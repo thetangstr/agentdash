@@ -1432,7 +1432,7 @@ export function LatestRunCard({
   // Extract a clean 2-3 line excerpt: first non-empty, non-header, non-list-mark lines
   const summary = useMemo(() => {
     if (!summaryRaw) return "";
-    const lines = shortenInstancePaths(summaryRaw)
+    const lines = shortenInstancePaths(redactSecrets(summaryRaw))
       .replace(/^#{1,6}\s+/gm, "")
       .split("\n")
       .map((l) => l.trim())

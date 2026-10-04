@@ -550,7 +550,7 @@ function ReadableMessage({
           compact ? "text-xs leading-5 text-foreground/90" : "text-sm text-foreground",
         )}
       >
-        {redactSecrets(shortenInstancePaths(block.text))}
+        {shortenInstancePaths(redactSecrets(block.text))}
       </MarkdownBody>
       {block.streaming && (
         <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] max-sm:text-xs font-medium italic text-muted-foreground">

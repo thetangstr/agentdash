@@ -447,6 +447,53 @@ describeEmbeddedPostgres("GET /companies/:companyId/work-products (Shipped feed)
     expect(handwritten.creatingRunMeteringStatus).toBeNull();
   });
 
+  // AgentDash (review #1016): the process-lost reaper and the setup-failure
+  // path never write usageJson — their unmetered status lives only in
+  // resultJson.runFacts. Without the coalesce a reaped run's deliverable
+  // would hold "counting…" open for ten minutes.
+  it("reads the reaped run's metering status from resultJson.runFacts", async () => {
+    const reapedIssue = randomUUID();
+    const reapedRun = randomUUID();
+    await db.insert(issues).values({
+      id: reapedIssue,
+      companyId: COMPANY,
+      title: "Lost process notes",
+      identifier: "SHP-11",
+      status: "in_review",
+      assigneeAgentId: PRIYA,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: reapedRun,
+      companyId: COMPANY,
+      agentId: PRIYA,
+      status: "failed",
+      invocationSource: "assignment",
+      resultJson: {
+        runFacts: {
+          meteringStatus: "unmetered_no_session",
+          outcome: "process_lost",
+        },
+      },
+    });
+    await db.insert(issueWorkProducts).values({
+      companyId: COMPANY,
+      issueId: reapedIssue,
+      type: "document",
+      provider: "paperclip",
+      title: "Lost process notes",
+      status: "ready_for_review",
+      createdByRunId: reapedRun,
+      createdAt: minutesAgo(3),
+      updatedAt: minutesAgo(3),
+    });
+
+    const res = await request(appAs(asUser("owner", "owner"))).get(
+      `/api/companies/${COMPANY}/work-products?issueId=${reapedIssue}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].creatingRunMeteringStatus).toBe("unmetered_no_session");
+  });
+
   it("rejects malformed filters and cursors with 400", async () => {
     const app = appAs(asUser("owner", "owner"));
     expect((await request(app).get(`/api/companies/${COMPANY}/work-products?projectId=nope`)).status).toBe(400);

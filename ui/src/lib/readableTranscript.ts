@@ -831,11 +831,24 @@ export function summarizeToolOutcome(
   // plus a duration ("/paperclip/.hermes/…/onboarding.md (12ms)"); the row's
   // label already names the file, so the echo drops to a plain verdict.
   if (isPathEchoOutcome(result, callInput)) return status === "error" ? "Failed" : "Done";
-  // JSON.parse decodes \u escapes the redaction above could not see, so the
-  // phrase is redacted again.
-  const json = summarizeJsonOutput(result);
+  // AgentDash (review #1016): Codex's command_execution result carries a
+  // structured header (command:/status:/exit_code:) above the real output —
+  // the same header transcriptPresentation's parseStructuredToolResult reads.
+  // Stripped here so the JSON scan sees the body, not the command echo.
+  const json = summarizeJsonOutput(stripExecResultHeader(result));
   if (json) return quietCredentialError(redactSecrets(json), status);
   return quietCredentialError(summarizeToolResult(result, status === "error", "compact"), status);
+}
+
+/** The leading `command:`/`status:`/`exit_code:` lines a structured exec
+ *  result prepends to its output (Codex's command_execution shape). */
+const EXEC_RESULT_HEADER_LINE = /^(?:command|status|exit_code)\s*:/i;
+
+function stripExecResultHeader(result: string): string {
+  const lines = result.split(/\r?\n/);
+  let index = 0;
+  while (index < lines.length && EXEC_RESULT_HEADER_LINE.test(lines[index].trim())) index += 1;
+  return lines.slice(index).join("\n");
 }
 
 /** The absolute path a call says it writes to (Hermes keeps it under `detail`). */

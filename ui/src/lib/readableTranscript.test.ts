@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "../adapters";
+import { getUIAdapter } from "../adapters";
 import {
   ReadableTranscriptBuilder,
   buildReadableTranscript,
@@ -972,5 +973,88 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
     const ws = "/paperclip/instances/default/workspaces/43e8155e-a1b2-4c3d-9e8f-001122334455";
     expect(summarizeJsonOutput(`wrote ${ws}/scan.md\n{"a":1}`)).toBe("wrote scan.md · Response: 1 field");
     expect(summarizeToolOutcome(`saved ${ws}/notes/plan.md`, "completed")).toBe("saved notes/plan.md");
+  });
+});
+
+// AgentDash (review #1016): the Codex command_execution result carries a
+// structured "command:/status:/exit_code:" header above the real output; the
+// collapsed row must summarize the body, not lead with the command echo.
+// These cases build the tool_result through each adapter's real stdout parser.
+describe("structured exec result headers", () => {
+  const TS = "2026-10-03T00:00:00.000Z";
+  const COMPANY_JSON =
+    '{"id":"9862d76d-1a2b-4c5d-8e9f-0123456789ab","name":"Acme Robotics","status":"active","issuePrefix":"ACM"}';
+
+  function toolResultContent(adapterType: string, line: string): string {
+    const entries = getUIAdapter(adapterType).parseStdoutLine?.(line, TS) ?? [];
+    const result = entries.find((entry) => entry.kind === "tool_result");
+    return result && result.kind === "tool_result" ? result.content : "";
+  }
+
+  it("Codex: the command header drops and the JSON body summarizes", () => {
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: {
+        type: "command_execution",
+        id: "cmd-1",
+        command: "bash -lc 'curl -s https://api.local/companies'",
+        status: "completed",
+        exit_code: 0,
+        aggregated_output: COMPANY_JSON,
+      },
+    });
+    const content = toolResultContent("codex_local", line);
+    expect(content).toContain("command: bash -lc");
+    expect(summarizeToolOutcome(content, "completed")).toBe("Got company Acme Robotics");
+  });
+
+  it("Codex: a failed call's header drops as well", () => {
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: {
+        type: "command_execution",
+        id: "cmd-2",
+        command: "bash -lc 'curl -s https://api.local/companies'",
+        status: "failed",
+        exit_code: 1,
+        aggregated_output: `${COMPANY_JSON}\nexit code 1`,
+      },
+    });
+    const content = toolResultContent("codex_local", line);
+    expect(summarizeToolOutcome(content, "error")).toContain("Acme Robotics");
+  });
+
+  it("Hermes: a JSON tool_result still summarizes", () => {
+    const line = JSON.stringify({
+      type: "tool_result",
+      name: "terminal",
+      output: JSON.stringify({ output: COMPANY_JSON, exit_code: 0, error: null }),
+      duration_ms: 83,
+      is_error: false,
+      timestamp: 1790921757447,
+    });
+    const content = toolResultContent("hermes_local", line);
+    expect(content).toContain("Acme Robotics");
+    expect(summarizeToolOutcome(content, "completed")).toBe("Got company Acme Robotics");
+  });
+
+  it("Claude: a JSON tool_result still summarizes", () => {
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: COMPANY_JSON,
+            is_error: false,
+          },
+        ],
+      },
+    });
+    const content = toolResultContent("claude_local", line);
+    expect(content).toContain("Acme Robotics");
+    expect(summarizeToolOutcome(content, "completed")).toBe("Got company Acme Robotics");
   });
 });

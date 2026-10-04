@@ -62,7 +62,7 @@ export interface IssueDocumentRevisionInfo {
 
 /** The map key `listIssueDocumentsByKey` returns rows under. */
 export function issueDocumentKey(issueId: string, key: string): string {
-  return `${issueId}${key}`;
+  return `${issueId}\\0${key}`;
 }
 
 /**
@@ -451,8 +451,14 @@ export function workProductService(db: Db) {
           assigneeAgentId: assigneeAgents.id,
           assigneeAgentName: assigneeAgents.name,
           // AgentDash (batch 3): stamped at run finalization; an `unmetered_*`
-          // value lets the client close the "counting…" window at once.
-          creatingRunMeteringStatus: sql<string | null>`${heartbeatRuns.usageJson} ->> 'meteringStatus'`,
+          // value lets the client close the "counting…" window at once. The
+          // process-lost reaper and the setup-failure path never wrote a
+          // usage row, so their status lives only in resultJson.runFacts —
+          // read that too or a reaped run's product "counts…" for ten minutes.
+          creatingRunMeteringStatus: sql<string | null>`coalesce(
+            ${heartbeatRuns.usageJson} ->> 'meteringStatus',
+            ${heartbeatRuns.resultJson} -> 'runFacts' ->> 'meteringStatus'
+          )`,
         })
         .from(issueWorkProducts)
         .innerJoin(issues, eq(issues.id, issueWorkProducts.issueId))

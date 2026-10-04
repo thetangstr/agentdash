@@ -36,4 +36,34 @@ describe("shortenInstancePaths", () => {
   it("handles several paths in one text", () => {
     expect(shortenInstancePaths(`${WS}/a.md and ${WS}/b.md`)).toBe("a.md and b.md");
   });
+
+  // AgentDash (review #1016): the matcher must stay anchored — "/instances/"
+  // appearing anywhere in a token is not ours.
+  it("leaves URLs alone, even ones with an instances/ segment", () => {
+    expect(shortenInstancePaths("see https://github.com/acme/instances/foo/bar")).toBe(
+      "see https://github.com/acme/instances/foo/bar",
+    );
+    expect(shortenInstancePaths("see https://github.com/acme/paperclip/instances/foo/bar")).toBe(
+      "see https://github.com/acme/paperclip/instances/foo/bar",
+    );
+  });
+
+  it("leaves non-paperclip /instances/ paths alone", () => {
+    expect(shortenInstancePaths("/Users/me/aws/instances/i-123/config.yaml")).toBe(
+      "/Users/me/aws/instances/i-123/config.yaml",
+    );
+  });
+
+  it("keeps a KEY= prefix and shortens only the path after it", () => {
+    expect(
+      shortenInstancePaths("export ANTHROPIC_API_KEY=/paperclip/instances/default/secrets/a.md"),
+    ).toBe("export ANTHROPIC_API_KEY=a.md");
+  });
+
+  it("shortens ~ and file:// rooted instance paths", () => {
+    expect(shortenInstancePaths("log at ~/.paperclip/instances/default/logs/run-1.log")).toBe(
+      "log at run-1.log",
+    );
+    expect(shortenInstancePaths(`open file://${WS}/scan.md`)).toBe("open scan.md");
+  });
 });

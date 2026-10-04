@@ -12,12 +12,33 @@
 // A path token is everything between whitespace/quotes/brackets. Trailing
 // sentence punctuation (".", ",") is not part of the path.
 const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
-// "…/instances/<instance>/workspaces/<workspace>/<relative path>"
-const WORKSPACE_PATH_RE =
-  /[^\s"'`()[\]{}<>]*\/instances\/[^\s"'`()[\]{}<>/]+\/workspaces\/[^\s"'`()[\]{}<>/]+(?:\/[^\s"'`()[\]{}<>]*)?/g;
-// Any other file under "…/instances/<instance>/" (config, logs, secrets dir).
-const INSTANCE_PATH_RE =
-  /[^\s"'`()[\]{}<>]*\/instances\/[^\s"'`()[\]{}<>/]+\/[^\s"'`()[\]{}<>/][^\s"'`()[\]{}<>]*/g;
+
+// AgentDash (review #1016): a match must start at a token boundary or right
+// after "=" (KEY=value), and the path itself must be a filesystem root —
+// "/", "~/", or "file://" — with a "paperclip"/".paperclip" home segment
+// directly before "/instances/". Mid-token "/instances/" is not enough:
+// https URLs keep their host, /Users/…/aws/instances/… is not ours, and a
+// KEY= prefix is never swallowed.
+const TOKEN_BOUNDARY = "(^|[\\s\"'`()\\[\\]{}<>]|=)";
+const PATH_ROOT = "(?:file:\\/\\/|~\\/|\\/)";
+const DELIM = "^\\s\"'`()\\[\\]{}<>";
+const LAZY_SEGMENTS = `[${DELIM}]*?`;
+const GREEDY_SEGMENTS = `[${DELIM}]*`;
+const HOME_SEGMENT = "(?:\\.paperclip|paperclip)";
+const ONE_SEGMENT = `[${DELIM}/]+`;
+
+// "<root>…/(paperclip|.paperclip)/instances/<instance>/workspaces/<ws>/<rel>"
+const WORKSPACE_PATH_RE = new RegExp(
+  TOKEN_BOUNDARY +
+    `(${PATH_ROOT}(?:${LAZY_SEGMENTS}/)?${HOME_SEGMENT}/instances/${ONE_SEGMENT}/workspaces/${ONE_SEGMENT}(?:/${GREEDY_SEGMENTS})?)`,
+  "g",
+);
+// Any other file under "<root>…/(paperclip|.paperclip)/instances/<instance>/".
+const INSTANCE_PATH_RE = new RegExp(
+  TOKEN_BOUNDARY +
+    `(${PATH_ROOT}(?:${LAZY_SEGMENTS}/)?${HOME_SEGMENT}/instances/${ONE_SEGMENT}/${ONE_SEGMENT}${GREEDY_SEGMENTS})`,
+  "g",
+);
 
 function basename(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -32,17 +53,17 @@ function splitTrailingPunctuation(path: string): [string, string] {
 
 export function shortenInstancePaths(text: string): string {
   return text
-    .replace(WORKSPACE_PATH_RE, (match) => {
-      const [path, suffix] = splitTrailingPunctuation(match);
+    .replace(WORKSPACE_PATH_RE, (_match, boundary: string, path: string) => {
+      const [clean, suffix] = splitTrailingPunctuation(path);
       const marker = "/workspaces/";
-      const after = path.slice(path.indexOf(marker) + marker.length);
+      const after = clean.slice(clean.lastIndexOf(marker) + marker.length);
       const slash = after.indexOf("/");
       // The workspace dir alone is the workspace id; deeper paths show relative.
       const short = slash === -1 ? basename(after) : after.slice(slash + 1);
-      return (short || basename(path)) + suffix;
+      return boundary + (short || basename(clean)) + suffix;
     })
-    .replace(INSTANCE_PATH_RE, (match) => {
-      const [path, suffix] = splitTrailingPunctuation(match);
-      return basename(path) + suffix;
+    .replace(INSTANCE_PATH_RE, (_match, boundary: string, path: string) => {
+      const [clean, suffix] = splitTrailingPunctuation(path);
+      return boundary + basename(clean) + suffix;
     });
 }

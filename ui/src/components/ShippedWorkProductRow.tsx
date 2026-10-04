@@ -6,6 +6,7 @@ import { useIsPhone } from "../hooks/useIsPhone";
 import { Link } from "@/lib/router";
 import { cn, issueUrl } from "../lib/utils";
 import { shortenInstancePaths } from "../lib/instancePaths";
+import { redactSecrets } from "../lib/redactSecrets";
 import { timeAgo } from "../lib/timeAgo";
 import {
   TOKENS_COUNTED_NOTE,
@@ -188,7 +189,7 @@ export function ShippedWorkProductRow({
           <p className="text-xs text-muted-foreground" data-testid="work-product-local-note">{LOCAL_FILE_NOTE}</p>
         ) : null}
         {product.summary && !target?.external ? (
-          <p className="line-clamp-2 text-xs text-muted-foreground">{shortenInstancePaths(product.summary)}</p>
+          <p className="line-clamp-2 text-xs text-muted-foreground">{shortenInstancePaths(redactSecrets(product.summary))}</p>
         ) : null}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
           <span>{workProductTypeLabel(product.type)}</span>
