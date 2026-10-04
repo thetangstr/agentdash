@@ -128,6 +128,31 @@ export default function ChatPanel({
     }
   }, [messages.length, lastMessageId]);
 
+  // AgentDash (c3 copy): a desktop→phone resize changes scrollHeight and
+  // clientHeight, so a chat that was pinned to the bottom jumps to mid-thread.
+  // Track whether the person is at the bottom, and on any scroller resize
+  // restore the pin only when they had not scrolled up themselves.
+  const atBottomRef = useRef(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // AgentDash (P0, v2026.1002.0): the chat is never silent while a reply is
   // owed. A conversation that ends on the person's message shows "CoS is
   // thinking…"; the reply, or the server's "CoS couldn't reply" card, ends it

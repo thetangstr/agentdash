@@ -307,7 +307,7 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
         await effect("cancel_audit", interruptedRunId, async () => {
           const publication = await insertActivity(db, { companyId: plan.issue.companyId, ...actor,
             action: "heartbeat.cancelled", entityType: "heartbeat_run", entityId: interruptedRunId!,
-            details: { agentId: plan.interruptRun!.agentId, source: "issue_comment_interrupt", issueId: id, mutationId: accepted.mutationId } });
+            details: { agentId: plan.interruptRun!.agentId, source: "issue_comment_interrupt", issueId: id, identifier: currentIssue.identifier, mutationId: accepted.mutationId } });
           publishActivity(publication);
         });
       }

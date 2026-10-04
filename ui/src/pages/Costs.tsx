@@ -924,7 +924,7 @@ export function Costs() {
             <div>
                 <h1 className="text-3xl font-semibold tracking-tight">Costs</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                  Inference spend, platform fees, credits, and live quota windows.
+                  Model usage, platform fees, credits, and quota remaining.
                 </p>
             </div>
 
@@ -973,7 +973,7 @@ export function Costs() {
                 shows tokens, not dollars, and says who actually bills them. */}
             <MetricTile
               testId="inference-spend-tile"
-              label="Inference spend"
+              label="Model usage"
               value={
                 !spendMeasured
                   ? "Not measured"
@@ -995,9 +995,14 @@ export function Costs() {
             <MetricTile
               label="Budget"
               value={activeBudgetIncidents.length > 0 ? String(activeBudgetIncidents.length) : (
-                spendPriced && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                  ? `${spendData.summary.utilizationPercent}%`
-                  : "Open"
+                spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
+                  ? spendPriced
+                    ? `${spendData.summary.utilizationPercent}%`
+                    // AgentDash (c3 copy): a cap exists but its fill level is
+                    // not measurable without priced usage — show the cap, not
+                    // "Open", which read as "no cap".
+                    : formatCents(spendData.summary.budgetCents)
+                  : "No budget limit set"
               )}
               subtitle={
                 activeBudgetIncidents.length > 0

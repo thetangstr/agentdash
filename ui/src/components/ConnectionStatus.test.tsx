@@ -76,4 +76,25 @@ describe("ConnectionStatus", () => {
     act(() => setLiveSocketState("open"));
     expect(badge()?.textContent).toBe("Checking…");
   });
+
+  // AgentDash (review-1015): the steady "Connected" word costs ~90px of phone
+  // header for nothing — it is screen-reader-only below md, while the states
+  // that need saying stay visible.
+  it("hides the Connected word below md but keeps it on warnings", () => {
+    const label = () => badge()?.querySelector("span:last-child");
+
+    act(() => root.render(<ConnectionStatus />));
+    act(() => setLiveSocketState("open"));
+    expect(label()?.textContent).toBe("Connected");
+    expect(label()?.className).toContain("max-md:sr-only");
+
+    act(() => setLiveSocketState("down"));
+    expect(label()?.textContent).toBe("Reconnecting…");
+    expect(label()?.className).not.toContain("sr-only");
+
+    mockUseServerHealth.mockReturnValue({ reachability: "unreachable", isOnline: true });
+    act(() => root.render(<ConnectionStatus />));
+    expect(label()?.textContent).toBe("Offline");
+    expect(label()?.className).not.toContain("sr-only");
+  });
 });

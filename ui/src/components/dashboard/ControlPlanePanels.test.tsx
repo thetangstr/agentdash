@@ -26,7 +26,7 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { ControlPlanePanels, fleetSize, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import(
+const { ControlPlanePanels, fleetSize, fleetRowSubtitle, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import(
   "./ControlPlanePanels"
 );
 
@@ -110,6 +110,21 @@ describe("ControlPlanePanels", () => {
     expect(q("dashboard-stats-error")?.textContent).toContain("Couldn't load the numbers. Internal Server Error");
     expect(container.querySelectorAll('[data-testid="dashboard-fleet-row"]')).toHaveLength(1);
     expect(q("dashboard-activity-empty")).not.toBeNull();
+  });
+
+  // AgentDash (c3 copy): a CoS literally named "Chief of Staff" used to fall
+  // through the identity-line suppression into the generic "Agent" subtitle.
+  it("names the role under a Chief of Staff whose name is its title", async () => {
+    mockAgentsApi.list.mockResolvedValue([
+      { id: "agent-cos", name: "Chief of Staff", role: "chief_of_staff", status: "idle", lastHeartbeatAt: null },
+      { id: "agent-1", name: "Agent 1", role: "general", status: "idle", lastHeartbeatAt: null },
+    ]);
+    await render();
+    const rows = container.querySelectorAll('[data-testid="dashboard-fleet-row"]');
+    // Name + role subtitle — "Chief of Staff" appears twice, not "Agent".
+    expect(rows[0]?.textContent?.match(/Chief of Staff/g) ?? []).toHaveLength(2);
+    expect(rows[0]?.textContent).not.toContain("Agent");
+    expect(rows[1]?.textContent).toContain("Agent");
   });
 
   it("shows an error in the fleet and activity panels when those queries fail", async () => {
@@ -235,5 +250,26 @@ describe("fleetSize", () => {
     expect(fleetSize(summary as any, [])).toBe(4);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(fleetSize(undefined, [makeAgent(1), makeAgent(2, "terminated")] as any)).toBe(1);
+  });
+});
+
+// AgentDash (review-1015): the fleet row's subtitle must never restate the
+// name — "Chief of Staff / Chief of Staff" read as a bug.
+describe("fleetRowSubtitle", () => {
+  it("names the hire's CoS instead of repeating the name", () => {
+    expect(fleetRowSubtitle({ name: "Chief of Staff", role: "chief_of_staff", title: null })).toBe("Your Chief of Staff");
+  });
+
+  it("drops the line rather than restating a role-named hire", () => {
+    expect(fleetRowSubtitle({ name: "Engineer", role: "engineer", title: null })).toBe("");
+  });
+
+  it("still names the role under a real name", () => {
+    expect(fleetRowSubtitle({ name: "Maya", role: "chief_of_staff", title: null })).toBe("Chief of Staff");
+    expect(fleetRowSubtitle({ name: "Scout", role: "engineer", title: null })).toBe("Engineer");
+  });
+
+  it("keeps the Agent fallback when the agent has neither title nor role", () => {
+    expect(fleetRowSubtitle({ name: "Scout", role: null, title: null })).toBe("Agent");
   });
 });

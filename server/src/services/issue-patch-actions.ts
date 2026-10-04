@@ -746,7 +746,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               // one — it gets its own code and wording so clients (and
               // people) can tell "say what you saw" apart from "it changed".
               if (seenRevision === undefined) {
-                throw conflict("Tell us which document revision you saw before accepting: read the latest revision, then try again.", {
+                throw conflict("Open the issue and review the latest document before marking it done.", {
                   code: "document_revision_required",
                   documentKey,
                   latestRevisionNumber: doc.latestRevisionNumber,
@@ -1145,7 +1145,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           const publication = await insertActivity(db, {
             companyId: issue.companyId, ...actor,
             action: "heartbeat.cancelled", entityType: "heartbeat_run", entityId: runId,
-            details: { agentId: run.agentId, source, issueId: id, mutationId: accepted.mutationId }
+            // AgentDash (review-1015): identifier lets the activity row name
+            // the issue — "ACM-3 was marked done", not "the issue was …".
+            details: { agentId: run.agentId, source, issueId: id, identifier: issue.identifier, mutationId: accepted.mutationId }
           });
           publishActivity(publication);
         });

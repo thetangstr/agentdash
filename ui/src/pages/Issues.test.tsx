@@ -57,12 +57,22 @@ describe("issueUpdateErrorToast", () => {
       409,
       { error: "conflict", details: { code: "document_revision_required" } },
     );
-    expect(issueUpdateErrorToast(err, "issue-uuid-1")).toEqual({
-      title: "Issue update failed",
-      body: "The document changed after the revision you saw — open the issue to review the latest.",
-      tone: "error",
+    expect(issueUpdateErrorToast(err, "issue-uuid-1", "ACM-6")).toEqual({
+      title: "Review ACM-6 before marking it done",
+      body: "Open the issue to review the latest document.",
+      tone: "info",
       action: { label: "Open the issue", href: "/issues/issue-uuid-1" },
     });
+  });
+
+  it("uses a generic title for the refusal when the identifier is unknown", () => {
+    const err = new ApiError("nope", 409, {
+      error: "conflict",
+      details: { code: "document_revision_required" },
+    });
+    expect(issueUpdateErrorToast(err, "issue-uuid-1").title).toBe(
+      "Review the issue before marking it done",
+    );
   });
 
   it("shows the server message with no link for other conflicts", () => {

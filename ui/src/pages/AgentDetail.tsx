@@ -56,7 +56,7 @@ import { MandatesTab } from "../components/agent/MandatesTab";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
-import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens } from "../lib/token-figures";
+import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens, formatCountedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { cancelledRunLabel } from "../lib/cancelledRunLabel";
@@ -1669,6 +1669,20 @@ function VitalCard({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+/** Input + output tokens this calendar month (UTC), matching `spentMonthlyCents`'s window. */
+export function monthCountedTokens(
+  runs: Pick<HeartbeatRun, "usageJson" | "resultJson" | "createdAt">[],
+  now: Date = new Date(),
+): number {
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  return runs
+    .filter((run) => new Date(run.createdAt).getTime() >= monthStart)
+    .reduce((sum, run) => {
+      const metrics = runMetrics(run as HeartbeatRun);
+      return sum + countedTokens({ inputTokens: metrics.input, outputTokens: metrics.output });
+    }, 0);
+}
+
 /**
  * AgentDash (scan 4 lane O1): true when this agent's usage is billed by the
  * customer's model provider (BYOK): no dollars metered this month, yet its
@@ -1708,6 +1722,38 @@ export function agentBilledByProvider(
     const metrics = runMetrics(run as HeartbeatRun);
     return countedTokens({ inputTokens: metrics.input, outputTokens: metrics.output }) > 0;
   });
+}
+
+export function AgentSpendFigure({
+  agent,
+  runs,
+  now,
+  monthCost,
+}: {
+  agent: Pick<AgentDetailRecord, "spentMonthlyCents"> & {
+    runHealth?: Pick<AgentRunHealth, "chatTurnsThisMonth"> | null;
+  };
+  runs: Pick<HeartbeatRun, "usageJson" | "resultJson" | "createdAt">[];
+  now?: Date;
+  monthCost?: Pick<CostByAgent, "costCents" | "inputTokens" | "cachedInputTokens" | "outputTokens"> | null;
+}) {
+  if (!agentBilledByProvider(agent, runs as HeartbeatRun[], now, monthCost)) {
+    return <span className="font-medium">{formatCents(monthCost?.costCents ?? agent.spentMonthlyCents ?? 0)}</span>;
+  }
+  const tokens = monthCountedTokens(runs, now);
+  if (tokens > 0) {
+    return (
+      <span data-testid="agent-spend-byok">
+        <span className="font-medium">{formatCountedTokens(tokens)}</span>
+        <span className="block text-xs text-muted-foreground">{BILLED_BY_PROVIDER_NOTE}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="text-muted-foreground" data-testid="agent-spend-byok">
+      {BILLED_BY_PROVIDER_NOTE}
+    </span>
+  );
 }
 
 export function AgentVitalsStrip({
@@ -1783,14 +1829,11 @@ export function AgentVitalsStrip({
       </VitalCard>
       <VitalCard label="Spend this month">
         {/* AgentDash (scan 4 lane O1): on BYOK the model provider bills the
-            tokens, so "$0.00" next to real usage read as "free". */}
-        {agentBilledByProvider(agent, runs, new Date(), monthCost) ? (
-          <span className="text-muted-foreground" data-testid="agent-spend-byok">
-            {BILLED_BY_PROVIDER_NOTE}
-          </span>
-        ) : (
-          <span className="font-medium">{formatCents(monthCost?.costCents ?? agent.spentMonthlyCents ?? 0)}</span>
-        )}
+            tokens, so "$0.00" next to real usage read as "free". (c3 copy):
+            show the month's tokens — an empty spend figure next to real work
+            read as "nothing happened". Chat-turn-only usage keeps the note.
+            monthCost flows through so the cost-events row stays authoritative. */}
+        <AgentSpendFigure agent={agent} runs={runs} monthCost={monthCost} />
       </VitalCard>
     </div>
   );
@@ -2237,6 +2280,10 @@ export function CostsSection({
   const totalTokens = totals ? totals.input + totals.output + totals.cached : 0;
   const billedByProvider =
     totals != null && totals.costCents === 0 && (totalTokens > 0 || chatTurns > 0);
+  // AgentDash (c3 copy): when no run has a priced cost the Cost column is a
+  // column of dashes (BYOK) — hide it; the Input/Output columns already carry
+  // the usage. It returns the moment a priced run appears.
+  const anyPricedRun = runsWithCost.some((run) => runMetrics(run).cost > 0);
 
   return (
     <div className="space-y-4">
@@ -2285,7 +2332,7 @@ export function CostsSection({
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Run</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Input</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Output</th>
-                <th className="text-right px-3 py-2 font-medium text-muted-foreground">Cost</th>
+                {anyPricedRun && <th className="text-right px-3 py-2 font-medium text-muted-foreground">Cost</th>}
               </tr>
             </thead>
             <tbody>
@@ -2297,12 +2344,14 @@ export function CostsSection({
                     <td className="px-3 py-2 font-mono">{run.id.slice(0, 8)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.input)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.output)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {metrics.cost > 0
-                        ? `$${metrics.cost.toFixed(4)}`
-                        : "-"
-                      }
-                    </td>
+                    {anyPricedRun && (
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {metrics.cost > 0
+                          ? `$${metrics.cost.toFixed(4)}`
+                          : "-"
+                        }
+                      </td>
+                    )}
                   </tr>
                 );
               })}

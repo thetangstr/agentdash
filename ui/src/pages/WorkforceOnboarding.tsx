@@ -29,7 +29,7 @@ function BriefEditor({ companyId, brief }: { companyId: string; brief: Workforce
   return <section id="company-brief" className="space-y-4 rounded-xl border p-5">
     <div>
       <h2 className="text-lg font-semibold">Company knowledge</h2>
-      <p className="text-sm text-muted-foreground">Revision {brief.revision}. Share only information approved for everyone in this company. Task answers stay with their task unless explicitly shared.</p>
+      <p className="text-sm text-muted-foreground">Share only information approved for everyone in this company. Task answers stay with their task unless you share them here.</p>
     </div>
     <div className="space-y-3">{sources.map((source, i) => <fieldset key={i} className="space-y-2 rounded-lg border bg-muted/20 p-3">
       <legend className="px-1 text-sm font-medium">Shared source {i + 1}</legend>
@@ -42,18 +42,21 @@ function BriefEditor({ companyId, brief }: { companyId: string; brief: Workforce
     </fieldset>)}<Button variant="outline" disabled={sources.length >= 12} onClick={() => setSources([...sources, { id: '', label: '', content: '' }])}>Add shared source</Button>
     </div>
     <div className="space-y-2">
-      <h3 className="text-sm font-medium">Human-confirmed facts</h3>{facts.map((fact, i) => <div key={i} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-3">
+      <h3 className="text-sm font-medium">Facts you have confirmed</h3>{facts.map((fact, i) => <div key={i} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-3">
         <Input aria-label={`Fact key ${i + 1}`} placeholder="Fact key, e.g. offer" value={fact.key} onChange={e => setFacts(facts.map((f, n) => n === i ? { ...f, key: e.target.value } : f))} />
         <Textarea aria-label={`Fact value ${i + 1}`} placeholder="Confirmed value" value={fact.value} onChange={e => setFacts(facts.map((f, n) => n === i ? { ...f, value: e.target.value } : f))} />
         <Input aria-label={`Fact source ${i + 1}`} placeholder="Source reference" value={fact.sourceReference} onChange={e => setFacts(facts.map((f, n) => n === i ? { ...f, sourceReference: e.target.value } : f))} />
         <Button variant="ghost" size="sm" onClick={() => setFacts(facts.filter((_, n) => n !== i))}>Remove fact {i + 1}</Button>
       </div>)}<Button variant="outline" disabled={facts.length >= 40} onClick={() => setFacts([...facts, { key: '', value: '', sourceReference: '' }])}>Add confirmed fact</Button>
     </div>
+    {/* AgentDash (c3 copy): the label row is the 44px phone tap target (the
+        audit unions a control's box with its label's), so the checkbox keeps
+        its normal square and the whole row stays tappable. */}
     <label className="flex items-start gap-2 text-sm max-sm:min-h-11 max-sm:items-center">
       <input type="checkbox" className="mt-1 max-sm:mt-0" aria-label="Share this brief company-wide" checked={consent} onChange={e => setConsent(e.target.checked)} />I confirm these facts and explicitly share these sources company-wide.</label>
     <WorkforceError error={save.error} />
     <div className="flex gap-2">
-      <Button data-testid="save-brief" disabled={!consent || save.isPending} onClick={() => save.mutate()}>Publish company brief</Button>{save.isError && <Button variant="outline" onClick={() => { void client.invalidateQueries({ queryKey: workforceKeys.brief(companyId) }); }}>Reload current revision</Button>}</div>
+      <Button data-testid="save-brief" disabled={!consent || save.isPending} onClick={() => save.mutate()}>Publish company brief</Button>{save.isError && <Button variant="outline" onClick={() => { void client.invalidateQueries({ queryKey: workforceKeys.brief(companyId) }); }}>Reload the saved brief</Button>}</div>
   </section>;
 }
 function ProposalReview({ companyId, revision }: { companyId: string; revision: number }) {
@@ -116,7 +119,7 @@ export function WorkforceAccountability({ companyId, agent }: { companyId: strin
   return <div id="workforce-accountability" className="space-y-2 rounded-lg border p-3 text-sm">
     <p>
       <strong>Accountable human:</strong> {accountableLabel(agent) ?? 'Unassigned'}{members.data && !activeOwner ? ' — active assignment required' : ''}</p>
-    <p className="text-muted-foreground">Questions require an active named human. Assignment does not answer existing questions. {agent.autonomy !== 'autonomous' && 'Stewardship pairs one person with one agent.'}</p>
+    <p className="text-muted-foreground">Open questions wait for a named, active person. Assigning someone here does not answer questions that are already open. {agent.autonomy !== 'autonomous' && 'Stewardship pairs one person with one agent.'}</p>
     <WorkforceError error={members.error || assign.error} />
     <div className="flex flex-wrap gap-2">
       <select aria-label="Accountable human" className="min-w-0 rounded-md border bg-background p-2" value={person} onChange={e => setPerson(e.target.value)}>
@@ -139,13 +142,13 @@ export function WorkforceAgentPanel({ companyId, agent }: { companyId: string; a
   return <section className="space-y-4 rounded-xl border p-5">
     <div>
       <h2 className="text-lg font-semibold">{agent.name} · role readiness</h2>
-      <p className="text-sm text-muted-foreground">Model and harness connectivity are separate from delivering accepted work.</p>
+      <p className="text-sm text-muted-foreground">Being connected to a model is not the same as being ready to deliver — this checks real, accepted work.</p>
     </div>
     <WorkforceError error={enrollment.error || readiness.error || action.error} />
     <WorkforceAccountability companyId={companyId} agent={agent} />
     {!e && <>
       <WorkforceRoleSelect value={templateId} onChange={setTemplateId} />
-      <WorkforceTemplatePreview templateId={templateId} />{!supportsWorkforcePrompt(agent.adapterType) && <p role="alert">Choose a supported native runtime in agent settings before enrolling.</p>}<Button disabled={!templateId || !supportsWorkforcePrompt(agent.adapterType) || enrollment.isPending || action.isPending} onClick={() => action.mutate('enroll')}>Enroll role</Button>
+      <WorkforceTemplatePreview templateId={templateId} />{!supportsWorkforcePrompt(agent.adapterType) && <p role="alert">Choose a supported runtime in agent settings before assigning a role.</p>}<Button disabled={!templateId || !supportsWorkforcePrompt(agent.adapterType) || enrollment.isPending || action.isPending} onClick={() => action.mutate('enroll')}>Assign role</Button>
     </>}
     {e && <>
       <WorkforceTemplatePreview templateId={e.templateId} />

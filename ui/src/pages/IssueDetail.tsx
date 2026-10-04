@@ -352,7 +352,7 @@ function ActorIdentity({ evt, agentMap, userProfileMap }: { evt: ActivityEvent; 
     const agent = agentMap.get(id);
     return <Identity name={agent?.name ?? id.slice(0, 8)} size="sm" />;
   }
-  if (evt.actorType === "system") return <Identity name="System" size="sm" />;
+  if (evt.actorType === "system") return <Identity name="AgentDash" size="sm" />;
   if (evt.actorType === "user") {
     const profile = userProfileMap?.get(id);
     return <Identity name={profile?.label ?? "Board"} avatarUrl={profile?.image} size="sm" />;
@@ -2545,13 +2545,11 @@ export function IssueDetail() {
   });
 
   useEffect(() => {
-    setBreadcrumbs([
-      sourceBreadcrumb,
-      { label: hasLiveRuns ? `🔵 ${breadcrumbTitle}` : breadcrumbTitle },
-    ]);
+    // AgentDash (c3 copy): the live state is already a "Live" badge in the
+    // header — the 🔵 emoji in the breadcrumb was a raw glyph, not a control.
+    setBreadcrumbs([sourceBreadcrumb, { label: breadcrumbTitle }]);
   }, [
     breadcrumbTitle,
-    hasLiveRuns,
     setBreadcrumbs,
     sourceBreadcrumb.href,
     sourceBreadcrumb.label,

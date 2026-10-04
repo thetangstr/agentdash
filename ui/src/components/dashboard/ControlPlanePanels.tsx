@@ -24,7 +24,7 @@ import { buildCompanyUserProfileMap } from "../../lib/company-members";
 import { formatCents, formatTokens } from "../../lib/utils";
 import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE } from "../../lib/token-figures";
 import { timeAgo } from "../../lib/timeAgo";
-import { agentIdentityLineUnderName } from "../../lib/agent-identity";
+import { agentIdentityLineUnderName, humanizeAgentRole, isGenericAgentRole } from "../../lib/agent-identity";
 import { ActivityRow } from "../ActivityRow";
 import { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS, isSystemPlumbingActivity } from "../../lib/activity-format";
 
@@ -32,6 +32,22 @@ export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
 export const NO_AGENTS_TEXT = "No agents yet.";
 export const BYOK_SPEND_NOTE = BILLED_BY_PROVIDER_NOTE;
+
+/**
+ * AgentDash (review-1015): the line under an agent's name must never restate
+ * the name. agentIdentityLineUnderName suppresses its own duplicates, but the
+ * role fallback re-printed "Chief of Staff" under "Chief of Staff" — so the
+ * CoS names itself "Your Chief of Staff" and any other restating role drops
+ * the line entirely. Same rule on phone and desktop (one row renders both).
+ */
+export function fleetRowSubtitle(agent: { name?: string | null; role?: string | null; title?: string | null }): string {
+  const line = agentIdentityLineUnderName(agent);
+  if (line) return line;
+  if ((agent.role ?? "").trim() === "chief_of_staff") return "Your Chief of Staff";
+  const roleLabel = isGenericAgentRole(agent.role) ? "" : humanizeAgentRole(agent.role);
+  if (roleLabel && roleLabel.toLowerCase() === (agent.name ?? "").trim().toLowerCase()) return "";
+  return roleLabel || "Agent";
+}
 
 /**
  * AgentDash: what the month-spend tile shows. A BYOK box meters tokens but not
@@ -306,7 +322,7 @@ function FleetPanel({ agents, isLoading, error }: { agents: Agent[] | undefined;
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{agent.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {agentIdentityLineUnderName(agent) || "Agent"}
+                      {fleetRowSubtitle(agent)}
                     </span>
                   </span>
                   <span className="shrink-0 text-right text-xs text-muted-foreground">

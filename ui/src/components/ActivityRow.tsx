@@ -41,9 +41,14 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
     ? (event.details as Record<string, unknown> | null)?.agentId as string | undefined
     : undefined;
 
-  const name = isHeartbeatEvent
-    ? (heartbeatAgentId ? entityNameMap.get(`agent:${heartbeatAgentId}`) : null)
-    : entityNameMap.get(`${event.entityType}:${event.entityId}`);
+  const name =
+    // AgentDash (c3 copy): the cancelled-run verb already names the agent
+    // ("stopped Scout's run") — appending the entity name would repeat it.
+    event.action === "heartbeat.cancelled"
+      ? null
+      : isHeartbeatEvent
+        ? (heartbeatAgentId ? entityNameMap.get(`agent:${heartbeatAgentId}`) : null)
+        : entityNameMap.get(`${event.entityType}:${event.entityId}`);
 
   const entityTitle = entityTitleMap?.get(`${event.entityType}:${event.entityId}`);
 
@@ -53,8 +58,17 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;
   const userProfile = event.actorType === "user" ? userProfileMap?.get(event.actorId) : null;
-  const systemEvent = event.actorType === "system" || isSystemPlumbingActivity(event.action);
-  const actorName = systemEvent ? "System" : actor?.name ?? ( userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
+  // AgentDash (review-1015): a run stopped because the issue closed is the
+  // product's doing — the person only marked the issue done — so AgentDash
+  // owns the row, not them.
+  const statusDrivenCancel =
+    event.action === "heartbeat.cancelled" &&
+    typeof (event.details as Record<string, unknown> | null)?.source === "string" &&
+    ((event.details as Record<string, unknown> | null)?.source as string).startsWith("issue_status_");
+  const systemEvent = event.actorType === "system" || isSystemPlumbingActivity(event.action) || statusDrivenCancel;
+  // AgentDash (c3 copy): actions the system takes are the product's own doing —
+  // "System" read like a person, so it is named "AgentDash" instead.
+  const actorName = systemEvent ? "AgentDash" : actor?.name ?? ( userProfile?.label ?? (event.actorType === "user" ? "Board" : event.actorId || "Unknown"));
   const actorAvatarUrl = systemEvent ? null : userProfile?.image ?? null;
 
   const stacked = layout === "stacked";

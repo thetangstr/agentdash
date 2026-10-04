@@ -9,8 +9,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { PluginRecord } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { AlertTriangle, FlaskConical, Plus, Power, Puzzle, Settings, Trash } from "lucide-react";
-import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
+import { useIsInstanceAdmin } from "@/hooks/useBoardSessionReady";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -61,8 +61,8 @@ function getPluginErrorSummary(plugin: PluginRecord): string {
  * @see doc/plugins/PLUGIN_SPEC.md §3 — Plugin Lifecycle for status semantics.
  */
 export function PluginManager() {
-  const { selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const isInstanceAdmin = useIsInstanceAdmin();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
 
@@ -73,12 +73,13 @@ export function PluginManager() {
   const [errorDetailsPlugin, setErrorDetailsPlugin] = useState<PluginRecord | null>(null);
 
   useEffect(() => {
+    // AgentDash (review-1015): this page lives under Instance Settings — same
+    // trail as About/Changelog/Adapters, not Company → Settings.
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
-      { label: "Settings", href: "/instance/settings/heartbeats" },
+      { label: "Instance Settings", href: "/instance/settings/general" },
       { label: "Plugins" },
     ]);
-  }, [selectedCompany?.name, setBreadcrumbs]);
+  }, [setBreadcrumbs]);
 
   const { data: plugins, isLoading, error } = useQuery({
     queryKey: queryKeys.plugins.all,
@@ -204,7 +205,8 @@ export function PluginManager() {
         </Dialog>
       </div>
 
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+      {/* Alpha notice — instance-admin only, like the adapters notice. */}
+      {isInstanceAdmin && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
         <div className="flex items-start gap-3">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
           <div className="space-y-1 text-sm">
@@ -214,7 +216,7 @@ export function PluginManager() {
             </p>
           </div>
         </div>
-      </div>
+      </div>}
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">

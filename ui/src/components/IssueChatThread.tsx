@@ -423,7 +423,7 @@ function fallbackAuthorLabel(message: ThreadMessage) {
   if (typeof custom?.["runAgentName"] === "string") return custom["runAgentName"];
   if (message.role === "assistant") return "Agent";
   if (message.role === "user") return "You";
-  return "System";
+  return "AgentDash";
 }
 
 function fallbackTextParts(message: ThreadMessage) {
@@ -659,7 +659,7 @@ function formatInteractionActorLabel(args: {
       ?? formatAssigneeUserLabel(userId, currentUserId, userLabelMap)
       ?? "Board";
   }
-  return "System";
+  return "AgentDash";
 }
 
 export function resolveIssueChatHumanAuthor(args: {

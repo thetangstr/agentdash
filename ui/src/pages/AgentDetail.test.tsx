@@ -56,7 +56,7 @@ vi.mock("@/lib/router", async (importOriginal) => {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine, agentBilledByProvider, AgentRunHealthSummary, RunStderrExcerpt, CostsSection, RunDetail, LatestRunCard } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider, monthCountedTokens, AgentSpendFigure, AgentRunHealthSummary, RunStderrExcerpt, CostsSection, RunDetail, LatestRunCard } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -289,6 +289,55 @@ describe("agentBilledByProvider", () => {
   });
 });
 
+// AgentDash (c3 copy): the BYOK spend card shows the month's counted tokens —
+// an empty dollar figure next to real work read as "nothing happened".
+describe("monthCountedTokens + AgentSpendFigure", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const run = (inputTokens: number, outputTokens: number, createdAt = "2026-10-02T09:00:00.000Z", extra = {}) =>
+    ({ usageJson: { inputTokens, outputTokens, ...extra }, resultJson: null, createdAt }) as never;
+
+  it("sums input + output for this month only, ignoring cached reads", () => {
+    expect(
+      monthCountedTokens(
+        [
+          run(32_000, 2_900),
+          run(1_000, 100, "2026-10-03T09:00:00.000Z", { cachedInputTokens: 500_000 }),
+          run(9_000, 900, "2026-09-28T09:00:00.000Z"),
+        ],
+        now,
+      ),
+    ).toBe(36_000);
+  });
+
+  it("prints the month's tokens plus who bills them on BYOK", () => {
+    renderNode(
+      <AgentSpendFigure agent={{ spentMonthlyCents: 0 }} runs={[run(32_000, 2_900)]} now={now} />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("34.9k");
+    expect(text).toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+  });
+
+  it("keeps the provider-billing note when usage was chat turns only", () => {
+    renderNode(
+      <AgentSpendFigure
+        agent={{ spentMonthlyCents: 0, runHealth: { chatTurnsThisMonth: 14 } }}
+        runs={[]}
+        now={now}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Billed by your model provider");
+    expect(text).not.toContain("$");
+  });
+
+  it("shows real dollars when spend is priced", () => {
+    renderNode(<AgentSpendFigure agent={{ spentMonthlyCents: 4200 }} runs={[run(32_000, 2_900)]} now={now} />);
+    expect(container!.textContent).toContain("$42.00");
+  });
+});
+
 // Batch 2 canary: "This agent has never run" + "$0.00" sat on a Chief of Staff
 // that had run the whole chat; chat turns count as activity.
 describe("AgentRunHealthSummary", () => {
@@ -482,12 +531,12 @@ describe("CostsSection on BYOK", () => {
     } as never;
   }
 
-  function renderCosts(runtimeState?: Record<string, unknown>, costRow?: Record<string, unknown> | null) {
+  function renderCosts(runtimeState?: Record<string, unknown>, costRow?: Record<string, unknown> | null, runs: unknown[] = []) {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => {
-      root!.render(<CostsSection runtimeState={runtimeState as never} runs={[]} costRow={costRow as never} />);
+      root!.render(<CostsSection runtimeState={runtimeState as never} runs={runs as never} costRow={costRow as never} />);
     });
     return container.textContent ?? "";
   }
@@ -513,6 +562,25 @@ describe("CostsSection on BYOK", () => {
     );
     expect(text).not.toContain("Billed by your model provider");
     expect(text).not.toContain("$0.00");
+  });
+
+  // AgentDash (c3 copy): a column of dashes is not information — on BYOK the
+  // Cost column hides; Input/Output still carry the usage.
+  it("hides the Cost column when no run is priced, shows it once one is", () => {
+    const headers = () => [...container!.querySelectorAll("th")].map((th) => th.textContent);
+    const unpriced = [
+      { id: "run-12345678", status: "succeeded", usageJson: { inputTokens: 32_000, outputTokens: 2_900 }, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" },
+    ];
+    renderCosts(runtimeState(), undefined, unpriced);
+    expect(headers()).toEqual(["Date", "Run", "Input", "Output"]);
+
+    const priced = [
+      ...unpriced,
+      { id: "run-87654321", status: "succeeded", usageJson: { inputTokens: 1_000, outputTokens: 100, costUsd: 0.12 }, resultJson: null, createdAt: "2026-10-03T09:00:00.000Z" },
+    ];
+    const text = renderCosts(runtimeState(), undefined, priced);
+    expect(headers()).toEqual(["Date", "Run", "Input", "Output", "Cost"]);
+    expect(text).toContain("$0.1200");
   });
 
   // Batch 3: cost events are the same source the Costs page reads — use them
