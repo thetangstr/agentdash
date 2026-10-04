@@ -2687,7 +2687,10 @@ export function agentRoutes(
       companyId: agent.companyId,
       actorType: "user",
       actorId: req.actor.userId ?? "board",
-      action: result.status === "pass" ? "agent.harness_preflight_passed" : "agent.harness_preflight_failed",
+      // AgentDash (c3 review): a non-blocking warn is a pass — the advisory
+      // checks are advisory. Only a result that would block a launch counts
+      // as a failure in the activity log.
+      action: isBlockingPreflightResult(result) ? "agent.harness_preflight_failed" : "agent.harness_preflight_passed",
       entityType: "agent",
       entityId: id,
       details: {

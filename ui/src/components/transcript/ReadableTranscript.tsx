@@ -430,6 +430,22 @@ export interface ReadableRunUsage {
   durationMs?: number | null;
 }
 
+// AgentDash (c3 review): a stopped run whose transcript has no result line
+// still gets the neutral "Stopped" footer — the run record's reason is the
+// whole story.
+const STOPPED_FALLBACK_FOOTER: ReadableResultFooter = {
+  ts: "",
+  isError: false,
+  outcome: "Stopped",
+  text: null,
+  errors: [],
+  durationMs: null,
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  costUsd: 0,
+};
+
 export function ReadableFooter({
   footer,
   density = "comfortable",
@@ -640,11 +656,15 @@ export function ReadableTranscriptView({
           {block.type === "message" && <ReadableMessage block={block} density={density} />}
           {block.type === "tools" && <ReadableToolGroup items={block.items} density={density} />}
           {block.type === "diff" && <ReadableDiff block={block} />}
-          {block.type === "error" && <ReadableErrorLines lines={block.lines} />}
+          {/* AgentDash (c3 review): a stopped run shows no red error lines —
+              the kill produced that noise; the reason is in the footer. */}
+          {block.type === "error" && stoppedReason == null && <ReadableErrorLines lines={block.lines} />}
         </div>
       ))}
       <ReadableDetails lines={transcript.details} density={density} thinkingClassName={thinkingClassName} />
-      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} usage={usage} stoppedReason={stoppedReason} />}
+      {(transcript.footer || stoppedReason != null) && (
+        <ReadableFooter footer={transcript.footer ?? STOPPED_FALLBACK_FOOTER} density={density} usage={usage} stoppedReason={stoppedReason} />
+      )}
     </div>
   );
 }
@@ -671,14 +691,21 @@ export function ReadableRunSummary({
 }) {
   const transcript = useReadableTranscript(entries, streaming);
   // The chat shows assistant text and tool calls from its own message parts;
-  // error-looking stderr only exists in the entries, so surface it here.
-  const errorLines = transcript.blocks.flatMap((block) => (block.type === "error" ? block.lines : []));
-  if (transcript.details.length === 0 && !transcript.footer && errorLines.length === 0) return null;
+  // error-looking stderr only exists in the entries, so surface it here —
+  // unless the run was stopped, in which case the killed process's error
+  // noise is exactly what the neutral footer replaces.
+  const stopped = stoppedReason != null;
+  const errorLines = stopped
+    ? []
+    : transcript.blocks.flatMap((block) => (block.type === "error" ? block.lines : []));
+  if (transcript.details.length === 0 && !transcript.footer && errorLines.length === 0 && !stopped) return null;
   return (
     <div className="space-y-2" data-readable-run-summary>
       {errorLines.length > 0 && <ReadableErrorLines lines={errorLines} />}
       <ReadableDetails lines={transcript.details} density={density} />
-      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} usage={usage} stoppedReason={stoppedReason} />}
+      {(transcript.footer || stopped) && (
+        <ReadableFooter footer={transcript.footer ?? STOPPED_FALLBACK_FOOTER} density={density} usage={usage} stoppedReason={stoppedReason} />
+      )}
     </div>
   );
 }

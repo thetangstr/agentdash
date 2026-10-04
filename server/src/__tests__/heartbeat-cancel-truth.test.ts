@@ -18,6 +18,7 @@ import {
   RUN_CANCELLED_BY_OPERATOR_MESSAGE,
 } from "@paperclipai/shared";
 import { heartbeatService } from "../services/heartbeat.ts";
+import { runningProcesses } from "../adapters/index.js";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.ts";
 
 async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, intervalMs = 50) {
@@ -472,4 +473,109 @@ describe("heartbeat cancel truth (c3)", () => {
       await gateway.close();
     }
   }, 120_000);
+
+  // AgentDash (c3 review): the whole race end-to-end with a real process —
+  // SIGTERM exits 130 via the trap, the adapter resolves after the cancelled
+  // commit, and nothing downstream may read it as a failure.
+  it("a real process killed by cancel exits 130 and still settles cancelled with the agent idle", async () => {
+    const { companyId, issuePrefix } = await seedCompany();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const heartbeat = heartbeatService(db);
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Process Agent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "process",
+      adapterConfig: {
+        command: "sh",
+        args: ["-c", "trap 'exit 130' TERM; sleep 30 & wait"],
+        graceSec: 1,
+      },
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Real process stopped by the operator",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      issueNumber: 1,
+      identifier: `${issuePrefix}-1`,
+    });
+
+    const run = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { issueId },
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_assigned" },
+      requestedByActorType: "user",
+      requestedByActorId: "user-1",
+    });
+    expect(run).not.toBeNull();
+
+    // Wait for the real sh process to be spawned — the process adapter does
+    // not persist a pid on the run row; the shared runningProcesses map is
+    // the same signal cancelRunInternal consults before it kills.
+    try {
+      await waitFor(async () => {
+        const row = await db
+          .select()
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, run!.id))
+          .then((rows) => rows[0]);
+        return row?.status === "running" && runningProcesses.has(run!.id);
+      }, 60_000);
+    } catch (err) {
+      const row = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, run!.id))
+        .then((rows) => rows[0]);
+      console.log("run row at timeout:", JSON.stringify({ status: row?.status, errorCode: row?.errorCode, error: row?.error, processPid: row?.processPid }));
+      const evts = await db
+        .select()
+        .from(heartbeatRunEvents)
+        .where(eq(heartbeatRunEvents.runId, run!.id))
+        .orderBy(asc(heartbeatRunEvents.id));
+      console.log("run events:", JSON.stringify(evts.map((e) => ({ t: e.eventType, m: e.message, lvl: e.level }))));
+      throw err;
+    }
+
+    const cancelled = await heartbeat.cancelRun(
+      run!.id,
+      RUN_CANCELLED_BY_OPERATOR_MESSAGE,
+      RUN_CANCELLED_BY_OPERATOR_CODE,
+    );
+    expect(cancelled?.status).toBe("cancelled");
+    await heartbeat.waitForExecutionDrain();
+
+    const settled = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, run!.id))
+      .then((rows) => rows[0]);
+    expect(settled?.status).toBe("cancelled");
+    expect(settled?.errorCode).toBe(RUN_CANCELLED_BY_OPERATOR_CODE);
+
+    const agent = await db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0]);
+    expect(agent?.status).toBe("idle");
+
+    const events = await db
+      .select()
+      .from(heartbeatRunEvents)
+      .where(eq(heartbeatRunEvents.runId, run!.id))
+      .orderBy(asc(heartbeatRunEvents.id));
+    // The cancel path and the adopted executor path must not double-report.
+    expect(events.filter((event) => event.message === "run stopped")).toHaveLength(1);
+    expect(events.some((event) => event.message === "run failed")).toBe(false);
+    expect(events.every((event) => event.level !== "error")).toBe(true);
+  }, 90_000);
 });

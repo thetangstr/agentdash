@@ -212,6 +212,30 @@ describe.sequential("activity routes", () => {
     expect(res.body).toEqual([{ runId: "run-1", adapterType: "codex_local" }]);
   });
 
+  // AgentDash (c3 review): run `error` is adapter detail and can carry a
+  // credential — it goes through the same serve-time redaction as run logs.
+  it("redacts secrets out of run errors served to the issue run list", async () => {
+    mockIssueService.getByIdentifier.mockResolvedValue({
+      id: "issue-uuid-1",
+      companyId: "company-1",
+    });
+    mockActivityService.runsForIssue.mockResolvedValue([
+      {
+        runId: "run-1",
+        status: "cancelled",
+        error: "Adapter probe failed with key sk-abcdefghijklmnop1234 attached",
+        errorCode: "cancelled_by_operator",
+      },
+    ]);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get("/api/issues/PAP-475/runs"));
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].error).not.toContain("sk-abcdefghijklmnop1234");
+    expect(res.body[0].error).toContain("Adapter probe failed");
+  });
+
   it("bounds the default issue run list to 100 runs", async () => {
     mockIssueService.getById.mockResolvedValue({
       id: "issue-uuid-1",

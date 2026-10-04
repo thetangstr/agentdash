@@ -662,4 +662,51 @@ describeEmbeddedPostgres("activity service", () => {
     expect(serialized).not.toContain("secret wake payload that must not be exposed");
     expect(serialized).not.toContain("large nested blob that must be dropped");
   });
+
+  // AgentDash (c3 review): `error` became a served field on this route — a
+  // provider-echoed credential in it must go through the same serve-time
+  // redaction pass as the run list and detail routes.
+  it("redacts a secret embedded in a run's error for issue run payloads", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "failed",
+      contextSnapshot: { issueId },
+      errorCode: "adapter_failed",
+      error:
+        "provider rejected the request: invalid credential sk-proj-0123456789abcdef supplied by adapter config",
+    });
+
+    const service = activityService(db);
+    const runs = await service.runsForIssue(companyId, issueId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.error).not.toContain("sk-proj-0123456789abcdef");
+    expect(runs[0]?.error).toContain("***REDACTED***");
+  });
 });

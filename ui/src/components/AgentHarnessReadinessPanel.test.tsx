@@ -152,7 +152,8 @@ describe("what reaches the screen", () => {
     );
 
     expect(html).toContain("Re-check setup");
-    expect(html).toContain("run successfully");
+    expect(html).toContain("has run before");
+    expect(html).toContain("Launching stays blocked");
     expect(html).not.toContain("Setup check failed");
   });
 

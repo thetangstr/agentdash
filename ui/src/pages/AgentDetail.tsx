@@ -1409,8 +1409,15 @@ export function LatestRunCard({
   const isLive = run.status === "running" || run.status === "queued";
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
-  const summaryRaw = run.resultJson
+  // AgentDash (c3): same rule as RunListItem — real summary text wins; a
+  // cancelled run with no summary still gets its stop reason, never the raw
+  // adapter error. (The cancel path does write a summary, so this matters
+  // exactly when it didn't.)
+  const resultSummary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
+    : "";
+  const summaryRaw = resultSummary
+    ? resultSummary
     : run.status === "cancelled"
       ? cancelledRunLabel(run)
       : (run.error ?? "");
@@ -3878,7 +3885,9 @@ export function RunStderrExcerpt({
   );
 }
 
-function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
+// Exported for tests: the cancelled-run chrome guards (no red failure panel,
+// no red exit code) are exercised through a rendered RunDetail.
+export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { pushToast } = useToastActions();

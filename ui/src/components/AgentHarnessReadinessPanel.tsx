@@ -243,7 +243,7 @@ export function AgentHarnessReadinessPanel({
   const Icon = status.state === "pass" ? ShieldCheck : status.state === "warn" || softened ? Info : AlertTriangle;
   const title = softened ? "Re-check setup" : status.title;
   const message = softened
-    ? "The last setup check failed, but this agent has run successfully — the evidence may be stale. Re-run the check to refresh it."
+    ? "Latest setup check failed; this agent has run before. Launching stays blocked until a check passes — re-run it to confirm the failure is real."
     : status.message;
   return (
     <section className={cn("rounded-lg border px-4 py-3 text-sm", softened ? "border-border bg-muted/40 text-muted-foreground" : toneForState(status.state), className)}>

@@ -1,13 +1,13 @@
-// AgentDash (OBS-5, #698): report the Hermes child's spawn to the heartbeat.
+// AgentDash (OBS-5, #698): report an adapter child's spawn to the heartbeat.
 //
-// hermes-paperclip-adapter calls `runChildProcess` without forwarding
-// `ctx.onSpawn`, so Hermes runs never recorded `process_pid` or
-// `process_started_at`, and anything timing a Hermes run (the first-output
-// deadline, the orphan reaper) had to start its clock at the run's queue start.
+// Some adapters call `runChildProcess` without forwarding `ctx.onSpawn`
+// (the vendored Hermes adapter — the built-in `process` adapter forwards it
+// directly), so their runs never recorded `process_pid` or
+// `process_started_at`, and anything timing the run (the first-output
+// deadline, the orphan reaper) or killing it by pid had nothing to go on.
 // `runChildProcess` does register the child in the shared `runningProcesses`
 // map the moment it spawns, so this watches that map for the run and reports
-// the spawn once, within one poll interval. No patch to the vendored adapter
-// (and so no lockfile change) is needed.
+// the spawn once, within one poll interval.
 import type { ServerAdapterModule } from "@paperclipai/adapter-utils";
 import { runningProcesses } from "./utils.js";
 

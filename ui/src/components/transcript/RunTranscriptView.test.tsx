@@ -90,6 +90,30 @@ describe("RunTranscriptView", () => {
     expect(html).not.toContain("process received SIGINT");
   });
 
+  // AgentDash (c3 review): a killed process rarely gets to write a result
+  // line — the stopped run still gets its neutral footer, and the stderr
+  // noise the kill produced is not shown as a red error block.
+  it("shows the stopped footer with no result line, and hides kill-noise error lines", () => {
+    const stoppedWithoutResult: TranscriptEntry[] = [
+      { kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: "Still working on it" },
+      { kind: "stderr", ts: "2026-03-12T00:00:02.000Z", text: "Error: process terminated by signal SIGTERM" },
+    ];
+    const html = render(<RunTranscriptView entries={stoppedWithoutResult} stoppedReason="Stopped manually" />);
+    expect(html).toContain('data-readable-footer="ok"');
+    expect(html).toContain("Stopped");
+    expect(html).toContain("Stopped manually");
+    expect(html).not.toContain("SIGTERM");
+    expect(html).not.toContain("process terminated");
+  });
+
+  it("still renders error lines on a run that was not stopped", () => {
+    const noisyRun: TranscriptEntry[] = [
+      { kind: "stderr", ts: "2026-03-12T00:00:02.000Z", text: "Error: real failure noise" },
+    ];
+    const html = render(<RunTranscriptView entries={noisyRun} />);
+    expect(html).toContain("real failure noise");
+  });
+
   it("keeps the red Failed footer for a genuinely failed run", () => {
     const failedRun: TranscriptEntry[] = [
       {
