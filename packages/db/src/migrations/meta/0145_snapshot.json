@@ -4017,6 +4017,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "assistant_messages_author_agent_created_idx": {
+          "name": "assistant_messages_author_agent_created_idx",
+          "columns": [
+            {
+              "expression": "author_agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {

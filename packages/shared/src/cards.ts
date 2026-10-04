@@ -54,4 +54,10 @@ export interface AgentPlanProposalV1Payload {
    */
   confirmedAt?: string;
   confirmedAgentIds?: string[];
+  /**
+   * AgentDash (review-1019): steady-state hire cards stamp who asked for the
+   * team; /confirm-plan refuses anyone else, matching task-card behaviour.
+   * Absent on onboarding cards, which stay confirmable by any member.
+   */
+  requesterUserId?: string;
 }

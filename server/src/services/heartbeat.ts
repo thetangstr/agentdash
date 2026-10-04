@@ -1247,9 +1247,10 @@ export function summarizeHeartbeatRunListResultJson(input: {
   ] as const) {
     let normalized = readNonEmptyString(value);
     // AgentDash (canary): rows persisted before the merge-time strip can hold
-    // a leading runtime status line (e.g. a scanner warning) as their summary.
-    // The run list must never show that as the agent's result.
-    if (key === "summary" && normalized) {
+    // a leading runtime status line (e.g. a scanner warning) as their summary
+    // or their result — the run card falls back summary ?? result, so every
+    // displayable text field is stripped. A real error stays verbatim.
+    if (key !== "error" && normalized) {
       const cleaned = stripStatusLines(normalized);
       normalized = cleaned.length > 0 ? cleaned : null;
     }

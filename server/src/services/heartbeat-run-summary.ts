@@ -22,12 +22,31 @@ function readCommentText(value: unknown) {
 // AgentDash (canary): a runtime status line is never the run summary. The
 // Hermes adapter picks cleaned stdout as its response, so a leading "⚠ tirith
 // security scanner enabled but not available" line became the persisted
-// summary. Strip the leading chatter from every summary-shaped input; a summary
-// that was only noise disappears instead of landing on the run card.
+// summary — and the same line reached `result` and `message`, which the run
+// card falls back to. Strip the leading chatter from every summary-shaped
+// input; a value that was only noise disappears instead of landing on the
+// run card.
 function readSummaryText(value: unknown) {
   if (typeof value !== "string") return null;
   const cleaned = stripStatusLines(value);
   return cleaned.length > 0 ? cleaned : null;
+}
+
+// The displayable text fields a status line can land in. `error` is excluded
+// on purpose: a real error is served verbatim.
+const RESULT_TEXT_KEYS = ["summary", "result", "message"] as const;
+
+function cleanResultTextFields(base: Record<string, unknown>): Record<string, unknown> {
+  let cleaned: Record<string, unknown> | null = null;
+  for (const key of RESULT_TEXT_KEYS) {
+    if (typeof base[key] !== "string") continue;
+    const value = readSummaryText(base[key]);
+    if (value === base[key]) continue;
+    cleaned ??= { ...base };
+    if (value === null) delete cleaned[key];
+    else cleaned[key] = value;
+  }
+  return cleaned ?? base;
 }
 
 export function mergeHeartbeatRunResultJson(
@@ -37,18 +56,8 @@ export function mergeHeartbeatRunResultJson(
   const normalizedSummary = readSummaryText(summary);
   let baseResult =
     resultJson && typeof resultJson === "object" && !Array.isArray(resultJson)
-      ? resultJson
+      ? cleanResultTextFields(resultJson)
       : null;
-
-  if (baseResult && typeof baseResult.summary === "string") {
-    const cleaned = readSummaryText(baseResult.summary);
-    if (cleaned === null) {
-      const { summary: _droppedSummary, ...rest } = baseResult;
-      baseResult = rest;
-    } else if (cleaned !== baseResult.summary) {
-      baseResult = { ...baseResult, summary: cleaned };
-    }
-  }
 
   if (!baseResult) {
     return normalizedSummary ? { summary: normalizedSummary } : null;
@@ -80,8 +89,9 @@ export function summarizeHeartbeatRunResultJson(
   for (const key of textFields) {
     let value = truncateSummaryText(resultJson[key]);
     // Rows persisted before the merge-time strip can still carry a leading
-    // status line as their summary; never serve it back to the run list.
-    if (key === "summary" && value !== null) {
+    // status line as their summary — or their result, which the card falls
+    // back to. `error` stays verbatim.
+    if (key !== "error" && value !== null) {
       value = readSummaryText(value);
     }
     if (value !== null) {

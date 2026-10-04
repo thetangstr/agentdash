@@ -1,6 +1,8 @@
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { isUuidLike } from "@paperclipai/shared";
 import {
+  agents,
   assistantConversations,
   assistantConversationParticipants,
   assistantMessages,
@@ -171,6 +173,27 @@ export function conversationService(db: Db) {
         if (err instanceof Error && err.message.startsWith("postMessage:")) throw err;
         // Lookup failed: fall back to the caller's company; a reload still shows the message.
       }
+      // AgentDash: remember which agent wrote an agent message — the shared
+      // company inbox has no per-agent conversation link, so this is what the
+      // agent page's chat tally counts. The column is a uuid FK to agents, so
+      // only a value that is a uuid AND resolves to an agent of this
+      // conversation's company earns attribution: callers pass "system" when
+      // the CoS is missing, and a deleted or foreign agent id would fail the
+      // insert outright. Unresolvable ids persist null — the message still
+      // posts, just unattributed.
+      let authorAgentId: string | null = null;
+      if (input.authorKind === "agent" && companyId && isUuidLike(input.authorId)) {
+        try {
+          const author = await db
+            .select({ id: agents.id })
+            .from(agents)
+            .where(and(eq(agents.id, input.authorId), eq(agents.companyId, companyId)))
+            .limit(1);
+          authorAgentId = author[0]?.id ?? null;
+        } catch {
+          // Lookup failed: post unattributed rather than lose the message.
+        }
+      }
       const rows = await db
         .insert(assistantMessages)
         .values({
@@ -178,10 +201,7 @@ export function conversationService(db: Db) {
           role: input.authorKind,
           // AgentDash: remember who wrote a person's message (Retry is theirs only).
           authorUserId: input.authorKind === "user" ? input.authorId : null,
-          // AgentDash: remember which agent wrote an agent message — the shared
-          // company inbox has no per-agent conversation link, so this is what
-          // the agent page's chat tally counts.
-          authorAgentId: input.authorKind === "agent" ? input.authorId : null,
+          authorAgentId,
           // AgentDash (GH #992): agent-authored text persists redacted.
           content: input.authorKind === "agent" ? redactRunLogText(input.body) : input.body,
           cardKind: input.cardKind ?? null,

@@ -76,6 +76,14 @@ describe("agentKindExplanation", () => {
     expect(text).not.toMatch(/own terminal/);
   });
 
+  // Review-1019: the `process` adapter runs its command on this machine —
+  // same wording applies even though its type lacks the `_local` suffix.
+  it("describes a stewarded agent on the process adapter as server-run too", () => {
+    const text = agentKindExplanation({ ...stewarded, adapterType: "process" });
+    expect(text).toMatch(/workspace server/);
+    expect(text).not.toMatch(/own terminal/);
+  });
+
   it("tells someone what to do about an unpaired agent", () => {
     // An explanation of a broken state that does not say how to fix it leaves
     // the reader exactly where they started.

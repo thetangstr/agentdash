@@ -45,5 +45,7 @@ export const assistantMessages = pgTable(
   },
   (table) => [
     index("assistant_messages_conversation_created_idx").on(table.conversationId, table.createdAt),
+    // The agent page's monthly chat tally filters author_agent_id + created_at.
+    index("assistant_messages_author_agent_created_idx").on(table.authorAgentId, table.createdAt),
   ],
 );

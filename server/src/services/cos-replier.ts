@@ -14,6 +14,8 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../middleware/logger.js";
 import { WORKFORCE_TEMPLATES, isAgentPlanPayload, normalizeAgentPlanTitles, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
+import { companies as companiesTable } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
 import { promptFactText, sanitizePromptData } from "./prompt-fact-text.js";
 import type { DispatchMeter } from "./dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-failure.js";
@@ -61,7 +63,10 @@ export function defaultAgentPlanAdapterType(): string {
 export const COS_PLAIN_LANGUAGE_GUIDANCE = `Write every visible sentence for a busy, non-technical business owner. Never name adapters, runtimes, models or providers (for example "hermes_local" or "claude_local"), JSON field names, role slugs with underscores, or internal process terms such as "artifact evidence", "neutral review", "workforce template" or "heartbeat". Say "Proposal Drafter", not "proposal_drafter", and "a reviewer checks the first job", not "neutral review".`;
 
 // AgentDash: shared catalog guidance for single, generated and revised proposals.
-export const WORKFORCE_PROPOSAL_GUIDANCE = `Available workforce templates (version 1): ${WORKFORCE_TEMPLATES.map(template => `${template.id}: ${template.description}`).join("; ")}. Add optional workforceTemplateId to an agent only when the human explicitly selects that catalog role. Preserve existing selections when revising unrelated details. Ambiguous requests remain custom with the field omitted. A template describes work and grants no permissions; display role, authority and runtime remain independent. A new hire's first job is accepted only after a reviewer checks the delivered work. ${COS_PLAIN_LANGUAGE_GUIDANCE}`;
+// The core text is kept separate so a prompt that already carries the
+// plain-language clause (the steady-state prompt does) does not get it twice.
+const WORKFORCE_PROPOSAL_CORE = `Available workforce templates (version 1): ${WORKFORCE_TEMPLATES.map(template => `${template.id}: ${template.description}`).join("; ")}. Add optional workforceTemplateId to an agent only when the human explicitly selects that catalog role. Preserve existing selections when revising unrelated details. Ambiguous requests remain custom with the field omitted. A template describes work and grants no permissions; display role, authority and runtime remain independent. A new hire's first job is accepted only after a reviewer checks the delivered work.`;
+export const WORKFORCE_PROPOSAL_GUIDANCE = `${WORKFORCE_PROPOSAL_CORE} ${COS_PLAIN_LANGUAGE_GUIDANCE}`;
 
 interface CosStateRow {
   conversationId: string;
@@ -230,12 +235,15 @@ export function steadyStatePrompt(
   roster: CosIssueRosterEntry[] | null,
   requester?: { name: string | null } | null,
   memberNames: readonly string[] = [],
+  requiresApproval = false,
 ): string {
+  // STEADY_STATE_PROMPT already carries the plain-language clause, so the
+  // hire block embeds the workforce core, not the full guidance (review #1019).
   const hireBlock = `
 
-${WORKFORCE_PROPOSAL_GUIDANCE}
+${WORKFORCE_PROPOSAL_CORE}
 
-${STEADY_HIRE_GUIDANCE}
+${STEADY_HIRE_GUIDANCE}${requiresApproval ? " This company requires board approval for new hires — say the hires join the team once the board approves them, never that they start on confirm." : ""}
 
 For adapterType, choose from: ${AGENT_PLAN_ADAPTER_TYPES}. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the person explicitly asks for another adapter. ${planNamingGuidance(memberNames)}`;
   if (!roster || roster.length === 0) {
@@ -243,7 +251,7 @@ For adapterType, choose from: ${AGENT_PLAN_ADAPTER_TYPES}. Prefer "${defaultAgen
   }
   const team = roster
     .map((a) =>
-      `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}${a.canTakeWork ? "" : " — unavailable right now, cannot take new work"}`,
+      `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}${a.canTakeWork ? "" : a.awaitingApproval ? " — awaiting board approval, cannot take new work yet" : " — unavailable right now, cannot take new work"}`,
     )
     .join("\n");
   // The message being answered is the last user turn; it is referenced, not
@@ -261,7 +269,7 @@ ${COS_FACTS_CHANNEL_GUIDANCE}
 You can suggest a task. The person confirms it with one click before anything is created. The team this person works with (name, role, id):
 ${team}${requestBlock}
 
-Teammates marked "unavailable right now" are still part of the team — say so when asked about them — but they cannot take new work, so never name one as an assignee.
+Teammates marked "unavailable right now" or "awaiting board approval" are still part of the team — say so when asked about them — but they cannot take new work, so never name one as an assignee. An approved hire stops awaiting approval; never claim one was rejected or removed unless a fact says so.
 
 Only when the message you are answering clearly asks for a piece of work to be done (for example "get Ellie to draft the proposal for Acme" or "have someone research our top three competitors"), suggest ONE task by ending your reply with exactly one fenced JSON block, after your visible reply:
 
@@ -678,7 +686,23 @@ export function cosReplier(deps: Deps) {
             logger.warn({ err, companyId: input.companyId }, "cos-replier: could not load the requester's name");
           }
         }
-        system = steadyStatePrompt(roster, trigger ? { name: requesterName } : null, memberNames);
+        // Hire proposals must never promise what the company's gate does not
+        // deliver: with board approval required, "confirm" means "sent to
+        // Approvals", not "hired".
+        let hiresNeedBoardApproval = false;
+        if (deps.db && input.companyId) {
+          try {
+            const company = await deps.db
+              .select({ requireBoardApprovalForNewAgents: companiesTable.requireBoardApprovalForNewAgents })
+              .from(companiesTable)
+              .where(eq(companiesTable.id, input.companyId))
+              .then((rows) => rows[0] ?? null);
+            hiresNeedBoardApproval = company?.requireBoardApprovalForNewAgents === true;
+          } catch (err) {
+            logger.warn({ err, companyId: input.companyId }, "cos-replier: could not read the hire-approval flag");
+          }
+        }
+        system = steadyStatePrompt(roster, trigger ? { name: requesterName } : null, memberNames, hiresNeedBoardApproval);
         // labelMessageAuthors emits one entry per non-error card in
         // chronological order, so its index maps 1:1 onto this list.
         const chronological = recent
@@ -753,7 +777,7 @@ export function cosReplier(deps: Deps) {
       const postPlan = async (
         proposedPlan: AgentPlanProposalV1Payload,
         proposedBody: string,
-        opts: { trackPhaseProposal?: boolean } = {},
+        opts: { trackPhaseProposal?: boolean; requesterUserId?: string | null } = {},
       ) => {
         // Never an agent named after a person in the company; titles verbatim.
         const { plan, body: planBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
@@ -773,7 +797,12 @@ export function cosReplier(deps: Deps) {
           authorId: input.cosAgentId,
           body: "",
           cardKind: PLAN_CARD_KIND,
-          cardPayload: plan as unknown as Record<string, unknown>,
+          cardPayload: {
+            ...plan,
+            // Review-1019: only the person who asked may confirm a
+            // steady-state hire card, like the task cards (item 11).
+            ...(opts.requesterUserId ? { requesterUserId: opts.requesterUserId } : {}),
+          } as unknown as Record<string, unknown>,
           companyId: input.companyId,
         });
         if (opts.trackPhaseProposal !== false) {
@@ -976,7 +1005,7 @@ export function cosReplier(deps: Deps) {
             return await postPlan(
               plan!,
               hireBody || "Here's the hire proposal — confirm on the card below.",
-              { trackPhaseProposal: false },
+              { trackPhaseProposal: false, requesterUserId: input.requestedBy?.userId ?? null },
             );
           } catch (err) {
             logger.warn(

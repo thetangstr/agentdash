@@ -10,6 +10,7 @@ import {
   extractCreateIssueTrailer,
   extractHirePlanTrailer,
   labelMessageAuthors,
+  steadyStatePrompt,
 } from "../services/cos-replier.js";
 
 const agentId = "33333333-3333-4333-8333-333333333333";
@@ -54,7 +55,7 @@ function setup(
     postMessage: vi.fn().mockImplementation(async (m: { cardKind?: string }) => ({ id: `m-${m.cardKind ?? "text"}` })),
   };
   const issueAction = {
-    roster: vi.fn().mockResolvedValue([{ id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true }]),
+    roster: vi.fn().mockResolvedValue([{ id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true, awaitingApproval: false }]),
     turnContext: vi.fn().mockResolvedValue(
       opts.turnContext ?? {
         openIssues: [{ identifier: "ACM-7", title: "Draft the Acme proposal", status: "in_progress", assigneeName: "Ellie" }],
@@ -626,6 +627,29 @@ describe("steady-state hire proposals", () => {
     // A hire card in a steady conversation never regresses it to "plan".
     expect(cosState.advancePhase).not.toHaveBeenCalled();
     expect(issueAction.proposeFromTrailer).not.toHaveBeenCalled();
+    // Review-1019: the card names who asked — confirm-plan refuses anyone else.
+    expect((card!.cardPayload as any).requesterUserId).toBe("user-a");
+  });
+
+  it("tells the CoS a gated hire lands only after board approval", async () => {
+    const roster = [{ id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true, awaitingApproval: false }];
+    const gated = steadyStatePrompt(roster, null, [], true);
+    expect(gated).toContain("board approval");
+    expect(gated).toContain("never that they start on confirm");
+    // The gating clause itself is conditional — the ungated prompt mentions
+    // board approval only in the roster label explainer.
+    const ungated = steadyStatePrompt(roster, null, [], false);
+    expect(ungated).not.toContain("never that they start on confirm");
+    // A hire awaiting approval is named "awaiting board approval", never
+    // "unavailable right now" (review-1019 item 10).
+    const pending = steadyStatePrompt(
+      [{ id: agentId, name: "Quinn", role: "Operations", canTakeWork: false, awaitingApproval: true }],
+      null,
+    );
+    expect(pending).toContain("awaiting board approval");
+    expect(pending).not.toContain("Quinn (Operations): " + agentId + " — unavailable right now");
+    // The plain-language clause travels exactly once (review-1019 item 14).
+    expect(gated.split(COS_PLAIN_LANGUAGE_GUIDANCE).length - 1).toBe(1);
   });
 
   it("asks for the hire trailer only when the message clearly asks for a new teammate", async () => {

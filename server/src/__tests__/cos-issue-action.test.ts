@@ -27,6 +27,9 @@ const patId = "99999999-9999-4999-8999-999999999999";
 // Scout sat in `error` on the canary and the roster dropped him outright —
 // the prompt never knew he existed.
 const scoutId = "12121212-1212-4212-8212-121212121212";
+// Quinn awaits board approval — on the roster, but labelled "awaiting
+// approval", never "unavailable right now" (review-1019).
+const quinnId = "23232323-2323-4323-8323-232323232323";
 const conversationId = "55555555-5555-4555-8555-555555555555";
 const triggerMessageId = "77777777-7777-4777-8777-777777777777";
 const cardMessageId = "88888888-8888-4888-8888-888888888888";
@@ -50,6 +53,7 @@ const agentsById: Record<string, any> = {
   [cosAgentId]: { id: cosAgentId, companyId, name: "Chief of Staff", role: "chief_of_staff", status: "idle" },
   [patId]: { id: patId, companyId, name: "Pat", role: "general", status: "paused" },
   [scoutId]: { id: scoutId, companyId, name: "Scout", role: "general", status: "error" },
+  [quinnId]: { id: quinnId, companyId, name: "Quinn", role: "general", status: "pending_approval" },
 };
 
 function requester(userId = founder, visible: string[] | null = null): CosIssueRequester {
@@ -147,7 +151,7 @@ describe("cosIssueAction.roster", () => {
   it("lists agents this person can see, never the CoS", async () => {
     const { deps } = makeDeps();
     await expect(cosIssueAction(deps).roster(companyId, requester(founder, [agentId, cosAgentId]), cosAgentId)).resolves.toEqual([
-      { id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true },
+      { id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true, awaitingApproval: false },
     ]);
   });
 
@@ -157,10 +161,14 @@ describe("cosIssueAction.roster", () => {
   it("lists every agent but the CoS when the person sees all agents, flagging who cannot take work", async () => {
     const { deps } = makeDeps();
     const roster = await cosIssueAction(deps).roster(companyId, requester(), cosAgentId);
-    expect(roster.map((a) => a.id)).toEqual([agentId, hiddenAgentId, patId, scoutId]);
+    expect(roster.map((a) => a.id)).toEqual([agentId, hiddenAgentId, patId, scoutId, quinnId]);
     expect(roster.find((a) => a.id === patId)).toMatchObject({ name: "Pat", canTakeWork: false });
     // The canary case: Scout in `error` stays on the roster, unassignable.
     expect(roster.find((a) => a.id === scoutId)).toMatchObject({ name: "Scout", canTakeWork: false });
+    // A hire awaiting board approval is on the roster, flagged so the prompt
+    // says "awaiting board approval" — not "unavailable right now".
+    expect(roster.find((a) => a.id === quinnId)).toMatchObject({ name: "Quinn", canTakeWork: false, awaitingApproval: true });
+    expect(roster.find((a) => a.id === patId)).toMatchObject({ awaitingApproval: false });
   });
 
   it("still refuses to propose work for a teammate who cannot take work", async () => {

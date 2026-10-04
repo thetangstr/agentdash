@@ -223,6 +223,11 @@ export interface CosIssueRosterEntry {
    * hand them work it cannot give.
    */
   canTakeWork: boolean;
+  /**
+   * AgentDash (review-1019): a hire waiting on board approval is not
+   * "unavailable right now" — the prompt must say it awaits approval.
+   */
+  awaitingApproval: boolean;
 }
 
 /**
@@ -427,6 +432,7 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
           name: a.name,
           role: a.title || a.role || "agent",
           canTakeWork: ASSIGNABLE_AGENT_STATUSES.has(a.status),
+          awaitingApproval: a.status === "pending_approval",
         }));
     },
 

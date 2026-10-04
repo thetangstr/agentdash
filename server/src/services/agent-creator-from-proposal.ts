@@ -43,7 +43,7 @@ export function acceptedHireNeedsRepair(agentIds: string[], cause?: unknown) {
   if (cause !== undefined) (error as Error & { cause?: unknown }).cause = cause;
   return error;
 }
-export async function completeManagedHire(deps: Deps, created: Awaited<ReturnType<ReturnType<typeof agentService>['create']>>, files: () => Promise<Record<string, string>>, workforceTemplateId?: string, userId?: string, mintKey = false) {
+export async function completeManagedHire(deps: Deps, created: Awaited<ReturnType<ReturnType<typeof agentService>['create']>>, files: () => Promise<Record<string, string>>, workforceTemplateId?: string, userId?: string, mintKey = false, releaseStatus: 'idle' | 'pending_approval' = 'idle') {
   if (!created.pausedAt) throw conflict('Hire materialization pause is missing');
   const materialized = await deps.instructions.materializeManagedBundle(created, await files(), { entryFile: 'AGENTS.md', replaceExisting: false });
   await deps.agents.completeMaterialization(created.id, created.pausedAt, materialized.adapterConfig);
@@ -54,7 +54,7 @@ export async function completeManagedHire(deps: Deps, created: Awaited<ReturnTyp
     if (enrollment.skillInstallError) throw acceptedHireNeedsRepair([created.id]);
   }
   const apiKey = mintKey ? await deps.agents.createApiKey(created.id, 'default', { source: 'agent_creation' }) : undefined;
-  await deps.agents.completeMaterialization(created.id, created.pausedAt, undefined, true);
+  await deps.agents.completeMaterialization(created.id, created.pausedAt, undefined, releaseStatus);
   return { agentId: created.id, apiKey };
 }
 export function agentCreatorFromProposal(deps: Deps) {

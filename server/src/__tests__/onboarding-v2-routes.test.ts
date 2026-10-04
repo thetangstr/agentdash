@@ -37,6 +37,7 @@ const mockCreator = {
 const mockInstructions = { materializeManagedBundle: vi.fn().mockResolvedValue({}) };
 const mockCosState = {
   getOrCreate: vi.fn(),
+  get: vi.fn().mockResolvedValue(null),
   recordTurn: vi.fn(),
   setGoals: vi.fn(),
   advancePhase: vi.fn().mockResolvedValue(undefined),
@@ -99,6 +100,14 @@ vi.mock("../routes/hermes-provider-setup.js", () => ({
 const mockDispatchLLM = vi.fn();
 vi.mock("../services/dispatch-llm.js", () => ({
   dispatchLLM: (...args: unknown[]) => mockDispatchLLM(...args),
+}));
+
+// AgentDash (PR #1019 review): confirm-plan creates one hire_agent approval
+// per gated hire — the service is mocked so the test asserts the calls, not
+// the approvals table.
+const mockApprovalCreate = vi.fn();
+vi.mock("../services/approvals.js", () => ({
+  approvalService: () => ({ create: mockApprovalCreate }),
 }));
 
 vi.mock("../services/materialize-onboarding-goals.js", () => ({
@@ -194,7 +203,7 @@ afterEach(() => {
   else process.env.PAPERCLIP_PUBLIC_URL = originalPublicUrl;
 });
 
-function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
+function buildApp(actor: any, dbResults: Array<unknown[]> = [], opts: { companyRows?: unknown[] } = {}) {
   const app = express();
   let hireFlow = false;
   app.use(express.json());
@@ -206,6 +215,7 @@ function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
   // Stub db: each `select().from().where()...orderBy?...limit?` chain pops the
   // next preset result. The chain's terminal state is awaitable as a Promise of an array.
   const queue = [...dbResults];
+  const companyRows = opts.companyRows ?? [];
   let selectedTable: unknown;
   let receiptConversation: any;
   let updating = false;
@@ -225,7 +235,7 @@ function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
       then: (onF: any, onR: any) => {
         let result: unknown[];
         if (hireFlow && updating) result = [];
-        else if (hireFlow && selectedTable === companies) result = [];
+        else if (hireFlow && selectedTable === companies) result = companyRows;
         else if (hireFlow && selectedTable === assistantConversations && receiptConversation) result = [receiptConversation];
         else {
           result = queue.length > 0 ? queue.shift()! : [];
@@ -867,6 +877,182 @@ describe("POST /api/onboarding/confirm-plan", () => {
       .post("/api/onboarding/confirm-plan")
       .send({ conversationId: "conv1" });
     expect(res.status).toBe(404);
+  });
+
+  // AgentDash (PR #1019 review, item 1): the plan-card path skipped the
+  // requireBoardApprovalForNewAgents gate that POST /agent-hires enforces.
+  it("gates hires on board approval: releases pending_approval and files one hire_agent approval each", async () => {
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    let createdCount = 0;
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: `agent-${++createdCount}`,
+      companyId,
+      name: data.name,
+      role: data.role,
+      title: data.title ?? null,
+      reportsTo: data.reportsTo ?? null,
+      adapterType: data.adapterType,
+      pausedAt: data.pausedAt,
+      adapterConfig: {},
+    }));
+    let approvalCount = 0;
+    mockApprovalCreate.mockImplementation(async (_companyId: string, data: any) => ({
+      id: `approval-${++approvalCount}`,
+      type: data.type,
+    }));
+
+    const planPayload = {
+      rationale: "ship + seed",
+      agents: [
+        { role: "engineering_lead", name: "Ellie", adapterType: "hermes_local", responsibilities: ["own dashboard"], kpis: ["ship Q3"] },
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test nightly"], kpis: ["zero P0 escapes"] },
+      ],
+      alignmentToShortTerm: "ships v2",
+      alignmentToLongTerm: "lays groundwork",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+      { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: true }] },
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      companyId: "c1",
+      createdAgentIds: ["agent-1", "agent-2"],
+      pendingApproval: true,
+      approvalIds: ["approval-1", "approval-2"],
+    });
+    // Each hire's release lands at pending_approval, never idle — the
+    // approval is what activates it.
+    const releases = mockAgents.completeMaterialization.mock.calls.filter((call: unknown[]) => call[3] !== undefined);
+    expect(releases).toHaveLength(2);
+    for (const call of releases) expect(call[3]).toBe("pending_approval");
+    // One hire_agent approval per created agent, carrying its agentId so the
+    // approval resolves THIS hire (approve → idle; reject → terminate if
+    // still pending).
+    expect(mockApprovalCreate).toHaveBeenCalledTimes(2);
+    expect(mockApprovalCreate).toHaveBeenNthCalledWith(
+      1,
+      "c1",
+      expect.objectContaining({
+        type: "hire_agent",
+        requestedByUserId: "u1",
+        status: "pending",
+        payload: expect.objectContaining({ agentId: "agent-1", source: "cos_plan" }),
+      }),
+    );
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("board approval") }),
+    );
+    expect(mockConversations.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Done — your team has been created") }),
+    );
+  });
+
+  it("does not file approvals or flag pendingApproval when the company does not gate hires", async () => {
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: "agent-1",
+      companyId,
+      name: data.name,
+      pausedAt: data.pausedAt,
+      adapterConfig: {},
+    }));
+    const planPayload = {
+      rationale: "one hire",
+      agents: [
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+      ],
+      alignmentToShortTerm: "s",
+      alignmentToLongTerm: "l",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+      { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: false }] },
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ companyId: "c1", createdAgentIds: ["agent-1"] });
+    expect(mockApprovalCreate).not.toHaveBeenCalled();
+    const releases = mockAgents.completeMaterialization.mock.calls.filter((call: unknown[]) => call[3] !== undefined);
+    expect(releases).toHaveLength(1);
+    expect(releases[0]![3]).toBe("idle");
+  });
+
+  // AgentDash (PR #1019 review, item 9): confirming a steady-state hire card
+  // must not re-run onboarding completion — the goals it would
+  // re-materialize may since have been renamed or deleted.
+  it("skips the 'team created' post and goal materialization when the conversation was already ready", async () => {
+    mockCosState.get.mockResolvedValue({ conversationId: "conv1", phase: "ready" });
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: "agent-1",
+      companyId,
+      name: data.name,
+      pausedAt: data.pausedAt,
+      adapterConfig: {},
+    }));
+    const planPayload = {
+      rationale: "one more hire",
+      agents: [
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+      ],
+      alignmentToShortTerm: "s",
+      alignmentToLongTerm: "l",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    expect(mockMaterializeOnboardingGoals).not.toHaveBeenCalled();
+    expect(mockConversations.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Done — your team has been created") }),
+    );
+  });
+
+  // AgentDash (PR #1019 review, item 11): a steady-state hire card names the
+  // person who asked — like a task card, only they may confirm it.
+  it("refuses a steady-state card confirm from anyone but the requester", async () => {
+    const planPayload = {
+      rationale: "one more hire",
+      agents: [
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+      ],
+      alignmentToShortTerm: "s",
+      alignmentToLongTerm: "l",
+      requesterUserId: "u1",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u2", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(403);
+    expect(mockAgents.create).not.toHaveBeenCalled();
   });
 });
 

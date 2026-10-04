@@ -177,6 +177,60 @@ describeEmbeddedPostgres("conversationService", () => {
     expect(scoped.every((m) => m.conversationId === conversation.id)).toBe(true);
   });
 
+  it("postMessage attributes a real same-company agent, and posts unattributed otherwise", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const agentId = await insertTestAgent(db, companyId);
+    const foreignCompanyId = randomUUID();
+    await db.insert(companies).values({ id: foreignCompanyId, name: "Other Co", issuePrefix: "OTH" });
+    const foreignAgentId = await insertTestAgent(db, foreignCompanyId, "Foreign Agent");
+    const conversation = await service.create({ companyId, userId: TEST_USER_ID });
+
+    const attributed = await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "agent",
+      authorId: agentId,
+      body: "real reply",
+    });
+    expect(attributed.authorAgentId).toBe(agentId);
+
+    // A deleted agent's id and a foreign-company agent's id both resolve to
+    // null — the message must still post rather than fail the uuid FK.
+    const deleted = await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "agent",
+      authorId: randomUUID(),
+      body: "from a gone agent",
+    });
+    expect(deleted.authorAgentId).toBeNull();
+    const foreign = await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "agent",
+      authorId: foreignAgentId,
+      body: "from another company",
+    });
+    expect(foreign.authorAgentId).toBeNull();
+  });
+
+  it("postMessage posts the CoS-missing card when the author is 'system'", async () => {
+    // Regression: routes/conversations passes cos?.id ?? "system"; a non-uuid
+    // authorId used to break the insert on the uuid FK, so the "CoS couldn't
+    // reply" card silently stopped posting.
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const conversation = await service.create({ companyId, userId: TEST_USER_ID });
+
+    const msg = await service.postMessage({
+      conversationId: conversation.id,
+      authorKind: "agent",
+      authorId: "system",
+      body: "CoS couldn't reply",
+      cardKind: "cos_dispatch_error_v1",
+    });
+    expect(msg.authorAgentId).toBeNull();
+    expect(msg.cardKind).toBe("cos_dispatch_error_v1");
+  });
+
   it("postMessage persists card_kind and card_payload when provided", async () => {
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: "Test Co" });

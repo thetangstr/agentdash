@@ -172,7 +172,9 @@ export function plainRuntimeLabel(type: string): string {
  * agent on a workspace adapter is not described as "run from a terminal".
  */
 export function runsOnWorkspaceServer(type: string | null | undefined): boolean {
-  return typeof type === "string" && (type.endsWith("_local") || type === "cursor");
+  // `process` runs the command on this machine; `cursor` predates the
+  // `_local` suffix convention (review-1019 item 13).
+  return typeof type === "string" && (type.endsWith("_local") || type === "cursor" || type === "process");
 }
 
 export function getAdapterLabels(): Record<string, string> {
