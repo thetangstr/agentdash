@@ -81,7 +81,12 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
                 style={{ backgroundColor: selectedCompany.brandColor }}
               />
             ) : null}
-            <span className="truncate text-sm font-bold text-foreground">
+            {/* AgentDash (c3-a11y): a clipped workspace name keeps its full
+                text on hover. */}
+            <span
+              className="truncate text-sm font-bold text-foreground"
+              title={selectedCompany?.name ?? undefined}
+            >
               {selectedCompany?.name ?? "Select company"}
             </span>
           </span>

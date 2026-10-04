@@ -197,6 +197,19 @@ export function IssueDocumentsSection({
     queryFn: () => issuesApi.listDocuments(issue.id),
   });
 
+  // AgentDash (c3-a11y): while a deliverable waits for review the Result block
+  // shows Accept / Request changes — Helpful / Needs work thumbs on the same
+  // deliverable are a second, competing vocabulary for the same decision, so
+  // they stay hidden until the review resolves. Same query the Result block
+  // runs, so this adds no request.
+  const { data: shipped } = useQuery({
+    queryKey: queryKeys.shipped(issue.companyId, { issueId: issue.id }),
+    queryFn: () => issuesApi.listShipped(issue.companyId, { issueId: issue.id }),
+  });
+  const deliverableAwaitingReview = (shipped?.items ?? []).some(
+    (product) => product.status === "ready_for_review",
+  );
+
   // `isFetching` alone cannot gate the empty state: it goes false the moment
   // the request fails while `data` stays undefined, so the menu fell through to
   // "No revisions yet" and told someone a document had no history when it may
@@ -844,7 +857,13 @@ export function IssueDocumentsSection({
             displayedBody.split("\n").find((line) => line.trim().length > 0)?.trimStart() ?? "",
           );
           const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim() && !titlesMatchKey(displayedTitle, doc.key) && (isFolded || !bodyLeadsWithHeading);
-          const canVoteOnDocument = Boolean(doc.latestRevisionId && doc.updatedByAgentId && !doc.updatedByUserId && onVote);
+          const canVoteOnDocument = Boolean(
+            doc.latestRevisionId
+            && doc.updatedByAgentId
+            && !doc.updatedByUserId
+            && onVote
+            && !deliverableAwaitingReview,
+          );
 
           return (
             <div

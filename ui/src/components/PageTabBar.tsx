@@ -12,9 +12,11 @@ interface PageTabBarProps {
   value?: string;
   onValueChange?: (value: string) => void;
   align?: "center" | "start";
+  /** AgentDash (c3-a11y): the phone <select> is icon-less chrome — it needs a name. */
+  ariaLabel?: string;
 }
 
-export function PageTabBar({ items, value, onValueChange, align = "center" }: PageTabBarProps) {
+export function PageTabBar({ items, value, onValueChange, align = "center", ariaLabel = "Page sections" }: PageTabBarProps) {
   const { isMobile } = useSidebar();
 
   if (isMobile && value !== undefined && onValueChange) {
@@ -22,6 +24,7 @@ export function PageTabBar({ items, value, onValueChange, align = "center" }: Pa
       <select
         value={value}
         onChange={(e) => onValueChange(e.target.value)}
+        aria-label={ariaLabel}
         className="h-9 rounded-md border border-border bg-background px-2 py-1 text-base focus:outline-none focus:ring-1 focus:ring-ring"
       >
         {items.map((item) => (

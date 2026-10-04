@@ -1,5 +1,5 @@
 import { Link } from "@/lib/router";
-import { Menu } from "lucide-react";
+import { ChevronLeft, Menu } from "lucide-react";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useCompany } from "../context/CompanyContext";
@@ -109,26 +109,39 @@ export function BreadcrumbBar() {
               return (
                 <Fragment key={i}>
                   {i > 0 && <BreadcrumbSeparator />}
-                  {/* AgentDash: on phones the parent crumb yields to the page
-                      label — a long workspace name must not push "Billing" off
-                      the bar or clip it. The parent truncates (bounded by the
-                      li) and keeps its 44px tap floor; the last crumb never
-                      shrinks, so the page name always reads in full. */}
+                  {/* AgentDash: on phones the parent crumb becomes a back
+                      chevron — a truncated "W"/"Worl"/"Sett" reads as noise
+                      and still eats page-name space. The chevron keeps the
+                      44px tap floor and announces "Back to <parent>"; the
+                      last crumb never shrinks, so the page name always reads
+                      in full. */}
                   <BreadcrumbItem
-                    className={isLast ? "min-w-0 max-sm:shrink-0" : "shrink-0 max-sm:shrink max-sm:min-w-0 max-sm:overflow-hidden"}
+                    className={isLast ? "min-w-0 max-sm:shrink-0" : "shrink-0"}
                   >
                     {isLast || !crumb.href ? (
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                     ) : (
-                      <BreadcrumbLink asChild>
-                        {/* 44px tap target on phones; the 48px header has the room. */}
-                        <Link
-                          to={crumb.href}
-                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:max-w-full max-sm:items-center"
-                        >
-                          <span className="min-w-0 max-sm:truncate">{crumb.label}</span>
-                        </Link>
-                      </BreadcrumbLink>
+                      <>
+                        {/* AgentDash (c3-a11y): on phones the parent crumb is a
+                            back chevron named "Back to <parent>" — a truncated
+                            "W"/"Worl" reads as noise. Kept as a separate link so
+                            the desktop crumb keeps its real name (an aria-label
+                            on a shared link renames it at every width). */}
+                        <BreadcrumbLink asChild className="sm:hidden">
+                          <Link
+                            to={crumb.href}
+                            aria-label={`Back to ${crumb.label}`}
+                            className="inline-flex min-h-11 min-w-11 items-center"
+                          >
+                            <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+                          </Link>
+                        </BreadcrumbLink>
+                        <BreadcrumbLink asChild className="max-sm:hidden">
+                          <Link to={crumb.href} className="min-w-0 truncate">
+                            {crumb.label}
+                          </Link>
+                        </BreadcrumbLink>
+                      </>
                     )}
                   </BreadcrumbItem>
                 </Fragment>

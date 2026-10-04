@@ -48,7 +48,7 @@ export default defineConfig({
     // Always boot a dedicated throwaway instance for e2e so browser tests
     // never attach to the developer's active Paperclip home/server.
     reuseExistingServer: false,
-    timeout: 120_000,
+    timeout: Number(process.env.PAPERCLIP_E2E_WEBSERVER_TIMEOUT_MS ?? 120_000),
     stdout: "pipe",
     stderr: "pipe",
     env: {

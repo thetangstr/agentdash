@@ -303,8 +303,8 @@ export function InstanceExperimentalSettings() {
           <div className="space-y-1.5">
             <h2 className="text-sm font-semibold">Auto-Restart Dev Server When Idle</h2>
             <p className="max-w-2xl text-sm text-muted-foreground">
-              In `pnpm dev:once`, wait for all queued and running local agent runs to finish, then restart the server
-              automatically when backend changes or migrations make the current boot stale.
+              For local development servers only. Wait for all queued and running local agent runs to finish, then
+              restart the server automatically when backend changes or migrations make the current boot stale.
             </p>
           </div>
           <ToggleSwitch

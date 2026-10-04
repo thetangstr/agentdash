@@ -241,8 +241,11 @@ export function Agents() {
           </div>
           {/* View toggle */}
           {!forceListView && (
-            <div className="flex items-center border border-border">
+            <div className="flex items-center border border-border" role="group" aria-label="Agents view">
               <button
+                type="button"
+                aria-label="List view"
+                aria-pressed={effectiveView === "list"}
                 className={cn(
                   "p-1.5 transition-colors",
                   effectiveView === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
@@ -252,6 +255,9 @@ export function Agents() {
                 <List className="h-3.5 w-3.5" />
               </button>
               <button
+                type="button"
+                aria-label="Org chart view"
+                aria-pressed={effectiveView === "org"}
                 className={cn(
                   "p-1.5 transition-colors",
                   effectiveView === "org" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
@@ -348,7 +354,7 @@ export function Agents() {
                       )}
                       <span
                         className="w-36 truncate text-left text-xs text-muted-foreground"
-                        title={getAdapterLabel(agent.adapterType)}
+                        title={`${plainRuntimeLabel(agent.adapterType)} — ${getAdapterLabel(agent.adapterType)}`}
                       >
                         {plainRuntimeLabel(agent.adapterType)}
                       </span>
@@ -608,7 +614,7 @@ function OrgTreeNode({
               <>
                 <span
                   className="w-36 truncate text-left text-xs text-muted-foreground"
-                  title={getAdapterLabel(agent.adapterType)}
+                  title={`${plainRuntimeLabel(agent.adapterType)} — ${getAdapterLabel(agent.adapterType)}`}
                 >
                   {plainRuntimeLabel(agent.adapterType)}
                 </span>
