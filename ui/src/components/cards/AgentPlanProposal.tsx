@@ -91,8 +91,13 @@ export function AgentPlanProposal({
   // answering it) says the team already exists.
   const hired = hiredHere || (typeof payload?.confirmedAt === "string" && payload.confirmedAt.length > 0);
   // Awaiting the board: this click returned pendingApproval, or the card was
-  // persisted that way — the label survives a reload and other tabs.
-  const awaitingApproval = sentForApproval || payload?.pendingApproval === true;
+  // persisted that way — the label survives a reload and other tabs. When
+  // the server has since written a decided value onto the card (the
+  // realtime update clears pendingApproval once every hire is decided), it
+  // wins over the click-time flag so the tab shows the outcome.
+  const awaitingApproval = typeof payload?.pendingApproval === "boolean"
+    ? payload.pendingApproval
+    : sentForApproval;
   // A rejection landed on a decided card; while approvals still wait the
   // "Sent for approval" label is the honest one.
   const notApproved = payload?.approvalRejected === true;

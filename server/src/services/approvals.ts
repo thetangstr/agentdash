@@ -3,8 +3,9 @@ import type { Db } from "@paperclipai/db";
 import { agents, approvalComments, approvals, assistantConversations, assistantMessages, bridgeTasks } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
-import { redactRunLogText } from "./run-log-redaction.js";
+import { redactRunLogText, redactRunLogValue } from "./run-log-redaction.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
+import { logger } from "../middleware/logger.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
@@ -349,11 +350,14 @@ export function approvalService(db: Db) {
           .where(inArray(agents.id, confirmedIds))
       : [];
     const stillPending = siblings.some((sibling) => sibling.status === "pending_approval");
-    const next = {
+    // The payload is model output read back from the card row — it is
+    // re-persisted and re-emitted here, so it must be credential-clean on
+    // the way out (same rule as markPlanCardConfirmed).
+    const next = redactRunLogValue({
       ...cardPayload,
       pendingApproval: stillPending,
       approvalRejected: rejected || cardPayload.approvalRejected === true,
-    };
+    });
     await db
       .update(assistantMessages)
       .set({ cardPayload: next })
@@ -435,7 +439,17 @@ export function approvalService(db: Db) {
           // since and fire the hook a second time.
           const activation = await agentsSvc.activatePendingApproval(payloadAgentId);
           if (activation?.activated) hireApprovedAgentId = payloadAgentId;
-          await updateCosPlanCardOnHireDecision(updated.companyId, payloadAgentId, false);
+          // The card write is best-effort: the approval was decided and the
+          // agent activated, so a card failure must not 500 the decision or
+          // skip the budget policy and the hire hook below.
+          try {
+            await updateCosPlanCardOnHireDecision(updated.companyId, payloadAgentId, false);
+          } catch (err) {
+            logger.warn(
+              { err, companyId: updated.companyId, agentId: payloadAgentId },
+              "[approvals] could not update the hire plan card after approval",
+            );
+          }
         } else {
           const created = await agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),
@@ -519,7 +533,14 @@ export function approvalService(db: Db) {
             endedByUserId: decidedByUserId,
             onlyIfStatus: "pending_approval",
           });
-          await updateCosPlanCardOnHireDecision(updated.companyId, payloadAgentId, true);
+          try {
+            await updateCosPlanCardOnHireDecision(updated.companyId, payloadAgentId, true);
+          } catch (err) {
+            logger.warn(
+              { err, companyId: updated.companyId, agentId: payloadAgentId },
+              "[approvals] could not update the hire plan card after rejection",
+            );
+          }
         }
       }
 

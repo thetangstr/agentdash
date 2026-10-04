@@ -149,6 +149,49 @@ describe("AgentPlanProposal", () => {
     });
   });
 
+  // AgentDash (review-1027 item 1): the tab that clicked "Set it up" still
+  // holds sentForApproval=true — when the realtime update lands with the
+  // board's decision written onto the card, the server's value wins and the
+  // label moves off "Sent for approval".
+  it("moves off 'Sent for approval' when the card re-renders decided", async () => {
+    const onConfirm = vi.fn().mockResolvedValue({ pendingApproval: true, approvalIds: ["ap1"] });
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />,
+      );
+    });
+
+    const setItUp = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Set it up"),
+    )!;
+    await act(async () => {
+      setItUp.click();
+    });
+    expect(container.textContent).toContain("Sent for approval");
+
+    const decided: AgentPlanProposalV1Payload = {
+      ...samplePayload,
+      confirmedAt: "2026-10-04T00:00:00.000Z",
+      confirmedAgentIds: ["a1", "a2"],
+      pendingApproval: false,
+      approvalRejected: true,
+    };
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={decided} onConfirm={onConfirm} onRevise={vi.fn()} />,
+      );
+    });
+
+    expect(container.textContent).toContain("Not approved");
+    expect(container.textContent).not.toContain("Sent for approval");
+    expect(container.textContent).not.toContain("Team hired");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   // AgentDash (review-1025 item 2): the card persists pendingApproval when it
   // is marked confirmed, so a reload or a second tab still reads "Sent for
   // approval" — the response object is gone by then.
