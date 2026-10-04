@@ -7,6 +7,7 @@ import {
   TOKENS_COUNTED_NOTE,
   USAGE_COUNTING_LABEL,
   formatShippedUsage,
+  isAwaitingReview,
   isUsageCounting,
   usageCountingEndsAt,
 } from "../lib/shipped";
@@ -77,12 +78,12 @@ export function IssueResultBlock({
   if (items.length === 0) return null;
   const usage = items[0]!.usage;
   const hasReviewableItem = items.some((product) => product.status === "ready_for_review");
-  const awaitingReview =
-    !!review
-    && issueStatus !== "done"
-    && issueStatus !== "cancelled"
-    && !issueLive
-    && hasReviewableItem;
+  const awaitingReview = isAwaitingReview({
+    canReview: !!review,
+    issueStatus,
+    issueLive,
+    hasReadyForReview: hasReviewableItem,
+  });
   // AgentDash (review #1003): while Live the controls stay hidden, but the
   // reviewer should know why — a run may still write the revision they would
   // be accepting.

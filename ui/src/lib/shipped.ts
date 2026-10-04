@@ -102,6 +102,32 @@ export function isLocalFileWorkProduct(product: Pick<IssueWorkProduct, "url" | "
 
 export const LOCAL_FILE_NOTE = "The agent saved this on its computer. Ask it to attach the content.";
 
+/**
+ * AgentDash (c3-a11y follow-up): the one rule for "a deliverable is waiting
+ * on an explicit Accept / Request changes decision". Both the Result block's
+ * review controls and the documents section's thumbs gate on it, so it must
+ * stay identical in the two places.
+ *
+ * True only when the viewer actually gets the review actions (`canReview` —
+ * board access in IssueDetail, a non-null `review` prop in the block), the
+ * issue is neither terminal nor still live (a running agent may yet write the
+ * revision being judged), and a work product sits at `ready_for_review`.
+ */
+export function isAwaitingReview(input: {
+  canReview: boolean;
+  issueStatus?: string | null;
+  issueLive?: boolean;
+  hasReadyForReview: boolean;
+}): boolean {
+  return Boolean(
+    input.canReview
+    && input.issueStatus !== "done"
+    && input.issueStatus !== "cancelled"
+    && !input.issueLive
+    && input.hasReadyForReview,
+  );
+}
+
 /** A title that is an absolute path or a file: URL shows as its file name. */
 export function workProductDisplayTitle(title: string): string {
   const trimmed = title.trim();
