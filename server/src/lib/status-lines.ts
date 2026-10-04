@@ -37,7 +37,7 @@ const DIAGNOSTIC_GLYPH_LINE = /^\s*[⚠ℹ]/u;
 
 // Hermes prints boot/status chatter with a check glyph. Only the observed
 // status words are matched — a "✓ Fixed X" checklist line stays.
-const HERMES_STATUS_LINE = /^\s*✓\s+(session resumed|resuming|loading\b)/iu;
+const HERMES_STATUS_LINE = /^\s*✓\s+(session resumed|resuming|loading|loaded)\b/iu;
 
 export function stripStatusLines(text: string): string {
   const lines = text
