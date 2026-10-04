@@ -161,8 +161,8 @@ describe("deliverable acceptance", () => {
 describe("deliverable review reasons", () => {
   it("reads requested changes, not updated", () => {
     const details = { reason: "changes_requested" };
-    expect(formatActivityVerb("issue.work_product_updated", details)).toBe("requested changes on the deliverable on");
-    expect(formatIssueActivityAction("issue.work_product_updated", details)).toBe("requested changes on the deliverable");
+    expect(formatActivityVerb("issue.work_product_updated", details)).toBe("requested changes to the deliverable on");
+    expect(formatIssueActivityAction("issue.work_product_updated", details)).toBe("requested changes to the deliverable");
   });
 
   it("reads resubmitted for review", () => {
@@ -182,7 +182,7 @@ describe("deliverable review reasons", () => {
       "accepted the product description",
     );
     expect(formatIssueActivityAction("issue.work_product_updated", { reason: "changes_requested", documentKey: "launch-plan" })).toBe(
-      "requested changes on the launch plan",
+      "requested changes to the launch plan",
     );
   });
 });

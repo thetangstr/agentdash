@@ -296,7 +296,7 @@ function humanizeDocumentKey(key: string): string {
  */
 const WORK_PRODUCT_UPDATE_PHRASES: Record<string, (target: string) => string> = {
   issue_accepted: (target) => `accepted ${target}`,
-  changes_requested: (target) => `requested changes on ${target}`,
+  changes_requested: (target) => `requested changes to ${target}`,
   resubmitted_for_review: (target) => `resubmitted ${target} for review`,
   issue_reopened: (target) => `reopened ${target}`,
 };

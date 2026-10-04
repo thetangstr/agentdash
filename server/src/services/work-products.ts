@@ -214,6 +214,7 @@ export async function resubmitSentBackDeliverables(
         status: "ready_for_review",
         reviewState: "needs_board_review",
         reason: "resubmitted_for_review",
+        ...(documentKey ? { documentKey } : {}),
         ...opts.activityDetails,
       },
     });

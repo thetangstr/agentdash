@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Agent } from "@paperclipai/shared";
+import { RUN_CANCELLED_BY_OPERATOR_CODE, type Agent } from "@paperclipai/shared";
 import {
   buildAssistantPartsFromTranscript,
   buildIssueChatMessages,
@@ -634,6 +634,70 @@ describe("buildIssueChatMessages", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.metadata.custom).toMatchObject({
       chainOfThoughtLabel: "Paused by board after 1 minute",
+      runStatus: "cancelled",
+    });
+  });
+
+  it("speaks the Stopped vocabulary for a cancelled run, not 'cancelled'", () => {
+    const messages = buildIssueChatMessages({
+      comments: [],
+      timelineEvents: [],
+      linkedRuns: [
+        {
+          runId: "run-stopped",
+          status: "cancelled",
+          agentId: "agent-1",
+          agentName: "CodexCoder",
+          createdAt: new Date("2026-04-06T12:01:00.000Z"),
+          startedAt: new Date("2026-04-06T12:01:00.000Z"),
+          finishedAt: new Date("2026-04-06T12:01:01.000Z"),
+          errorCode: RUN_CANCELLED_BY_OPERATOR_CODE,
+          error: "Stopped by you",
+        },
+      ],
+      liveRuns: [],
+      transcriptsByRunId: new Map([
+        ["run-stopped", [{ kind: "assistant", ts: "2026-04-06T12:01:05.000Z", text: "Working on it." }]],
+      ]),
+      hasOutputForRun: (runId) => runId === "run-stopped",
+      currentUserId: "user-1",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.metadata.custom).toMatchObject({
+      chainOfThoughtLabel: "Stopped manually after 1 second",
+      runStatus: "cancelled",
+    });
+  });
+
+  it("shows the recorded reason when a cancelled run was not operator-stopped", () => {
+    const messages = buildIssueChatMessages({
+      comments: [],
+      timelineEvents: [],
+      linkedRuns: [
+        {
+          runId: "run-stopped-issue",
+          status: "cancelled",
+          agentId: "agent-1",
+          agentName: "CodexCoder",
+          createdAt: new Date("2026-04-06T12:01:00.000Z"),
+          startedAt: new Date("2026-04-06T12:01:00.000Z"),
+          finishedAt: new Date("2026-04-06T12:01:30.000Z"),
+          errorCode: "cancelled",
+          error: "Cancelled: issue marked done",
+        },
+      ],
+      liveRuns: [],
+      transcriptsByRunId: new Map([
+        ["run-stopped-issue", [{ kind: "assistant", ts: "2026-04-06T12:01:05.000Z", text: "Working on it." }]],
+      ]),
+      hasOutputForRun: (runId) => runId === "run-stopped-issue",
+      currentUserId: "user-1",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.metadata.custom).toMatchObject({
+      chainOfThoughtLabel: "Cancelled: issue marked done after 30 seconds",
       runStatus: "cancelled",
     });
   });

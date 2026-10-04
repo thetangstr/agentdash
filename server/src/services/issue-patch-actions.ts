@@ -828,8 +828,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               eq(issueWorkProducts.status, "approved"),
               sql`${issueWorkProducts.metadata} -> 'acceptance' ->> 'reason' = 'issue_accepted'`,
             ))
-            .returning({ id: issueWorkProducts.id, status: issueWorkProducts.status, reviewState: issueWorkProducts.reviewState });
+            .returning({ id: issueWorkProducts.id, status: issueWorkProducts.status, reviewState: issueWorkProducts.reviewState, metadata: issueWorkProducts.metadata });
           for (const product of reopenedProducts) {
+            const documentKey = workProductDocumentKey(product.metadata);
             await audit({
               companyId: issue.companyId,
               actorType: actor.actorType,
@@ -846,6 +847,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
                 status: product.status,
                 reviewState: product.reviewState,
                 reason: "issue_reopened",
+                ...(documentKey ? { documentKey } : {}),
                 ...context.attribution,
               },
             });
@@ -894,6 +896,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               .where(eq(issueWorkProducts.id, product.id));
           }
           for (const product of waitingForReview) {
+            const documentKey = workProductDocumentKey(product.metadata);
             await audit({
               companyId: issue.companyId,
               actorType: actor.actorType,
@@ -910,6 +913,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
                 status: "changes_requested",
                 reviewState: "changes_requested",
                 reason: "changes_requested",
+                ...(documentKey ? { documentKey } : {}),
                 ...context.attribution,
               },
             });
