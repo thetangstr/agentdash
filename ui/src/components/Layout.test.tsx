@@ -347,11 +347,13 @@ describe("Layout", () => {
   });
 
   // AgentDash (c4 trust): the floating cluster sits above the scroll area —
-  // the last feed row used to hide underneath it on desktop.
+  // the last feed row used to hide underneath it on desktop. The clearance
+  // must be scoped to md+ too: a bare pb-20 loses to md:p-6 in the generated
+  // stylesheet (computed padding stays 24px; e2e asserts the computed value).
   it("reserves clearance under the floating status cluster on desktop", async () => {
     const root = await renderLayout();
     const main = container.querySelector("#main-content");
-    expect(main?.className).toContain("pb-20");
+    expect(main?.className).toContain("md:pb-20");
     await act(async () => root.unmount());
   });
 

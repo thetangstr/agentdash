@@ -582,7 +582,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     return {
       context, existing, intent, snapshot, domain, updateFields, transition, decisionId, checkout, interruptRun, runsToCancelForClosedStatus,
       mentionedIds, titleOrDescriptionChanged, existingRelations, updateReferenceSummaryBefore, commentBody, resumeRequested,
-      effectiveMoveToTodoRequested, isClosed, isBlocked, hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy
+      explicitMoveToTodoRequested, effectiveMoveToTodoRequested, isClosed, isBlocked, hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy
     };
   }
   async function accept(context: IssuePatchContext) {
@@ -604,7 +604,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         finalAuthorityGuard?.validateIssue(target);
         const plan = await prepare(context, tx);
         const { existing, intent, updateFields, transition, decisionId, titleOrDescriptionChanged, existingRelations,
-          updateReferenceSummaryBefore, commentBody, resumeRequested, effectiveMoveToTodoRequested, isClosed, isBlocked,
+          updateReferenceSummaryBefore, commentBody, resumeRequested, explicitMoveToTodoRequested, effectiveMoveToTodoRequested, isClosed, isBlocked,
           hasUnresolvedFirstClassBlockers, previousExecutionPolicy, nextExecutionPolicy } = plan;
         const id = existing.id;
         const actor = context.actor;
@@ -694,7 +694,18 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ...context.attribution,
             ...(commentBody ? { source: "comment" } : {}),
             ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-            ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
+            // AgentDash (c4 trust, review #1026): `reopened` fires for an
+            // explicit reopen intent AND for a comment that reopens a closed
+            // issue on its own. `autoReopened` marks only the implicit case —
+            // the feed attributes it to AgentDash, while an explicit reopen
+            // stays with the person.
+            ...(reopened
+              ? {
+                  reopened: true,
+                  reopenedFrom: reopenFromStatus,
+                  ...(explicitMoveToTodoRequested ? {} : { autoReopened: true }),
+                }
+              : {}),
             // AgentDash (c4 trust): the request-changes route reaches this
             // same audit with a status move, and the feed showed the bare
             // "updated ACM-6" — nothing said changes were asked for.
@@ -1062,7 +1073,14 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               // AgentDash (GH #678): provenance when the write came via an assistant grant.
               ...context.attribution,
               ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
-              ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
+              ...(reopened
+                ? {
+                    reopened: true,
+                    reopenedFrom: reopenFromStatus,
+                    source: "comment",
+                    ...(explicitMoveToTodoRequested ? {} : { autoReopened: true }),
+                  }
+                : {}),
               ...(plan.interruptRun ? { requestedInterruptRunId: plan.interruptRun.id } : {}),
               ...(hasFieldChanges ? { updated: true } : {}),
               ...summarizeIssueReferenceActivityDetails({

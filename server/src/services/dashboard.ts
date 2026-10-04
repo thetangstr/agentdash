@@ -21,6 +21,7 @@ import type {
 } from "@paperclipai/shared";
 import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { redactRunLogText } from "./run-log-redaction.js";
+import { acceptedWorkProductCondition } from "./work-products.js";
 
 const DASHBOARD_RUN_ACTIVITY_DAYS = 14;
 const HARNESS_HEALTH_WINDOW_HOURS = 24;
@@ -465,52 +466,41 @@ export function dashboardService(db: Db) {
 
       // AgentDash (c4 trust): the verdicts table only records REVIEWER
       // verdicts. When the owner accepts a deliverable or sends it back, that
-      // decision lands on issue_work_products.status (approved/merged vs
-      // changes_requested) — so Health showed "0/0 accepted", "successful runs
-      // pending review", and "done tasks without verdicts" for work the owner
-      // already signed off. Fold the current owner decision per issue into
-      // the same map: a deliverable still sent back counts as a revision;
-      // otherwise any accepted deliverable counts as a pass. A live reviewer
-      // verdict stays authoritative when no owner decision exists.
-      const OWNER_PRODUCT_OUTCOME: Record<string, "passed" | "revision_requested"> = {
-        approved: "passed",
-        merged: "passed",
-        changes_requested: "revision_requested",
-      };
+      // decision lands on issue_work_products.status — so Health showed
+      // "0/0 accepted", "successful runs pending review", and "done tasks
+      // without verdicts" for work the owner already signed off. Fold the
+      // owner decision per issue into the same map, using the SAME
+      // acceptance rule Shipped uses (acceptedWorkProductCondition, which
+      // also counts pre-2026-10-02 deliverables on a done issue): accepted
+      // wins, otherwise a deliverable still sent back counts as a revision.
+      // A live reviewer verdict stays authoritative when no owner decision
+      // exists.
       const taskQualityIssueIdList = Array.from(taskQualityIssueIds);
       const taskQualityProductRows = taskQualityIssueIdList.length > 0
         ? await db
             .select({
               issueId: issueWorkProducts.issueId,
-              status: issueWorkProducts.status,
-              updatedAt: issueWorkProducts.updatedAt,
+              accepted: sql<boolean>`bool_or(${acceptedWorkProductCondition()})`,
+              sentBack: sql<boolean>`bool_or(${issueWorkProducts.status} = 'changes_requested')`,
+              latestAt: sql<Date>`max(${issueWorkProducts.updatedAt})`,
             })
             .from(issueWorkProducts)
+            .innerJoin(issues, eq(issueWorkProducts.issueId, issues.id))
             .where(
               and(
                 eq(issueWorkProducts.companyId, companyId),
                 inArray(issueWorkProducts.issueId, taskQualityIssueIdList),
               ),
             )
+            .groupBy(issueWorkProducts.issueId)
         : [];
 
-      const ownerProductStatusesByIssueId = new Map<string, { statuses: Set<string>; latestAt: Date }>();
-      for (const row of taskQualityProductRows) {
-        const entry = ownerProductStatusesByIssueId.get(row.issueId) ?? {
-          statuses: new Set<string>(),
-          latestAt: row.updatedAt,
-        };
-        entry.statuses.add(row.status);
-        if (row.updatedAt > entry.latestAt) entry.latestAt = row.updatedAt;
-        ownerProductStatusesByIssueId.set(row.issueId, entry);
-      }
-
       const latestDecisionByIssueId = new Map(latestVerdictByIssueId);
-      for (const [issueId, { statuses, latestAt }] of ownerProductStatusesByIssueId) {
-        if (statuses.has("changes_requested")) {
-          latestDecisionByIssueId.set(issueId, { outcome: "revision_requested", createdAt: latestAt });
-        } else if ([...statuses].some((status) => OWNER_PRODUCT_OUTCOME[status] === "passed")) {
-          latestDecisionByIssueId.set(issueId, { outcome: "passed", createdAt: latestAt });
+      for (const row of taskQualityProductRows) {
+        if (row.accepted) {
+          latestDecisionByIssueId.set(row.issueId, { outcome: "passed", createdAt: row.latestAt });
+        } else if (row.sentBack) {
+          latestDecisionByIssueId.set(row.issueId, { outcome: "revision_requested", createdAt: row.latestAt });
         }
       }
 

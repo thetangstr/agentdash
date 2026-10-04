@@ -48,8 +48,8 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
   // Approval wake plumbing
   "approval.requester_wakeup_failed",
   "approval.requester_wakeup_queued",
-  // Local-harness bridge plumbing
-  "bridge.endpoint_enrolled",
+  // Local-harness bridge plumbing (enroll/revoke stay visible — owners attach
+  // and remove workers and need to see it happened)
   "bridge.endpoint_revoked",
   "bridge.task_completed",
   "bridge.task_created",
@@ -72,13 +72,13 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
   "evaluation.scorecard_snapshot",
   "execution_workspace.updated",
   "finance_event.reported",
-  "github_connection.credential_issued",
-  // Connector tool calls
+  // Connector tool calls (gmail.send stays visible — a mail going out under
+  // the company's name is not plumbing, and credential_issued marks the
+  // one-time GitHub credential handoff owners watch for)
   "gmail.draft",
   "gmail.list",
   "gmail.read_thread",
   "gmail.search",
-  "gmail.send",
   // Run lifecycle internals
   "heartbeat.cancel_failed",
   "heartbeat.completed",
@@ -86,8 +86,6 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
   // Successful hire hooks (failures and errors stay visible)
   "hire_hook.succeeded",
   "human_channel.message_received",
-  // Delivered connector sends (failures and refusals stay visible)
-  "connector_send.succeeded",
   // Inbox bookkeeping
   "inbox.cadence_changed",
   "inbox.dismissed",
@@ -104,21 +102,22 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
   "issue.productivity_review_created",
   "issue.productivity_review_updated",
   "issue.task_recovery_permit_consumed",
+  // Thread-interaction lifecycle stays visible at creation; only its plumbing
+  // transitions are bookkeeping.
   "issue.thread_interaction_answered",
   "issue.thread_interaction_cancelled",
-  "issue.thread_interaction_created",
   "issue.thread_interaction_expired",
   "issue.touched",
   "issue.tree_hold_run_interrupted",
   "issue.tree_hold_wakeup_deferred",
-  // Routine trigger internals
+  // Routine trigger internals (trigger_secret_rotated stays visible — a secret
+  // rotation is the kind of thing owners ask about; steward_webhook
+  // registrations/revocations likewise)
   "routine.run_triggered",
   "routine.trigger_created",
   "routine.trigger_deleted",
-  "routine.trigger_secret_rotated",
   "routine.trigger_updated",
   "sidebar_preferences.project_order_updated",
-  "steward_webhook.registered",
   "steward_webhook.revoked",
   // Reviewer auto-hire machinery (a failed provision stays visible)
   "reviewer_hire_requested",
@@ -134,6 +133,7 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
  */
 export const IMPORTANT_SYSTEM_ACTIVITY_ACTIONS = new Set<string>([
   "budget.hard_threshold_crossed",
+  "budget.incident_resolved",
   "agent.token_ceiling_paused",
   "agent.paused",
   "issue.recovery_budget_exhausted",
@@ -147,4 +147,14 @@ export const IMPORTANT_SYSTEM_ACTIVITY_ACTIONS = new Set<string>([
   "verdict_escalated",
   "reviewer_hire_provision_failed",
   "connector_send.undelivered_reported",
+  // AgentDash (c4 trust, review #1026): system-originated approvals are
+  // decisions put to the owner — the company feed must not hide them just
+  // because no person clicked the button.
+  "approval.created",
+  "approval.approved",
+  "approval.rejected",
+  "approval.resubmitted",
+  "approval.revision_requested",
+  "approval.emergency_override",
+  "approval.comment_added",
 ]);

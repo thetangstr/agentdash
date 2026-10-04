@@ -139,13 +139,13 @@ export function readAgentHarnessPreflightStatus(
     // did not pass — a failure, not stale evidence. Mapping it to "stale" hid
     // it entirely and made the page re-check in the background on every visit,
     // which logged an activity row each time. Show the verdict's message and
-    // the failing checks; the warn/fail split uses the same blocking rule the
-    // launch gate uses.
+    // the failing checks. A non-blocking warn can never reach this branch
+    // (the evaluator only returns not_passed for fail, unknown status, or a
+    // blocking warn), so the state is always "fail".
     if (verdict.reason === "not_passed") {
-      const advisory = status === "warn" && !isBlockingPreflightResult({ status, checks });
       return {
-        state: advisory ? "warn" : "fail",
-        title: advisory ? "Harness preflight passed with warnings" : "Harness preflight failed",
+        state: "fail",
+        title: "Harness preflight failed",
         message: verdict.message,
         adapterType,
         testedAt,

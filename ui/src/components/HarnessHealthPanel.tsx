@@ -1,34 +1,42 @@
 import type { DashboardHarnessAdapterHealth, DashboardHarnessHealth, DashboardHarnessStatus } from "@paperclipai/shared";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { cn } from "../lib/utils";
 
 /**
  * AgentDash (c4 trust): adapter keys are internal identifiers — "hermes
- * local" in the hosted feed meant nothing to an owner. Name the harness the
- * person actually picked at hire time.
+ * local" in the hosted feed meant nothing to an owner. The registry names the
+ * harness the person actually picked at hire time.
  */
-const ADAPTER_TYPE_LABELS: Record<string, string> = {
-  process: "Local process",
-  http: "HTTP",
-  acpx_local: "ACPX (local)",
-  claude_api: "Claude API",
-  claude_local: "Claude Code (local)",
-  codex_local: "Codex (local)",
-  gemini_local: "Gemini (local)",
-  hermes_local: "Hermes (local)",
-  opencode_local: "OpenCode (local)",
-  pi_local: "Pi (local)",
-  cursor: "Cursor",
-  openclaw_gateway: "OpenClaw",
+const formatAdapterType = getAdapterLabel;
+
+/**
+ * AgentDash (c4 trust, review #1026): failure categories are issue-linked
+ * tokens — "rate_limited" is not how an owner talks about a stopped run.
+ */
+const FAILURE_CATEGORY_LABELS: Record<string, string> = {
+  adapter_unavailable: "the agent tool wasn't running",
+  auth: "sign-in failed",
+  auth_expired: "the sign-in expired",
+  auth_failure: "sign-in failed",
+  cancelled: "stopped",
+  missing_credential: "a credential is missing",
+  model_unavailable: "the model wasn't available",
+  network_unreachable: "the network was unreachable",
+  permission_denied: "permission was denied",
+  process_crashed: "the agent process crashed",
+  protocol: "a protocol error",
+  quota_limit: "a usage limit was reached",
+  rate_limited: "a rate limit was reached",
+  runtime: "a runtime error",
+  timeout: "timed out",
+  unknown: "unknown",
+  workspace_unavailable: "the workspace was unavailable",
 };
 
-function formatAdapterType(value: string) {
-  return ADAPTER_TYPE_LABELS[value]
-    ?? value.replace(/[_-]+/g, " ").replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
-}
-
 function formatCategory(value: string | null) {
-  return value ? value.replace(/[_-]+/g, " ") : "none";
+  if (!value) return "none";
+  return FAILURE_CATEGORY_LABELS[value] ?? value.replace(/[_-]+/g, " ");
 }
 
 function statusTone(status: DashboardHarnessStatus) {

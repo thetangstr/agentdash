@@ -68,7 +68,9 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   const details = event.details as Record<string, unknown> | null;
   // AgentDash (c4 trust): a comment that reopens a closed issue is the
   // product reacting to the comment — the person didn't "reopen" anything.
-  const autoReopen = event.action === "issue.updated" && details?.reopened === true;
+  // `autoReopened` is set only for that implicit case; an explicit reopen
+  // request still belongs to the person.
+  const autoReopen = event.action === "issue.updated" && details?.autoReopened === true;
   // AgentDash (c4 trust): approvals the system opens on the person's behalf
   // (the onboarding plan's hire requests, assistant-granted actions) must not
   // read as the person asking. `via` marks an assistant-grant write; `source`
@@ -88,6 +90,12 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   const actorAvatarUrl = systemEvent ? null : userProfile?.image ?? null;
 
   const stacked = layout === "stacked";
+  // AgentDash (c4 trust, review #1026): the added/removed chips belong to
+  // issue.updated only — rendered unconditionally they surfaced as a stray
+  // "Removed references" line under unrelated rows. They render their own
+  // issue links, so they must sit OUTSIDE the row link (no nested <a>).
+  const referenceSummary =
+    event.action === "issue.updated" ? <IssueReferenceActivitySummary event={event} /> : null;
   const inner = stacked ? (
     <div className="space-y-1" data-testid="activity-row-stacked">
       <p className="min-w-0 break-words">
@@ -106,10 +114,6 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
         </span>
         <span className="shrink-0 text-muted-foreground">{timeAgo(event.createdAt)}</span>
       </div>
-      {/* AgentDash (c4 trust): the added/removed chips belong to issue.updated
-          only — rendered unconditionally they surfaced as a stray
-          "Removed references" line under unrelated rows. */}
-      {event.action === "issue.updated" && <IssueReferenceActivitySummary event={event} />}
     </div>
   ) : (
     <div className="space-y-2">
@@ -127,7 +131,6 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
         </p>
         <span className="text-xs text-muted-foreground shrink-0 pt-0.5">{timeAgo(event.createdAt)}</span>
       </div>
-      {event.action === "issue.updated" && <IssueReferenceActivitySummary event={event} />}
     </div>
   );
 
@@ -139,15 +142,19 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
 
   if (link) {
     return (
-      <Link to={link} className={cn(classes, "no-underline text-inherit block")}>
-        {inner}
-      </Link>
+      <div className={classes}>
+        <Link to={link} className="no-underline text-inherit block">
+          {inner}
+        </Link>
+        {referenceSummary}
+      </div>
     );
   }
 
   return (
     <div className={classes}>
       {inner}
+      {referenceSummary}
     </div>
   );
 }

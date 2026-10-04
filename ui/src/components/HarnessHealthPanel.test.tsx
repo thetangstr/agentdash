@@ -34,7 +34,7 @@ describe("HarnessHealthPanel", () => {
     expect(html).toContain("60%");
     expect(html).toContain("Codex (local)");
     expect(html).toContain("75%");
-    expect(html).toContain("rate limited");
+    expect(html).toContain("a rate limit was reached");
     expect(html).toContain(">2</span> agents");
   });
 

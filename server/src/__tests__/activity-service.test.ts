@@ -117,6 +117,64 @@ describeEmbeddedPostgres("activity service", () => {
     expect(result.map((event) => event.action)).toEqual(["test.newest", "test.middle"]);
   });
 
+  // AgentDash (c4 trust, review #1026): "hide system events" must not bury a
+  // budget hard-stop or a system-opened approval — the keep-list still shows.
+  it("keeps owner-critical system rows when system events are off", async () => {
+    const companyId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(activityLog).values([
+      {
+        companyId,
+        actorType: "user",
+        actorId: "local-board",
+        action: "issue.created",
+        entityType: "issue",
+        entityId: randomUUID(),
+      },
+      {
+        companyId,
+        actorType: "system",
+        actorId: "system",
+        action: "environment.probed",
+        entityType: "environment",
+        entityId: randomUUID(),
+      },
+      {
+        companyId,
+        actorType: "system",
+        actorId: "system",
+        action: "budget.hard_threshold_crossed",
+        entityType: "company",
+        entityId: companyId,
+      },
+      {
+        companyId,
+        actorType: "system",
+        actorId: "workflow_recommendations",
+        action: "approval.created",
+        entityType: "approval",
+        entityId: randomUUID(),
+      },
+    ]);
+
+    const hidden = await activityService(db).list({ companyId, includeSystem: false });
+    expect(hidden.map((event) => event.action).sort()).toEqual([
+      "approval.created",
+      "budget.hard_threshold_crossed",
+      "issue.created",
+    ]);
+
+    const everything = await activityService(db).list({ companyId });
+    expect(everything).toHaveLength(4);
+  });
+
   it("returns compact usage and result summaries for issue runs", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

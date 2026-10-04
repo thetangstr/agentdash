@@ -627,8 +627,14 @@ describeEmbeddedPostgres("dashboard service", () => {
     const agentId = randomUUID();
     const acceptedIssueId = randomUUID();
     const sentBackIssueId = randomUUID();
+    const legacyIssueId = randomUUID();
+    const mixedIssueId = randomUUID();
     const now = new Date();
     const recent = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    // AgentDash (review #1026): Shipped accepts deliverables recorded before
+    // acceptance tracking (2026-10-02) when their issue is done — Health must
+    // apply the same rule or it calls them unreviewed forever.
+    const legacy = new Date("2026-09-15T12:00:00.000Z");
 
     await db.insert(companies).values({
       id: companyId,
@@ -663,6 +669,21 @@ describeEmbeddedPostgres("dashboard service", () => {
         status: "in_progress",
         updatedAt: recent,
       },
+      {
+        id: legacyIssueId,
+        companyId,
+        title: "Legacy accepted work",
+        status: "done",
+        completedAt: recent,
+        updatedAt: recent,
+      },
+      {
+        id: mixedIssueId,
+        companyId,
+        title: "One deliverable accepted, another sent back",
+        status: "in_progress",
+        updatedAt: recent,
+      },
     ]);
     await db.insert(issueWorkProducts).values([
       {
@@ -683,6 +704,38 @@ describeEmbeddedPostgres("dashboard service", () => {
         title: "Draft",
         status: "changes_requested",
       },
+      {
+        // Recorded before acceptance tracking existed; the issue being done
+        // stands in for the acceptance — Shipped counts it, so must Health.
+        id: randomUUID(),
+        companyId,
+        issueId: legacyIssueId,
+        type: "document",
+        provider: "agentdash",
+        title: "Old brief",
+        status: "submitted",
+        createdAt: legacy,
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: mixedIssueId,
+        type: "document",
+        provider: "agentdash",
+        title: "Accepted doc",
+        status: "approved",
+      },
+      {
+        // A sent-back deliverable alongside an accepted one does not drag the
+        // issue back under review — the acceptance stands.
+        id: randomUUID(),
+        companyId,
+        issueId: mixedIssueId,
+        type: "pull_request",
+        provider: "github",
+        title: "Follow-up PR",
+        status: "changes_requested",
+      },
     ]);
     // A green run on the accepted issue — with no reviewer verdict it used to
     // count as "pending review" forever.
@@ -699,12 +752,12 @@ describeEmbeddedPostgres("dashboard service", () => {
     const summary = await dashboardService(db).summary(companyId);
 
     expect(summary.taskQuality).toMatchObject({
-      issuesInScope: 2,
-      reviewedIssues: 2,
-      passedIssues: 1,
+      issuesInScope: 4,
+      reviewedIssues: 4,
+      passedIssues: 3,
       failedIssues: 0,
       revisionRequestedIssues: 1,
-      acceptanceRatePercent: 50,
+      acceptanceRatePercent: 75,
       unreviewedDoneIssues: 0,
       greenRunsPendingReview: 0,
     });

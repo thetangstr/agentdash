@@ -98,6 +98,10 @@ describe("ActivityRow", () => {
     const event = rowEvent("issue.updated", {
       status: "todo",
       reopened: true,
+      // AgentDash (c4 trust, review #1026): the server writes autoReopened
+      // only when the comment itself caused the reopen — an explicit reopen
+      // intent stays with the person.
+      autoReopened: true,
       reopenedFrom: "done",
       source: "comment",
     });
@@ -107,6 +111,20 @@ describe("ActivityRow", () => {
     expect(container.textContent).toContain("AgentDash");
     expect(container.textContent).toContain("reopened");
     expect(container.textContent).not.toContain("Board");
+  });
+
+  it("keeps an explicit reopen with the person who asked", () => {
+    const event = rowEvent("issue.updated", {
+      status: "todo",
+      reopened: true,
+      reopenedFrom: "done",
+    });
+    act(() =>
+      root.render(<ActivityRow event={event} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("reopened");
+    expect(container.textContent).toContain("Board");
+    expect(container.textContent).not.toContain("AgentDash");
   });
 
   it("credits a system-opened approval to AgentDash", () => {

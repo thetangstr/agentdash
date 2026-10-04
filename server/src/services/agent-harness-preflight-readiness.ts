@@ -124,6 +124,19 @@ export function evaluateAgentHarnessPreflightReadiness(
     };
   }
 
+  // Staleness outranks outcome: a failed check against an OLD config must
+  // read as stale so the page re-checks the current one in the background —
+  // the saved failure may no longer be true. Blocking is unaffected: the UI
+  // treats stale evidence as not-ready either way, and launch stays gated.
+  if (configDigest !== buildAgentHarnessPreflightDigest(input)) {
+    return {
+      ready: false,
+      reason: "stale",
+      message: "Run a new harness preflight because the agent configuration changed.",
+      testedAt,
+    };
+  }
+
   // Warnings are advisory — the evidence is usable; only a failed check blocks
   // the agent. Except a warning that says the adapter cannot run at all
   // (probe auth required, probe failed, Hermes with no provider): that blocks
@@ -137,16 +150,10 @@ export function evaluateAgentHarnessPreflightReadiness(
     return {
       ready: false,
       reason: "not_passed",
-      message: "Resolve the saved harness preflight checks before starting this agent.",
-      testedAt,
-    };
-  }
-
-  if (configDigest !== buildAgentHarnessPreflightDigest(input)) {
-    return {
-      ready: false,
-      reason: "stale",
-      message: "Run a new harness preflight because the agent configuration changed.",
+      // "harness preflight" is rewritten to "setup check" for owners — say
+      // "findings", not "checks", or it reads "Resolve the saved setup check
+      // checks".
+      message: "Resolve the findings from the saved harness preflight before starting this agent.",
       testedAt,
     };
   }

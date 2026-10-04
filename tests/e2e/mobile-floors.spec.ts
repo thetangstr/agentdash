@@ -762,6 +762,37 @@ test.describe("Phone floors on every main screen", () => {
     }
   });
 
+  // AgentDash (c4 trust, review #1026): the fixed Connected/Report cluster
+  // covered the last Activity row on desktop. Assert the COMPUTED padding —
+  // a bare pb-20 class loses to md:p-6 in the generated stylesheet, so a
+  // class check alone cannot catch the regression.
+  test("desktop: the floating status cluster never covers the last row", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoPage(page, `/${seeded.company.issuePrefix}/activity`);
+    await expect(main(page).getByRole("heading").first()).toBeVisible({ timeout: 30_000 });
+    await settle(page);
+
+    const cluster = page.locator(".fixed.bottom-4.right-4");
+    await expect(cluster).toBeVisible();
+    const clusterBox = (await cluster.boundingBox())!;
+    const paddingBottom = await main(page).evaluate(
+      (el) => Number.parseFloat(getComputedStyle(el).paddingBottom),
+    );
+    expect(
+      paddingBottom,
+      `main padding-bottom ${paddingBottom}px must clear the ${Math.ceil(clusterBox.height)}px cluster + 16px offset`,
+    ).toBeGreaterThanOrEqual(clusterBox.height + 16);
+
+    // And concretely: scrolled to the end, the last content block sits above
+    // the cluster rather than underneath it.
+    await main(page).evaluate((el) => el.scrollTo(0, el.scrollHeight));
+    const lastBox = (await main(page).locator(":scope > *:last-child").boundingBox())!;
+    expect(
+      lastBox.y + lastBox.height,
+      `last row bottom ${Math.round(lastBox.y + lastBox.height)} vs cluster top ${Math.round(clusterBox.y)}`,
+    ).toBeLessThanOrEqual(clusterBox.y + 1);
+  });
+
   test("issue page: a toast sits above the bottom nav and the docked composer", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await gotoPage(page, `/${seeded.company.issuePrefix}/issues/${seeded.issueRef}`);

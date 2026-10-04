@@ -443,7 +443,10 @@ export function Layout() {
                 // AgentDash (c4 trust): the floating Connected/Report cluster
                 // sits at bottom-4 over the scroll area and covered the last
                 // row of long feeds — reserve clearance beneath it on desktop.
-                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto pb-20",
+                // md:pb-20, not bare pb-20: md:p-6 sorts later in the
+                // generated stylesheet and would reset the bottom padding to
+                // 24px, which is how the badge still covered the last row.
+                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto pb-20 md:pb-20",
               )}
             >
               {hasUnknownCompanyPrefix ? (

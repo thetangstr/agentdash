@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Agent } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
 import { formatActivityVerb, formatIssueActivityAction, isSystemPlumbingActivity } from "./activity-format";
@@ -197,6 +200,7 @@ describe("deliverable review reasons", () => {
  */
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   // agent lifecycle and configuration
+  "agent.accountability_changed",
   "agent.approved",
   "agent.budget_updated",
   "agent.config_rolled_back",
@@ -205,9 +209,11 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "agent.created",
   "agent.deleted",
   "agent.directives_pushed",
+  "agent.governance_ceiling_updated",
   "agent.governance_change_rejected",
   "agent.governance_configuration_clamped",
   "agent.governance_harness_request_clamped",
+  "agent.governance_request_updated",
   "agent.harness_preflight_failed",
   "agent.harness_preflight_passed",
   "agent.hire_created",
@@ -331,8 +337,10 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "execution_workspace.runtime_stop",
   "execution_workspace.updated",
   "finance_event.reported",
+  "github_connection.connected",
   "github_connection.credential_issued",
   "github_connection.disconnected",
+  "github_connection.rotated",
   // connector tool calls
   "gmail.draft",
   "gmail.list",
@@ -351,6 +359,8 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "heartbeat.invoked",
   "heartbeat.output_stale_detected",
   "heartbeat.output_stale_escalated",
+  "heartbeat.watchdog_decision_recorded",
+  "heartbeat.watchdog_snoozed",
   "hermes_provider.configured",
   "hire_hook.error",
   "hire_hook.failed",
@@ -404,12 +414,15 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.productivity_review_updated",
   "issue.read_marked",
   "issue.read_unmarked",
+  "issue.recovery_budget_cleared",
   "issue.recovery_budget_exhausted",
   "issue.relations.updated",
   "issue.released",
   "issue.reviewers_updated",
+  "issue.task_recovery_authorized",
   "issue.task_recovery_permit_consumed",
   "issue.task_recovery_permit_denied",
+  "issue.task_recovery_permit_superseded",
   "issue.thread_interaction_accepted",
   "issue.thread_interaction_answered",
   "issue.thread_interaction_cancelled",
@@ -417,8 +430,10 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.thread_interaction_expired",
   "issue.thread_interaction_rejected",
   "issue.touched",
+  "issue.tree_hold_effect_unresolved",
   "issue.tree_hold_run_interrupted",
   "issue.tree_hold_wakeup_deferred",
+  "issue.tree_restore_wakeup_requested",
   "issue.updated",
   "issue.work_product_created",
   "issue.work_product_deleted",
@@ -426,6 +441,8 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "join.approved",
   "join.auto_approved",
   "join.rejected",
+  "join.request_replayed",
+  "join.requested",
   "label.created",
   "label.deleted",
   "model_key.requested",
@@ -481,7 +498,49 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "workflow_recommendation.accepted",
   "workflow_recommendation.declined",
   "workflow_recommendation.raised",
+  "workspace.persistence_recovery_cleared",
 ] as const;
+
+/**
+ * AgentDash (c4 trust, review #1026): `action:` fields in server code that are
+ * NOT activity rows — step kinds, healer skip reasons, decision payloads.
+ * Anything else the scan finds must land in SERVER_WRITTEN_ACTIVITY_ACTIONS.
+ */
+const NON_ACTIVITY_ACTION_FIELDS = new Set([
+  "ask_next", // deep-interview step kind
+  "skipped_cost_limit", // run-healer skip reasons
+  "skipped_daily_limit",
+  "skipped_low_confidence",
+  "skipped_no_diagnosis",
+]);
+
+/**
+ * Scan every `action: 'literal'` in production server code (tests excluded).
+ * Quoted literals only — template actions stay in the curated list by hand.
+ */
+function scanServerActionLiterals(): string[] {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../server/src");
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "__tests__" && entry.name !== "node_modules") walk(full);
+      } else if (/\.ts$/.test(entry.name) && !/\.(test|spec)\.ts$/.test(entry.name)) {
+        files.push(full);
+      }
+    }
+  };
+  walk(root);
+  const found = new Set<string>();
+  const literal = /\baction:\s*['"`]([a-z][a-zA-Z0-9]*(?:[._][a-zA-Z0-9]+)+)['"`]/g;
+  for (const file of files) {
+    for (const match of readFileSync(file, "utf8").matchAll(literal)) {
+      if (!NON_ACTIVITY_ACTION_FIELDS.has(match[1])) found.add(match[1]);
+    }
+  }
+  return [...found].sort();
+}
 
 describe("every server-written action has a plain verb", () => {
   it.each(SERVER_WRITTEN_ACTIVITY_ACTIONS)("%s", (action) => {
@@ -491,6 +550,11 @@ describe("every server-written action has a plain verb", () => {
     expect(verb).not.toBe(action.replace(/[._]/g, " "));
     expect(verb).not.toMatch(/\./);
     expect(verb).not.toMatch(/_/);
+  });
+
+  it("the catalogue covers every action literal in server code", () => {
+    const known = new Set<string>(SERVER_WRITTEN_ACTIVITY_ACTIONS);
+    expect(scanServerActionLiterals().filter((action) => !known.has(action))).toEqual([]);
   });
 });
 
@@ -573,14 +637,13 @@ describe("hosted activity gaps", () => {
 describe("plumbing hidden by default", () => {
   it("hides tool calls, run internals, and bookkeeping", () => {
     for (const action of [
-      "gmail.send",
       "gmail.search",
+      "gmail.draft",
       "bridge.task_created",
       "cost.reported",
       "heartbeat.completed",
       "heartbeat.cancel_failed",
       "issue.touched",
-      "issue.thread_interaction_created",
       "routine.run_triggered",
       "sidebar_preferences.project_order_updated",
       "instructions_refreshed",
@@ -602,6 +665,16 @@ describe("plumbing hidden by default", () => {
       "connector_send.refused",
       "approval.rejected",
       "agent.stewardship_assigned",
+      // AgentDash (review #1026): these read as plumbing but are owner-visible
+      // — a sent mail, a delivered send, a worker enroll, a credential handoff,
+      // a secret rotation, a webhook registration, a thread prompt.
+      "gmail.send",
+      "connector_send.succeeded",
+      "bridge.endpoint_enrolled",
+      "github_connection.credential_issued",
+      "routine.trigger_secret_rotated",
+      "steward_webhook.registered",
+      "issue.thread_interaction_created",
     ]) {
       expect(isSystemPlumbingActivity(action)).toBe(false);
     }
