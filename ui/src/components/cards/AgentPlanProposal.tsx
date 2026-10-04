@@ -7,6 +7,10 @@ import { ApiError } from "../../api/client";
 
 // AgentDash (scan 4, lane N): shown once the plan's team is hired.
 export const PLAN_HIRED_LABEL = "Team hired ✓";
+// AgentDash (cos-followups review): when the company gates hires on board
+// approval, "Team hired" would claim a team that cannot work yet — the
+// response's pendingApproval switches the label to the honest state.
+export const PLAN_SENT_FOR_APPROVAL_LABEL = "Sent for approval";
 export const PLAN_SUPERSEDED_NOTE = "A newer plan below replaced this one.";
 
 function conflictCode(err: ApiError): string | null {
@@ -54,8 +58,12 @@ export function AgentPlanProposal({
   payload: AgentPlanProposalV1Payload;
   /** A newer plan card replaced this one: no actions, a short note instead. */
   superseded?: boolean;
-  /** May reject: a 409 means the team was already hired. */
-  onConfirm: () => Promise<void> | void;
+  /**
+   * May reject: a 409 means the team was already hired. A resolved
+   * `pendingApproval` means the hires are waiting on board approval, so the
+   * card says "Sent for approval" rather than "Team hired".
+   */
+  onConfirm: () => Promise<{ pendingApproval?: boolean } | void> | { pendingApproval?: boolean } | void;
   // #210: accept a free-text delta so the server can produce a revised plan
   // instead of just acknowledging "reject". Callers that don't care about
   // text can still pass a no-op.
@@ -66,6 +74,7 @@ export function AgentPlanProposal({
   const [submitting, setSubmitting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [hiredHere, setHiredHere] = useState(false);
+  const [sentForApproval, setSentForApproval] = useState(false);
   const [supersededHere, setSupersededHere] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const trimmed = revisionText.trim();
@@ -78,7 +87,8 @@ export function AgentPlanProposal({
     setConfirming(true);
     setConfirmError(null);
     try {
-      await onConfirm();
+      const outcome = await onConfirm();
+      setSentForApproval(outcome?.pendingApproval === true);
       setHiredHere(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && conflictCode(err) === "superseded_plan") {
@@ -180,7 +190,7 @@ export function AgentPlanProposal({
             disabled
             aria-disabled="true"
           >
-            {PLAN_HIRED_LABEL}
+            {sentForApproval ? PLAN_SENT_FOR_APPROVAL_LABEL : PLAN_HIRED_LABEL}
           </button>
           <button
             type="button"

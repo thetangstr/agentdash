@@ -127,6 +127,10 @@ describeEmbeddedPostgres("agent run health — Chief of Staff chat turns", () =>
       // not count even when they name the CoS.
       { conversationId: INBOX, role: "agent", content: "CoS couldn't reply", authorAgentId: COS, cardKind: "cos_dispatch_error_v1" },
       { conversationId: INBOX, role: "agent", content: "Your Pro trial ends in 3 days.", authorAgentId: COS, cardPayload: { systemNotice: "billing" } },
+      // A notice from before the marker existed: no cardPayload, only the
+      // canned body (routes/billing.ts) marks it as billing, not an answer.
+      { conversationId: INBOX, role: "agent", content: "Heads up: your Pro trial ends in 3 days. Add a payment method to keep Pro features (multi-human invites, agent hires) active. [Update payment method](/billing)", authorAgentId: COS },
+      { conversationId: CONVERSATION, role: "agent", content: "Your Pro subscription ended. Everyone keeps their existing access, but inviting new teammates and hiring new agents now require an active subscription. [Reactivate Pro](/billing)" },
     ]);
     for (const statement of BACKFILL_STATEMENTS) {
       await db.execute(sql.raw(statement));

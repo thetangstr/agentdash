@@ -120,4 +120,32 @@ describe("AgentPlanProposal", () => {
       root.unmount();
     });
   });
+
+  // AgentDash (cos-followups review): a company that gates hires on board
+  // approval gets pendingApproval back — "Team hired" would claim a team
+  // that cannot work yet.
+  it("says 'Sent for approval' when the hires are waiting on board approval", async () => {
+    const onConfirm = vi.fn().mockResolvedValue({ pendingApproval: true, approvalIds: ["ap1"] });
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />,
+      );
+    });
+
+    const setItUp = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Set it up"),
+    )!;
+    await act(async () => {
+      setItUp.click();
+    });
+
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("Sent for approval");
+    expect(container.textContent).not.toContain("Team hired");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

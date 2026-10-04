@@ -171,6 +171,43 @@ describe("mergeHeartbeatRunResultJson", () => {
     ).toEqual({ summary: "All 42 checks pass." });
   });
 
+  // AgentDash (cos-followups review): the runtime signs its own status writes
+  // with \r\n while the agent's answer uses \n, so a CRLF line in an
+  // otherwise-LF document is subprocess chatter even without a glyph.
+  it("strips a glyph-less CRLF status line from an LF answer", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "Loading MCP servers…\r\nMoved the ticket to review.",
+      ),
+    ).toEqual({ summary: "Moved the ticket to review." });
+  });
+
+  it("strips a ✗ CRLF status line — the line ending is the signature, not the glyph", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "✗ mcp server workspace-search failed\r\nAll 42 checks pass.",
+      ),
+    ).toEqual({ summary: "All 42 checks pass." });
+  });
+
+  it("keeps an ℹ line that starts real prose — info is not a warning", () => {
+    const text = "ℹ Note: the migration is reversible";
+    expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
+    const multi = "ℹ Note: the migration is reversible\nThe rollback takes two minutes.";
+    expect(mergeHeartbeatRunResultJson(null, multi)).toEqual({ summary: multi });
+  });
+
+  it("still strips an ℹ line when it carries the CRLF machine signature", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "ℹ no fallback adapter configured\r\nShipped the fix.",
+      ),
+    ).toEqual({ summary: "Shipped the fix." });
+  });
+
   it("strips a warning-only result and message, not just the summary", () => {
     expect(
       mergeHeartbeatRunResultJson(

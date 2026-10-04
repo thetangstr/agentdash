@@ -787,6 +787,43 @@ export function onboardingV2Routes(db: Db) {
       cosOnboardingStateService(db).get(conversationId),
     ]);
     const requiresApproval = companyRow?.requireBoardApprovalForNewAgents === true;
+    // AgentDash (cos-followups review): filing a gated hire's approval is the
+    // same write on the first confirm and on a retry that found the receipt
+    // but not the approval — one helper keeps the payloads identical.
+    const fileHireApproval = async (
+      hired: { id: string; name: string; role: string; title?: string | null; reportsTo?: string | null; adapterType?: string | null },
+      fallbackAdapterType?: string,
+    ): Promise<string> => {
+      const approval = await approvalService(db).create(companyId, {
+        type: "hire_agent",
+        requestedByAgentId: null,
+        requestedByUserId: req.actor.userId,
+        status: "pending",
+        payload: {
+          name: hired.name,
+          role: hired.role,
+          title: hired.title ?? null,
+          reportsTo: hired.reportsTo ?? null,
+          adapterType: hired.adapterType ?? fallbackAdapterType ?? null,
+          agentId: hired.id,
+          source: "cos_plan",
+        },
+        decisionNote: null,
+        decidedByUserId: null,
+        decidedAt: null,
+        updatedAt: new Date(),
+      });
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId!,
+        action: "approval.created",
+        entityType: "approval",
+        entityId: approval.id,
+        details: { type: approval.type, linkedAgentId: hired.id, source: "cos_plan" },
+      });
+      return approval.id;
+    };
     // A confirm on a conversation that is already `ready` (steady-state hire
     // after onboarding) must not re-announce the team or re-materialize goals
     // the person may since have renamed or deleted.
@@ -829,6 +866,48 @@ export function onboardingV2Routes(db: Db) {
       // existed is marked now, so it stops offering "Set it up".
       // A partly hired team (a hire failed mid-batch) is not marked.
       if (!payload.confirmedAt && previousHire.agentIds.length === payload.agents.length) await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, previousHire.agentIds);
+      // AgentDash (cos-followups review): the hire_agent approvals are written
+      // after the receipt commits — a crash between them strands
+      // pending_approval agents no one can approve, and the used receipt used
+      // to dead-end the retry. Re-create only the missing approvals instead.
+      // An agent that already has an open approval, or whose hire already
+      // resolved, is untouched; a hire still paused mid-materialization keeps
+      // the repair path — its approval would be premature because activation
+      // only applies to pending_approval.
+      if (requiresApproval) {
+        const retryAgents = agentService(db);
+        const approvalIds: string[] = [];
+        const awaitingApproval: string[] = [];
+        const stillMaterializing: string[] = [];
+        for (const agentId of previousHire.agentIds) {
+          const hired = await retryAgents.getById(agentId);
+          if (!hired || hired.companyId !== companyId) continue;
+          if (hired.status === "paused") {
+            const meta = hired.metadata && typeof hired.metadata === "object" ? hired.metadata as Record<string, unknown> : null;
+            if (meta?.onboardingMaterialization === "pending") stillMaterializing.push(agentId);
+            continue;
+          }
+          if (hired.status !== "pending_approval") continue;
+          awaitingApproval.push(agentId);
+          const open = await approvalService(db).listPendingHireApprovalsForAgent(companyId, agentId);
+          if (open.length > 0) {
+            approvalIds.push(...open.map((entry) => entry.id));
+            continue;
+          }
+          approvalIds.push(await fileHireApproval(hired));
+        }
+        if (stillMaterializing.length > 0) throw acceptedHireNeedsRepair(stillMaterializing);
+        // Every receipt hire already resolved — the receipt outcome stands
+        // and there is nothing left to approve.
+        if (awaitingApproval.length === 0) throw consumedHire(previousHire);
+        res.status(200).json({
+          companyId,
+          createdAgentIds: previousHire.agentIds,
+          pendingApproval: true,
+          approvalIds,
+        });
+        return;
+      }
       throw consumedHire(previousHire);
     }
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
@@ -911,37 +990,8 @@ ${kpis || "- (none captured)"}
       // hire_agent approval — approval activates it, rejection terminates
       // only the still-pending agent (approvals.ts:365/:446).
       if (requiresApproval) {
-        const approvalsSvc = approvalService(db);
         for (const { created, planAgent } of accepted) {
-          const approval = await approvalsSvc.create(companyId, {
-            type: "hire_agent",
-            requestedByAgentId: null,
-            requestedByUserId: req.actor.userId,
-            status: "pending",
-            payload: {
-              name: created.name,
-              role: created.role,
-              title: created.title ?? null,
-              reportsTo: created.reportsTo ?? null,
-              adapterType: created.adapterType ?? planAgent.adapterType,
-              agentId: created.id,
-              source: "cos_plan",
-            },
-            decisionNote: null,
-            decidedByUserId: null,
-            decidedAt: null,
-            updatedAt: new Date(),
-          });
-          approvalIds.push(approval.id);
-          await logActivity(db, {
-            companyId,
-            actorType: "user",
-            actorId: req.actor.userId!,
-            action: "approval.created",
-            entityType: "approval",
-            entityId: approval.id,
-            details: { type: approval.type, linkedAgentId: created.id, source: "cos_plan" },
-          });
+          approvalIds.push(await fileHireApproval(created, planAgent.adapterType));
         }
       }
       if (materialized.cosAgentId && !alreadyReady) await conversations.postMessage({
@@ -1104,6 +1154,13 @@ ${kpis || "- (none captured)"}
     if (!priorPayload || !Array.isArray(priorPayload.agents)) {
       throw badRequest("Latest plan card has no agents payload to revise");
     }
+    // AgentDash (cos-followups review): the same requester gate as
+    // confirm-plan — a steady-state card names who asked for the team, and
+    // only they may revise it. Onboarding cards carry no requester and stay
+    // revisable by any member.
+    if (typeof priorPayload.requesterUserId === "string" && priorPayload.requesterUserId !== req.actor.userId) {
+      throw forbidden("Only the person who asked for this team can revise it");
+    }
     // AgentDash (scan 4, lane N): a hired plan is not revised (no LLM call,
     // no new card); the team already exists.
     if (priorPayload.confirmedAt || (await readHireReceipt(companyId, conversationId, `plan:${planMsg.id}`))) {
@@ -1121,7 +1178,7 @@ ${kpis || "- (none captured)"}
     // agents[]) can't masquerade as part of the operator's instructions.
     // Trust boundary: only the static text below is "system"; everything
     // user-controlled is a user turn.
-    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, ...priorPlan } = priorPayload;
+    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, requesterUserId: priorRequesterUserId, ...priorPlan } = priorPayload;
     const priorPlanJson = JSON.stringify(priorPlan, null, 2);
     const userRevision = revisionText.trim();
     // AgentDash (scan 4, lane N): never name an agent after a member.
@@ -1180,7 +1237,15 @@ No greetings. No markdown headings outside the JSON block.`;
       );
     }
 
-    const { plan: newPlan, body: visibleBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
+    const { plan: modelPlan, body: visibleBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
+    // AgentDash (cos-followups review): requesterUserId is server-owned. The
+    // model never saw the prior card's value (stripped above) and any it
+    // invents is dropped — the revised card belongs to whoever asked for the
+    // original team.
+    const { requesterUserId: _modelRequester, ...planSansRequester } = modelPlan;
+    const newPlan: AgentPlanProposalV1Payload = priorRequesterUserId
+      ? { ...planSansRequester, requesterUserId: priorRequesterUserId }
+      : planSansRequester;
 
     // AgentDash (canary, lane chat): the LLM call above takes seconds — long
     // enough for the person to confirm this plan in another tab. Re-check the

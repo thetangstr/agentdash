@@ -16,8 +16,10 @@ export interface CardContext {
   /**
    * May reject; the plan card shows the outcome (409 = already hired, or
    * superseded by a newer plan). `messageId` is the card that was clicked.
+   * The confirm-plan response's `pendingApproval` decides between
+   * "Team hired" and "Sent for approval".
    */
-  onProposalConfirm?: (messageId?: string) => Promise<void> | void;
+  onProposalConfirm?: (messageId?: string) => Promise<{ pendingApproval?: boolean } | void> | { pendingApproval?: boolean } | void;
   onProposalReject?: (reason?: string) => void;
   onInviteSend?: (emails: string[]) => Promise<InviteSendResult | void>;
   onInviteSkip?: () => void;
@@ -72,7 +74,7 @@ export function CardRenderer({
         <AgentPlanProposal
           payload={payload as any}
           onConfirm={async () => {
-            await context.onProposalConfirm?.(messageId);
+            return await context.onProposalConfirm?.(messageId);
           }}
           superseded={superseded}
           onRevise={(text) => context.onProposalReject?.(text)}
