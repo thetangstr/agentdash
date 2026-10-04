@@ -3,9 +3,15 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentPlanProposal } from "../cards/AgentPlanProposal";
 import type { AgentPlanProposalV1Payload } from "@paperclipai/shared";
+
+const mockGetSession = vi.hoisted(() => vi.fn());
+vi.mock("../../api/auth", () => ({
+  authApi: { getSession: mockGetSession },
+}));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -34,8 +40,12 @@ const samplePayload: AgentPlanProposalV1Payload = {
 
 describe("AgentPlanProposal", () => {
   let container: HTMLDivElement;
+  let queryClient: QueryClient;
 
   beforeEach(() => {
+    // Unknown session keeps the card permissive — the server is the authority.
+    mockGetSession.mockReset().mockRejectedValue(new Error("no session"));
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement("div");
     document.body.appendChild(container);
   });
@@ -51,7 +61,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={onRevise} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={onRevise} />
+        </QueryClientProvider>,
       );
     });
 
@@ -129,7 +141,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
@@ -205,7 +219,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={persisted} onConfirm={vi.fn()} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={persisted} onConfirm={vi.fn()} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
@@ -283,7 +299,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
