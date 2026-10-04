@@ -186,11 +186,28 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     try {
       const response = await confirmPlan(f, application(faultDatabase('second'))); expect(response.status).toBe(409);
       expect((await hires(f)).map(a => a.name)).toEqual(['First']);
-      expect(events).toEqual(['workforce.enrolled']);
+      expect(events).toEqual(['workforce.enrolled', 'agent.created']);
       expect(await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.companyId,f.company.id))).toHaveLength(1);
       expect((await confirmPlan(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
       expect((await db.select().from(cosOnboardingStates).where(eq(cosOnboardingStates.conversationId,f.conversation.id)))[0].phase).toBe('materializing');
     } finally { stop(); }
+  });
+  // AgentDash (scan 5, lane access): every plan-card hire writes an
+  // agent.created audit with details.source = "cos_plan", committed atomically
+  // with the agent row.
+  it('logs agent.created with cos_plan source for each plan-card hire', async () => {
+    const f = await fixture(); await plan(f);
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    const response = await confirmPlan(f); expect(response.status).toBe(201);
+    const hired = await hires(f); expect(hired).toHaveLength(2);
+    const rows = await db.select().from(activityLog).where(and(eq(activityLog.companyId, f.company.id), eq(activityLog.action, 'agent.created')));
+    expect(rows).toHaveLength(2);
+    const byEntity = new Map(rows.map(r => [r.entityId, r]));
+    for (const agent of hired) {
+      const row = byEntity.get(agent.id);
+      expect(row).toMatchObject({ actorType: 'user', actorId: f.userId, agentId: agent.id });
+      expect(row?.details).toMatchObject({ source: 'cos_plan', name: agent.name, role: agent.role });
+    }
   });
   it.each(['interview', 'plan'])('refuses concurrent and repeated %s confirmations with one accepted set', async kind => {
     const f = await fixture(); if(kind === 'plan') await plan(f);

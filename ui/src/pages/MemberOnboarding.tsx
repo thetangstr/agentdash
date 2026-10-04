@@ -52,19 +52,31 @@ export function MemberOnboardingPage() {
   }
 
   const isWelcome = session.currentStep === "welcome";
+  // AgentDash (scan 5, lane access): steward copy is for stewards. An ordinary
+  // invitee gets a plain "You joined <workspace>" landing; the guide link
+  // (My Agent, connecting your terminal) describes a steward's tooling.
+  const isSteward = session.isSteward;
   return (
     <main className="mx-auto flex min-h-[70vh] max-w-2xl items-center px-6 py-12">
       <section className="w-full rounded-xl border border-border bg-card p-8 shadow-sm">
-        <p className="text-sm font-medium text-primary">{session.companyName}</p>
+        <p className="text-sm font-medium text-primary">
+          {isWelcome && !isSteward ? "Member onboarding" : session.companyName}
+        </p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-          {isWelcome ? "Welcome to your workspace" : "Your workspace is ready"}
+          {isWelcome
+            ? isSteward
+              ? "Welcome to your workspace"
+              : `You joined ${session.companyName}`
+            : "Your workspace is ready"}
         </h1>
         <p className="mt-4 text-muted-foreground">
           {isWelcome
-            ? "AgentDash keeps your team’s work, agent activity, and approvals in one place. Your existing role and permissions stay unchanged."
+            ? isSteward
+              ? "AgentDash keeps your team’s work, agent activity, and approvals in one place. Your existing role and permissions stay unchanged."
+              : "The team's work, agent activity, and anything waiting on you all live on the dashboard. Your role and permissions are already in place."
             : "Open tasks show work that is not done or cancelled. You can leave at any time and this step will resume when you return."}
         </p>
-        {isWelcome ? (
+        {isWelcome && isSteward ? (
           <p className="mt-3 text-sm text-muted-foreground">
             New here?{" "}
             <Link to="/guides/steward/getting-started" className="underline">

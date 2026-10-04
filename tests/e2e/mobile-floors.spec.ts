@@ -226,7 +226,9 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
         const res = await request.get(`/api/heartbeat-runs/${run.id}`);
         return res.ok() ? ((await res.json()) as { status: string }).status : `http ${res.status()}`;
       },
-      { timeout: 60_000, intervals: [500, 1000, 2000] },
+      // Stays inside the 180s beforeAll budget; the adapter tick is slow
+      // under machine load even for the fake run.
+      { timeout: 120_000, intervals: [500, 1000, 2000] },
     )
     .toMatch(/^(succeeded|failed|timed_out|cancelled)$/);
 
@@ -570,6 +572,12 @@ const PAGES: Target[] = [
 test.describe("Phone floors on every main screen", () => {
   let seeded: Seeded;
 
+  test.beforeEach(async ({ page }) => {
+    // A pending web-font fetch holds the `load` event and can stall page.goto
+    // for minutes on runners with slow egress; the UI falls back fine.
+    await page.route(/fonts\.(gstatic|googleapis)\.com/, (route) => route.abort());
+  });
+
   test.beforeAll(async ({ request }, testInfo) => {
     // Seeding waits for one fake run to finish.
     testInfo.setTimeout(180_000);
@@ -605,6 +613,32 @@ test.describe("Phone floors on every main screen", () => {
       }
     });
   }
+
+  test("access page at 390px: each member is a readable card with on-screen actions", async ({ page }) => {
+    await page.setViewportSize(WIDTHS[0]);
+    await page.goto(`/${seeded.company.issuePrefix}/company/settings/access`);
+    await expect(main(page).getByRole("heading", { name: "Humans" })).toBeVisible({ timeout: 30_000 });
+    await settle(page);
+
+    // Below sm the five-column grid is replaced by stacked member cards; the
+    // column header stays in the DOM but is CSS-hidden.
+    await expect(main(page).getByText("User account")).toBeHidden();
+
+    const cards = main(page).locator('[data-testid^="member-card-"]');
+    await expect(cards.first()).toBeVisible();
+    for (const card of await cards.all()) {
+      // Identity, role and status stay visible — nothing truncated away.
+      const box = (await card.boundingBox())!;
+      expect(box.width, "member card fits the viewport").toBeLessThanOrEqual(WIDTHS[0].width);
+      for (const name of ["Edit", "Remove"]) {
+        const action = card.getByRole("button", { name, exact: true });
+        await expect(action).toBeVisible();
+        const actionBox = (await action.boundingBox())!;
+        // Fully on screen: the card never clips the control.
+        expect(actionBox.x + actionBox.width, `${name} button on screen`).toBeLessThanOrEqual(WIDTHS[0].width);
+      }
+    }
+  });
 
   test("breadcrumb at 390px: a long workspace name does not clip the page label", async ({ page, request }) => {
     // ~40-char name: the parent crumb must truncate, never clip the page label.

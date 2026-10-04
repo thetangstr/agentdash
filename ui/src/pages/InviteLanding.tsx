@@ -387,9 +387,12 @@ export function InviteLandingPage() {
       setResult({ kind: asBootstrap ? "bootstrap" : "join", payload });
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // AgentDash (scan 5, lane access): an approved human join lands on the
+      // "You joined the company" confirmation below — not on member
+      // onboarding. The session still exists, so Open board walks the invitee
+      // into it via the access gate.
       if (invite?.companyId && isApprovedHumanJoinPayload(payload, showsAgentForm)) {
         setSelectedCompanyId(invite.companyId, { source: "manual" });
-        navigate("/member-onboarding", { replace: true });
       }
     },
     onError: (err) => {

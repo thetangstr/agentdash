@@ -46,9 +46,10 @@ export default defineConfig({
     command: `pnpm paperclipai onboard --yes --run`,
     url: `${BASE_URL}/api/health`,
     // Always boot a dedicated throwaway instance for e2e so browser tests
-    // never attach to the developer's active Paperclip home/server.
-    reuseExistingServer: false,
-    timeout: 120_000,
+    // never attach to the developer's active Paperclip home/server. Local
+    // iteration against an intentionally re-used server can opt back in.
+    reuseExistingServer: process.env.PAPERCLIP_E2E_REUSE_EXISTING_SERVER === "1",
+    timeout: Number(process.env.PAPERCLIP_E2E_WEBSERVER_TIMEOUT ?? 120_000),
     stdout: "pipe",
     stderr: "pipe",
     env: {

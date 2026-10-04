@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,7 +9,24 @@ import type { PaperclipConfig } from "../config/schema.js";
 
 const ORIGINAL_ENV = { ...process.env };
 
-function createTempConfig(): string {
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("no ephemeral port assigned")));
+        return;
+      }
+      const { port } = address;
+      server.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+function createTempConfig(port: number): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-"));
   const configPath = path.join(root, ".paperclip", "config.json");
   const runtimeRoot = path.join(root, "runtime");
@@ -38,7 +56,7 @@ function createTempConfig(): string {
       deploymentMode: "local_trusted",
       exposure: "private",
       host: "127.0.0.1",
-      port: 3199,
+      port,
       allowedHostnames: [],
       serveUi: true,
     },
@@ -87,7 +105,7 @@ describe("doctor", () => {
   });
 
   it("re-runs repairable checks so repaired failures do not remain blocking", async () => {
-    const configPath = createTempConfig();
+    const configPath = createTempConfig(await freePort());
 
     const summary = await doctor({
       config: configPath,

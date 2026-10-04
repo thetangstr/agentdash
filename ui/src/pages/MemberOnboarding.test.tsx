@@ -19,6 +19,9 @@ vi.mock("@/api/onboarding", () => ({
 
 vi.mock("@/lib/router", () => ({
   Navigate: ({ to }: { to: string }) => <div>Navigate:{to}</div>,
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
+    <a href={to}>{children}</a>
+  ),
   useNavigate: () => navigateMock,
 }));
 
@@ -50,6 +53,7 @@ describe("MemberOnboardingPage", () => {
         currentStep: "workspace",
         completedAt: "2026-08-26T17:00:00.000Z",
         updatedAt: "2026-08-26T17:00:00.000Z",
+        isSteward: false,
       },
     ]);
     const root = createRoot(container);
@@ -65,6 +69,77 @@ describe("MemberOnboardingPage", () => {
     await act(async () => {
       await vi.waitFor(() => {
         expect(container.textContent).toContain("Navigate:/MKT/dashboard");
+      });
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  // AgentDash (scan 5, lane access): an ordinary invitee gets a plain
+  // "You joined <workspace>" welcome — no steward wording, no steward guide.
+  it("shows a non-steward the joined welcome without steward wording", async () => {
+    listMemberSessionsMock.mockResolvedValue([
+      {
+        id: "session-1",
+        companyId: "company-1",
+        companyName: "MKThink",
+        issuePrefix: "MKT",
+        status: "in_progress",
+        currentStep: "welcome",
+        completedAt: null,
+        updatedAt: "2026-08-26T17:00:00.000Z",
+        isSteward: false,
+      },
+    ]);
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemberOnboardingPage />
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("You joined MKThink");
+      });
+    });
+    expect(container.textContent).not.toContain("steward");
+    expect(container.textContent).not.toContain("Steward");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the steward guide for a member who stewards an agent", async () => {
+    listMemberSessionsMock.mockResolvedValue([
+      {
+        id: "session-1",
+        companyId: "company-1",
+        companyName: "MKThink",
+        issuePrefix: "MKT",
+        status: "in_progress",
+        currentStep: "welcome",
+        completedAt: null,
+        updatedAt: "2026-08-26T17:00:00.000Z",
+        isSteward: true,
+      },
+    ]);
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemberOnboardingPage />
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("Welcome to your workspace");
+        expect(container.textContent).toContain("Getting started as a steward");
       });
     });
 

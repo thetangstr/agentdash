@@ -1,6 +1,6 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { companies, onboardingSessions } from "@paperclipai/db";
+import { agentStewardships, companies, onboardingSessions } from "@paperclipai/db";
 
 export const MEMBER_ONBOARDING_STEPS = ["welcome", "workspace"] as const;
 export type MemberOnboardingStep = (typeof MEMBER_ONBOARDING_STEPS)[number];
@@ -39,6 +39,10 @@ export function memberOnboardingService(db: Db) {
           currentStep: onboardingSessions.currentStep,
           completedAt: onboardingSessions.completedAt,
           updatedAt: onboardingSessions.updatedAt,
+          // AgentDash (scan 5, lane access): whether this member actively
+          // stewards an agent here. The UI shows steward wording only when
+          // this is true; ordinary invitees get the plain joined copy.
+          isSteward: sql<boolean>`exists (select 1 from ${agentStewardships} s where s.company_id = ${onboardingSessions.companyId} and s.user_id = ${userId} and s.ended_at is null)`,
         })
         .from(onboardingSessions)
         .innerJoin(companies, eq(companies.id, onboardingSessions.companyId))

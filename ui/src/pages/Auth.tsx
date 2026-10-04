@@ -26,8 +26,13 @@ type AuthMode = "sign_in" | "sign_up";
  * back" there greets someone who has never been here, and there is no account
  * to sign in to. Everything else opens on Sign in.
  */
-export function defaultAuthMode(health: Pick<HealthStatus, "bootstrapStatus" | "selfServeBootstrap"> | null | undefined): AuthMode {
-  return health?.bootstrapStatus === "bootstrap_pending" && health.selfServeBootstrap === true ? "sign_up" : "sign_in";
+export function defaultAuthMode(health: Pick<HealthStatus, "selfServeBootstrap" | "hasUsers"> | null | undefined): AuthMode {
+  // AgentDash (scan 5, lane access): "no users" — not bootstrap_pending — is
+  // the Create-account condition. bootstrapStatus tracks the instance_admin
+  // role, and a claimed box can already have a user while it still reports
+  // bootstrap_pending; greeting that user with "Create your workspace" leaves
+  // them unable to sign in.
+  return health?.selfServeBootstrap === true && health.hasUsers === false ? "sign_up" : "sign_in";
 }
 
 export function AuthPage() {

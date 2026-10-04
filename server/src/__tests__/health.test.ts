@@ -15,9 +15,11 @@ vi.mock("../dev-server-status.js", () => ({
 
 const mockServedRelease = vi.hoisted(() => vi.fn());
 const mockBoxClaimedCached = vi.hoisted(() => vi.fn());
+const mockInstanceHasUsers = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/claim-code.js", () => ({
   boxClaimedCached: mockBoxClaimedCached,
+  instanceHasUsers: mockInstanceHasUsers,
 }));
 
 vi.mock("../lib/served-release.js", () => ({
@@ -36,6 +38,7 @@ describe("GET /health", () => {
     mockReadPersistedDevServerStatus.mockReturnValue(undefined);
     mockServedRelease.mockReturnValue(null);
     mockBoxClaimedCached.mockResolvedValue(true);
+    mockInstanceHasUsers.mockResolvedValue(false);
   });
 
   afterEach(() => {

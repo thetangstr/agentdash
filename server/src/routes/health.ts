@@ -15,7 +15,7 @@ import { alerterStatus } from "../observability/alerter.js";
 import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
 import { declaredOriginsEnabled, normalizeOrigin } from "../lib/declared-origins.js";
 import { isHostedBox } from "../services/license.js";
-import { boxClaimedCached } from "../lib/claim-code.js";
+import { boxClaimedCached, instanceHasUsers } from "../lib/claim-code.js";
 import { servedRelease } from "../lib/served-release.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
@@ -184,6 +184,17 @@ export function healthRoutes(
         ? await companyService(db).hasActiveCompany()
         : false;
 
+    // AgentDash (scan 5, lane access): whether ANY account exists — a
+    // different question from bootstrapStatus (an instance_admin role). A
+    // claimed box keeps reporting bootstrap_pending while it already has a
+    // user, and /auth must open on Sign in then. Exposed on both shapes: the
+    // auth page's caller is anonymous by definition, and the count itself is
+    // already inferable from bootstrapStatus/claimed.
+    const hasUsers =
+      opts.deploymentMode === "authenticated" && typeof (db as { select?: unknown }).select === "function"
+        ? await instanceHasUsers(db)
+        : false;
+
     // AgentDash (#767, SC-6): on a hosted box, whether anyone has claimed it
     // (the persisted claim, or any account; cached, #767 review). The control plane polls this to close
     // sign-up and to tell an unclaimed box from one in use; nothing else about
@@ -215,6 +226,7 @@ export function healthRoutes(
         bootstrapInviteActive,
         selfServeBootstrap,
         instanceHasCompany,
+        hasUsers,
         ...(claimed !== undefined ? { claimed } : {}),
         adapterReady: adapter.ready,
         adapterPreset: adapter.preset,
@@ -242,6 +254,7 @@ export function healthRoutes(
       bootstrapInviteActive,
       selfServeBootstrap,
       instanceHasCompany,
+      hasUsers,
       // AgentDash (scan 3 lane L): the claim state belongs on the signed-in
       // shape too. Only the public branch carried it, so an operator or the
       // control plane reading health with a session saw no `claimed` at all.

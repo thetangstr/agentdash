@@ -14,7 +14,7 @@
 // "Plan with your Chief of Staff". Whether this flow applies to a company is
 // the server's answer (`applies`); when it does not, the page goes to /cos.
 // The page itself never reads the company's profile (one UX).
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -101,17 +101,30 @@ export function FirstRunPage() {
     enabled: Boolean(companyId),
   });
   const status = statusQuery.data;
+  // AgentDash (scan 5, lane access): "Skip for now" advances the flow instead
+  // of jumping Home. The server has no skip state (the step stays the first
+  // incomplete one on a revisit, which still offers it — no unusable loop), so
+  // the advance is kept here, per company.
+  const [skippedCompanyId, setSkippedCompanyId] = useState<string | null>(null);
+  const [skippedSteps, setSkippedSteps] = useState<ReadonlySet<FirstRunStep>>(new Set());
+  const skipped = skippedCompanyId === companyId ? skippedSteps : new Set<FirstRunStep>();
+  const nextStep: FirstRunStep | undefined =
+    status?.nextStep === "repo" && skipped.has("repo")
+      ? status.firstIssue.done
+        ? "done"
+        : "first_issue"
+      : status?.nextStep;
   const adapterQuery = useQuery({
     queryKey: ["onboarding-adapter-status"],
     queryFn: () => onboardingApi.adapterStatus(),
-    enabled: status?.nextStep === "model",
+    enabled: nextStep === "model",
     retry: false,
   });
 
   const home = company ? `/${company.issuePrefix}/dashboard` : "/";
   useEffect(() => {
-    if (status?.applies && status.nextStep === "done") navigate(home, { replace: true });
-  }, [status?.applies, status?.nextStep, home, navigate]);
+    if (status?.applies && nextStep === "done") navigate(home, { replace: true });
+  }, [status?.applies, nextStep, home, navigate]);
 
   if (loading) return <div role="status" className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
   if (!company) {
@@ -153,7 +166,7 @@ export function FirstRunPage() {
   let body: ReactNode = null;
   if (showRuntime) {
     body = <RuntimeStep companyId={company.id} onContinue={() => navigate("/cos", { replace: true })} />;
-  } else if (status.nextStep === "model") {
+  } else if (nextStep === "model") {
     const provider = adapterQuery.data?.hermesProvider;
     body = !status.canConfigureModel ? (
       // #794: a company admin who is not the instance admin cannot set the key.
@@ -182,7 +195,7 @@ export function FirstRunPage() {
     ) : (
       <div role="status" className="p-8 text-center text-sm text-muted-foreground">Loading…</div>
     );
-  } else if (status.nextStep === "repo") {
+  } else if (nextStep === "repo") {
     body = (
       <GitHubConnectStep
         companyId={company.id}
@@ -195,7 +208,7 @@ export function FirstRunPage() {
         }}
       />
     );
-  } else if (status.nextStep === "first_issue") {
+  } else if (nextStep === "first_issue") {
     body = (
       <FirstIssueStep
         companyId={company.id}
@@ -211,7 +224,17 @@ export function FirstRunPage() {
   }
 
   // The code and first-task steps can be skipped; Home keeps offering them.
-  const optionalStep = !showRuntime && (status.nextStep === "repo" || status.nextStep === "first_issue");
+  const optionalStep = !showRuntime && (nextStep === "repo" || nextStep === "first_issue");
+  // AgentDash (scan 5, lane access): skip advances the flow — repo → first
+  // task, first task → the Chief of Staff — instead of jumping Home.
+  const skipOptionalStep = () => {
+    if (nextStep === "repo") {
+      setSkippedCompanyId(company.id);
+      setSkippedSteps((current) => new Set(current).add("repo"));
+      return;
+    }
+    navigate("/cos", { replace: true });
+  };
 
   return (
     <div className="min-h-screen bg-surface-page" data-testid="first-run">
@@ -220,7 +243,7 @@ export function FirstRunPage() {
           numbering stable, so revisiting /setup resumes at "2. Code
           (optional)" instead of a renumbered step 1. */}
       <StepIndicator
-        current={showRuntime ? "model" : status.nextStep}
+        current={showRuntime ? "model" : nextStep ?? "done"}
         modelLabel={status.model.required ? undefined : "Your AI assistant"}
       />
       {optionalStep ? (
@@ -228,7 +251,7 @@ export function FirstRunPage() {
         <div className="mx-auto mt-6 max-w-lg px-6" data-testid="first-run-optional-notice">
           <div className="rounded-lg border p-4 text-sm">
             <p>
-              {status.nextStep === "repo"
+              {nextStep === "repo"
                 ? "This step is optional. Connect GitHub only if your team works on code."
                 : "This step is optional. You can give your team its first task now or later."}
             </p>
@@ -245,7 +268,7 @@ export function FirstRunPage() {
             variant="ghost"
             className="min-h-11 px-0 text-muted-foreground underline-offset-4 hover:underline"
             data-testid="first-run-skip"
-            onClick={() => navigate(home, { replace: true })}
+            onClick={skipOptionalStep}
           >
             Skip for now
           </Button>

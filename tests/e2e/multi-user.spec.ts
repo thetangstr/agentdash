@@ -8,7 +8,7 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
  *   2. Human invite creation and acceptance API
  *   3. Company Settings UI — member list, role editing, invite creation
  *   4. Invite landing page UI
- *   5. Role-based access control (viewer read-only)
+ *   5. Role-based access control (member management)
  *   6. Last-owner protection
  */
 
@@ -76,7 +76,7 @@ async function createCompanyViaWizard(
 async function createHumanInvite(
   request: APIRequestContext,
   companyId: string,
-  role: string = "operator"
+  role: string = "member"
 ): Promise<{ token: string; inviteUrl: string; inviteId: string }> {
   const res = await request.post(
     `${BASE}/api/companies/${companyId}/invites`,
@@ -99,6 +99,11 @@ async function createHumanInvite(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/** A pending web-font fetch holds `load`; abort externals so goto can't stall. */
+async function abortExternalFonts(page: Page) {
+  await page.route(/fonts\.(gstatic|googleapis)\.com/, (route) => route.abort());
+}
 
 test.describe("Multi-user: API", () => {
   let companyId: string;
@@ -136,7 +141,7 @@ test.describe("Multi-user: API", () => {
       {
         data: {
           allowedJoinTypes: "human",
-          humanRole: "operator",
+          humanRole: "member",
         },
       }
     );
@@ -150,7 +155,7 @@ test.describe("Multi-user: API", () => {
   });
 
   test("GET /invites/:token returns invite summary", async ({ request }) => {
-    const invite = await createHumanInvite(request, companyId, "viewer");
+    const invite = await createHumanInvite(request, companyId, "member");
     const res = await request.get(`${BASE}/api/invites/${invite.token}`);
     expect(res.ok()).toBe(true);
     const body = await res.json();
@@ -165,7 +170,7 @@ test.describe("Multi-user: API", () => {
   test("POST /invites/:token/accept (human) creates membership", async ({
     request,
   }) => {
-    const invite = await createHumanInvite(request, companyId, "operator");
+    const invite = await createHumanInvite(request, companyId, "member");
     const acceptRes = await request.post(
       `${BASE}/api/invites/${invite.token}/accept`,
       {
@@ -182,7 +187,7 @@ test.describe("Multi-user: API", () => {
   test("POST /invites/:token/accept rejects agent on human-only invite", async ({
     request,
   }) => {
-    const invite = await createHumanInvite(request, companyId, "operator");
+    const invite = await createHumanInvite(request, companyId, "member");
     const acceptRes = await request.post(
       `${BASE}/api/invites/${invite.token}/accept`,
       {
@@ -193,10 +198,10 @@ test.describe("Multi-user: API", () => {
     expect(acceptRes.status()).toBe(400);
   });
 
-  test("POST /companies/:id/invites supports all four roles", async ({
+  test("POST /companies/:id/invites supports both human roles", async ({
     request,
   }) => {
-    for (const role of ["owner", "admin", "operator", "viewer"]) {
+    for (const role of ["admin", "member"]) {
       const res = await request.post(
         `${BASE}/api/companies/${companyId}/invites`,
         {
@@ -209,22 +214,21 @@ test.describe("Multi-user: API", () => {
     }
   });
 
-  test("PATCH /companies/:id/members/:memberId cannot remove last owner", async ({
+  test("PATCH /companies/:id/members/:memberId refuses to demote the sole admin", async ({
     request,
   }) => {
     // Create a fresh company for this test
     const fresh = await createCompanyViaWizard(
       request,
-      `MU-LastOwner-${Date.now()}`
+      `MU-LastAdmin-${Date.now()}`
     );
 
-    // First promote the local-board member to owner
     const membersRes = await request.get(
       `${BASE}/api/companies/${fresh.companyId}/members`
     );
     const { members } = await membersRes.json();
 
-    // Find the board member (should be the only one)
+    // Find the board member (should be the only one, and the only admin)
     const boardMember = members.find(
       (m: { principalId: string }) => m.principalId === "local-board"
     );
@@ -233,21 +237,16 @@ test.describe("Multi-user: API", () => {
       return;
     }
 
-    // Promote to owner first
-    const promoteRes = await request.patch(
-      `${BASE}/api/companies/${fresh.companyId}/members/${boardMember.id}`,
-      { data: { membershipRole: "owner" } }
-    );
-    expect(promoteRes.ok()).toBe(true);
-
-    // Now try to demote the last (and only) owner to operator — should fail
+    // In local_trusted the actor IS local-board, so the self-protection guard
+    // fires first: a board user cannot demote or remove its own membership,
+    // which is what keeps the last admin in place through this API.
     const demoteRes = await request.patch(
       `${BASE}/api/companies/${fresh.companyId}/members/${boardMember.id}`,
-      { data: { membershipRole: "operator" } }
+      { data: { membershipRole: "member" } }
     );
-    expect(demoteRes.status()).toBe(409);
+    expect(demoteRes.status()).toBe(403);
     const errBody = await demoteRes.json();
-    expect(JSON.stringify(errBody)).toContain("last active owner");
+    expect(JSON.stringify(errBody)).toContain("cannot remove yourself");
   });
 
   test("POST /companies/:id/openclaw/invite-prompt creates agent invite", async ({
@@ -272,6 +271,8 @@ test.describe("Multi-user: Company Settings UI", () => {
   let companyId: string;
   let companyPrefix: string;
 
+  test.beforeEach(async ({ page }) => abortExternalFonts(page));
+
   test.beforeAll(async ({ request }) => {
     const result = await createCompanyViaWizard(
       request,
@@ -295,32 +296,39 @@ test.describe("Multi-user: Company Settings UI", () => {
     });
   });
 
+  // Human invite creation lives on the dedicated Invites page now.
   test("shows human invite creation controls", async ({ page }) => {
-    await page.goto(`${BASE}/${companyPrefix}/company/settings`);
+    await page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
     await page.waitForLoadState("networkidle");
-    const inviteButton = page.getByTestId("company-settings-create-human-invite");
-    await expect(inviteButton).toBeVisible({ timeout: 10_000 });
 
-    const roleSelect = page.getByTestId("company-settings-human-invite-role");
-    await expect(roleSelect).toBeVisible();
+    await expect(page.getByText("Choose a role")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("radio", { name: /^Member\b/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /^Admin\b/ })).toBeVisible();
+    await expect(page.getByText("Auto-approve on accept")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Create invite" })
+    ).toBeVisible();
   });
 
   test("can create human invite and shows URL", async ({ page }) => {
-    await page.goto(`${BASE}/${companyPrefix}/company/settings`);
+    await page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
     await page.waitForLoadState("networkidle");
-    const inviteButton = page.getByTestId("company-settings-create-human-invite");
-    await expect(inviteButton).toBeVisible({ timeout: 10_000 });
-    await inviteButton.click();
+    await page
+      .getByRole("button", { name: "Create invite" })
+      .click();
 
-    await expect(page.getByTestId("company-settings-human-invite-url")).toBeVisible({
+    await expect(page.getByTestId("latest-invite-url")).toBeVisible({
       timeout: 10_000,
     });
+    await expect(page.getByTestId("latest-invite-url")).toContainText("/invite/");
   });
 });
 
 test.describe("Multi-user: Invite Landing UI", () => {
   let companyId: string;
   let inviteToken: string;
+
+  test.beforeEach(async ({ page }) => abortExternalFonts(page));
 
   test.beforeAll(async ({ request }) => {
     const result = await createCompanyViaWizard(
@@ -329,7 +337,7 @@ test.describe("Multi-user: Invite Landing UI", () => {
     );
     companyId = result.companyId;
 
-    const invite = await createHumanInvite(request, companyId, "operator");
+    const invite = await createHumanInvite(request, companyId, "member");
     inviteToken = invite.token;
   });
 
@@ -343,13 +351,17 @@ test.describe("Multi-user: Invite Landing UI", () => {
     ).toBeVisible({ timeout: 10_000 });
   });
 
-  test("invite landing shows human join type", async ({ page }) => {
+  test("invite landing shows the invited member role, not the agent form", async ({ page }) => {
     await page.goto(`${BASE}/invite/${inviteToken}`);
     await page.waitForLoadState("networkidle");
 
-    // For a human-only invite, should show human join option
-    const humanOption = page.locator("text=/human/i");
-    await expect(humanOption).toBeVisible({ timeout: 10_000 });
+    // For a human-only invite the landing reports the requested access as the
+    // invited role and does not offer the agent-join form.
+    await expect(page.getByText("Requested access")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Member").first()).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Submit agent details" })
+    ).toHaveCount(0);
   });
 
   test("expired/invalid invite token returns error", async ({ page }) => {
@@ -373,8 +385,8 @@ test.describe("Multi-user: Member role management API", () => {
   test("invite + accept creates member with correct role", async ({
     request,
   }) => {
-    // Create invite for 'viewer' role
-    const invite = await createHumanInvite(request, companyId, "viewer");
+    // Create invite for 'member' role
+    const invite = await createHumanInvite(request, companyId, "member");
 
     // Accept the invite
     const acceptRes = await request.post(
@@ -395,7 +407,7 @@ test.describe("Multi-user: Member role management API", () => {
 
   test("PATCH member role updates correctly", async ({ request }) => {
     // First create an invite and accept it to get a second member
-    const invite = await createHumanInvite(request, companyId, "operator");
+    const invite = await createHumanInvite(request, companyId, "member");
     const acceptRes = await request.post(
       `${BASE}/api/invites/${invite.token}/accept`,
       { data: { requestType: "human" } }
@@ -408,18 +420,18 @@ test.describe("Multi-user: Member role management API", () => {
     );
     const { members } = await membersRes.json();
 
-    // Find a non-owner member to modify
-    const nonOwner = members.find(
-      (m: { membershipRole: string }) => m.membershipRole !== "owner"
+    // Find a non-admin member to modify
+    const nonAdmin = members.find(
+      (m: { membershipRole: string }) => m.membershipRole !== "admin"
     );
-    if (!nonOwner) {
+    if (!nonAdmin) {
       test.skip();
       return;
     }
 
     // Update role to admin
     const patchRes = await request.patch(
-      `${BASE}/api/companies/${companyId}/members/${nonOwner.id}`,
+      `${BASE}/api/companies/${companyId}/members/${nonAdmin.id}`,
       { data: { membershipRole: "admin" } }
     );
     expect(patchRes.ok()).toBe(true);
@@ -429,7 +441,7 @@ test.describe("Multi-user: Member role management API", () => {
 
   test("PATCH member status to suspended works", async ({ request }) => {
     // Create another member
-    const invite = await createHumanInvite(request, companyId, "operator");
+    const invite = await createHumanInvite(request, companyId, "member");
     await request.post(`${BASE}/api/invites/${invite.token}/accept`, {
       data: { requestType: "human" },
     });
@@ -439,17 +451,17 @@ test.describe("Multi-user: Member role management API", () => {
     );
     const { members } = await membersRes.json();
 
-    const nonOwner = members.find(
+    const nonAdmin = members.find(
       (m: { membershipRole: string; status: string }) =>
-        m.membershipRole !== "owner" && m.status === "active"
+        m.membershipRole !== "admin" && m.status === "active"
     );
-    if (!nonOwner) {
+    if (!nonAdmin) {
       test.skip();
       return;
     }
 
     const patchRes = await request.patch(
-      `${BASE}/api/companies/${companyId}/members/${nonOwner.id}`,
+      `${BASE}/api/companies/${companyId}/members/${nonAdmin.id}`,
       { data: { status: "suspended" } }
     );
     expect(patchRes.ok()).toBe(true);
