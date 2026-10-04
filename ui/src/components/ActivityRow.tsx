@@ -141,12 +141,17 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   );
 
   if (link) {
+    // The row link keeps the row's padding/tap-target classes (mobile tests
+    // measure them); the reference chips sit outside it with matching
+    // horizontal padding, so no <a> is nested inside another.
     return (
-      <div className={classes}>
-        <Link to={link} className="no-underline text-inherit block">
+      <div className="hover:bg-accent/50 transition-colors">
+        <Link to={link} className={cn(classes, "no-underline text-inherit block")}>
           {inner}
         </Link>
-        {referenceSummary}
+        {referenceSummary && (
+          <div className={stacked ? "px-3 pb-2.5" : "px-4 pb-2"}>{referenceSummary}</div>
+        )}
       </div>
     );
   }
