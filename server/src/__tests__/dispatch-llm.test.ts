@@ -150,6 +150,53 @@ describe("dispatchLLM", () => {
   });
 
   /**
+   * AgentDash (batch 4, c4-model-tiers): a modelless hermes_local CoS chat
+   * runs the HIGH tier — the Chief of Staff is a leadership role. An
+   * explicit model in the dispatch options still wins.
+   */
+  describe("hermes_local model tiers", () => {
+    function spawnArgs(): string[] {
+      return spawnMock.mock.calls[0][1] as string[];
+    }
+
+    it("routes a modelless hermes_local dispatch through the high tier", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      const args = spawnArgs();
+      expect(args[args.indexOf("-m") + 1]).toBe("qwen3.8-max-0902");
+      expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-token-plan-cn");
+    });
+
+    it("honours the high-tier env overrides", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      process.env.AGENTDASH_HERMES_HIGH_MODEL = "qwen-next";
+      process.env.AGENTDASH_HERMES_HIGH_PROVIDER = "alibaba-custom";
+      try {
+        await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+        const args = spawnArgs();
+        expect(args[args.indexOf("-m") + 1]).toBe("qwen-next");
+        expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-custom");
+      } finally {
+        delete process.env.AGENTDASH_HERMES_HIGH_MODEL;
+        delete process.env.AGENTDASH_HERMES_HIGH_PROVIDER;
+      }
+    });
+
+    it("lets an explicit model win and never invents a provider for it", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM(
+        { system: "s", messages: [{ role: "user", content: "hi" }] },
+        undefined,
+        { model: "glm-5.3-flash" },
+      );
+      const args = spawnArgs();
+      expect(args[args.indexOf("-m") + 1]).toBe("glm-5.3-flash");
+      expect(args).not.toContain("--provider");
+    });
+  });
+
+  /**
    * Least privilege for a process that reads untrusted agent output.
    *
    * The prompt handed to Hermes contains other agents' answers — text this

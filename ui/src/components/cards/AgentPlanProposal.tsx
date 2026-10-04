@@ -2,7 +2,15 @@ import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — CoS plan proposal (Phase C + #210 revision).
 // See docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
 import { useState } from "react";
-import { AGENT_ROLE_LABELS, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import {
+  AGENT_ROLE_LABELS,
+  HERMES_LOCAL_ADAPTER_TYPE,
+  mapProposedAgentRole,
+  modelTierForRole,
+  proposedRoleTitle,
+  resolveHermesModelTier,
+  type AgentPlanProposalV1Payload,
+} from "@paperclipai/shared";
 import { ApiError } from "../../api/client";
 
 // AgentDash (scan 4, lane N): shown once the plan's team is hired.
@@ -158,6 +166,19 @@ export function AgentPlanProposal({
                 {role ? <span className="text-text-secondary font-normal"> — {role}</span> : null}
               </div>
               <WorkforceTemplatePreview templateId={agent.workforceTemplateId}/>
+              {agent.adapterType === HERMES_LOCAL_ADAPTER_TYPE && (() => {
+                // AgentDash (c4-model-tiers): the tier this hire will get —
+                // plain words ("DeepSeek V4.1 Flash · ops tier"), never the
+                // raw id.
+                const spec = resolveHermesModelTier(
+                  modelTierForRole(mapProposedAgentRole(agent.role), proposedRoleTitle(agent.title ?? agent.role)),
+                );
+                return (
+                  <p className="mt-1 text-xs text-text-tertiary" data-testid="plan-agent-model">
+                    Model: {spec.displayName} · {spec.tierLabel}
+                  </p>
+                );
+              })()}
               {responsibilities.length > 0 && (
                 // AgentDash (c3-a11y): an agent can carry several
                 // responsibilities — show them all; a tight bullet list stays

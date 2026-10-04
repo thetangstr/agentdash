@@ -1344,6 +1344,24 @@ export { isAgentPlanPayload, normalizeAgentPlanTitles, PLAN_AGENT_TITLE_MAX_LENG
 // AgentDash: plan-card role -> AGENT_ROLES mapping used by /onboarding/confirm-plan.
 export { PRIVILEGED_PLAN_ROLES, mapProposedAgentRole, proposedRoleTitle } from "./agent-role-mapping.js";
 
+// AgentDash (batch 4, c4-model-tiers): the hermes_local high/low model tiers —
+// one source of truth for creation defaults, CoS dispatch, the doctor command
+// and the plain-words model display.
+export {
+  HERMES_MODEL_TIERS,
+  HERMES_LOCAL_ADAPTER_TYPE,
+  AGENT_MODEL_TIER_METADATA_KEY,
+  resolveHermesModelTier,
+  modelTierForRole,
+  applyHermesModelTierDefault,
+  hermesModelDisplayName,
+  hermesModelTierLabel,
+  hermesModelTierForModel,
+  describeHermesModel,
+  type HermesModelTierId,
+  type HermesModelTierSpec,
+} from "./hermes-model-tiers.js";
+
 // AgentDash: the one preflight blocking rule shared by the create/preflight
 // routes, the launch readiness evaluator, and the new-agent UI gate.
 export {

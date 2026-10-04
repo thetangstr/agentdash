@@ -8,10 +8,11 @@ import { logger } from "../middleware/logger.js";
  * primary adapter fails, written as comma-separated `adapter[:model]`
  * entries, e.g.:
  *
- *   AGENTDASH_FALLBACK_CHAIN=hermes_local:k3,hermes_local:glm-5.3
+ *   AGENTDASH_FALLBACK_CHAIN=hermes_local:qwen3.8-max-0902,hermes_local:deepseek-v4-flash
  *
  * Two hops may name the same adapter with different models — that is the
- * point: "Kimi K3 via Hermes, then GLM via Hermes" is one adapter, two hops.
+ * point: "Qwen 3.8 Max via Hermes, then DeepSeek V4.1 Flash via Hermes" is
+ * one adapter, two hops (the shipped high–low tier pair).
  * A hop without a model runs the adapter on its own configured default.
  *
  * The chain is read from the environment on every call, like

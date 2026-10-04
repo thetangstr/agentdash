@@ -7,7 +7,12 @@ import type {
   EnvBinding,
   Environment,
 } from "@paperclipai/shared";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, supportedEnvironmentDriversForAdapter } from "@paperclipai/shared";
+import {
+  AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  modelTierForRole,
+  resolveHermesModelTier,
+  supportedEnvironmentDriversForAdapter,
+} from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
 import { buildTestEnvironmentRequest } from "../lib/adapter-test-environment-request";
 import { agentsApi } from "../api/agents";
@@ -92,6 +97,13 @@ type AgentConfigFormProps = {
       mode: "create";
       values: CreateConfigValues;
       onChange: (patch: Partial<CreateConfigValues>) => void;
+      /**
+       * AgentDash (c4-model-tiers): the role/title the new agent will get,
+       * so the hermes model dropdown can name the tier an empty selection
+       * defaults to. Optional — the generic label is used without them.
+       */
+      createRole?: string | null;
+      createTitle?: string | null;
     }
   | {
       mode: "edit";
@@ -956,7 +968,20 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 detectModelLabel="Detect model"
                 emptyDetectHint="No model detected. Select or enter one manually."
                 defaultInheritedLabel={
-                  adapterType === "hermes_local" ? "Default (inherited from hermes config)" : undefined
+                  adapterType === "hermes_local"
+                    ? (() => {
+                        // AgentDash (c4-model-tiers): "Default" for hermes_local
+                        // is the agent's role tier, not a hermes-config default.
+                        const roleTierRole = isCreate
+                          ? props.createRole ?? null
+                          : props.agent.role ?? null;
+                        const roleTierTitle = isCreate
+                          ? props.createTitle ?? null
+                          : (props.agent.title as string | null) ?? null;
+                        const spec = resolveHermesModelTier(modelTierForRole(roleTierRole, roleTierTitle));
+                        return `Default (${spec.displayName} · ${spec.tierLabel})`;
+                      })()
+                    : undefined
                 }
               />
               {(refreshModelsError || fetchedModelsError) && (

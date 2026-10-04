@@ -1,6 +1,13 @@
 import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — agent hire proposal
-import type { ProposalPayload } from "@paperclipai/shared";
+import {
+  HERMES_LOCAL_ADAPTER_TYPE,
+  mapProposedAgentRole,
+  modelTierForRole,
+  proposedRoleTitle,
+  resolveHermesModelTier,
+  type ProposalPayload,
+} from "@paperclipai/shared";
 import { useState } from "react";
 
 export function ProposalCard({
@@ -20,6 +27,18 @@ export function ProposalCard({
         {payload.name} — {payload.role}
       </div>
       <WorkforceTemplatePreview templateId={payload.workforceTemplateId}/>
+      {payload.adapterType === HERMES_LOCAL_ADAPTER_TYPE && (() => {
+        // AgentDash (c4-model-tiers): the tier this hire got — plain words,
+        // never the raw id.
+        const spec = resolveHermesModelTier(
+          modelTierForRole(mapProposedAgentRole(payload.role), proposedRoleTitle(payload.role)),
+        );
+        return (
+          <p className="mt-1 text-xs text-text-tertiary" data-testid="proposal-agent-model">
+            Model: {spec.displayName} · {spec.tierLabel}
+          </p>
+        );
+      })()}
       <div className="mt-2 text-text-primary">{payload.oneLineOkr}</div>
       <div className="mt-2 text-sm text-text-secondary">{payload.rationale}</div>
       <div className="mt-4 flex gap-2">

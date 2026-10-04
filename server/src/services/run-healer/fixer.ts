@@ -12,6 +12,7 @@ import type { HealDiagnosis } from "./diagnosis.js";
 import { heartbeatService } from "../heartbeat.js";
 import { agentService } from "../agents.js";
 import { nextFallbackHop, readFallbackChain } from "../../lib/adapter-fallback-chain.js";
+import { HERMES_MODEL_TIERS } from "@paperclipai/shared";
 
 /**
  * AGE-113 invariant: automatic recovery may not switch an agent's adapter or
@@ -25,13 +26,22 @@ import { nextFallbackHop, readFallbackChain } from "../../lib/adapter-fallback-c
  * (a bounded retry, the same wakeup the `retry` fix uses), and the failure is
  * surfaced so a human can decide whether to change the configuration.
  */
+// AgentDash (batch 4, c4-model-tiers): a hermes_local agent's recovery
+// suggestion moves within Hermes first — the shipped high–low tier pair —
+// before crossing providers. `adapter:model` entries match the
+// AGENTDASH_FALLBACK_CHAIN hop format; the first entry that is not the
+// agent's current (adapter, model) is what gets suggested.
 const ADAPTER_FALLBACK_CHAIN: Record<string, string[]> = {
   claude_local: ["claude_api", "opencode_local", "hermes_local"],
   claude_api: ["opencode_local", "hermes_local"],
   codex_local: ["opencode_local"],
   gemini_local: ["claude_api", "opencode_local"],
   opencode_local: ["hermes_local"],
-  hermes_local: ["claude_api"],
+  hermes_local: [
+    `hermes_local:${HERMES_MODEL_TIERS.high.model}`,
+    `hermes_local:${HERMES_MODEL_TIERS.low.model}`,
+    "claude_api",
+  ],
   pi_local: ["claude_api", "opencode_local"],
   acpx_local: ["claude_api"],
   openclaw_gateway: ["claude_api"],
@@ -138,7 +148,14 @@ async function executeAdapterSwitchFix(
       suggestedTarget = next ? `${next.adapter}${next.model ? `:${next.model}` : ""}` : null;
     } else {
       const fallbackChain = ADAPTER_FALLBACK_CHAIN[currentAdapter] ?? [];
-      if (fallbackChain.length > 0) suggestedTarget = fallbackChain[0] ?? null;
+      // AgentDash (c4-model-tiers): entries may carry `adapter:model`; skip
+      // the hop the agent is already on so the suggestion is a real move.
+      suggestedTarget = fallbackChain.find((hop) => {
+        const sep = hop.indexOf(":");
+        const hopAdapter = sep < 0 ? hop : hop.slice(0, sep);
+        const hopModel = sep < 0 ? "" : hop.slice(sep + 1);
+        return hopAdapter !== currentAdapter || hopModel !== currentModel;
+      }) ?? null;
     }
 
     logger.warn(

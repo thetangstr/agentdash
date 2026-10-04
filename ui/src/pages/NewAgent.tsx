@@ -395,6 +395,8 @@ export function NewAgent() {
         <AgentConfigForm
           mode="create"
           values={configValues}
+          createRole={effectiveRole}
+          createTitle={title}
           onChange={(patch) => {
             if (patch.adapterType !== undefined) setAdapterTouched(true);
             setConfigValues((prev) => ({ ...prev, ...patch }));

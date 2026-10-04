@@ -700,7 +700,10 @@ export function onboardingV2Routes(db: Db) {
       await conversations.postMessage({
         conversationId, authorKind: 'agent', authorId: reportsToAgentId,
         body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
-        cardKind: 'proposal_card_v1', cardPayload: proposal as unknown as Record<string, unknown>,
+        // AgentDash (c4-model-tiers): the adapter is stamped so the echoed
+        // card can label the hire's model tier in plain words.
+        cardKind: 'proposal_card_v1',
+        cardPayload: { ...proposal, adapterType: accepted[0]?.created.adapterType } as unknown as Record<string, unknown>,
       });
     } catch (error) { throw acceptedHireNeedsRepair(accepted.map(item => item.created.id), error); }
     res.status(201).json({

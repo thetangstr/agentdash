@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ApprovalPayloadRenderer, approvalLabel } from "./ApprovalPayload";
+import { ApprovalPayloadRenderer, approvalLabel, HireAgentPayload } from "./ApprovalPayload";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -60,6 +60,54 @@ describe("ApprovalPayloadRenderer", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("shows the hire's model in plain words for a hermes_local payload", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <ApprovalPayloadRenderer
+          type="hire_agent"
+          payload={{
+            name: "Ava",
+            role: "chief_of_staff",
+            title: "Chief of Staff",
+            adapterType: "hermes_local",
+            adapterConfig: { model: "qwen3.8-max-0902", provider: "alibaba-token-plan-cn" },
+            metadata: { modelTier: "high" },
+          }}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Qwen 3.8 Max · high tier");
+    expect(container.textContent).not.toContain("qwen3.8-max-0902");
+    act(() => { root.unmount(); });
+  });
+
+  it("names the tier a modelless hermes_local hire will get", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <HireAgentPayload
+          payload={{ name: "Bex", role: "engineer", adapterType: "hermes_local" }}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("DeepSeek V4.1 Flash · ops tier");
+    act(() => { root.unmount(); });
+  });
+
+  it("shows no model line for a non-hermes adapter", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <HireAgentPayload
+          payload={{ name: "Claude", role: "engineer", adapterType: "claude_local" }}
+        />,
+      );
+    });
+    expect(container.textContent).not.toContain("Model");
+    act(() => { root.unmount(); });
   });
 
   it("can hide the repeated title when the card header already shows it", () => {

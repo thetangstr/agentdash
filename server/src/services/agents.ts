@@ -25,7 +25,7 @@ import {
   issueComments,
   issueReviewQueueState,
 } from "@paperclipai/db";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, AGENT_MODEL_TIER_METADATA_KEY, applyHermesModelTierDefault, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
@@ -479,9 +479,38 @@ export function agentService(db: Db) {
       const role = data.role ?? "general";
       const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
       const runtimeConfig = normalizeRuntimeConfigForNewAgent(data.runtimeConfig);
+      // AgentDash (batch 4, c4-model-tiers): the service-level funnel for the
+      // paths that never cross the routes' applyCreateDefaultsByAdapterType —
+      // the CoS proposal creator, /confirm-plan, the CoS hire card and
+      // workforce-template hires. A hermes_local agent created without an
+      // explicit model gets its role's high/low tier; an explicit model a
+      // person set always wins. The applied tier lands in metadata so the
+      // agent page can label the model in plain words.
+      const tiered = applyHermesModelTierDefault({
+        adapterType: data.adapterType,
+        adapterConfig: isPlainRecord(data.adapterConfig) ? data.adapterConfig : {},
+        role,
+        title: data.title,
+      });
       const created = await db
         .insert(agents)
-        .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions, runtimeConfig })
+        .values({
+          ...data,
+          adapterConfig: tiered.adapterConfig,
+          name: uniqueName,
+          companyId,
+          role,
+          permissions: normalizedPermissions,
+          runtimeConfig,
+          ...(tiered.appliedTier
+            ? {
+                metadata: {
+                  ...(isPlainRecord(data.metadata) ? data.metadata : {}),
+                  [AGENT_MODEL_TIER_METADATA_KEY]: tiered.appliedTier,
+                },
+              }
+            : {}),
+        })
         .returning()
         .then((rows) => rows[0]);
 

@@ -7,6 +7,12 @@ export interface ProposalPayload {
   role: string;
   oneLineOkr: string;
   rationale: string;
+  /**
+   * AgentDash (c4-model-tiers): stamped server-side on the echoed hire card
+   * so the UI can show the hire's model tier in plain words. Absent on
+   * payloads generated before the tier feature.
+   */
+  adapterType?: AgentAdapterType;
 }
 
 export interface InvitePromptPayload {

@@ -15,6 +15,7 @@ import { logSafeError } from "./run-log-redaction.js";
 import { stripStatusLines } from "../lib/status-lines.js";
 import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
+import { resolveHermesModelTier } from "@paperclipai/shared";
 
 // Default to PATH so every Mac mini install can use its own Hermes location.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
@@ -609,7 +610,16 @@ export async function dispatchLLM(
       // with glm" are distinct hops; without one, Hermes uses its own
       // configured default.
       const hermesModel = (options?.model ?? "").trim();
-      if (hermesModel) hermesArgs.push("-m", hermesModel);
+      if (hermesModel) {
+        hermesArgs.push("-m", hermesModel);
+      } else {
+        // AgentDash (batch 4, c4-model-tiers): with no explicit model the CoS
+        // runs the HIGH tier — the Chief of Staff is a leadership role. The
+        // tier pair is env-overridable (AGENTDASH_HERMES_HIGH_MODEL /
+        // _PROVIDER) like the agent-side defaults.
+        const highTier = resolveHermesModelTier("high");
+        hermesArgs.push("-m", highTier.model, "--provider", highTier.provider);
+      }
       const reply = stripStatusLines(await spawnWithTimeout(hermesCmd, hermesArgs));
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
