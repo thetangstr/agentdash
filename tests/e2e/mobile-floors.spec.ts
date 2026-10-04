@@ -470,8 +470,15 @@ async function shoot(page: Page, name: string) {
  */
 async function waitForRealFonts(page: Page) {
   await page.evaluate(() => document.fonts.ready);
+  // fonts.check answers true whenever the family resolves to ANY face —
+  // including a synthesized fallback when no @font-face for Manrope exists —
+  // so also require a Manrope FontFace entry that actually loaded.
   expect(
-    await page.evaluate(() => document.fonts.check("16px Manrope")),
+    await page.evaluate(
+      () =>
+        document.fonts.check("16px Manrope") &&
+        [...document.fonts].some((f) => f.family.replace(/"/g, "") === "Manrope" && f.status === "loaded"),
+    ),
     "Manrope is loaded (measuring fallback fonts gives wrong metrics)",
   ).toBe(true);
 }

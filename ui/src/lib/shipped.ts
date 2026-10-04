@@ -1,5 +1,5 @@
 // AgentDash: UX-2 (#783) — shared formatting for work products ("what shipped").
-import type { IssueWorkProduct, ShippedIssueUsage } from "@paperclipai/shared";
+import type { IssueWorkProduct, ShippedIssueUsage, ShippedWorkProduct } from "@paperclipai/shared";
 import { formatCents } from "./utils";
 import { countedTokens, formatCountedTokens } from "./token-figures";
 
@@ -41,17 +41,25 @@ export function isUsageCounting(
   return usageCountingEndsAt(products, now) !== null;
 }
 
-type CountingProduct = { createdAt?: Date | string | null; createdByRunId?: string | null };
+type CountingProduct = {
+  createdAt?: Date | string | null;
+  createdByRunId?: string | null;
+  creatingRunMeteringStatus?: string | null;
+};
 
 /**
  * When the "counting…" window closes (ms epoch), or null when it is not open.
  * Keyed on creation, not on later edits, and only for deliverables a run
  * created: one recorded by hand has no run to meter, so it never counts.
+ * A run that finished unmetered (`unmetered_*`) will never report usage, so
+ * its deliverables settle to "not metered yet" at once instead of holding
+ * the window open for the full ten minutes.
  */
 export function usageCountingEndsAt(products: ReadonlyArray<CountingProduct>, now: number = Date.now()): number | null {
   let end: number | null = null;
   for (const product of products) {
     if (!product.createdByRunId) continue;
+    if (product.creatingRunMeteringStatus?.startsWith("unmetered_")) continue;
     const at = new Date(product.createdAt ?? 0).getTime();
     if (!Number.isFinite(at) || at <= 0) continue;
     const closes = at + USAGE_COUNTING_WINDOW_MS;
@@ -126,6 +134,20 @@ export function isAwaitingReview(input: {
     && !input.issueLive
     && input.hasReadyForReview,
   );
+}
+
+/**
+ * AgentDash (batch 3): the "when" on a Result row. A document deliverable's
+ * work-product record does not change when the agent writes a new revision,
+ * so the row ages from the linked document's latest revision instead —
+ * otherwise it reads "10m ago" beside a Documents section saying "rev 2".
+ */
+export function workProductTimestamp(
+  product: { createdAt: Date | string; document?: ShippedWorkProduct["document"] },
+): Date | string {
+  const revisedAt = product.document?.updatedAt;
+  if (revisedAt && new Date(revisedAt).getTime() > new Date(product.createdAt).getTime()) return revisedAt;
+  return product.createdAt;
 }
 
 /** A title that is an absolute path or a file: URL shows as its file name. */

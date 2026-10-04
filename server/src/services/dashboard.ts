@@ -489,8 +489,15 @@ export function dashboardService(db: Db) {
           ),
         );
       const issueLinkedSpendCents = taskQualityCostRows.reduce((sum, row) => sum + Number(row.costCents), 0);
+      // AgentDash (batch 3): the shared display definition is input + output;
+      // cached reads are listed beside it, never folded into the headline
+      // number (the Costs page counts the same way).
       const issueLinkedTokens = taskQualityCostRows.reduce(
-        (sum, row) => sum + Number(row.inputTokens) + Number(row.cachedInputTokens) + Number(row.outputTokens),
+        (sum, row) => sum + Number(row.inputTokens) + Number(row.outputTokens),
+        0,
+      );
+      const issueLinkedCachedTokens = taskQualityCostRows.reduce(
+        (sum, row) => sum + Number(row.cachedInputTokens),
         0,
       );
 
@@ -538,6 +545,7 @@ export function dashboardService(db: Db) {
         greenRunsWithOpenTasks,
         issueLinkedSpendCents,
         issueLinkedTokens,
+        issueLinkedCachedTokens,
         spendPerAcceptedIssueCents: passedIssues > 0
           ? Math.round(issueLinkedSpendCents / passedIssues)
           : null,

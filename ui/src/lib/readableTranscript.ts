@@ -9,6 +9,7 @@
 //     "Details" disclosure, except anything that looks like an error;
 //   - the result entry becomes a compact footer.
 import type { TranscriptEntry } from "../adapters";
+import { shortenInstancePaths } from "./instancePaths";
 import { containsSecrets, isSecretName, redactSecrets } from "./redactSecrets";
 
 export { redactSecrets };
@@ -830,11 +831,30 @@ export function summarizeToolOutcome(
   // plus a duration ("/paperclip/.hermes/…/onboarding.md (12ms)"); the row's
   // label already names the file, so the echo drops to a plain verdict.
   if (isPathEchoOutcome(result, callInput)) return status === "error" ? "Failed" : "Done";
-  // JSON.parse decodes \u escapes the redaction above could not see, so the
-  // phrase is redacted again.
-  const json = summarizeJsonOutput(result);
+  // AgentDash (review #1016): Codex's command_execution result carries a
+  // structured header (command:/status:/exit_code:) above the real output —
+  // the same header transcriptPresentation's parseStructuredToolResult reads.
+  // Stripped here so the JSON scan sees the body, not the command echo.
+  const json = summarizeJsonOutput(stripExecResultHeader(result));
   if (json) return quietCredentialError(redactSecrets(json), status);
   return quietCredentialError(summarizeToolResult(result, status === "error", "compact"), status);
+}
+
+/** The leading `command:`/`status:`/`exit_code:` block a structured exec
+ *  result prepends to its output (Codex's command_execution shape): a
+ *  `command:` line first, optional further metadata lines, then a blank
+ *  line before the body. Output that merely starts with a `status:`-style
+ *  line (or has no blank-line separator) is not this header — it stays. */
+const EXEC_RESULT_COMMAND_LINE = /^command\s*:/i;
+const EXEC_RESULT_HEADER_LINE = /^(?:command|status|exit_code)\s*:/i;
+
+function stripExecResultHeader(result: string): string {
+  const lines = result.split(/\r?\n/);
+  if (!EXEC_RESULT_COMMAND_LINE.test(lines[0]?.trim() ?? "")) return result;
+  let index = 1;
+  while (index < lines.length && EXEC_RESULT_HEADER_LINE.test(lines[index].trim())) index += 1;
+  if (index >= lines.length || lines[index].trim() !== "") return result;
+  return lines.slice(index + 1).join("\n");
 }
 
 /** The absolute path a call says it writes to (Hermes keeps it under `detail`). */
@@ -878,49 +898,55 @@ function plural(count: number, noun: string): string {
 
 /**
  * AgentDash (scan 4 lane O1): a JSON tool output (an API response) as a short
- * phrase instead of its first raw line: "Got issue WHI-1", "Response: 12
- * fields", "Response: 3 items", "Error: Issue not found". Concatenated or
- * NDJSON bodies each get a phrase ("Got issue WHI-1 · Response: 4 fields"),
- * and a truncated body degrades to its issue ref or "Response (JSON)". Null
- * when the output is not JSON. The full output stays in the expanded view.
+ * phrase instead of its first raw line: "Got issue WHI-1", "Got company Acme
+ * Robotics", "Response: 12 fields", "Response: 3 items", "Error: Issue not
+ * found". Concatenated or NDJSON bodies each get a phrase ("Got issue WHI-1 ·
+ * Response: 4 fields"), a truncated body degrades to its issue ref or
+ * "Response (JSON)", and non-JSON text around a body (a script's `KEY_SET`
+ * echo, an `exit code 1` tail, a `--- stderr ---` line) is kept as its first
+ * line rather than dropping the whole output back to raw JSON. Null when the
+ * output carries no JSON body. The full output stays in the expanded view.
  */
 export function summarizeJsonOutput(text: string): string | null {
   const trimmed = text.trim();
-  if (!/^[[{]/.test(trimmed)) return null;
-  try {
-    return summarizeJsonValue(JSON.parse(trimmed));
-  } catch {
-    // Several bodies back to back, or a truncated one: fall through.
-  }
-  const bodies = splitJsonBodies(trimmed);
-  if (!bodies || bodies.length === 0) return null;
-  const phrases: string[] = [];
-  for (const body of bodies) {
-    try {
-      const phrase = summarizeJsonValue(JSON.parse(body));
-      if (!phrase) return null;
-      phrases.push(phrase);
-    } catch {
-      // A truncated body keeps enough of its head to recognise an issue ref.
-      const identifier = /"identifier"\s*:\s*"([^"]+)"/.exec(body)?.[1];
-      phrases.push(identifier && ISSUE_REF_RE.test(identifier) ? `Got issue ${identifier}` : "Response (JSON)");
+  if (!/[[{]/.test(trimmed)) return null;
+  const segments = scanJsonSegments(trimmed);
+  const parts: string[] = [];
+  let sawBody = false;
+  for (const segment of segments) {
+    if (segment.kind === "json") {
+      sawBody = true;
+      parts.push(jsonBodyPhrase(segment.raw));
+    } else {
+      const line = textGapLine(segment.raw);
+      if (line) parts.push(line);
     }
   }
-  return phrases.join(" · ");
+  // The whole output was a `{`-opening body that never closed — a truncated
+  // response, still worth a phrase rather than the raw text.
+  if (!sawBody) return /^[[{]/.test(trimmed) ? truncatedJsonPhrase(trimmed) : null;
+  return parts.length ? parts.join(" · ") : null;
 }
 
+type JsonSegment = { kind: "json"; raw: string } | { kind: "text"; raw: string };
+
 /**
- * Splits concatenated JSON values (`{"a":1}{"b":2}` or NDJSON lines) into
- * their raw bodies; a truncated tail is kept as its own body so the caller
- * can summarise it loosely. Null when non-JSON text sits between bodies.
+ * Splits mixed output into JSON bodies and the text between them. A body is a
+ * balanced `{…}`/`[…]` span that parses to an object or array, anywhere in the
+ * text — not only at the start — so a script echo ("KEY_SET") or a shell tail
+ * ("exit code 1") around a response no longer defeats the summary. A tail
+ * that opens a body and never closes counts as a truncated body when it
+ * starts the output or opens like structured data (`{"…`).
  */
-function splitJsonBodies(text: string): string[] | null {
-  const bodies: string[] = [];
+function scanJsonSegments(text: string): JsonSegment[] {
+  const segments: JsonSegment[] = [];
+  let textStart = 0;
   let i = 0;
   while (i < text.length) {
-    while (i < text.length && /\s/.test(text[i]!)) i += 1;
-    if (i >= text.length) break;
-    if (text[i] !== "{" && text[i] !== "[") return null;
+    if (text[i] !== "{" && text[i] !== "[") {
+      i += 1;
+      continue;
+    }
     const start = i;
     let depth = 0;
     let inString = false;
@@ -943,12 +969,68 @@ function splitJsonBodies(text: string): string[] | null {
         }
       }
     }
-    bodies.push(text.slice(start, i));
+    const raw = text.slice(start, i);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = undefined;
+    }
+    if (parsed !== undefined && typeof parsed === "object" && parsed !== null) {
+      if (start > textStart) segments.push({ kind: "text", raw: text.slice(textStart, start) });
+      segments.push({ kind: "json", raw });
+      textStart = i;
+      continue;
+    }
+    if (depth > 0 && i >= text.length && (start === 0 || /^[[{]\s*["{[]/.test(raw))) {
+      // A truncated body: keep it so the caller can summarise its head loosely.
+      if (start > textStart) segments.push({ kind: "text", raw: text.slice(textStart, start) });
+      segments.push({ kind: "json", raw });
+      textStart = i;
+      continue;
+    }
+    // Not JSON (prose braces, unparseable span): step past the opener so a
+    // nested real body inside it is still found.
+    i = start + 1;
   }
-  return bodies;
+  if (textStart < text.length) segments.push({ kind: "text", raw: text.slice(textStart) });
+  return segments;
 }
 
-function summarizeJsonValue(value: unknown): string | null {
+/** A phrase for one JSON body, whole or truncated. */
+function jsonBodyPhrase(raw: string): string {
+  try {
+    const phrase = summarizeJsonValue(JSON.parse(raw));
+    if (phrase) return phrase;
+  } catch {
+    // Truncated body — fall through to the loose read.
+  }
+  return truncatedJsonPhrase(raw);
+}
+
+/** What a truncated body still says: its ref, its name, or just that it was JSON. */
+function truncatedJsonPhrase(raw: string): string {
+  const identifier = /"identifier"\s*:\s*"([^"]+)"/.exec(raw)?.[1];
+  if (identifier && ISSUE_REF_RE.test(identifier)) return `Got issue ${identifier}`;
+  const named = /"(?:name|title)"\s*:\s*"([^"]+)"/.exec(raw)?.[1];
+  if (named) return truncate(`Got ${compactWhitespace(named)}`, TARGET_MAX);
+  return "Response (JSON)";
+}
+
+/** Stream-section markers a script output may carry around a body. */
+const TEXT_GAP_NOISE_LINE = /^-{2,}\s*(?:stdout|stderr|traceback|console|output)\s*-{2,}$/i;
+
+/** The first real line of text between JSON bodies; null for pure noise. */
+function textGapLine(text: string): string | null {
+  for (const line of text.split(/\r?\n/)) {
+    const compact = compactWhitespace(line);
+    if (!compact || TEXT_GAP_NOISE_LINE.test(compact)) continue;
+    return truncate(shortenInstancePaths(compact), 48);
+  }
+  return null;
+}
+
+function summarizeJsonValue(value: unknown, depth = 0): string | null {
   if (Array.isArray(value)) return value.length === 0 ? "Response: no items" : `Response: ${plural(value.length, "item")}`;
   const record = asRecord(value);
   if (!record) return null;
@@ -963,6 +1045,40 @@ function summarizeJsonValue(value: unknown): string | null {
   for (const key of ["items", "data", "results", "issues", "comments", "agents"]) {
     const list = record[key];
     if (Array.isArray(list)) return `Response: ${plural(list.length, "item")}`;
+  }
+  // AgentDash (batch 3): name the record a call returned — "Got company Acme
+  // Robotics" reads like the work, "Response: 18 fields" reads like the wire.
+  const name = typeof record.name === "string" && record.name.trim() ? compactWhitespace(record.name) : null;
+  const title = typeof record.title === "string" && record.title.trim() ? compactWhitespace(record.title) : null;
+  if (typeof record.issuePrefix === "string" && name) return truncate(`Got company ${name}`, TARGET_MAX);
+  if (name && (typeof record.adapterType === "string" || typeof record.urlKey === "string" || typeof record.role === "string")) {
+    return truncate(`Got agent ${name}`, TARGET_MAX);
+  }
+  if (typeof record.documentId === "string" && typeof record.revisionNumber === "number") {
+    return truncate(`Got document revision ${record.revisionNumber}${title ? ` — ${title}` : ""}`, TARGET_MAX);
+  }
+  // A document (issueId + key/format/type=document) is not just any record that
+  // mentions an issue: a pull_request work product has issueId + title too.
+  const documentShape =
+    typeof record.issueId === "string" &&
+    (typeof record.key === "string" || typeof record.format === "string" || record.type === "document");
+  if (documentShape && (title || typeof record.key === "string")) {
+    return truncate(`Got document ${title ?? String(record.key)}`, TARGET_MAX);
+  }
+  if (typeof record.body === "string" && record.body.trim() && typeof record.issueId === "string") {
+    return truncate(`Got comment — ${compactWhitespace(record.body)}`, TARGET_MAX);
+  }
+  if (name) return truncate(`Got ${name}`, TARGET_MAX);
+  if (title) return truncate(`Got ${title}`, TARGET_MAX);
+  // A response that wraps the entity under a key ("{"issue":{…}}",
+  // "{"document":{…}}") names what is inside.
+  if (depth < 1) {
+    for (const key of ["issue", "document", "comment", "agent", "company", "workProduct", "result", "data"]) {
+      const inner = asRecord(record[key]);
+      if (!inner) continue;
+      const phrase = summarizeJsonValue(inner, depth + 1);
+      if (phrase) return phrase;
+    }
   }
   const fields = Object.keys(record).length;
   return fields === 0 ? "Response: empty" : `Response: ${plural(fields, "field")}`;

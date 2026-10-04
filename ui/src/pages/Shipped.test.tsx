@@ -57,6 +57,8 @@ function item(id: string, overrides: Partial<ShippedWorkProduct> = {}): ShippedW
     issue: { id: `issue-${id}`, identifier: `ACME-${id}`, title: `Issue ${id}`, status: "done", projectId: null },
     agent: { id: "agent-1", name: "Maya" },
     usage: { metered: true, inputTokens: 2_000, cachedInputTokens: 0, outputTokens: 500, costCents: 0 },
+    document: null,
+    creatingRunMeteringStatus: null,
     ...overrides,
   };
 }

@@ -4671,6 +4671,8 @@ components:
           type: number
         issueLinkedTokens:
           type: number
+        issueLinkedCachedTokens:
+          type: number
         spendPerAcceptedIssueCents:
           type:
             - number
@@ -4691,6 +4693,7 @@ components:
         - greenRunsWithOpenTasks
         - issueLinkedSpendCents
         - issueLinkedTokens
+        - issueLinkedCachedTokens
         - spendPerAcceptedIssueCents
     DocumentFormat:
       type: string

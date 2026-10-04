@@ -7,6 +7,7 @@ import type { TranscriptEntry } from "../../adapters";
 import { MarkdownBody } from "../MarkdownBody";
 import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
+import { shortenInstancePaths } from "../../lib/instancePaths";
 import { redactSecretsInValue } from "../../lib/redactSecrets";
 import {
   formatRunDuration,
@@ -514,7 +515,9 @@ export function ReadableFooter({
             density === "compact" ? "text-[11px] max-sm:text-xs leading-5" : "text-xs leading-5",
           )}
         >
-          {redactSecrets(footerText)}
+          {/* AgentDash (review #1016): redact first — a secret that is a path
+              basename must never survive as the shortened file name. */}
+          {shortenInstancePaths(redactSecrets(footerText))}
         </MarkdownBody>
       )}
     </div>
@@ -547,7 +550,7 @@ function ReadableMessage({
           compact ? "text-xs leading-5 text-foreground/90" : "text-sm text-foreground",
         )}
       >
-        {redactSecrets(block.text)}
+        {shortenInstancePaths(redactSecrets(block.text))}
       </MarkdownBody>
       {block.streaming && (
         <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] max-sm:text-xs font-medium italic text-muted-foreground">

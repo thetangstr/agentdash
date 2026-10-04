@@ -81,7 +81,15 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
         <Stat
           label="Spend per accepted task"
           value={spendPerAccepted}
-          detail={`${quality.issueLinkedTokens.toLocaleString()} issue-linked tokens`}
+          // AgentDash (batch 3): input + output only, the same figure the
+          // Costs page reports; cached reads are listed separately rather
+          // than folded into the headline number.
+          detail={
+            `${quality.issueLinkedTokens.toLocaleString()} issue-linked tokens` +
+            (quality.issueLinkedCachedTokens > 0
+              ? ` · ${quality.issueLinkedCachedTokens.toLocaleString()} cached reads`
+              : "")
+          }
         />
         <Stat
           label="Reviewed outcomes"

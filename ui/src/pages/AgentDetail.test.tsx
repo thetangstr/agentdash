@@ -247,6 +247,46 @@ describe("agentBilledByProvider", () => {
       ),
     ).toBe(true);
   });
+
+  // Batch 3: the canary agent page read "Spend this month $0.00" while the
+  // Costs page showed 132.7k tokens — unmetered runs leave usageJson empty,
+  // so the run-level heuristic undercounted. Cost events are authoritative.
+  it("reads this month's cost-events row over run-level usage when loaded", () => {
+    const unmeteredRuns = [
+      { usageJson: { meteringStatus: "unmetered_no_session" }, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" } as never,
+    ];
+    // Run usage is empty, but the events row carries the real tokens.
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0 },
+        unmeteredRuns,
+        now,
+        { costCents: 0, inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 12_700 },
+      ),
+    ).toBe(true);
+    // A priced company (this month's events carry dollars) is not BYOK.
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0 },
+        [],
+        now,
+        { costCents: 420, inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 12_700 },
+      ),
+    ).toBe(false);
+    // Loaded with no events and no chat turns: nothing ran this month.
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, unmeteredRuns, now, null)).toBe(false);
+  });
+
+  it("treats cached-only cost events as billed by the provider", () => {
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0 },
+        [],
+        now,
+        { costCents: 0, inputTokens: 0, cachedInputTokens: 50_000, outputTokens: 0 },
+      ),
+    ).toBe(true);
+  });
 });
 
 // Batch 2 canary: "This agent has never run" + "$0.00" sat on a Chief of Staff
@@ -442,12 +482,12 @@ describe("CostsSection on BYOK", () => {
     } as never;
   }
 
-  function renderCosts(runtimeState?: Record<string, unknown>) {
+  function renderCosts(runtimeState?: Record<string, unknown>, costRow?: Record<string, unknown> | null) {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => {
-      root!.render(<CostsSection runtimeState={runtimeState as never} runs={[]} />);
+      root!.render(<CostsSection runtimeState={runtimeState as never} runs={[]} costRow={costRow as never} />);
     });
     return container.textContent ?? "";
   }
@@ -471,6 +511,37 @@ describe("CostsSection on BYOK", () => {
     const text = renderCosts(
       runtimeState({ totalInputTokens: 0, totalOutputTokens: 0, totalCachedInputTokens: 0 }),
     );
+    expect(text).not.toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+  });
+
+  // Batch 3: cost events are the same source the Costs page reads — use them
+  // once loaded, even when runtimeState counters undercount unmetered runs.
+  it("reads tokens from the cost-events row when the run counters sit at 0", () => {
+    const text = renderCosts(
+      runtimeState({ totalInputTokens: 0, totalOutputTokens: 0, totalCachedInputTokens: 0, totalCostCents: 0 }),
+      { costCents: 0, inputTokens: 120_000, cachedInputTokens: 50_000, outputTokens: 12_700 },
+    );
+    expect(text).toContain("120.0k");
+    expect(text).toContain("12.7k");
+    expect(text).toContain("50.0k");
+    expect(text).toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+  });
+
+  it("reads priced spend from the cost-events row", () => {
+    const text = renderCosts(
+      runtimeState({ totalInputTokens: 0, totalOutputTokens: 0, totalCachedInputTokens: 0, totalCostCents: 0 }),
+      { costCents: 1337, inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 12_700 },
+    );
+    expect(text).toContain("$13.37");
+    expect(text).not.toContain("Billed by your model provider");
+  });
+
+  it("shows zeroed figures when the cost-events query loaded with no events", () => {
+    const text = renderCosts(undefined, null);
+    expect(text).toContain("Total cost");
+    expect(text).toContain("—");
     expect(text).not.toContain("Billed by your model provider");
     expect(text).not.toContain("$0.00");
   });

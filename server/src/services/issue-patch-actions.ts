@@ -15,7 +15,7 @@ import { featureFlagsService } from "./feature-flags.js";
 import { resolveAgentClosingStatus } from "./issue-blocked-declaration.js";
 import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
 import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
-import { listIssueDocumentsByKey, resubmitSentBackDeliverables, workProductDocumentKey } from "./work-products.js";
+import { issueDocumentKey, listIssueDocumentsByKey, resubmitSentBackDeliverables, workProductDocumentKey } from "./work-products.js";
 import {
   digestIssueIntentFacts, IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
   summarizeIssueReferenceActivityDetails, summarizeIssueRelationForActivity, type IssueCommentExecutor, type IssueCommentContext
@@ -734,12 +734,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               eq(issueWorkProducts.issueId, issue.id),
               inArray(issueWorkProducts.status, ["ready_for_review", "changes_requested"]),
             ));
-          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId, issue.id,
-            awaiting.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId,
+            new Map([[issue.id, awaiting.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key)]]));
           const seenRevisions = intent.acceptedDocumentRevisions ?? {};
           for (const product of awaiting) {
             const documentKey = workProductDocumentKey(product.metadata);
-            const doc = documentKey ? docsByKey.get(documentKey) : null;
+            const doc = documentKey ? docsByKey.get(issueDocumentKey(issue.id, documentKey)) : null;
             if (doc) {
               const seenRevision = seenRevisions[documentKey!];
               // AgentDash (review #1003): a missing baseline is not a stale
@@ -864,12 +864,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               eq(issueWorkProducts.issueId, issue.id),
               eq(issueWorkProducts.status, "ready_for_review"),
             ));
-          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId, issue.id,
-            waitingForReview.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+          const docsByKey = await listIssueDocumentsByKey(tx, issue.companyId,
+            new Map([[issue.id, waitingForReview.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key)]]));
           const changesRequestedAt = new Date().toISOString();
           for (const product of waitingForReview) {
             const documentKey = workProductDocumentKey(product.metadata);
-            const doc = documentKey ? docsByKey.get(documentKey) : null;
+            const doc = documentKey ? docsByKey.get(issueDocumentKey(issue.id, documentKey)) : null;
             // AgentDash (batch 2 review lane): the revision the request was
             // made against is the baseline. Resubmission only counts once a
             // strictly newer revision exists (or the run that would write it

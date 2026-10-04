@@ -58,7 +58,7 @@ describeEmbedded("one-time claim link (#767)", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-claim-link-");
     db = createDb(tempDb.connectionString);
-  }, 30_000);
+  }, 120_000);
 
   beforeEach(() => {
     for (const k of ENV_KEYS) saved[k] = process.env[k];
@@ -316,13 +316,25 @@ describeEmbedded("one-time claim link (#767)", () => {
     it("reports claimed false, then true after the first sign-up, on a hosted box", async () => {
       process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
       const before = await request(healthApp()).get("/health");
-      expect(before.body).toMatchObject({ hostedBox: true, claimed: false });
+      expect(before.body).toMatchObject({ hostedBox: true, claimed: false, hasUsers: false });
       expect((await signUp(authApp(), { email: "founder@example.com", inviteCode: CLAIM_CODE })).status).toBe(200);
-      resetClaimedCacheForTests(); // "false" is cached for a few seconds; "true" for good
+      // No resetClaimedCacheForTests: the user-create hook clears the stale
+      // pre-signup snapshot, so this poll reads live state (PR #1017 follow-up).
       const after = await request(healthApp()).get("/health");
-      expect(after.body).toMatchObject({ hostedBox: true, claimed: true });
+      expect(after.body).toMatchObject({ hostedBox: true, claimed: true, hasUsers: true });
       // Nothing about the user beyond the flag.
       expect(JSON.stringify(after.body)).not.toContain("founder@example.com");
+    });
+
+    it("flips hasUsers without a cache reset on a claim-less self-serve box too", async () => {
+      // No AGENTDASH_CLAIM_EMAIL → completeClaim never runs; the
+      // unconditional invalidation in the user-create hook is what must fire.
+      delete process.env.AGENTDASH_CLAIM_EMAIL;
+      process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP = "true";
+      const health = healthApp();
+      expect((await request(health).get("/health")).body).toMatchObject({ hasUsers: false });
+      expect((await signUp(authApp(), { email: "a@example.com", inviteCode: CLAIM_CODE })).status).toBe(200);
+      expect((await request(health).get("/health")).body).toMatchObject({ hasUsers: true });
     });
 
     it("has no claimed field off a hosted box", async () => {

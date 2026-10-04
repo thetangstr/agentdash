@@ -6,7 +6,7 @@ import { toNodeHandler } from "better-auth/node";
 import { configuredEdgeSecret, EDGE_CLIENT_IP_HEADER } from "../middleware/edge-gate.js";
 import { APIError } from "better-auth/api";
 // AgentDash (#767 review): the atomic, persisted claim of a hosted box.
-import { CLAIM_ATTEMPT_HEADER, claimEmailMatches, claimHeldBy, completeClaim, configuredClaimEmail, takeClaim } from "../lib/claim-code.js";
+import { CLAIM_ATTEMPT_HEADER, claimEmailMatches, claimHeldBy, completeClaim, configuredClaimEmail, invalidateClaimStateCache, takeClaim } from "../lib/claim-code.js";
 import type { Db } from "@paperclipai/db";
 import {
   authAccounts,
@@ -436,6 +436,11 @@ export function createBetterAuthInstance(
             user: { id: string; email: string; name: string | null },
             context: unknown,
           ) => {
+            // AgentDash (PR #1017 follow-up): a fresh user must not sit
+            // behind a claim-state cache filled before it existed — /auth
+            // would keep offering "Create account" and health would keep
+            // reporting claimed:false/hasUsers:false into the poll window.
+            invalidateClaimStateCache();
             // AgentDash (#812): the box's claim counts once its user exists.
             if (configuredClaimEmail()) {
               await completeClaim(db).catch((err: unknown) =>

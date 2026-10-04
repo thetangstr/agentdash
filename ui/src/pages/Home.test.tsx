@@ -162,6 +162,8 @@ function shippedFeed(total: number): ShippedFeed {
             healthStatus: "unknown",
             summary: null,
             metadata: null,
+            document: null,
+            creatingRunMeteringStatus: null,
             createdByRunId: null,
             createdAt: new Date(),
             updatedAt: new Date(),
