@@ -465,7 +465,17 @@ async function shoot(page: Page, name: string) {
 async function settle(page: Page) {
   // Let late queries (badges, counts, live runs) land; live pages never go fully idle.
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+  // Font metrics are audit input: give document.fonts.ready a bounded window.
+  await page
+    .evaluate(() => Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5_000))]))
+    .catch(() => undefined);
 }
+
+// A pending web-font fetch holds the `load` event and can stall page.goto for
+// minutes on a slow-egress machine. The audit must still measure the real web
+// font (aborting it changes text metrics), so navigate on DOMContentLoaded and
+// let the ready/settle waits absorb the rest.
+const gotoPage = (page: Page, to: string) => page.goto(to, { waitUntil: "domcontentloaded" });
 
 type Target = {
   name: string;
@@ -572,12 +582,6 @@ const PAGES: Target[] = [
 test.describe("Phone floors on every main screen", () => {
   let seeded: Seeded;
 
-  test.beforeEach(async ({ page }) => {
-    // A pending web-font fetch holds the `load` event and can stall page.goto
-    // for minutes on runners with slow egress; the UI falls back fine.
-    await page.route(/fonts\.(gstatic|googleapis)\.com/, (route) => route.abort());
-  });
-
   test.beforeAll(async ({ request }, testInfo) => {
     // Seeding waits for one fake run to finish.
     testInfo.setTimeout(180_000);
@@ -593,7 +597,7 @@ test.describe("Phone floors on every main screen", () => {
         test(`${name}: no sideways scroll, small text, small, unnamed or overlapping targets`, async ({ page }) => {
           await page.setViewportSize(size);
           const to = target.path(seeded);
-          await page.goto(to.startsWith("/") ? to : `/${seeded.company.issuePrefix}/${to}`);
+          await gotoPage(page, to.startsWith("/") ? to : `/${seeded.company.issuePrefix}/${to}`);
           await expect(target.ready(page, seeded).first()).toBeVisible({ timeout: 30_000 });
           await settle(page);
           await target.prepare?.(page);
@@ -616,7 +620,7 @@ test.describe("Phone floors on every main screen", () => {
 
   test("access page at 390px: each member is a readable card with on-screen actions", async ({ page }) => {
     await page.setViewportSize(WIDTHS[0]);
-    await page.goto(`/${seeded.company.issuePrefix}/company/settings/access`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/company/settings/access`);
     await expect(main(page).getByRole("heading", { name: "Humans" })).toBeVisible({ timeout: 30_000 });
     await settle(page);
 
@@ -653,7 +657,7 @@ test.describe("Phone floors on every main screen", () => {
       { path: "workforce", label: "Workforce" },
       { path: "company/settings", label: "Settings" },
     ]) {
-      await page.goto(`/${company.issuePrefix}/${target.path}`);
+      await gotoPage(page, `/${company.issuePrefix}/${target.path}`);
       const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: target.label });
       await expect(crumb).toBeVisible({ timeout: 30_000 });
       // Fully on screen — not pushed past the edge.
@@ -669,7 +673,7 @@ test.describe("Phone floors on every main screen", () => {
 
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);
-    await page.goto(`/${seeded.company.issuePrefix}/dashboard`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/dashboard`);
     const nav = page.getByRole("navigation", { name: "Mobile navigation" });
     await expect(nav).toBeVisible({ timeout: 30_000 });
     const items = await nav.locator("a, button").evaluateAll((els) =>
@@ -699,7 +703,7 @@ test.describe("Phone floors on every main screen", () => {
 
   test("agent header at 360px: a long name is not squeezed by the actions", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);
-    await page.goto(`/${seeded.company.issuePrefix}/agents/${seeded.agentId}`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/agents/${seeded.agentId}`);
     const heading = main(page).getByRole("heading", { name: LONG_AGENT });
     await expect(heading).toBeVisible({ timeout: 30_000 });
     // Shown in full: the heading is not truncated.
@@ -717,7 +721,7 @@ test.describe("Phone floors on every main screen", () => {
 
   test("issue page: a toast sits above the bottom nav and the docked composer", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await page.goto(`/${seeded.company.issuePrefix}/issues/${seeded.issueRef}`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/issues/${seeded.issueRef}`);
     await expect(main(page).getByText(/Draft is attached as a document/)).toBeVisible({ timeout: 30_000 });
     const composer = page.getByTestId("issue-chat-composer-dock");
     await expect(composer).toBeVisible();
