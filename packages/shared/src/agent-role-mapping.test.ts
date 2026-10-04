@@ -17,20 +17,28 @@ describe("mapProposedAgentRole", () => {
     expect(mapProposedAgentRole("Security Engineer")).toBe("security");
     expect(mapProposedAgentRole("UX Researcher")).toBe("designer");
     expect(mapProposedAgentRole("product-manager")).toBe("pm");
-    expect(mapProposedAgentRole("Bookkeeper")).toBe("cfo");
+    expect(mapProposedAgentRole("Bookkeeper")).toBe("finance");
+  });
+
+  // c4-hire-ux: `cfo` is the executive role, kept for actual C-suite titles;
+  // finance staff land in the neutral `finance` role.
+  it("maps only C-suite titles to cfo", () => {
+    expect(mapProposedAgentRole("cfo")).toBe("cfo");
+    expect(mapProposedAgentRole("CFO")).toBe("cfo");
+    expect(mapProposedAgentRole("Chief Financial Officer")).toBe("cfo");
   });
 
   // Scan 4 (accounting-firm persona): bookkeeping phrases beat the generic
-  // job words ("coordinator" -> pm) without pulling unrelated jobs into cfo.
-  it("maps an accounting firm's plan hires to cfo", () => {
-    expect(mapProposedAgentRole("Month End Close Coordinator")).toBe("cfo");
-    expect(mapProposedAgentRole("Close Checklist Manager")).toBe("cfo");
-    expect(mapProposedAgentRole("Year-End Close Lead")).toBe("cfo");
-    expect(mapProposedAgentRole("Accounts Payable Clerk")).toBe("cfo");
-    expect(mapProposedAgentRole("Accounts Receivable Specialist")).toBe("cfo");
-    expect(mapProposedAgentRole("Bank Reconciliation Specialist")).toBe("cfo");
-    expect(mapProposedAgentRole("Payroll Coordinator")).toBe("cfo");
-    expect(mapProposedAgentRole("General Ledger Reviewer")).toBe("cfo");
+  // job words ("coordinator" -> pm) and land in finance, not the executive cfo.
+  it("maps an accounting firm's plan hires to finance", () => {
+    expect(mapProposedAgentRole("Month End Close Coordinator")).toBe("finance");
+    expect(mapProposedAgentRole("Close Checklist Manager")).toBe("finance");
+    expect(mapProposedAgentRole("Year-End Close Lead")).toBe("finance");
+    expect(mapProposedAgentRole("Accounts Payable Clerk")).toBe("finance");
+    expect(mapProposedAgentRole("Accounts Receivable Specialist")).toBe("finance");
+    expect(mapProposedAgentRole("Bank Reconciliation Specialist")).toBe("finance");
+    expect(mapProposedAgentRole("Payroll Coordinator")).toBe("finance");
+    expect(mapProposedAgentRole("General Ledger Reviewer")).toBe("finance");
     expect(mapProposedAgentRole("Outreach Drafter")).toBe("cmo");
   });
 
@@ -46,7 +54,7 @@ describe("mapProposedAgentRole", () => {
     ["Accessibility Auditor", "general"],
     ["Deal Close Specialist", "general"],
     ["Ticket Close-out Coordinator", "pm"],
-    ["Financial Compliance Analyst", "cfo"],
+    ["Financial Compliance Analyst", "finance"],
     ["Compliance Auditor", "security"],
     ["Sales Closer", "general"],
     ["Expense Report Tool Developer", "engineer"],

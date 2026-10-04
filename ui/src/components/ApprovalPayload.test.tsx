@@ -16,6 +16,15 @@ describe("approvalLabel", () => {
       }),
     ).toBe("Approval: Reply with an ASCII frog");
   });
+
+  // AgentDash (c4-hire-ux): a hire reads the way the owner would say it — the
+  // human title, never the internal role slug.
+  it("reads a hire as 'Hire <name> as <title>'", () => {
+    expect(approvalLabel("hire_agent", { name: "Bea", title: "Bookkeeper", role: "finance" })).toBe(
+      "Hire Bea as Bookkeeper",
+    );
+    expect(approvalLabel("hire_agent", { name: "Bea" })).toBe("Hire Bea");
+  });
 });
 
 describe("ApprovalPayloadRenderer", () => {

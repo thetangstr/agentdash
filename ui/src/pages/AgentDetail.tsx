@@ -131,7 +131,7 @@ import {
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
-import { agentIdentityLineUnderName } from "../lib/agent-identity";
+import { agentHireOrigin, agentIdentityLineUnderName } from "../lib/agent-identity";
 import {
   applyAgentSkillSnapshot,
   arraysEqual,
@@ -1597,7 +1597,7 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
             ? `No runs yet — answered ${chatTurnsThisMonth} chat message${chatTurnsThisMonth === 1 ? "" : "s"} this month.`
             : chatTurns > 0
               ? `No runs yet — answered ${chatTurns} chat message${chatTurns === 1 ? "" : "s"}, none this month.`
-              : "This agent has never run. Nothing here is broken yet — and nothing here works yet either."}
+              : "Ready for its first task."}
         </p>
       ) : (
         <>
@@ -1901,13 +1901,14 @@ function AgentOverview({
     () => buildCompanyUserProfileMap(companyMembers?.users),
     [companyMembers?.users],
   );
-  const creatorId = agent.createdByUserId ?? null;
-  const creatorProfile = creatorId ? userProfiles.get(creatorId) : undefined;
-  const agentMetadata = asRecord(agent.metadata);
-  const autoHireReason = asNonEmptyString(agentMetadata?.autoHireReason);
   const steward = agent.steward ?? null;
   const stewardLabel = steward ? (steward.name ?? steward.email ?? steward.userId) : null;
   const accountable = agent.accountable ?? null;
+  // AgentDash (c4-hire-ux): the "Created by" line — the CoS stands up with the
+  // workspace; a CoS hire credits the person who confirmed (the stamp, or the
+  // accountable person on older rows) rather than "Hired by an agent".
+  const hireOrigin = agentHireOrigin(agent);
+  const creatorProfile = hireOrigin.kind === "person" ? userProfiles.get(hireOrigin.userId) : undefined;
   const accountableName = accountableLabel(agent);
   return (
     <div className="space-y-8">
@@ -1978,21 +1979,28 @@ function AgentOverview({
             <span className="text-xs">{formatDate(agent.createdAt)}</span>
           </SummaryRow>
           <SummaryRow label="Created by">
-            {creatorId ? (
+            {hireOrigin.kind === "cos" ? (
+              // AgentDash (c4-hire-ux): the CoS is not hired by anyone — the
+              // onboarding flow stands it up with the workspace itself.
+              <span className="text-xs text-muted-foreground">Set up with the workspace</span>
+            ) : hireOrigin.kind === "person" ? (
               <>
                 <Identity
-                  name={creatorProfile?.label ?? creatorId.slice(0, 5)}
+                  name={creatorProfile?.label ?? hireOrigin.userId.slice(0, 5)}
                   avatarUrl={creatorProfile?.image ?? null}
                   size="xs"
                 />
                 <span className="text-xs">
-                  {creatorProfile?.label ?? `${creatorId.slice(0, 5)} (no longer a member)`}
+                  {creatorProfile?.label ?? `${hireOrigin.userId.slice(0, 5)} (no longer a member)`}
+                  {hireOrigin.viaCos ? ", via Chief of Staff" : ""}
                 </span>
               </>
-            ) : agentMetadata?.autoHired === true ? (
+            ) : hireOrigin.kind === "cosUnattributed" ? (
+              <span className="text-xs text-muted-foreground">Hired through the Chief of Staff</span>
+            ) : hireOrigin.kind === "reviewQueue" ? (
               <span className="text-xs text-muted-foreground">
                 Hired automatically by the review queue
-                {autoHireReason === "neutrality_conflict"
+                {hireOrigin.reason === "neutrality_conflict"
                   ? " — no neutral reviewer was available"
                   : " — queue depth outgrew the active reviewers"}
               </span>

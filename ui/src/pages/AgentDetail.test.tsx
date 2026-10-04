@@ -341,9 +341,11 @@ describe("monthCountedTokens + AgentSpendFigure", () => {
 // Batch 2 canary: "This agent has never run" + "$0.00" sat on a Chief of Staff
 // that had run the whole chat; chat turns count as activity.
 describe("AgentRunHealthSummary", () => {
-  it("says the agent never ran only when it truly did nothing", () => {
+  // c4-hire-ux: a never-run agent reads as ready, not broken-and-useless.
+  it("reads a never-run agent as ready for its first task", () => {
     renderNode(<AgentRunHealthSummary runHealth={runHealthFixture()} />);
-    expect(container!.textContent).toContain("This agent has never run");
+    expect(container!.textContent).toContain("Ready for its first task.");
+    expect(container!.textContent).not.toContain("never run");
   });
 
   it("names chat activity instead of claiming the agent never ran", () => {

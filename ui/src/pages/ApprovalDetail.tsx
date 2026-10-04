@@ -3,8 +3,10 @@ import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { approvalsApi } from "../api/approvals";
 import { agentsApi } from "../api/agents";
+import { accessApi } from "../api/access";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { buildCompanyUserLabelMap } from "../lib/company-members";
 import { queryKeys } from "../lib/queryKeys";
 import { StatusBadge } from "../components/StatusBadge";
 import { Identity } from "../components/Identity";
@@ -15,6 +17,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
 import type { ApprovalComment } from "@paperclipai/shared";
 import { MarkdownBody } from "../components/MarkdownBody";
+
+// AgentDash (c4-hire-ux): owner-facing status words — the nav calls the page
+// "Decisions", so a pending request is "waiting for a decision", not "pending".
+const APPROVAL_STATUS_LABELS: Record<string, string> = {
+  pending: "Waiting for a decision",
+  revision_requested: "Changes requested",
+  approved: "Approved",
+  rejected: "Declined",
+};
 
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
@@ -52,6 +63,15 @@ export function ApprovalDetail() {
     enabled: !!resolvedCompanyId,
   });
 
+  // AgentDash (c4-hire-ux): approvals can name a person (requestedByUserId)
+  // as well as an agent — resolve people to names through the member
+  // directory, the same map the member pages use.
+  const { data: userDirectory } = useQuery({
+    queryKey: queryKeys.access.companyUserDirectory(resolvedCompanyId ?? ""),
+    queryFn: () => accessApi.listUserDirectory(resolvedCompanyId ?? ""),
+    enabled: !!resolvedCompanyId,
+  });
+
   useEffect(() => {
     if (!approval?.companyId || approval.companyId === selectedCompanyId) return;
     setSelectedCompanyId(approval.companyId, { source: "route_sync" });
@@ -62,6 +82,8 @@ export function ApprovalDetail() {
     for (const agent of agents ?? []) map.set(agent.id, agent.name);
     return map;
   }, [agents]);
+
+  const userLabels = useMemo(() => buildCompanyUserLabelMap(userDirectory?.users), [userDirectory]);
 
   useEffect(() => {
     // UX-7 (#788): the approvals list is the Decisions page — the breadcrumb
@@ -148,6 +170,20 @@ export function ApprovalDetail() {
 
   const payload = approval.payload as Record<string, unknown>;
   const linkedAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
+  // AgentDash (c4-hire-ux): "Dana (via Chief of Staff)" for a hire the person
+  // confirmed on a CoS plan card; plain name for a direct request; the agent
+  // name when an agent asked.
+  const viaCoS = payload.source === "cos_plan" || payload.source === "cos_proposal";
+  const requesterUserName = approval.requestedByUserId ? userLabels.get(approval.requestedByUserId) ?? null : null;
+  const requestedByLabel = approval.requestedByAgentId
+    ? agentNameById.get(approval.requestedByAgentId) ?? approval.requestedByAgentId.slice(0, 8)
+    : approval.requestedByUserId
+      ? viaCoS
+        ? requesterUserName
+          ? `${requesterUserName} (via Chief of Staff)`
+          : "The Chief of Staff"
+        : requesterUserName ?? "A member"
+      : null;
   const isActionable = approval.status === "pending" || approval.status === "revision_requested";
   const isBudgetApproval = approval.type === "budget_override_required";
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
@@ -185,7 +221,9 @@ export function ApprovalDetail() {
               <div>
                 <p className="text-sm text-green-800 dark:text-green-100 font-medium">Approval confirmed</p>
                 <p className="text-xs text-green-700 dark:text-green-200/90">
-                  Requesting agent was notified to review this approval and linked issues.
+                  {approval.type === "hire_agent"
+                    ? "The hire is approved — the agent can start work."
+                    : "The request was approved."}
                 </p>
               </div>
             </div>
@@ -206,19 +244,15 @@ export function ApprovalDetail() {
             <TypeIcon className="h-5 w-5 text-muted-foreground shrink-0" />
             <div>
               <h2 className="text-lg font-semibold">{approvalLabel(approval.type, approval.payload as Record<string, unknown> | null)}</h2>
-              <p className="text-xs text-muted-foreground font-mono">{approval.id}</p>
             </div>
           </div>
-          <StatusBadge status={approval.status} />
+          <StatusBadge status={approval.status} label={APPROVAL_STATUS_LABELS[approval.status]} />
         </div>
         <div className="text-sm space-y-1">
-          {approval.requestedByAgentId && (
+          {requestedByLabel && (
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground text-xs">Requested by</span>
-              <Identity
-                name={agentNameById.get(approval.requestedByAgentId) ?? approval.requestedByAgentId.slice(0, 8)}
-                size="sm"
-              />
+              <Identity name={requestedByLabel} size="sm" />
             </div>
           )}
           <ApprovalPayloadRenderer type={approval.type} payload={payload} />
@@ -228,12 +262,24 @@ export function ApprovalDetail() {
             onClick={() => setShowRawPayload((v) => !v)}
           >
             <ChevronRight className={`h-3 w-3 transition-transform ${showRawPayload ? "rotate-90" : ""}`} />
-            See full request
+            Technical details
           </button>
           {showRawPayload && (
-            <pre className="text-xs bg-muted/40 rounded-md p-3 overflow-x-auto">
-              {JSON.stringify(payload, null, 2)}
-            </pre>
+            <div className="rounded-md bg-muted/40 p-3 space-y-1.5 text-xs">
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground w-24 shrink-0">Request</span>
+                <span className="font-mono break-all">{approval.id}</span>
+              </div>
+              {linkedAgentId && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground w-24 shrink-0">Agent</span>
+                  <span className="font-mono break-all">{linkedAgentId}</span>
+                </div>
+              )}
+              <pre className="overflow-x-auto text-muted-foreground pt-1">
+                {JSON.stringify(payload, null, 2)}
+              </pre>
+            </div>
           )}
           {approval.decisionNote && (
             <p className="text-xs text-muted-foreground">Decision note: {approval.decisionNote}</p>
@@ -295,7 +341,7 @@ export function ApprovalDetail() {
               onClick={() => revisionMutation.mutate()}
               disabled={revisionMutation.isPending}
             >
-              Request revision
+              Ask for changes
             </Button>
           )}
           {approval.status === "revision_requested" && (
@@ -305,7 +351,7 @@ export function ApprovalDetail() {
               onClick={() => resubmitMutation.mutate()}
               disabled={resubmitMutation.isPending}
             >
-              Mark resubmitted
+              Resubmit
             </Button>
           )}
           {approval.status === "rejected" && approval.type === "hire_agent" && linkedAgentId && (
@@ -314,12 +360,12 @@ export function ApprovalDetail() {
               variant="outline"
               className="text-destructive border-destructive/40"
               onClick={() => {
-                if (!window.confirm("Delete this disapproved agent? This cannot be undone.")) return;
+                if (!window.confirm("Delete the declined agent? This cannot be undone.")) return;
                 deleteAgentMutation.mutate(linkedAgentId);
               }}
               disabled={deleteAgentMutation.isPending}
             >
-              Delete disapproved agent
+              Delete declined agent
             </Button>
           )}
         </div>
@@ -339,7 +385,10 @@ export function ApprovalDetail() {
                     />
                   </Link>
                 ) : (
-                  <Identity name="Board" size="sm" />
+                  <Identity
+                    name={comment.authorUserId ? userLabels.get(comment.authorUserId) ?? "Board" : "Board"}
+                    size="sm"
+                  />
                 )}
                 <span className="text-xs text-muted-foreground">
                   {new Date(comment.createdAt).toLocaleString()}
@@ -353,6 +402,7 @@ export function ApprovalDetail() {
           value={commentBody}
           onChange={(e) => setCommentBody(e.target.value)}
           placeholder="Add a comment..."
+          aria-label="Add a comment"
           rows={3}
         />
         <div className="flex justify-end">

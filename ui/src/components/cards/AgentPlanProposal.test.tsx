@@ -3,9 +3,15 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
-import { AgentPlanProposal, PLAN_HIRED_LABEL, PLAN_SUPERSEDED_NOTE, formatPlanRole, isKnownPlanValue, planAgentTitle } from "./AgentPlanProposal";
+import { AgentPlanProposal, PLAN_HIRED_LABEL, PLAN_SINGLE_HIRED_LABEL, PLAN_SUPERSEDED_NOTE, formatPlanRole, isKnownPlanValue, planAgentTitle } from "./AgentPlanProposal";
+
+const mockGetSession = vi.hoisted(() => vi.fn());
+vi.mock("../../api/auth", () => ({
+  authApi: { getSession: mockGetSession },
+}));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -55,8 +61,12 @@ describe("isKnownPlanValue", () => {
 describe("AgentPlanProposal", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
+  let queryClient: QueryClient;
 
   beforeEach(() => {
+    // Unknown session keeps the card permissive — the server is the authority.
+    mockGetSession.mockReset().mockRejectedValue(new Error("no session"));
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -64,12 +74,17 @@ describe("AgentPlanProposal", () => {
 
   afterEach(() => {
     act(() => root.unmount());
+    queryClient.clear();
     container.remove();
   });
 
+  function renderCard(element: React.ReactElement) {
+    root.render(<QueryClientProvider client={queryClient}>{element}</QueryClientProvider>);
+  }
+
   it("shows people-facing roles and hides adapters and Unknown fields", () => {
     act(() => {
-      root.render(
+      renderCard(
         <AgentPlanProposal
           payload={{
             rationale: "Two people to win more bids.",
@@ -110,6 +125,15 @@ describe("AgentPlanProposal", () => {
     alignmentToShortTerm: "This quarter",
     alignmentToLongTerm: "Next year",
   };
+  const teamPlan = {
+    rationale: "Ship faster.",
+    agents: [
+      { role: "engineer", name: "Ellie", adapterType: "hermes_local", responsibilities: [], kpis: [] },
+      { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: [], kpis: [] },
+    ],
+    alignmentToShortTerm: "This quarter",
+    alignmentToLongTerm: "Next year",
+  };
   function buttons() {
     return Array.from(container.querySelectorAll("button"));
   }
@@ -118,64 +142,127 @@ describe("AgentPlanProposal", () => {
   }
 
   // Scan 4, lane N: after the hire the card stops offering "Set it up".
-  it("shows Team hired with every button disabled once the plan is confirmed", () => {
+  // c4-hire-ux: a one-agent plan reads "Hired ✓" — "Team" is wrong for it.
+  it("shows Hired with every button disabled once a single-hire plan is confirmed", () => {
     act(() => {
-      root.render(<AgentPlanProposal payload={{ ...plan, confirmedAt: "2026-10-02T08:05:00Z" } as never} onConfirm={vi.fn()} onRevise={() => {}} />);
+      renderCard(<AgentPlanProposal payload={{ ...plan, confirmedAt: "2026-10-02T08:05:00Z" } as never} onConfirm={vi.fn()} onRevise={() => {}} />);
     });
     expect(container.textContent).toContain("Marcus — Month-End Close Coordinator");
     expect(byLabel("Set it up")).toBeNull();
-    expect(byLabel(PLAN_HIRED_LABEL)?.disabled).toBe(true);
+    expect(byLabel(PLAN_SINGLE_HIRED_LABEL)?.disabled).toBe(true);
+    expect(byLabel(PLAN_HIRED_LABEL)).toBeNull();
     expect(byLabel("Let me revise")?.disabled).toBe(true);
   });
 
-  it("turns into Team hired after a successful Set it up", async () => {
-    const onConfirm = vi.fn().mockResolvedValue(undefined);
+  it("keeps Team hired for a multi-agent plan", () => {
     act(() => {
-      root.render(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
+      renderCard(<AgentPlanProposal payload={{ ...teamPlan, confirmedAt: "2026-10-02T08:05:00Z" } as never} onConfirm={vi.fn()} onRevise={() => {}} />);
     });
-    await act(async () => byLabel("Set it up")!.click());
-    expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(byLabel(PLAN_HIRED_LABEL)?.disabled).toBe(true);
   });
 
-  it("maps a 409 (already hired) to Team hired", async () => {
-    const onConfirm = vi.fn().mockRejectedValue(new ApiError("Hire already accepted", 409, { accepted: true }));
+  it("turns into Hired after a successful Set it up", async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
     act(() => {
-      root.render(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
+      renderCard(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
     });
     await act(async () => byLabel("Set it up")!.click());
-    expect(byLabel(PLAN_HIRED_LABEL)?.disabled).toBe(true);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(byLabel(PLAN_SINGLE_HIRED_LABEL)?.disabled).toBe(true);
+  });
+
+  it("maps a 409 (already hired) to Hired", async () => {
+    const onConfirm = vi.fn().mockRejectedValue(new ApiError("Hire already accepted", 409, { accepted: true }));
+    act(() => {
+      renderCard(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
+    });
+    await act(async () => byLabel("Set it up")!.click());
+    expect(byLabel(PLAN_SINGLE_HIRED_LABEL)?.disabled).toBe(true);
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   // PR #989 review: only the newest plan card offers actions.
   it("offers no actions on a plan card a newer one replaced", () => {
     act(() => {
-      root.render(<AgentPlanProposal payload={plan as never} onConfirm={vi.fn()} onRevise={() => {}} superseded />);
+      renderCard(<AgentPlanProposal payload={plan as never} onConfirm={vi.fn()} onRevise={() => {}} superseded />);
     });
     expect(buttons()).toHaveLength(0);
     expect(container.textContent).toContain(PLAN_SUPERSEDED_NOTE);
   });
 
-  it("maps a superseded_plan 409 to the replaced note, not Team hired", async () => {
+  it("maps a superseded_plan 409 to the replaced note, not Hired", async () => {
     const onConfirm = vi.fn().mockRejectedValue(
       new ApiError("A newer plan replaced this one.", 409, { error: "x", details: { code: "superseded_plan" } }),
     );
     act(() => {
-      root.render(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
+      renderCard(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
     });
     await act(async () => byLabel("Set it up")!.click());
-    expect(byLabel(PLAN_HIRED_LABEL)).toBeNull();
+    expect(byLabel(PLAN_SINGLE_HIRED_LABEL)).toBeNull();
     expect(container.textContent).toContain(PLAN_SUPERSEDED_NOTE);
   });
 
   it("shows any other failure and lets the person try again", async () => {
     const onConfirm = vi.fn().mockRejectedValue(new ApiError("Your plan allows one agent.", 402, null));
     act(() => {
-      root.render(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
+      renderCard(<AgentPlanProposal payload={plan as never} onConfirm={onConfirm} onRevise={() => {}} />);
     });
     await act(async () => byLabel("Set it up")!.click());
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Your plan allows one agent.");
     expect(byLabel("Set it up")?.disabled).toBe(false);
+  });
+
+  // c4-hire-ux: a steady-state card names who asked for the team. Another
+  // viewer reads "Waiting for <name> to confirm" instead of clicking "Set it
+  // up" into the server's 403.
+  it("hides actions behind a waiting note for a viewer who is not the requester", async () => {
+    mockGetSession.mockResolvedValue({ user: { id: "u2" } });
+    const onConfirm = vi.fn();
+    act(() => {
+      renderCard(
+        <AgentPlanProposal
+          payload={{ ...plan, requesterUserId: "u1", requesterName: "Dana" } as never}
+          onConfirm={onConfirm}
+          onRevise={() => {}}
+        />,
+      );
+    });
+    await act(async () => {});
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Waiting for Dana to confirm.");
+    });
+    expect(byLabel("Set it up")).toBeNull();
+    expect(buttons().filter((b) => !b.disabled)).toHaveLength(0);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("still offers Set it up to the requester", async () => {
+    mockGetSession.mockResolvedValue({ user: { id: "u1" } });
+    act(() => {
+      renderCard(
+        <AgentPlanProposal
+          payload={{ ...plan, requesterUserId: "u1", requesterName: "Dana" } as never}
+          onConfirm={vi.fn()}
+          onRevise={() => {}}
+        />,
+      );
+    });
+    await act(async () => {});
+    expect(byLabel("Set it up")).not.toBeNull();
+    expect(container.textContent).not.toContain("Waiting for");
+  });
+
+  it("stays permissive while the session is unknown — the server decides", async () => {
+    act(() => {
+      renderCard(
+        <AgentPlanProposal
+          payload={{ ...plan, requesterUserId: "u1", requesterName: "Dana" } as never}
+          onConfirm={vi.fn()}
+          onRevise={() => {}}
+        />,
+      );
+    });
+    await act(async () => {});
+    expect(byLabel("Set it up")).not.toBeNull();
   });
 });

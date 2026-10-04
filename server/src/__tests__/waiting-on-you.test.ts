@@ -7,6 +7,7 @@ import {
   agents,
   agentStewardships,
   approvals,
+  authUsers,
   companies,
   companyMemberships,
   createDb,
@@ -266,5 +267,40 @@ describeEmbeddedPostgres("waiting on you: Home, list_pending_decisions and whats
       waitingOnYouService(db).list(COMPANY, actor),
     ]);
     expect(JSON.parse(JSON.stringify(direct))).toEqual(home);
+  });
+
+  // AgentDash (c4-hire-ux): a person who confirmed a CoS plan card is named as
+  // the asker — "Dana (via Chief of Staff) asks to hire Bea as Bookkeeper." —
+  // not lumped under "The board" with no title. Inserted here rather than in
+  // the shared fixture so the earlier total/list assertions are untouched.
+  it("names the person behind a cos_plan hire, with the hire's title", async () => {
+    await db.insert(authUsers).values({
+      id: OTHER_USER,
+      name: "Dana Whitfield",
+      email: "dana@waiting.test",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const userHire = randomUUID();
+    await db.insert(approvals).values({
+      id: userHire,
+      companyId: COMPANY,
+      type: "hire_agent",
+      requestedByUserId: OTHER_USER,
+      status: "pending",
+      payload: { name: "Bea", title: "Bookkeeper", role: "finance", agentId: randomUUID(), source: "cos_plan" },
+      createdAt: hoursAgo(10),
+    });
+
+    const res = await request(app()).get(`/api/companies/${COMPANY}/assistant/pending-decisions`);
+    expect(res.status).toBe(200);
+    const decision = (res.body.decisions as Array<{ approvalId: string; summary: string; askedBy: string | null }>)
+      .find((d) => d.approvalId === userHire);
+    expect(decision?.summary).toBe("Dana Whitfield (via Chief of Staff) asks to hire Bea as Bookkeeper.");
+    expect(decision?.askedBy).toBe("Dana Whitfield");
+    // The same user's plain (non-CoS) filing names them without the qualifier.
+    const board = (res.body.decisions as Array<{ approvalId: string; summary: string }>)
+      .find((d) => d.approvalId === A_BOARD);
+    expect(board?.summary).toBe("Dana Whitfield asks to approve spending past a budget limit.");
   });
 });
