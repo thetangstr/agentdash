@@ -151,6 +151,34 @@ describe("mergeHeartbeatRunResultJson", () => {
     expect(
       mergeHeartbeatRunResultJson(null, "line one\r\nline two\r\n"),
     ).toEqual({ summary: "line one\nline two" });
+    expect(
+      mergeHeartbeatRunResultJson(null, "line one\r\nline two"),
+    ).toEqual({ summary: "line one\nline two" });
+  });
+
+  // AgentDash (review-1025 item 1): an answer that ends without a final
+  // newline leaves its last line unterminated — that tail is not LF evidence,
+  // so a CRLF document must not read as "mixed" and be stripped to its last
+  // line. dispatch-llm trims stdout before this runs, so every CRLF CoS
+  // answer arrives exactly like this.
+  it("keeps a CRLF answer whose last line has no terminator", () => {
+    expect(
+      mergeHeartbeatRunResultJson(null, "a\r\nb"),
+    ).toEqual({ summary: "a\nb" });
+    expect(
+      mergeHeartbeatRunResultJson(null, "line one\r\nline two"),
+    ).toEqual({ summary: "line one\nline two" });
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "Para one.\r\n\r\nPara two.\r\nPara three.",
+      ),
+    ).toEqual({ summary: "Para one.\n\nPara two.\nPara three." });
+    // A fenced payload the way revise-plan emits one, CRLF throughout.
+    const reply = "Updated based on your feedback.\r\n```json\r\n{\"plan\":{}}\r\n```";
+    expect(mergeHeartbeatRunResultJson(null, reply)).toEqual({
+      summary: "Updated based on your feedback.\n```json\n{\"plan\":{}}\n```",
+    });
   });
 
   it("still treats a lone carriage return as an in-place redraw", () => {
@@ -169,6 +197,43 @@ describe("mergeHeartbeatRunResultJson", () => {
         "⚠ scanner unavailable\r\nAll 42 checks pass.",
       ),
     ).toEqual({ summary: "All 42 checks pass." });
+  });
+
+  // AgentDash (cos-followups review): the runtime signs its own status writes
+  // with \r\n while the agent's answer uses \n, so a CRLF line in an
+  // otherwise-LF document is subprocess chatter even without a glyph.
+  it("strips a glyph-less CRLF status line from an LF answer", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "Loading MCP servers…\r\nMoved the ticket to review.",
+      ),
+    ).toEqual({ summary: "Moved the ticket to review." });
+  });
+
+  it("strips a ✗ CRLF status line — the line ending is the signature, not the glyph", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "✗ mcp server workspace-search failed\r\nAll 42 checks pass.",
+      ),
+    ).toEqual({ summary: "All 42 checks pass." });
+  });
+
+  it("keeps an ℹ line that starts real prose — info is not a warning", () => {
+    const text = "ℹ Note: the migration is reversible";
+    expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
+    const multi = "ℹ Note: the migration is reversible\nThe rollback takes two minutes.";
+    expect(mergeHeartbeatRunResultJson(null, multi)).toEqual({ summary: multi });
+  });
+
+  it("still strips an ℹ line when it carries the CRLF machine signature", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "ℹ no fallback adapter configured\r\nShipped the fix.",
+      ),
+    ).toEqual({ summary: "Shipped the fix." });
   });
 
   it("strips a warning-only result and message, not just the summary", () => {

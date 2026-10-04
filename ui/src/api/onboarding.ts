@@ -178,7 +178,7 @@ export const onboardingApi = {
   // AgentDash (scan 4, lane N): messageId names the card clicked; the server
   // refuses (409 superseded_plan) when a newer plan replaced it.
   confirmPlan: (input: { conversationId: string; messageId?: string }) =>
-    api.post<{ companyId: string; createdAgentIds: string[] }>(
+    api.post<{ companyId: string; createdAgentIds: string[]; pendingApproval?: boolean; approvalIds?: string[] }>(
       "/onboarding/confirm-plan",
       input,
     ),
