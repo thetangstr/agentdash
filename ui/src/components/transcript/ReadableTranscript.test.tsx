@@ -162,7 +162,7 @@ describe("readable transcript secrets behind instance paths", () => {
       ),
     );
     expect(container.textContent).not.toContain("plainsecretvalue123456");
-    expect(container.textContent).toContain("API_KEY=REDACTED");
+    expect(container.textContent).toContain("API_KEY=•••• hidden");
   });
 
   it("a message block never shows a secret that is a path basename", () => {
@@ -176,6 +176,6 @@ describe("readable transcript secrets behind instance paths", () => {
       ),
     );
     expect(container.textContent).not.toContain("plainsecretvalue123456");
-    expect(container.textContent).toContain("API_KEY=REDACTED");
+    expect(container.textContent).toContain("API_KEY=•••• hidden");
   });
 });
