@@ -475,11 +475,11 @@ export function OrgChart() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuItem className="min-h-11" onSelect={() => navigate("/company/import")}>
                 <Upload className="h-4 w-4" />
-                Import company
+                Import workspace
               </DropdownMenuItem>
               <DropdownMenuItem className="min-h-11" onSelect={() => navigate("/company/export")}>
                 <Download className="h-4 w-4" />
-                Export company
+                Export workspace
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -500,13 +500,13 @@ export function OrgChart() {
         <Link to="/company/import">
           <Button variant="outline" size="sm">
             <Upload className="mr-1.5 h-3.5 w-3.5" />
-            Import company
+            Import workspace
           </Button>
         </Link>
         <Link to="/company/export">
           <Button variant="outline" size="sm">
             <Download className="mr-1.5 h-3.5 w-3.5" />
-            Export company
+            Export workspace
           </Button>
         </Link>
       </div>

@@ -31,6 +31,7 @@ import { adapterLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
+import { displayMaskedSecrets, SECRET_MASK_DISPLAY } from "../lib/redactSecrets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 import { StatusBadge } from "../components/StatusBadge";
@@ -57,6 +58,7 @@ import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd 
 import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
+import { cancelledRunLabel } from "../lib/cancelledRunLabel";
 import {
   AgentRunFailureGuidance,
   readAgentRunFailureClassification,
@@ -145,14 +147,14 @@ const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string 
 
 const RUN_LOG_PAGE_BYTES = 256_000;
 
-const REDACTED_ENV_VALUE = "***REDACTED***";
+const REDACTED_ENV_VALUE = SECRET_MASK_DISPLAY;
 const SECRET_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
 const COMMAND_ENV_KEY_RE = /(^command$|^cmd$|command[-_]?line|resolved[-_]?command|PAPERCLIP_RESOLVED_COMMAND)/i;
 const JWT_VALUE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
 
 function redactPathText(value: string, censorUsernameInLogs: boolean) {
-  return redactHomePathUserSegments(value, { enabled: censorUsernameInLogs });
+  return displayMaskedSecrets(redactHomePathUserSegments(value, { enabled: censorUsernameInLogs }));
 }
 
 function redactPathValue<T>(value: T, censorUsernameInLogs: boolean): T {
@@ -176,14 +178,14 @@ function redactEnvValue(key: string, value: unknown, censorUsernameInLogs: boole
     !Array.isArray(value) &&
     (value as { type?: unknown }).type === "secret_ref"
   ) {
-    return "***SECRET_REF***";
+    return SECRET_MASK_DISPLAY;
   }
   if (shouldRedactSecretValue(key, value)) return REDACTED_ENV_VALUE;
   if (value === null || value === undefined) return "";
   if (typeof value === "string" && COMMAND_ENV_KEY_RE.test(key)) return redactCommandText(value, censorUsernameInLogs);
   if (typeof value === "string") return redactPathText(value, censorUsernameInLogs);
   try {
-    return JSON.stringify(redactPathValue(value, censorUsernameInLogs));
+    return displayMaskedSecrets(JSON.stringify(redactPathValue(value, censorUsernameInLogs)));
   } catch {
     return redactPathText(String(value), censorUsernameInLogs);
   }
@@ -1160,6 +1162,7 @@ export function AgentDetail() {
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
+            ariaLabel="Agent sections"
             items={AGENT_DETAIL_TOP_TABS}
             value={agentDetailTabValue(activeView)}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -1215,6 +1218,7 @@ export function AgentDetail() {
           status={harnessPreflightStatus}
           onRunPreflight={() => harnessPreflight.mutate()}
           pending={harnessPreflight.isPending}
+          hasSuccessfulRuns={(agent.runHealth?.succeeded ?? 0) > 0}
           error={
             harnessPreflight.error instanceof Error
               ? harnessPreflight.error.message
@@ -1283,6 +1287,7 @@ export function AgentDetail() {
         >
           <PageTabBar
             align="start"
+            ariaLabel="Agent settings sections"
             items={AGENT_DETAIL_SETTINGS_TABS}
             value={activeView}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -1407,9 +1412,18 @@ export function LatestRunCard({
   const isLive = run.status === "running" || run.status === "queued";
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
-  const summaryRaw = run.resultJson
+  // AgentDash (c3): same rule as RunListItem — real summary text wins; a
+  // cancelled run with no summary still gets its stop reason, never the raw
+  // adapter error. (The cancel path writes no summary, so a stopped run
+  // almost always lands here.)
+  const resultSummary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
-    : run.error ?? "";
+    : "";
+  const summaryRaw = resultSummary
+    ? resultSummary
+    : run.status === "cancelled"
+      ? cancelledRunLabel(run)
+      : (run.error ?? "");
 
   // Extract a clean 2-3 line excerpt: first non-empty, non-header, non-list-mark lines
   const summary = useMemo(() => {
@@ -1489,7 +1503,7 @@ export function LatestRunCard({
 
         {summary ? (
           <div className="pointer-events-none relative overflow-hidden max-h-16 [&_a]:pointer-events-auto">
-            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{summary}</MarkdownBody>
+            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{displayMaskedSecrets(summary)}</MarkdownBody>
           </div>
         ) : showEmptySummary && !isLive && !run.error ? (
           <p className="text-sm text-muted-foreground" data-testid="latest-run-no-summary">
@@ -3708,13 +3722,21 @@ export function AgentSkillsTab({
 
 /* ---- Runs Tab ---- */
 
-function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
+// AgentDash (c3): the label every surface uses for a cancelled run — the
+// recorded reason, neutral — lives in lib/cancelledRunLabel.
+
+export function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
-  const summary = run.resultJson
+  const resultSummary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
-    : run.error ?? "";
+    : "";
+  const summary = resultSummary
+    ? resultSummary
+    : run.status === "cancelled"
+      ? cancelledRunLabel(run)
+      : (run.error ?? "");
 
   return (
     <Link
@@ -3744,7 +3766,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
       </div>
       {summary && (
         <span className="text-xs text-muted-foreground truncate pl-5.5">
-          {summary.slice(0, 60)}
+          {displayMaskedSecrets(summary).slice(0, 60)}
         </span>
       )}
       {(metrics.totalTokens > 0 || metrics.cost > 0) && (
@@ -3876,7 +3898,9 @@ export function RunStderrExcerpt({
   );
 }
 
-function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
+// Exported for tests: the cancelled-run chrome guards (no red failure panel,
+// no red exit code) are exercised through a rendered RunDetail.
+export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { pushToast } = useToastActions();
@@ -4176,8 +4200,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
               if (!adapterType && !displayProvider && !displayModel) return null;
               // AgentDash (Scan 3, lane J): plain words, not "HERMES LOCAL
               // kimi-coding/k3"; the raw values stay in the hover titles.
-              const modelText = displayModel
-                ? (displayProvider ? `${displayProvider}/${displayModel}` : displayModel)
+              // AgentDash (c3-a11y): "auto" (provider, or an "auto/x" prefix)
+              // is the adapter's own routing detail — "Model: auto/k3" reads
+              // as noise. Show the model name, or nothing when "auto" is all
+              // there is.
+              const modelName = displayModel?.startsWith("auto/")
+                ? displayModel.slice("auto/".length)
+                : displayModel;
+              const modelText = modelName && modelName !== "auto"
+                ? (displayProvider && displayProvider !== "auto" && !modelName.includes("/") && !displayModel?.startsWith("auto/")
+                  ? `${displayProvider}/${modelName}`
+                  : modelName)
                 : null;
               return (
                 <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap" data-testid="run-runtime-summary">
@@ -4241,7 +4274,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
               </div>
             )}
             <RunQuotaUpgrade run={run} />
-            {failureClassification ? (
+            {/* AgentDash (c3): a stopped run has nothing to recover from — the
+                classification the killed adapter's failed write may have left
+                in resultJson is stale, not guidance. */}
+            {failureClassification && run.status !== "cancelled" ? (
               <AgentRunFailureGuidance classification={failureClassification} actions={recoveryActions} />
             ) : null}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
@@ -4291,7 +4327,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 )}
               </div>
             )}
-            {hasNonZeroExit && (
+            {/* AgentDash (c3): exit 130 on a cancelled run is just the kill we
+                sent — not a red failure signal. The reason line above names it. */}
+            {hasNonZeroExit && run.status !== "cancelled" && (
               <div className="text-xs text-red-600 dark:text-red-400">
                 Exit code {run.exitCode}
                 {run.signal && <span className="text-muted-foreground ml-1">(signal: {run.signal})</span>}
@@ -4941,6 +4979,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           streaming={isLive}
           emptyMessage={run.logRef ? "Waiting for transcript..." : "No persisted transcript for this run."}
           usage={runUsage}
+          stoppedReason={run.status === "cancelled" ? cancelledRunLabel(run) : null}
         />
         {hasMoreLog && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">

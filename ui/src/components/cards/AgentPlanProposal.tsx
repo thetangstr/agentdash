@@ -121,7 +121,7 @@ export function AgentPlanProposal({
         {agents.map((agent, i) => {
           const role = planAgentTitle(agent);
           const kpis = (Array.isArray(agent.kpis) ? agent.kpis : []).filter(isKnownPlanValue);
-          const responsibility = (Array.isArray(agent.responsibilities) ? agent.responsibilities : []).find(isKnownPlanValue);
+          const responsibilities = (Array.isArray(agent.responsibilities) ? agent.responsibilities : []).filter(isKnownPlanValue);
           return (
             <div
               key={`${agent.role}-${i}`}
@@ -133,8 +133,15 @@ export function AgentPlanProposal({
                 {role ? <span className="text-text-secondary font-normal"> — {role}</span> : null}
               </div>
               <WorkforceTemplatePreview templateId={agent.workforceTemplateId}/>
-              {responsibility && (
-                <div className="mt-1 text-sm text-text-secondary break-words">{responsibility}</div>
+              {responsibilities.length > 0 && (
+                // AgentDash (c3-a11y): an agent can carry several
+                // responsibilities — show them all; a tight bullet list stays
+                // readable on a phone where one wrapped paragraph would not.
+                <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sm text-text-secondary break-words">
+                  {responsibilities.map((responsibility, j) => (
+                    <li key={j}>{responsibility}</li>
+                  ))}
+                </ul>
               )}
               {kpis.length > 0 && (
                 <p className="mt-2 text-sm text-text-secondary break-words">

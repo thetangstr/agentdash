@@ -64,6 +64,77 @@ describe("RunTranscriptView", () => {
     expect(html).toContain("<h2>Summary</h2>");
   });
 
+  // AgentDash (c3): a killed process reports "Failed" in the transcript's own
+  // result line; a cancelled run's footer must read as a neutral stop instead.
+  it("renders a neutral Stopped footer for a cancelled run", () => {
+    const cancelledRun: TranscriptEntry[] = [
+      { kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: "Working on it" },
+      {
+        kind: "result",
+        ts: "2026-03-12T00:00:30.000Z",
+        text: "Interrupted: process received SIGINT",
+        inputTokens: 500,
+        outputTokens: 100,
+        cachedTokens: 0,
+        costUsd: 0.004,
+        subtype: "error",
+        isError: true,
+        errors: ["Interrupted: process received SIGINT"],
+      },
+    ];
+    const html = render(<RunTranscriptView entries={cancelledRun} stoppedReason="Stopped manually" />);
+    expect(html).toContain('data-readable-footer="ok"');
+    expect(html).toContain("Stopped · 29s");
+    expect(html).toContain("Stopped manually");
+    expect(html).not.toContain("Failed");
+    expect(html).not.toContain("process received SIGINT");
+  });
+
+  // AgentDash (c3 review): a killed process rarely gets to write a result
+  // line — the stopped run still gets its neutral footer, and the stderr
+  // noise the kill produced is not shown as a red error block.
+  it("shows the stopped footer with no result line, and hides kill-noise error lines", () => {
+    const stoppedWithoutResult: TranscriptEntry[] = [
+      { kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: "Still working on it" },
+      { kind: "stderr", ts: "2026-03-12T00:00:02.000Z", text: "Error: process terminated by signal SIGTERM" },
+    ];
+    const html = render(<RunTranscriptView entries={stoppedWithoutResult} stoppedReason="Stopped manually" />);
+    expect(html).toContain('data-readable-footer="ok"');
+    expect(html).toContain("Stopped");
+    expect(html).toContain("Stopped manually");
+    expect(html).not.toContain("SIGTERM");
+    expect(html).not.toContain("process terminated");
+  });
+
+  it("still renders error lines on a run that was not stopped", () => {
+    const noisyRun: TranscriptEntry[] = [
+      { kind: "stderr", ts: "2026-03-12T00:00:02.000Z", text: "Error: real failure noise" },
+    ];
+    const html = render(<RunTranscriptView entries={noisyRun} />);
+    expect(html).toContain("real failure noise");
+  });
+
+  it("keeps the red Failed footer for a genuinely failed run", () => {
+    const failedRun: TranscriptEntry[] = [
+      {
+        kind: "result",
+        ts: "2026-03-12T00:00:30.000Z",
+        text: "Adapter exploded",
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        costUsd: 0,
+        subtype: "error",
+        isError: true,
+        errors: ["Adapter exploded"],
+      },
+    ];
+    const html = render(<RunTranscriptView entries={failedRun} />);
+    expect(html).toContain('data-readable-footer="error"');
+    expect(html).toContain("Failed");
+    expect(html).toContain("Adapter exploded");
+  });
+
   it("treats the legacy nice mode as readable", () => {
     const html = render(<RunTranscriptView mode="nice" entries={toolRun} />);
     expect(html).toContain('data-transcript-mode="readable"');
@@ -113,7 +184,7 @@ describe("RunTranscriptView raw redaction", () => {
   it("redacts tool calls, results, stdout, stderr and assistant text, with a note", () => {
     const html = render(<RunTranscriptView entries={entries} mode="raw" />);
     expect(html).not.toContain(SECRET);
-    expect(html).toContain("***REDACTED***");
+    expect(html).toContain("•••• hidden");
     expect(html).toContain("Credentials in this log are hidden.");
   });
 

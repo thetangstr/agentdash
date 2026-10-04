@@ -5,6 +5,7 @@ import {
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  RUN_CANCELLED_BY_OPERATOR_CODE,
   readIssueRecoveryBudget,
   type IssueGraphLivenessAutoRecoveryPreview,
   type IssueGraphLivenessAutoRecoveryPreviewItem,
@@ -18,6 +19,7 @@ import {
   heartbeatRunWatchdogDecisions,
   heartbeatRuns,
   issueApprovals,
+  issueComments,
   issueRelations,
   issueThreadInteractions,
   issues,
@@ -105,7 +107,7 @@ type RecoveryWakeup = (
 
 type LatestIssueRun = Pick<
   typeof heartbeatRuns.$inferSelect,
-  "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot" | "livenessState"
+  "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot" | "livenessState" | "finishedAt" | "createdAt"
 > | null;
 type SuccessfulLatestIssueRun = NonNullable<LatestIssueRun> & { status: "succeeded" };
 
@@ -404,6 +406,8 @@ export function recoveryService(
         errorCode: heartbeatRuns.errorCode,
         contextSnapshot: heartbeatRuns.contextSnapshot,
         livenessState: heartbeatRuns.livenessState,
+        finishedAt: heartbeatRuns.finishedAt,
+        createdAt: heartbeatRuns.createdAt,
       })
       .from(heartbeatRuns)
       .where(
@@ -510,6 +514,28 @@ export function recoveryService(
           eq(agentWakeupRequests.companyId, companyId),
           eq(agentWakeupRequests.status, "queued"),
           sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
+        ),
+      )
+      .limit(1)
+      .then((rows) => Boolean(rows[0]));
+  }
+
+  // AgentDash (c3): an operator-stopped issue is parked, not stranded — unless
+  // something newer than the stop already asked for work: a queued wake (a
+  // comment interrupt, a resume, an assignment) or an issue comment posted
+  // after the run ended. Either one is a fresh ask and the sweep should treat
+  // the issue normally.
+  async function hasNewerIssueEvent(companyId: string, issueId: string, latestRun: NonNullable<LatestIssueRun>) {
+    if (await hasQueuedIssueWake(companyId, issueId)) return true;
+    const stoppedAt = latestRun.finishedAt ?? latestRun.createdAt;
+    if (!stoppedAt) return false;
+    return db
+      .select({ id: issueComments.id })
+      .from(issueComments)
+      .where(
+        and(
+          eq(issueComments.issueId, issueId),
+          gt(issueComments.createdAt, stoppedAt),
         ),
       )
       .limit(1)
@@ -1850,6 +1876,19 @@ export function recoveryService(
       }
 
       const latestRun = await getLatestIssueRun(issue.companyId, issue.id);
+      // AgentDash (c3): an operator stop is a person's decision — the sweep
+      // must not undo it with an automatic continuation wake. The issue stays
+      // parked until a newer event (comment, wake, reassignment, resume) asks
+      // for work again. Narrow on purpose: pause/budget/hold cancels still
+      // recover through this sweep (and the pause-hold suppression above).
+      if (
+        latestRun?.status === "cancelled" &&
+        latestRun.errorCode === RUN_CANCELLED_BY_OPERATOR_CODE &&
+        !(await hasNewerIssueEvent(issue.companyId, issue.id, latestRun))
+      ) {
+        result.skipped += 1;
+        continue;
+      }
       if (isStrandedIssueRecoveryIssue(issue) && isUnsuccessfulTerminalIssueRun(latestRun)) {
         const updated = await escalateStrandedRecoveryIssueInPlace({
           issue,

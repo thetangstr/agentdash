@@ -27,6 +27,7 @@ const mockIssuesApi = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
   deleteAttachment: vi.fn(),
   upsertDocument: vi.fn(),
+  listShipped: vi.fn(),
 }));
 
 const mockActivityApi = vi.hoisted(() => ({
@@ -782,6 +783,7 @@ describe("IssueDetail", () => {
     mockIssuesApi.markRead.mockResolvedValue({ id: "issue-1", lastReadAt: new Date().toISOString() });
     mockIssuesApi.getTreeControlState.mockResolvedValue({ activePauseHold: null });
     mockIssuesApi.listTreeHolds.mockResolvedValue([]);
+    mockIssuesApi.listShipped.mockResolvedValue({ items: [], total: 0, nextCursor: null, monthTotal: null });
     mockActivityApi.forIssue.mockResolvedValue([]);
     mockActivityApi.runsForIssue.mockResolvedValue([]);
     mockHeartbeatsApi.liveRunsForIssue.mockResolvedValue([]);

@@ -49,6 +49,8 @@ export interface IssueChatLinkedRun {
   logBytes?: number | null;
   usageJson?: Record<string, unknown> | null;
   resultJson?: Record<string, unknown> | null;
+  error?: string | null;
+  errorCode?: string | null;
 }
 
 export interface IssueChatTranscriptEntry {

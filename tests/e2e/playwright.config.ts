@@ -49,7 +49,7 @@ export default defineConfig({
     // never attach to the developer's active Paperclip home/server. Local
     // iteration against an intentionally re-used server can opt back in.
     reuseExistingServer: process.env.PAPERCLIP_E2E_REUSE_EXISTING_SERVER === "1",
-    timeout: Number(process.env.PAPERCLIP_E2E_WEBSERVER_TIMEOUT ?? 120_000),
+    timeout: Number(process.env.PAPERCLIP_E2E_WEBSERVER_TIMEOUT_MS ?? 120_000),
     stdout: "pipe",
     stderr: "pipe",
     env: {
