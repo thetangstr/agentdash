@@ -3,6 +3,7 @@ import { Sparkles } from "lucide-react";
 import type { Message } from "../api/conversations";
 import { CardRenderer, type CardContext } from "./cards";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { displayMaskedSecrets } from "../lib/redactSecrets";
 
 export function MessageList({
   messages,
@@ -33,7 +34,9 @@ export function MessageList({
       {visible.map((m) => {
         const author = m.role ?? m.authorKind;
         const isAgent = author === "agent";
-        const text = m.content ?? m.body ?? "";
+        // c3-a11y review: stored text can carry any of the server mask
+        // spellings; one display mask for both bubbles.
+        const text = displayMaskedSecrets(m.content ?? m.body ?? "");
         const timeStr = new Date(m.createdAt).toLocaleTimeString([], {
           hour: "2-digit",
           minute: "2-digit",

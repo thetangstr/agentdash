@@ -157,7 +157,9 @@ export function getAdapterLabel(type: string): string {
  * available as the hover title.
  */
 export function plainRuntimeLabel(type: string): string {
-  if (type.endsWith("_local") || type === "cursor") return "Runs on your workspace server";
+  // AgentDash (c3-a11y): "workspace server" truncated mid-phrase inside the
+  // Team list's 9rem column; this fits and says the same thing.
+  if (type.endsWith("_local") || type === "cursor") return "Runs on your server";
   if (type === "openclaw_gateway" || type === "http") return "Runs on another service";
   return getAdapterLabel(type);
 }

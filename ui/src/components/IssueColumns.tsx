@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { Issue } from "@paperclipai/shared";
-import { Columns3 } from "lucide-react";
+// AgentDash (c3-a11y review): TableProperties, not Columns3 — the Board-view
+// toggle already uses Columns3 and the two read as the same icon.
+import { TableProperties } from "lucide-react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Button } from "@/components/ui/button";
 import {
@@ -90,7 +92,7 @@ export function IssueColumnPicker({
           className={iconOnly ? "h-8 w-8 shrink-0" : "hidden h-8 shrink-0 px-2 text-xs sm:inline-flex"}
           title="Columns"
         >
-          <Columns3 className={iconOnly ? "h-3.5 w-3.5" : "mr-1 h-3.5 w-3.5"} />
+          <TableProperties className={iconOnly ? "h-3.5 w-3.5" : "mr-1 h-3.5 w-3.5"} />
           {!iconOnly && "Columns"}
         </Button>
       </DropdownMenuTrigger>

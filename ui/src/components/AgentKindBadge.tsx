@@ -58,11 +58,21 @@ export function agentKindExplanation(agent: Pick<Agent, "autonomy" | "accountabl
   }
 }
 
-const LABELS: Record<AgentKind, string> = {
-  autonomous: "Autonomous",
-  stewarded: "Stewarded",
-  unpaired: "Needs a steward",
-};
+// AgentDash (c3-a11y): the badge says what the kind *means*, not the enum —
+// "Stewarded"/"Autonomous" read as jargon to someone meeting the list cold.
+// The enum names stay in data-testids; the words are for humans.
+function kindLabel(agent: Pick<Agent, "autonomy" | "accountable">): string {
+  switch (agentKind(agent)) {
+    case "autonomous":
+      return "Runs solo";
+    case "stewarded": {
+      const who = accountableLabel(agent);
+      return who ? `Run by ${who}` : "Run by a person";
+    }
+    case "unpaired":
+      return "No one runs it yet";
+  }
+}
 
 const STYLES: Record<AgentKind, string> = {
   // Distinct from the muted "Not scheduled" pill and from the destructive
@@ -100,7 +110,7 @@ export function AgentKindBadge({
   const kind = agentKind(agent);
   const unaccountable = hideUnpaired && kind === "unpaired";
   const testId = unaccountable ? "agent-kind-unaccountable" : `agent-kind-${kind}`;
-  const label = unaccountable ? "No one accountable" : LABELS[kind];
+  const label = unaccountable ? "No one accountable" : kindLabel(agent);
   const style = unaccountable ? "border-border text-muted-foreground" : STYLES[kind];
   const explanation = unaccountable
     ? "Nobody is accountable for this agent yet. Make it autonomous and choose the person who answers for it on its page."
@@ -117,7 +127,7 @@ export function AgentKindBadge({
           <span
             data-testid={testId}
             className={cn(
-              "cursor-default whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+              "inline-block max-w-44 cursor-default truncate whitespace-nowrap rounded-full border px-2 py-0.5 align-middle text-[10px] font-medium tracking-wide",
               style,
               className,
             )}

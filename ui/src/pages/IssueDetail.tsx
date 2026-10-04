@@ -1321,6 +1321,24 @@ export function IssueDetail() {
     selectedCompanyId
     && boardAccess?.companyIds?.includes(selectedCompanyId),
   );
+  // AgentDash (c3-a11y review): the Accept / Request changes actions appear
+  // only under these exact conditions (same as IssueResultBlock). A document's
+  // Helpful / Needs work thumbs are a competing vocabulary ONLY then, and only
+  // on the document that deliverable binds to — so the gate is worked out once
+  // here and handed down, not re-derived loosely in the documents section.
+  const { data: shippedForReview } = useQuery({
+    queryKey: queryKeys.shipped(issue?.companyId ?? "", { issueId: issue?.id ?? "" }),
+    queryFn: () => issuesApi.listShipped(issue!.companyId, { issueId: issue!.id }),
+    enabled: !!issue && canManageTreeControl,
+  });
+  const awaitingReview = Boolean(
+    canManageTreeControl
+    && issue
+    && issue.status !== "done"
+    && issue.status !== "cancelled"
+    && !hasLiveRuns
+    && (shippedForReview?.items ?? []).some((product) => product.status === "ready_for_review"),
+  );
   const { data: feedbackVotes } = useQuery({
     queryKey: queryKeys.issues.feedbackVotes(issueId!),
     queryFn: () => issuesApi.listFeedbackVotes(issueId!),
@@ -3645,6 +3663,7 @@ export function IssueDetail() {
       <IssueDocumentsSection
         issue={issue}
         canDeleteDocuments={Boolean(session?.user?.id)}
+        awaitingReview={awaitingReview}
         feedbackVotes={feedbackVotes}
         feedbackDataSharingPreference={feedbackDataSharingPreference}
         feedbackTermsUrl={FEEDBACK_TERMS_URL}

@@ -394,6 +394,29 @@ describe("IssueProperties", () => {
     act(() => root.unmount());
   });
 
+  // AgentDash (c3-a11y): the arrow links in the Properties pickers are
+  // icon-only — they must announce where they go.
+  it("names the assignee arrow link after the assigned agent", async () => {
+    mockAgentsApi.list.mockResolvedValue([
+      { id: "agent-1", name: "Maya", role: "engineer" },
+    ]);
+
+    const root = renderProperties(container, {
+      issue: createIssue({ assigneeAgentId: "agent-1" }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+    });
+    await flush();
+    // A second flush so the agents query has resolved before we look for the name.
+    await flush();
+
+    const link = container.querySelector('a[aria-label="Open agent Maya"]');
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("href")).toBe("/agents/agent-1");
+
+    act(() => root.unmount());
+  });
+
   it("passes blocker attention to the sidebar status icon", async () => {
     const root = renderProperties(container, {
       issue: createIssue({

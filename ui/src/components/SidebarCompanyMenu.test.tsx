@@ -155,6 +155,39 @@ describe("SidebarCompanyMenu", () => {
     });
   });
 
+  it("lets the trigger shrink so a long workspace name ellipsizes instead of pushing the chevron off", async () => {
+    mockState.selectedCompany = {
+      ...mockState.selectedCompany,
+      name: "Tanaka Family Travel Holdings Co. Ltd.",
+    };
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarCompanyMenu />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    const trigger = container.querySelector('button[aria-label="Open Tanaka Family Travel Holdings Co. Ltd. menu"]');
+    expect(trigger).not.toBeNull();
+    // Without min-w-0 the flex-1 button refuses to shrink below its content
+    // width and the name clips with no ellipsis.
+    expect(trigger!.className).toContain("min-w-0");
+    expect(trigger!.className).toContain("flex-1");
+    // The dropdown chevron stays visible at the edge.
+    const chevron = trigger!.querySelector("svg");
+    expect(chevron).not.toBeNull();
+    expect(chevron!.classList.contains("shrink-0")).toBe(true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   // UX-6 review (#787): the hidden rail's "Add company" path survives here —
   // self-hosted single-company only. Hosted boxes bind exactly one workspace,
   // and a multi-company user still has the rail's own button.

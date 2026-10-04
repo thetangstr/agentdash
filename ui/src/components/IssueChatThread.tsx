@@ -611,7 +611,7 @@ const IssueChatTextPart = memo(function IssueChatTextPart({ text, recessed }: { 
       softBreaks
       onImageClick={onImageClick}
     >
-      {text}
+      {redactSecrets(text)}
     </MarkdownBody>
   );
 });
