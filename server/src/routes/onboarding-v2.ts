@@ -905,6 +905,7 @@ export function onboardingV2Routes(db: Db) {
         // and there is nothing left to approve.
         if (awaitingApproval.length === 0) throw consumedHire(previousHire);
         const approvalIds: string[] = [];
+        let filedCount = 0;
         for (const hired of awaitingApproval) {
           const open = await retryApprovals.listPendingHireApprovalsForAgent(companyId, hired.id);
           if (open.length > 0) {
@@ -912,33 +913,39 @@ export function onboardingV2Routes(db: Db) {
             continue;
           }
           approvalIds.push(await fileHireApproval(hired));
+          filedCount++;
         }
         // AgentDash (review-1025 item 3): the repair path finishes the same
         // post-hire bookkeeping the first confirm would have — the hires are
         // only usefully "sent for approval" once the CoS has said so, the
         // phase has moved, and the goals exist.
-        const cos = (await retryAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
-        if (cos && !alreadyReady) await conversations.postMessage({
-          conversationId, authorKind: 'agent', authorId: cos.id,
-          body: 'Your hires are waiting on board approval — I have sent each one to Approvals. They will join the team as they are approved.',
-        });
-        else if (cos) await conversations.postMessage({
-          conversationId, authorKind: 'agent', authorId: cos.id,
-          body: 'Those hires are waiting on board approval — I have sent each one to Approvals.',
-        });
-        await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
-        if (cos && !alreadyReady) {
-          try {
-            await materializeOnboardingGoals({ db })({
-              conversationId,
-              companyId,
-              ownerAgentId: cos.id,
-            });
-          } catch (err) {
-            logger.error(
-              { err, conversationId, companyId, cosAgentId: cos.id },
-              "[onboarding-v2] materializeOnboardingGoals failed; continuing with agent materialization",
-            );
+        // AgentDash (cos-followups-2 item 2): a retry that filed nothing and
+        // found the conversation already `ready` repaired nothing — it must
+        // not repost the CoS message or rematerialize goals a second time.
+        if (filedCount > 0 || !alreadyReady) {
+          const cos = (await retryAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
+          if (cos && !alreadyReady) await conversations.postMessage({
+            conversationId, authorKind: 'agent', authorId: cos.id,
+            body: 'Your hires are waiting on board approval — I have sent each one to Approvals. They will join the team as they are approved.',
+          });
+          else if (cos) await conversations.postMessage({
+            conversationId, authorKind: 'agent', authorId: cos.id,
+            body: 'Those hires are waiting on board approval — I have sent each one to Approvals.',
+          });
+          await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
+          if (cos && !alreadyReady) {
+            try {
+              await materializeOnboardingGoals({ db })({
+                conversationId,
+                companyId,
+                ownerAgentId: cos.id,
+              });
+            } catch (err) {
+              logger.error(
+                { err, conversationId, companyId, cosAgentId: cos.id },
+                "[onboarding-v2] materializeOnboardingGoals failed; continuing with agent materialization",
+              );
+            }
           }
         }
         res.status(200).json({
@@ -954,7 +961,11 @@ export function onboardingV2Routes(db: Db) {
     if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
     const accepted = await acceptOnboardingHires(companyId, conversationId, receiptKey, payload.agents.length, res, async (acceptance, index) => {
       const txAgents = agentService(acceptance.executor);
-      if (index === 0) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
+      // AgentDash (cos-followups-2 item 1): only onboarding moves through
+      // `materializing` — rewinding a `ready` conversation on a steady-state
+      // hire strands the phase mid-flow if a later step fails, and the retry
+      // would then replay the onboarding message and goals.
+      if (index === 0 && !alreadyReady) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
       const cos = (await txAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
       const planAgent = payload.agents[index];
       // AgentDash (scan 3, lane H): plan hires answer to the human who confirmed
@@ -1221,7 +1232,7 @@ ${kpis || "- (none captured)"}
     // agents[]) can't masquerade as part of the operator's instructions.
     // Trust boundary: only the static text below is "system"; everything
     // user-controlled is a user turn.
-    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, pendingApproval: _pendingApproval, requesterUserId: priorRequesterUserId, ...priorPlan } = priorPayload;
+    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, pendingApproval: _pendingApproval, approvalRejected: _approvalRejected, requesterUserId: priorRequesterUserId, ...priorPlan } = priorPayload;
     const priorPlanJson = JSON.stringify(priorPlan, null, 2);
     const userRevision = revisionText.trim();
     // AgentDash (scan 4, lane N): never name an agent after a member.
@@ -1285,7 +1296,7 @@ No greetings. No markdown headings outside the JSON block.`;
     // model never saw the prior card's value (stripped above) and any it
     // invents is dropped — the revised card belongs to whoever asked for the
     // original team.
-    const { requesterUserId: _modelRequester, pendingApproval: _modelPendingApproval, ...planSansRequester } = modelPlan;
+    const { requesterUserId: _modelRequester, pendingApproval: _modelPendingApproval, approvalRejected: _modelApprovalRejected, ...planSansRequester } = modelPlan;
     const newPlan: AgentPlanProposalV1Payload = priorRequesterUserId
       ? { ...planSansRequester, requesterUserId: priorRequesterUserId }
       : planSansRequester;

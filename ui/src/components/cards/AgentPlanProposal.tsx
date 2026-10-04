@@ -19,6 +19,10 @@ export const PLAN_HIRED_LABEL = "Team hired ✓";
 // approval, "Team hired" would claim a team that cannot work yet — the
 // response's pendingApproval switches the label to the honest state.
 export const PLAN_SENT_FOR_APPROVAL_LABEL = "Sent for approval";
+// AgentDash (cos-followups-2 item 4): the approval service stamps
+// approvalRejected on the card when a board rejects a hire — "Team hired"
+// must not return once "Sent for approval" resolved to a no.
+export const PLAN_NOT_APPROVED_LABEL = "Not approved";
 export const PLAN_SUPERSEDED_NOTE = "A newer plan below replaced this one.";
 
 function conflictDetails(err: ApiError): Record<string, unknown> | null {
@@ -95,8 +99,16 @@ export function AgentPlanProposal({
   // answering it) says the team already exists.
   const hired = hiredHere || (typeof payload?.confirmedAt === "string" && payload.confirmedAt.length > 0);
   // Awaiting the board: this click returned pendingApproval, or the card was
-  // persisted that way — the label survives a reload and other tabs.
-  const awaitingApproval = sentForApproval || payload?.pendingApproval === true;
+  // persisted that way — the label survives a reload and other tabs. When
+  // the server has since written a decided value onto the card (the
+  // realtime update clears pendingApproval once every hire is decided), it
+  // wins over the click-time flag so the tab shows the outcome.
+  const awaitingApproval = typeof payload?.pendingApproval === "boolean"
+    ? payload.pendingApproval
+    : sentForApproval;
+  // A rejection landed on a decided card; while approvals still wait the
+  // "Sent for approval" label is the honest one.
+  const notApproved = payload?.approvalRejected === true;
 
   async function confirm() {
     if (hired || confirming) return;
@@ -226,7 +238,11 @@ export function AgentPlanProposal({
             disabled
             aria-disabled="true"
           >
-            {awaitingApproval ? PLAN_SENT_FOR_APPROVAL_LABEL : PLAN_HIRED_LABEL}
+            {awaitingApproval
+              ? PLAN_SENT_FOR_APPROVAL_LABEL
+              : notApproved
+                ? PLAN_NOT_APPROVED_LABEL
+                : PLAN_HIRED_LABEL}
           </button>
           <button
             type="button"
