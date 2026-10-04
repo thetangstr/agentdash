@@ -36,6 +36,11 @@ export const assistantMessages = pgTable(
     // messages and rows from before this column). The Retry route only
     // re-dispatches a message for the person who wrote it.
     authorUserId: text("author_user_id"),
+    // AgentDash: the agent that wrote an agent message (null for user messages
+    // and rows from before this column). The company inbox is shared — the
+    // conversation's assistantAgentId cannot attribute replies between the CoS
+    // and summoned teammates, so the author lives on the message.
+    authorAgentId: uuid("author_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

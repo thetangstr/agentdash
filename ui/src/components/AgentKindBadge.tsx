@@ -1,4 +1,5 @@
 import type { Agent } from "@paperclipai/shared";
+import { runsOnWorkspaceServer } from "../adapters/adapter-display-registry";
 import {
   Tooltip,
   TooltipContent,
@@ -44,7 +45,9 @@ export function accountableLabel(agent: Pick<Agent, "accountable">): string | nu
  * different explanations of the same word is how a product teaches two
  * different meanings.
  */
-export function agentKindExplanation(agent: Pick<Agent, "autonomy" | "accountable">): string {
+export function agentKindExplanation(
+  agent: Pick<Agent, "autonomy" | "accountable"> & Partial<Pick<Agent, "adapterType">>,
+): string {
   const who = accountableLabel(agent);
   switch (agentKind(agent)) {
     case "autonomous":
@@ -52,7 +55,13 @@ export function agentKindExplanation(agent: Pick<Agent, "autonomy" | "accountabl
         ? `Works on its own — no person runs it, and it has no connect code or key. ${who} is accountable for what it does.`
         : "Works on its own — no person runs it, and it has no connect code or key.";
     case "stewarded":
-      return `${who ?? "One person"} runs this agent from their own terminal, and answers for what it does. One person, one agent.`;
+      // AgentDash (canary c3): a stewarded agent on a workspace adapter — the
+      // hosted Chief of Staff is one — runs on the workspace's machine, so
+      // "runs it from their own terminal" is false. What stays true is who
+      // answers for it.
+      return runsOnWorkspaceServer(agent.adapterType)
+        ? `${who ?? "One person"} answers for what this agent does. It runs on your workspace server.`
+        : `${who ?? "One person"} runs this agent from their own terminal, and answers for what it does. One person, one agent.`;
     case "unpaired":
       return "Meant to be run by one person, but nobody is paired with it yet: no My Agent page, no connect code, and escalations from it reach no one. Assign a steward, or make it autonomous.";
   }
@@ -96,7 +105,7 @@ export function AgentKindBadge({
   className,
   hideUnpaired = false,
 }: {
-  agent: Pick<Agent, "autonomy" | "accountable">;
+  agent: Pick<Agent, "autonomy" | "accountable"> & Partial<Pick<Agent, "adapterType">>;
   className?: string;
   /**
    * AgentDash (canary1, v2026.1002.1): set where the workspace cannot assign

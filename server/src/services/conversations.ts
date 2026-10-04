@@ -178,6 +178,10 @@ export function conversationService(db: Db) {
           role: input.authorKind,
           // AgentDash: remember who wrote a person's message (Retry is theirs only).
           authorUserId: input.authorKind === "user" ? input.authorId : null,
+          // AgentDash: remember which agent wrote an agent message — the shared
+          // company inbox has no per-agent conversation link, so this is what
+          // the agent page's chat tally counts.
+          authorAgentId: input.authorKind === "agent" ? input.authorId : null,
           // AgentDash (GH #992): agent-authored text persists redacted.
           content: input.authorKind === "agent" ? redactRunLogText(input.body) : input.body,
           cardKind: input.cardKind ?? null,

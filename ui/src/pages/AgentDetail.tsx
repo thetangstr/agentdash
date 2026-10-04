@@ -1567,6 +1567,7 @@ export function AgentRunHealthNote({ runs }: { runs: HeartbeatRun[] }) {
  */
 export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth }) {
   const chatTurns = runHealth.chatTurns ?? 0;
+  const chatTurnsThisMonth = runHealth.chatTurnsThisMonth ?? 0;
   // Only the operator cancel route stamps "cancelled_by_operator" — system
   // cancellations (budget pause, quota, subtree hold, comment interrupt)
   // share the generic "cancelled" code and read neutral with their reason.
@@ -1578,9 +1579,11 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
       <h3 className="text-sm font-semibold">What its runs show</h3>
       {runHealth.neverRan ? (
         <p className="mt-1 text-sm text-muted-foreground">
-          {chatTurns > 0
-            ? `No runs yet — this agent has answered ${chatTurns} chat message${chatTurns === 1 ? "" : "s"}.`
-            : "This agent has never run. Nothing here is broken yet — and nothing here works yet either."}
+          {chatTurnsThisMonth > 0
+            ? `No runs yet — answered ${chatTurnsThisMonth} chat message${chatTurnsThisMonth === 1 ? "" : "s"} this month.`
+            : chatTurns > 0
+              ? `No runs yet — answered ${chatTurns} chat message${chatTurns === 1 ? "" : "s"}, none this month.`
+              : "This agent has never run. Nothing here is broken yet — and nothing here works yet either."}
         </p>
       ) : (
         <>
@@ -1599,7 +1602,11 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
             >
               {runHealth.succeededWithoutEvidence} succeeded without leaving anything
             </span>
-            {chatTurns > 0 ? (
+            {chatTurnsThisMonth > 0 ? (
+              <span className="text-muted-foreground">
+                Answered {chatTurnsThisMonth} chat message{chatTurnsThisMonth === 1 ? "" : "s"} this month
+              </span>
+            ) : chatTurns > 0 ? (
               <span className="text-muted-foreground">
                 {chatTurns} chat message{chatTurns === 1 ? "" : "s"} answered
               </span>

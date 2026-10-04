@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  agents,
   assistantConversationParticipants,
   assistantConversations,
   assistantMessages,
@@ -36,6 +37,13 @@ async function insertTestUser(db: ReturnType<typeof createDb>) {
   }).onConflictDoNothing();
 }
 
+// author_agent_id is a uuid FK — an agent message needs a real agent row.
+async function insertTestAgent(db: ReturnType<typeof createDb>, companyId: string, name = "Test Agent") {
+  const id = randomUUID();
+  await db.insert(agents).values({ id, companyId, name, role: "general" });
+  return id;
+}
+
 describeEmbeddedPostgres("conversationService", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
@@ -45,12 +53,15 @@ describeEmbeddedPostgres("conversationService", () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-conversations-service-");
     db = createDb(tempDb.connectionString);
     service = conversationService(db);
-  }, 20_000);
+    // initdb + full migration replay can exceed the helper's own 60/60/120s
+    // internal bounds on a loaded box, so the hook must outlive that chain.
+  }, 300_000);
 
   afterEach(async () => {
     await db.delete(assistantConversationParticipants);
     await db.delete(assistantMessages);
     await db.delete(assistantConversations);
+    await db.delete(agents);
     await db.delete(companies);
     await db.delete(authUsers);
   });
@@ -169,11 +180,12 @@ describeEmbeddedPostgres("conversationService", () => {
   it("postMessage persists card_kind and card_payload when provided", async () => {
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const agentId = await insertTestAgent(db, companyId);
     const conversation = await service.create({ companyId, userId: TEST_USER_ID });
     const msg = await service.postMessage({
       conversationId: conversation.id,
       authorKind: "agent",
-      authorId: "agent-1",
+      authorId: agentId,
       body: "Here is a proposal",
       cardKind: "proposal_card_v1",
       cardPayload: { name: "Reese", role: "SDR", oneLineOkr: "Close 10 deals", rationale: "Strong pipeline" },
@@ -202,11 +214,12 @@ describeEmbeddedPostgres("conversationService", () => {
     const canary = "provk-chat-canary-7f3a9c2d4e5ab6c78d9e0f1a2b3c4d5e";
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const agentId = await insertTestAgent(db, companyId, "Chief of Staff");
     const conversation = await service.create({ companyId, userId: TEST_USER_ID });
     await service.postMessage({
       conversationId: conversation.id,
       authorKind: "agent",
-      authorId: "cos-1",
+      authorId: agentId,
       body: `the key is api_key=${canary}`,
     });
     await service.postMessage({
@@ -238,11 +251,12 @@ describeEmbeddedPostgres("conversationService", () => {
     const canary = "provk-card-canary-9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a";
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    const agentId = await insertTestAgent(db, companyId, "Chief of Staff");
     const conversation = await service.create({ companyId, userId: TEST_USER_ID });
     const agentMsg = await service.postMessage({
       conversationId: conversation.id,
       authorKind: "agent",
-      authorId: "cos-1",
+      authorId: agentId,
       body: "proposal",
       cardKind: "issue_proposal_v1",
       cardPayload: { title: "Task", description: `uses api_key=${canary}`, status: "pending" },

@@ -159,9 +159,20 @@ export function getAdapterLabel(type: string): string {
 export function plainRuntimeLabel(type: string): string {
   // AgentDash (c3-a11y): "workspace server" truncated mid-phrase inside the
   // Team list's 9rem column; this fits and says the same thing.
-  if (type.endsWith("_local") || type === "cursor") return "Runs on your server";
+  if (runsOnWorkspaceServer(type)) return "Runs on your server";
   if (type === "openclaw_gateway" || type === "http") return "Runs on another service";
   return getAdapterLabel(type);
+}
+
+/**
+ * True when the adapter executes on the machine this workspace runs on (the
+ * owner's computer self-hosted, our hosted server on agentdash.cloud) — as
+ * opposed to a terminal or service the agent's steward connects themselves.
+ * AgentDash (canary c3): the ownership explanation needs this so a stewarded
+ * agent on a workspace adapter is not described as "run from a terminal".
+ */
+export function runsOnWorkspaceServer(type: string | null | undefined): boolean {
+  return typeof type === "string" && (type.endsWith("_local") || type === "cursor");
 }
 
 export function getAdapterLabels(): Record<string, string> {

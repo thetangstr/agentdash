@@ -67,6 +67,15 @@ describe("agentKindExplanation", () => {
     expect(agentKindExplanation(stewarded)).toMatch(/Ada runs this agent/);
   });
 
+  // AgentDash (canary c3): the hosted Chief of Staff is stewarded but runs on
+  // the workspace server — "runs from their own terminal" was false there.
+  it("describes a stewarded agent on a workspace adapter as server-run, not terminal-run", () => {
+    const text = agentKindExplanation({ ...stewarded, adapterType: "claude_local" });
+    expect(text).toMatch(/Ada answers for what this agent does/);
+    expect(text).toMatch(/workspace server/);
+    expect(text).not.toMatch(/own terminal/);
+  });
+
   it("tells someone what to do about an unpaired agent", () => {
     // An explanation of a broken state that does not say how to fix it leaves
     // the reader exactly where they started.

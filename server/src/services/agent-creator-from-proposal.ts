@@ -139,7 +139,11 @@ export function agentCreatorFromProposal(deps: Deps) {
 // status values ("in_review"), "DoD", "board user", "document key" or "work
 // product". Batch 2 strengthened the canonical block: no internal record
 // names ("work product record") and never "complete" or "done" while a change
-// only awaits review. Proposal-created hires add nothing to that.
+// only awaits review. c3-cos strengthened it again: never narrate a status
+// transition ("moving the issue to in_review"), never stack states ("done and
+// ready for review"), and never paste runtime lines (tool output, scanner
+// warnings) into what a person reads. Proposal-created hires add nothing to
+// that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.

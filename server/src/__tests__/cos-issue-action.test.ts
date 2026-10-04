@@ -20,6 +20,13 @@ const otherCompanyId = "22222222-2222-4222-8222-222222222222";
 const agentId = "33333333-3333-4333-8333-333333333333";
 const hiddenAgentId = "66666666-6666-4666-8666-666666666666";
 const cosAgentId = "44444444-4444-4444-8444-444444444444";
+// Pat is paused — still on the roster, never assignable. A real UUID so the
+// assigneeAgentId schema check does not refuse the trailer before the
+// assignable-status gate runs.
+const patId = "99999999-9999-4999-8999-999999999999";
+// Scout sat in `error` on the canary and the roster dropped him outright —
+// the prompt never knew he existed.
+const scoutId = "12121212-1212-4212-8212-121212121212";
 const conversationId = "55555555-5555-4555-8555-555555555555";
 const triggerMessageId = "77777777-7777-4777-8777-777777777777";
 const cardMessageId = "88888888-8888-4888-8888-888888888888";
@@ -41,7 +48,8 @@ const agentsById: Record<string, any> = {
   [agentId]: { id: agentId, companyId, name: "Ellie", role: "general", title: "Proposal Drafter", status: "idle" },
   [hiddenAgentId]: { id: hiddenAgentId, companyId, name: "Owner-only Olive", role: "general", status: "idle" },
   [cosAgentId]: { id: cosAgentId, companyId, name: "Chief of Staff", role: "chief_of_staff", status: "idle" },
-  p: { id: "p", companyId, name: "Pat", role: "general", status: "paused" },
+  [patId]: { id: patId, companyId, name: "Pat", role: "general", status: "paused" },
+  [scoutId]: { id: scoutId, companyId, name: "Scout", role: "general", status: "error" },
 };
 
 function requester(userId = founder, visible: string[] | null = null): CosIssueRequester {
@@ -136,17 +144,30 @@ describe("parseCreateIssueTrailer", () => {
 });
 
 describe("cosIssueAction.roster", () => {
-  it("lists agents this person can see and give work to, never the CoS", async () => {
+  it("lists agents this person can see, never the CoS", async () => {
     const { deps } = makeDeps();
     await expect(cosIssueAction(deps).roster(companyId, requester(founder, [agentId, cosAgentId]), cosAgentId)).resolves.toEqual([
-      { id: agentId, name: "Ellie", role: "Proposal Drafter" },
+      { id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true },
     ]);
   });
 
-  it("lists every active agent but the CoS when the person sees all agents", async () => {
+  // AgentDash (canary c3): a teammate in error or paused still exists — the
+  // CoS named everyone but Scout because the roster dropped non-assignable
+  // statuses. They are listed, flagged, and still unassignable.
+  it("lists every agent but the CoS when the person sees all agents, flagging who cannot take work", async () => {
     const { deps } = makeDeps();
     const roster = await cosIssueAction(deps).roster(companyId, requester(), cosAgentId);
-    expect(roster.map((a) => a.id)).toEqual([agentId, hiddenAgentId]);
+    expect(roster.map((a) => a.id)).toEqual([agentId, hiddenAgentId, patId, scoutId]);
+    expect(roster.find((a) => a.id === patId)).toMatchObject({ name: "Pat", canTakeWork: false });
+    // The canary case: Scout in `error` stays on the roster, unassignable.
+    expect(roster.find((a) => a.id === scoutId)).toMatchObject({ name: "Scout", canTakeWork: false });
+  });
+
+  it("still refuses to propose work for a teammate who cannot take work", async () => {
+    const { deps } = makeDeps();
+    const result = await propose(deps, { trailer: trailer({ assigneeAgentId: patId }) });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.note).toBe(COS_ISSUE_NOTES.inactiveAssignee("Pat"));
   });
 
   it("is empty without a person", async () => {

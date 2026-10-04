@@ -8,7 +8,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, assistantConversations, assistantMessages, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, count, desc, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, not, or, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -754,6 +754,12 @@ export function agentRoutes(
     // every message all day still reports total: 0. Count its agent-authored
     // replies so "never run" does not claim the agent did nothing, and the
     // month count lets the spend read "Billed by your model provider" (BYOK).
+    //
+    // Attribution is per message: the company inbox is one shared conversation
+    // whose assistantAgentId is null, so replies by the CoS and by summoned
+    // teammates can only be told apart by the message's author_agent_id. Rows
+    // from before that column still count through a conversation owned by the
+    // agent (the old 1:1 conversations did set assistantAgentId).
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
@@ -769,7 +775,13 @@ export function agentRoutes(
       )
       .where(and(
         eq(assistantMessages.role, "agent"),
-        eq(assistantConversations.assistantAgentId, agentId),
+        or(
+          eq(assistantMessages.authorAgentId, agentId),
+          and(
+            isNull(assistantMessages.authorAgentId),
+            eq(assistantConversations.assistantAgentId, agentId),
+          ),
+        ),
       ));
     const chatTurns = Number(chatTally?.total ?? 0);
     const chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);

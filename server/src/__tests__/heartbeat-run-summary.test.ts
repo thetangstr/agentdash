@@ -95,4 +95,69 @@ describe("mergeHeartbeatRunResultJson", () => {
       stdout: "raw stdout",
     });
   });
+
+  // AgentDash (canary): the Hermes adapter picks cleaned stdout as its
+  // response, so a leading runtime warning became the persisted run summary.
+  // A status line is never the summary.
+  it("strips a leading runtime warning from the adapter summary", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\r\nMoved the ticket to review and posted the diff for the reviewer.",
+      ),
+    ).toEqual({
+      summary: "Moved the ticket to review and posted the diff for the reviewer.",
+    });
+  });
+
+  it("drops a summary that was only a status line", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\r\n",
+      ),
+    ).toBeNull();
+    expect(
+      mergeHeartbeatRunResultJson(
+        { summary: "⚠ scanner unavailable", result: "real output" },
+        null,
+      ),
+    ).toEqual({ result: "real output" });
+  });
+
+  it("strips chatter from a summary already inside resultJson", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        { summary: "✓ loading tools\r\nAll 42 checks pass.", stdout: "raw" },
+        "ignored fallback",
+      ),
+    ).toEqual({ summary: "All 42 checks pass.", stdout: "raw" });
+  });
+
+  it("leaves a warning mid-summary alone — only a leading run is chatter", () => {
+    const text = "Deployed the fix.\n⚠ scanner unavailable";
+    expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
+  });
+});
+
+describe("summarizeHeartbeatRunResultJson status lines", () => {
+  it("never serves a leading status line as the summary", () => {
+    const summary = summarizeHeartbeatRunResultJson({
+      summary: "⚠ tirith security scanner enabled but not available",
+      result: "real output",
+    });
+
+    expect(summary).toEqual({ result: "real output" });
+  });
+});
+
+describe("buildHeartbeatRunIssueComment status lines", () => {
+  it("skips a chatter-only summary and falls back to the result", () => {
+    expect(
+      buildHeartbeatRunIssueComment({
+        summary: "✓ session resumed\r\n",
+        result: "Shipped the fix.",
+      }),
+    ).toBe("Shipped the fix.");
+  });
 });
