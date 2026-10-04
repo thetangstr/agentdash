@@ -310,7 +310,7 @@ export function InstanceExperimentalSettings() {
             <div className="space-y-1.5">
               <h2 className="text-sm font-semibold">Auto-Restart Dev Server When Idle</h2>
               <p className="max-w-2xl text-sm text-muted-foreground">
-                In <code className="rounded bg-muted px-1 py-0.5 text-[0.85em]">pnpm dev:once</code>, wait for all
+                In <code className="rounded bg-muted px-1 py-0.5">pnpm dev:once</code>, wait for all
                 queued and running local agent runs to finish, then restart the server automatically when backend
                 changes or migrations make the current boot stale.
               </p>
