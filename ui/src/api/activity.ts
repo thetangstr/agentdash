@@ -14,6 +14,8 @@ export interface RunForIssue {
   invocationSource: string;
   usageJson: Record<string, unknown> | null;
   resultJson: Record<string, unknown> | null;
+  error?: string | null;
+  errorCode?: string | null;
   logBytes?: number | null;
   retryOfRunId?: string | null;
   scheduledRetryAt?: string | null;
