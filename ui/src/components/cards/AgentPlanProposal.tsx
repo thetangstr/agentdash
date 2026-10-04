@@ -13,9 +13,14 @@ export const PLAN_HIRED_LABEL = "Team hired ✓";
 export const PLAN_SENT_FOR_APPROVAL_LABEL = "Sent for approval";
 export const PLAN_SUPERSEDED_NOTE = "A newer plan below replaced this one.";
 
+function conflictDetails(err: ApiError): Record<string, unknown> | null {
+  const details = (err.body as { details?: unknown } | null)?.details;
+  return details && typeof details === "object" ? (details as Record<string, unknown>) : null;
+}
+
 function conflictCode(err: ApiError): string | null {
-  const details = (err.body as { details?: { code?: unknown } } | null)?.details;
-  return typeof details?.code === "string" ? details.code : null;
+  const code = conflictDetails(err)?.code;
+  return typeof code === "string" ? code : null;
 }
 
 const ROLE_LABELS = AGENT_ROLE_LABELS as Record<string, string>;
@@ -81,6 +86,9 @@ export function AgentPlanProposal({
   // Hired: the server marked the card (confirmedAt), or this click (or a 409
   // answering it) says the team already exists.
   const hired = hiredHere || (typeof payload?.confirmedAt === "string" && payload.confirmedAt.length > 0);
+  // Awaiting the board: this click returned pendingApproval, or the card was
+  // persisted that way — the label survives a reload and other tabs.
+  const awaitingApproval = sentForApproval || payload?.pendingApproval === true;
 
   async function confirm() {
     if (hired || confirming) return;
@@ -94,7 +102,14 @@ export function AgentPlanProposal({
       if (err instanceof ApiError && err.status === 409 && conflictCode(err) === "superseded_plan") {
         setSupersededHere(true);
       } else if (err instanceof ApiError && err.status === 409) {
-        setHiredHere(true);
+        // A 409 carrying details.repair is the repair contract, not "the team
+        // exists" — show what the server said instead of claiming "Team
+        // hired".
+        if (typeof conflictDetails(err)?.repair === "string") {
+          setConfirmError(err.message || "Couldn't set up the team. Try again.");
+        } else {
+          setHiredHere(true);
+        }
       } else {
         setConfirmError(err instanceof Error && err.message ? err.message : "Couldn't set up the team. Try again.");
       }
@@ -190,7 +205,7 @@ export function AgentPlanProposal({
             disabled
             aria-disabled="true"
           >
-            {sentForApproval ? PLAN_SENT_FOR_APPROVAL_LABEL : PLAN_HIRED_LABEL}
+            {awaitingApproval ? PLAN_SENT_FOR_APPROVAL_LABEL : PLAN_HIRED_LABEL}
           </button>
           <button
             type="button"

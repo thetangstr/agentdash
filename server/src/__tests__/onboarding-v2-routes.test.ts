@@ -1122,6 +1122,61 @@ describe("POST /api/onboarding/confirm-plan", () => {
     );
   });
 
+  // AgentDash (review-1025 item 3): a repaired confirm still finishes the
+  // onboarding bookkeeping the first attempt would have — CoS message, phase
+  // advance, goal materialization — not just the approvals.
+  it("finishes the post-hire bookkeeping when a retry files the missing approvals", async () => {
+    const planPayload = {
+      rationale: "one hire",
+      agents: [
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+      ],
+      alignmentToShortTerm: "s",
+      alignmentToLongTerm: "l",
+    };
+    mockAgents.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "c1",
+      name: "Quinn",
+      status: "pending_approval",
+      metadata: {},
+    });
+    // Not already ready — the repair path owes the closing message and the
+    // goal materialization the first attempt never reached.
+    mockCosState.get.mockResolvedValue({ conversationId: "conv1", phase: "materializing" });
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    mockListPendingHireApprovals.mockResolvedValue([]);
+    mockApprovalCreate.mockImplementation(async (_companyId: string, data: any) => ({ id: "approval-retry", type: data.type }));
+
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{
+          id: "conv1",
+          companyId: "c1",
+          metadata: { agentdashAcceptedHires: { "plan:msg1": { attemptId: "a1", agentIds: ["agent-1"] } } },
+        }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+      { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: true }] },
+    );
+
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorId: "cos1",
+        body: expect.stringContaining("waiting on board approval"),
+      }),
+    );
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "ready");
+    expect(mockMaterializeOnboardingGoals).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "conv1", ownerAgentId: "cos1" }),
+    );
+  });
+
   it("returns the open approval on retry instead of filing a duplicate", async () => {
     const planPayload = {
       rationale: "one hire",
@@ -1162,20 +1217,22 @@ describe("POST /api/onboarding/confirm-plan", () => {
 
   it("keeps the repair contract when a receipt hire is still materializing", async () => {
     const planPayload = {
-      rationale: "one hire",
+      rationale: "two hires",
       agents: [
         { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+        { role: "design", name: "Rae", adapterType: "hermes_local", responsibilities: ["design"], kpis: ["ship"] },
       ],
       alignmentToShortTerm: "s",
       alignmentToLongTerm: "l",
     };
-    mockAgents.getById.mockResolvedValue({
-      id: "agent-1",
-      companyId: "c1",
-      name: "Quinn",
-      status: "paused",
-      metadata: { onboardingMaterialization: "pending" },
-    });
+    // AgentDash (review-1025 item 4): agent-1 is pending_approval and agent-2
+    // is still materializing — the retry must throw before filing agent-1's
+    // approval, or a repair leaves half the batch filed.
+    mockAgents.getById.mockImplementation(async (id: string) =>
+      id === "agent-1"
+        ? { id, companyId: "c1", name: "Quinn", status: "pending_approval", metadata: {} }
+        : { id, companyId: "c1", name: "Rae", status: "paused", metadata: { onboardingMaterialization: "pending" } },
+    );
     mockListPendingHireApprovals.mockResolvedValue([]);
 
     const app = buildApp(
@@ -1184,7 +1241,7 @@ describe("POST /api/onboarding/confirm-plan", () => {
         [{
           id: "conv1",
           companyId: "c1",
-          metadata: { agentdashAcceptedHires: { "plan:msg1": { attemptId: "a1", agentIds: ["agent-1"] } } },
+          metadata: { agentdashAcceptedHires: { "plan:msg1": { attemptId: "a1", agentIds: ["agent-1", "agent-2"] } } },
         }],
         [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
       ],
@@ -1196,6 +1253,8 @@ describe("POST /api/onboarding/confirm-plan", () => {
     // A paused mid-materialization hire cannot be activated by an approval —
     // the retry points at the repair path instead of filing one.
     expect(res.status).toBe(409);
+    expect(res.body.details?.repair).toEqual(expect.any(String));
+    expect(res.body.details?.agentIds).toEqual(["agent-2"]);
     expect(mockApprovalCreate).not.toHaveBeenCalled();
   });
 });

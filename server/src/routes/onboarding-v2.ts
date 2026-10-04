@@ -206,11 +206,15 @@ export function onboardingV2Routes(db: Db) {
     messageId: string,
     payload: AgentPlanProposalV1Payload,
     agentIds: string[],
+    pendingApproval?: boolean,
   ) {
     // AgentDash (GH #992): the payload is model output read back from the
     // card row — it is re-persisted and re-emitted here, so it must be
     // credential-clean on the way out.
-    const next: AgentPlanProposalV1Payload = redactRunLogValue({ ...payload, confirmedAt: new Date().toISOString(), confirmedAgentIds: agentIds });
+    // AgentDash (review-1025 item 2): pendingApproval rides on the card so a
+    // reload or a second tab still shows "Sent for approval" while the hires
+    // wait on the board instead of flipping back to "Team hired".
+    const next: AgentPlanProposalV1Payload = redactRunLogValue({ ...payload, confirmedAt: new Date().toISOString(), confirmedAgentIds: agentIds, ...(pendingApproval === true ? { pendingApproval: true } : {}) });
     try {
       await db
         .update(assistantMessages)
@@ -865,19 +869,22 @@ export function onboardingV2Routes(db: Db) {
       // AgentDash (scan 4, lane N): a card hired before the confirmed state
       // existed is marked now, so it stops offering "Set it up".
       // A partly hired team (a hire failed mid-batch) is not marked.
-      if (!payload.confirmedAt && previousHire.agentIds.length === payload.agents.length) await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, previousHire.agentIds);
+      if (!payload.confirmedAt && previousHire.agentIds.length === payload.agents.length) await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, previousHire.agentIds, requiresApproval);
       // AgentDash (cos-followups review): the hire_agent approvals are written
       // after the receipt commits — a crash between them strands
       // pending_approval agents no one can approve, and the used receipt used
       // to dead-end the retry. Re-create only the missing approvals instead.
+      // AgentDash (review-1025 item 4): classify every hire first and throw
+      // before filing anything — a retry must never create half the approvals
+      // and then bail on a still-materializing sibling.
       // An agent that already has an open approval, or whose hire already
       // resolved, is untouched; a hire still paused mid-materialization keeps
       // the repair path — its approval would be premature because activation
       // only applies to pending_approval.
       if (requiresApproval) {
         const retryAgents = agentService(db);
-        const approvalIds: string[] = [];
-        const awaitingApproval: string[] = [];
+        const retryApprovals = approvalService(db);
+        const awaitingApproval: NonNullable<Awaited<ReturnType<typeof retryAgents.getById>>>[] = [];
         const stillMaterializing: string[] = [];
         for (const agentId of previousHire.agentIds) {
           const hired = await retryAgents.getById(agentId);
@@ -888,18 +895,49 @@ export function onboardingV2Routes(db: Db) {
             continue;
           }
           if (hired.status !== "pending_approval") continue;
-          awaitingApproval.push(agentId);
-          const open = await approvalService(db).listPendingHireApprovalsForAgent(companyId, agentId);
+          awaitingApproval.push(hired);
+        }
+        if (stillMaterializing.length > 0) throw acceptedHireNeedsRepair(stillMaterializing);
+        // Every receipt hire already resolved — the receipt outcome stands
+        // and there is nothing left to approve.
+        if (awaitingApproval.length === 0) throw consumedHire(previousHire);
+        const approvalIds: string[] = [];
+        for (const hired of awaitingApproval) {
+          const open = await retryApprovals.listPendingHireApprovalsForAgent(companyId, hired.id);
           if (open.length > 0) {
             approvalIds.push(...open.map((entry) => entry.id));
             continue;
           }
           approvalIds.push(await fileHireApproval(hired));
         }
-        if (stillMaterializing.length > 0) throw acceptedHireNeedsRepair(stillMaterializing);
-        // Every receipt hire already resolved — the receipt outcome stands
-        // and there is nothing left to approve.
-        if (awaitingApproval.length === 0) throw consumedHire(previousHire);
+        // AgentDash (review-1025 item 3): the repair path finishes the same
+        // post-hire bookkeeping the first confirm would have — the hires are
+        // only usefully "sent for approval" once the CoS has said so, the
+        // phase has moved, and the goals exist.
+        const cos = (await retryAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
+        if (cos && !alreadyReady) await conversations.postMessage({
+          conversationId, authorKind: 'agent', authorId: cos.id,
+          body: 'Your hires are waiting on board approval — I have sent each one to Approvals. They will join the team as they are approved.',
+        });
+        else if (cos) await conversations.postMessage({
+          conversationId, authorKind: 'agent', authorId: cos.id,
+          body: 'Those hires are waiting on board approval — I have sent each one to Approvals.',
+        });
+        await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
+        if (cos && !alreadyReady) {
+          try {
+            await materializeOnboardingGoals({ db })({
+              conversationId,
+              companyId,
+              ownerAgentId: cos.id,
+            });
+          } catch (err) {
+            logger.error(
+              { err, conversationId, companyId, cosAgentId: cos.id },
+              "[onboarding-v2] materializeOnboardingGoals failed; continuing with agent materialization",
+            );
+          }
+        }
         res.status(200).json({
           companyId,
           createdAgentIds: previousHire.agentIds,
@@ -1008,8 +1046,10 @@ ${kpis || "- (none captured)"}
     } catch (error) {
       throw acceptedHireNeedsRepair(failedHires.length > 0 ? failedHires.map(item => item.agentId) : materialized.createdAgentIds, error);
     }
-    // AgentDash (scan 4, lane N): the card now says "Team hired" for everyone.
-    await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, materialized.createdAgentIds);
+    // AgentDash (scan 4, lane N): the card now says "Team hired" for everyone —
+    // or "Sent for approval" when the hires went to the board (review-1025
+    // item 2): the state persists, so a reload does not downgrade the label.
+    await markPlanCardConfirmed(companyId, conversationId, planMsg.id, payload, materialized.createdAgentIds, requiresApproval);
 
     // AgentDash (issue #174): materialize the captured onboarding goals
     // ({shortTerm, longTerm}) into the goals table so the user sees them on
@@ -1178,7 +1218,7 @@ ${kpis || "- (none captured)"}
     // agents[]) can't masquerade as part of the operator's instructions.
     // Trust boundary: only the static text below is "system"; everything
     // user-controlled is a user turn.
-    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, requesterUserId: priorRequesterUserId, ...priorPlan } = priorPayload;
+    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, pendingApproval: _pendingApproval, requesterUserId: priorRequesterUserId, ...priorPlan } = priorPayload;
     const priorPlanJson = JSON.stringify(priorPlan, null, 2);
     const userRevision = revisionText.trim();
     // AgentDash (scan 4, lane N): never name an agent after a member.
@@ -1242,7 +1282,7 @@ No greetings. No markdown headings outside the JSON block.`;
     // model never saw the prior card's value (stripped above) and any it
     // invents is dropped — the revised card belongs to whoever asked for the
     // original team.
-    const { requesterUserId: _modelRequester, ...planSansRequester } = modelPlan;
+    const { requesterUserId: _modelRequester, pendingApproval: _modelPendingApproval, ...planSansRequester } = modelPlan;
     const newPlan: AgentPlanProposalV1Payload = priorRequesterUserId
       ? { ...planSansRequester, requesterUserId: priorRequesterUserId }
       : planSansRequester;

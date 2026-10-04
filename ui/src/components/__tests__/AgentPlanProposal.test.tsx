@@ -148,4 +148,63 @@ describe("AgentPlanProposal", () => {
       root.unmount();
     });
   });
+
+  // AgentDash (review-1025 item 2): the card persists pendingApproval when it
+  // is marked confirmed, so a reload or a second tab still reads "Sent for
+  // approval" — the response object is gone by then.
+  it("still says 'Sent for approval' when the card was persisted pending approval", async () => {
+    const persisted: AgentPlanProposalV1Payload = {
+      ...samplePayload,
+      confirmedAt: "2026-10-04T00:00:00.000Z",
+      confirmedAgentIds: ["a1", "a2"],
+      pendingApproval: true,
+    };
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={persisted} onConfirm={vi.fn()} onRevise={vi.fn()} />,
+      );
+    });
+
+    expect(container.textContent).toContain("Sent for approval");
+    expect(container.textContent).not.toContain("Team hired");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // AgentDash (review-1025 item 5): a 409 carrying details.repair is the
+  // repair contract — a hire half-materialized, not a hired team. Show what
+  // the server said instead of "Team hired".
+  it("shows the server's message on a repair 409 instead of 'Team hired'", async () => {
+    const { ApiError } = await import("../../api/client");
+    const onConfirm = vi.fn().mockRejectedValue(
+      new ApiError(
+        "Hire accepted but configuration needs repair; use the existing agents, do not hire again",
+        409,
+        { error: "Hire accepted but configuration needs repair", details: { accepted: true, agentIds: ["a1"], repair: "Use instructions-bundle PATCH…" } },
+      ),
+    );
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />,
+      );
+    });
+
+    const setItUp = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Set it up"),
+    )!;
+    await act(async () => {
+      setItUp.click();
+    });
+
+    expect(container.textContent).not.toContain("Team hired");
+    expect(container.textContent).toContain("configuration needs repair");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

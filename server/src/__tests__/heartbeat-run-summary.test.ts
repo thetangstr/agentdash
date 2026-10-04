@@ -151,6 +151,34 @@ describe("mergeHeartbeatRunResultJson", () => {
     expect(
       mergeHeartbeatRunResultJson(null, "line one\r\nline two\r\n"),
     ).toEqual({ summary: "line one\nline two" });
+    expect(
+      mergeHeartbeatRunResultJson(null, "line one\r\nline two"),
+    ).toEqual({ summary: "line one\nline two" });
+  });
+
+  // AgentDash (review-1025 item 1): an answer that ends without a final
+  // newline leaves its last line unterminated — that tail is not LF evidence,
+  // so a CRLF document must not read as "mixed" and be stripped to its last
+  // line. dispatch-llm trims stdout before this runs, so every CRLF CoS
+  // answer arrives exactly like this.
+  it("keeps a CRLF answer whose last line has no terminator", () => {
+    expect(
+      mergeHeartbeatRunResultJson(null, "a\r\nb"),
+    ).toEqual({ summary: "a\nb" });
+    expect(
+      mergeHeartbeatRunResultJson(null, "line one\r\nline two"),
+    ).toEqual({ summary: "line one\nline two" });
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "Para one.\r\n\r\nPara two.\r\nPara three.",
+      ),
+    ).toEqual({ summary: "Para one.\n\nPara two.\nPara three." });
+    // A fenced payload the way revise-plan emits one, CRLF throughout.
+    const reply = "Updated based on your feedback.\r\n```json\r\n{\"plan\":{}}\r\n```";
+    expect(mergeHeartbeatRunResultJson(null, reply)).toEqual({
+      summary: "Updated based on your feedback.\n```json\n{\"plan\":{}}\n```",
+    });
   });
 
   it("still treats a lone carriage return as an in-place redraw", () => {

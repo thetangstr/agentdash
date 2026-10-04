@@ -22,8 +22,15 @@
  *   status lines with `\r\n` ("Loading MCP servers…\r\n", "✗ mcp server …
  *   failed\r\n") while the agent's answer uses plain `\n`, so the mixed
  *   ending is the subprocess signature even when the line carries no glyph.
- *   A document that is uniformly CRLF was authored that way — those endings
- *   are just normalised, never treated as chatter.
+ *   Only lines that actually carry a terminator count toward that mix — an
+ *   answer that ends without a final newline leaves its last line
+ *   unterminated, which must not read as LF evidence and turn a uniformly
+ *   CRLF document "mixed" (that would eat every line but the last). When
+ *   the mix cannot be proven — a lone CRLF status line ahead of an
+ *   unterminated answer, or a uniform-CRLF document — a CRLF line still
+ *   counts as chatter if it carries a machine shape: a leading ✗⚠ℹ✓ glyph
+ *   or a trailing "…" progress mark. A uniformly CRLF document of ordinary
+ *   prose is just normalised, never treated as chatter.
  * - A lone in-place redraw. A `\r` that is not part of a line ending is a
  *   carriage return: the runtime redrew over the line, so only the fragment
  *   after the last `\r` is visible. A line whose visible fragment is empty
@@ -47,18 +54,36 @@ const DIAGNOSTIC_GLYPH_LINE = /^\s*⚠/u;
 // status words are matched — a "✓ Fixed X" checklist line stays.
 const HERMES_STATUS_LINE = /^\s*✓\s+(session resumed|resuming|loading|loaded)\b/iu;
 
+// A CRLF line whose mix with LF lines cannot be proven is still chatter when
+// it is shaped like machine output: a status-glyph opener (✗⚠ℹ✓) or a
+// trailing "…" progress mark. ℹ belongs here — "ℹ Note: …" is prose on its
+// own, but prose does not arrive CRLF-terminated next to an LF answer.
+const CRLF_MACHINE_GLYPH = /^\s*[✗⚠ℹ✓]/u;
+const CRLF_PROGRESS_MARK = /…\s*$/u;
+
 export function stripStatusLines(text: string): string {
   // Split on \n first so a "\r\n" line ending survives as a trailing "\r" —
   // the evidence the mixed-ending rule below reads.
   const rawLines = text.split("\n");
+  // Only a line that carries its terminator counts as line-ending evidence.
+  // Every element before the last was ended by the split \n; the last element
+  // is either "" (the tail marker after a final "\n", not a line) or an
+  // unterminated tail that ended at EOF. Counting that tail as an LF line
+  // would make every CRLF answer without a trailing newline look "mixed" —
+  // and strip it down to its last line.
+  let crlfCount = 0;
+  let lfCount = 0;
+  for (let i = 0; i < rawLines.length - 1; i++) {
+    if (rawLines[i]!.endsWith("\r")) crlfCount++;
+    else lfCount++;
+  }
+  const mixedEndings = crlfCount > 0 && lfCount > 0;
+
   // A trailing empty element is the document tail after a final "\n", not a
-  // line — it must not make an otherwise uniform-CRLF document look mixed.
+  // line — drop it so it never renders as a phantom empty line.
   const lineCount = rawLines.length > 0 && rawLines[rawLines.length - 1] === ""
     ? rawLines.length - 1
     : rawLines.length;
-  let crlfCount = 0;
-  for (let i = 0; i < lineCount; i++) if (rawLines[i]!.endsWith("\r")) crlfCount++;
-  const mixedEndings = crlfCount > 0 && crlfCount < lineCount;
 
   const lines = rawLines.slice(0, lineCount).map((raw) => {
     const crlfEnded = raw.endsWith("\r");
@@ -75,7 +100,10 @@ export function stripStatusLines(text: string): string {
     const line = lines[start] ?? { crlfEnded: false, redrawn: false, visible: "" };
     const isStatusLine =
       (line.redrawn && line.visible === "") ||
-      (line.crlfEnded && mixedEndings) ||
+      (line.crlfEnded &&
+        (mixedEndings ||
+          CRLF_MACHINE_GLYPH.test(line.visible) ||
+          CRLF_PROGRESS_MARK.test(line.visible))) ||
       DIAGNOSTIC_GLYPH_LINE.test(line.visible) ||
       HERMES_STATUS_LINE.test(line.visible);
     if (!isStatusLine) break;
