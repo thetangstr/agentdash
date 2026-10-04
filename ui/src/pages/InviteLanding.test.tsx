@@ -288,7 +288,7 @@ describe("InviteLandingPage", () => {
     });
   });
 
-  it("auto-accepts the invite after account creation and redirects into the company", async () => {
+  it("auto-accepts the invite after account creation and lands on the joined confirmation", async () => {
     getSessionMock.mockResolvedValueOnce(null);
     getSessionMock.mockResolvedValue({
       session: { id: "session-1", userId: "user-1" },
@@ -366,7 +366,11 @@ describe("InviteLandingPage", () => {
     expect(setSelectedCompanyIdMock).toHaveBeenCalledWith("company-1", { source: "manual" });
     expect(queryClient.getQueryData(queryKeys.companies.all)).toBeUndefined();
     expect(localStorage.getItem("paperclip:pending-invite-token")).toBeNull();
-    expect(container.textContent).toContain("Member onboarding destination");
+    // AgentDash (scan 5, lane access): the joined confirmation, not member
+    // onboarding — the access gate walks the invitee into that next.
+    // PR #1017 review: it names the workspace, not a generic "the company".
+    expect(container.textContent).toContain("You joined Acme Robotics");
+    expect(container.textContent).not.toContain("Member onboarding destination");
 
     await act(async () => {
       root.unmount();

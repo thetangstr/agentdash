@@ -23,6 +23,8 @@ export type HealthStatus = {
   // AgentDash: self-serve-bootstrap — first-user self-serve company creation.
   selfServeBootstrap?: boolean;
   instanceHasCompany?: boolean;
+  /** AgentDash (scan 5, lane access): any account exists — unlike bootstrapStatus, true even while bootstrap is still pending. */
+  hasUsers?: boolean;
   /** AgentDash (#726): a hosted agentdash.cloud box. GH #786 routes its first run to /setup, not the wizard. */
   hostedBox?: boolean;
   /** The instance's default runtime preset (server: readAdapterStatus().preset). */

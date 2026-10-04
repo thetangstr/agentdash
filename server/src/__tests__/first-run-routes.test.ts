@@ -313,11 +313,17 @@ describeEmbeddedPostgres("first-run routes", () => {
     expect(await db.select().from(agents).where(eq(agents.companyId, company.id))).toHaveLength(2);
   });
 
+  // PR #1017 review: the /setup "Skip for now" on the repo step must never
+  // land here — this refusal is why skipping goes to /cos instead.
   it("refuses without a connected repo", async () => {
     const { company, owner } = await seed({ connect: false });
     const res = await request(app(owner)).post(`/api/companies/${company.id}/first-run/first-issue`).send({ title: "Fix a bug" });
     expect(res.status).toBe(409);
     expect(res.body.error).toContain("Connect a GitHub repository first");
+    // Nothing half-created on the refusal: no issue, no hired engineer.
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+    expect(await db.select().from(agents).where(eq(agents.companyId, company.id))).toHaveLength(1);
+    expect(wakeups).toHaveLength(0);
   });
 
   it("returns the Free cap payload when there is no room to hire an engineer", async () => {

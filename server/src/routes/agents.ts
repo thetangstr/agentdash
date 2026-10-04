@@ -475,6 +475,10 @@ export function agentRoutes(
     // state (Hermes managed profiles) need it; without it a hosted box's
     // fail-closed Hermes check reports "the run has no agent id".
     agent?: { id: string; companyId: string; adapterConfig: Record<string, unknown> } | null;
+    // AgentDash (c3 addendum): false for the standalone re-check endpoint — a
+    // failed result is the data the caller asked for, so it persists as
+    // evidence and returns 200 instead of a 422 the UI can only log.
+    enforce?: boolean;
   }): Promise<AdapterEnvironmentTestResult> {
     const adapter = requireServerAdapter(input.adapterType);
     const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
@@ -509,7 +513,7 @@ export function agentRoutes(
     // which is the correct setup for that adapter. But a warn that means the
     // adapter cannot run at all (probe auth required, probe failed, Hermes
     // with no provider anywhere) blocks exactly like a fail.
-    if (isBlockingPreflightResult(result)) {
+    if (isBlockingPreflightResult(result) && input.enforce !== false) {
       throw unprocessable(
         input.failureMessage
           ?? "Agent harness preflight failed. Resolve the adapter environment checks before creating this agent.",
@@ -2663,13 +2667,16 @@ export function agentRoutes(
         : {};
     const result = await withAgentResolvedModelCheck(
       agent,
+      // AgentDash (c3 addendum): the re-check endpoint reports the outcome —
+      // even a failed check result is saved evidence, not a 422. The launch
+      // gate in claimQueuedRun is what enforces readiness.
       await runRequiredHarnessPreflight({
         companyId: agent.companyId,
         adapterType: agent.adapterType,
         adapterConfig,
         defaultEnvironmentId: agent.defaultEnvironmentId,
         agent: { id: agent.id, companyId: agent.companyId, adapterConfig },
-        failureMessage: "Agent harness preflight failed. Resolve the adapter environment checks before running this agent.",
+        enforce: false,
       }),
     );
     const metadata = withHarnessPreflightMetadata(
@@ -2692,7 +2699,10 @@ export function agentRoutes(
       companyId: agent.companyId,
       actorType: "user",
       actorId: req.actor.userId ?? "board",
-      action: "agent.harness_preflight_passed",
+      // AgentDash (c3 review): a non-blocking warn is a pass — the advisory
+      // checks are advisory. Only a result that would block a launch counts
+      // as a failure in the activity log.
+      action: isBlockingPreflightResult(result) ? "agent.harness_preflight_failed" : "agent.harness_preflight_passed",
       entityType: "agent",
       entityId: id,
       details: {

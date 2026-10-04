@@ -7,9 +7,12 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
-import type { AgentRunHealth, AgentTokenCeilingStatus } from "@paperclipai/shared";
+import type { AgentRunHealth, AgentTokenCeilingStatus, HeartbeatRun } from "@paperclipai/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ToastProvider } from "../context/ToastContext";
 
 // AgentDetail's import graph reaches `@mdxeditor/editor` via AgentConfigForm →
 // MarkdownEditor, and its Sandpack dependency throws inside jsdom's CSS
@@ -18,9 +21,42 @@ vi.mock("../components/MarkdownEditor", () => ({
   MarkdownEditor: () => null,
 }));
 
+// MarkdownBody needs ThemeProvider and the editor stack; rendered text is all
+// these tests assert on, so it is a passthrough.
+vi.mock("../components/MarkdownBody", () => ({
+  MarkdownBody: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+
+// ScrollToBottom reads the page panel context; there is no panel in a bare
+// component render.
+vi.mock("../context/PanelContext", () => ({
+  usePanel: () => ({ togglePanelVisible: vi.fn() }),
+}));
+
+// The app router resolves company prefixes through CompanyContext; these
+// tests assert rendered content, not navigation, so navigation primitives
+// are stubs.
+vi.mock("@/lib/router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/router")>();
+  const StubLink = ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  );
+  return {
+    ...actual,
+    Link: StubLink,
+    CompanyLink: StubLink,
+    useNavigate: () => () => undefined,
+    useParams: () => ({}),
+    Navigate: () => null,
+    useBeforeUnload: () => undefined,
+  };
+});
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine, agentBilledByProvider, AgentRunHealthSummary, RunStderrExcerpt, CostsSection } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider, AgentRunHealthSummary, RunStderrExcerpt, CostsSection, RunDetail, LatestRunCard } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -437,5 +473,154 @@ describe("CostsSection on BYOK", () => {
     );
     expect(text).not.toContain("Billed by your model provider");
     expect(text).not.toContain("$0.00");
+  });
+});
+
+function heartbeatRunFixture(overrides: Partial<HeartbeatRun> = {}): HeartbeatRun {
+  return {
+    id: "run-1",
+    companyId: "company-1",
+    agentId: "agent-1",
+    invocationSource: "on_demand",
+    triggerDetail: "manual",
+    status: "cancelled",
+    startedAt: new Date("2026-10-03T10:00:00.000Z"),
+    finishedAt: new Date("2026-10-03T10:00:05.000Z"),
+    error: null,
+    wakeupRequestId: null,
+    exitCode: null,
+    signal: null,
+    usageJson: null,
+    resultJson: null,
+    sessionIdBefore: null,
+    sessionIdAfter: null,
+    logStore: null,
+    logRef: null,
+    logBytes: null,
+    logSha256: null,
+    logCompressed: false,
+    stdoutExcerpt: null,
+    stderrExcerpt: null,
+    errorCode: null,
+    externalRunId: null,
+    processPid: null,
+    processGroupId: null,
+    processStartedAt: null,
+    lastOutputAt: null,
+    lastOutputSeq: 0,
+    lastOutputStream: null,
+    lastOutputBytes: null,
+    retryOfRunId: null,
+    processLossRetryCount: 0,
+    livenessState: null,
+    livenessReason: null,
+    continuationAttempt: 0,
+    lastUsefulActionAt: null,
+    nextAction: null,
+    contextSnapshot: null,
+    createdAt: new Date("2026-10-03T10:00:00.000Z"),
+    updatedAt: new Date("2026-10-03T10:00:05.000Z"),
+    ...overrides,
+  };
+}
+
+describe("RunDetail on a cancelled run", () => {
+  function renderRunDetail(run: HeartbeatRun) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderNode(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ToastProvider>
+            <TooltipProvider>
+              <RunDetail run={run} agentRouteId="agent-1" adapterType="process" adapterConfig={{}} />
+            </TooltipProvider>
+          </ToastProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return container!.textContent ?? "";
+  }
+
+  it("hides the harness-recovery panel and the red exit code left by the killed adapter", () => {
+    // The stale-failure canary: the adapter's post-kill write left a failed
+    // classification in resultJson and exit 130 on the row, but the run is
+    // cancelled — none of that is red failure chrome.
+    const text = renderRunDetail(heartbeatRunFixture({
+      error: "Stopped manually",
+      errorCode: "cancelled_by_operator",
+      exitCode: 130,
+      signal: "SIGTERM",
+      resultJson: {
+        failureClassification: {
+          category: "unknown",
+          severity: "operator_action_required",
+          title: "Run failed",
+          detail: "The run ended unexpectedly.",
+          nextActions: ["retry"],
+        },
+      },
+    }));
+    expect(text).not.toContain("Harness recovery");
+    expect(text).not.toContain("Exit code");
+    expect(text).toContain("Stopped manually");
+  });
+
+  it("still shows failure chrome on a genuinely failed run", () => {
+    const text = renderRunDetail(heartbeatRunFixture({
+      status: "failed",
+      error: "adapter exited",
+      exitCode: 1,
+      resultJson: {
+        failureClassification: {
+          category: "unknown",
+          severity: "operator_action_required",
+          title: "Run failed",
+          detail: "The run ended unexpectedly.",
+          nextActions: ["retry"],
+        },
+      },
+    }));
+    expect(text).toContain("Harness recovery");
+    expect(text).toContain("Exit code 1");
+  });
+});
+
+describe("LatestRunCard on a cancelled run", () => {
+  it("shows the recorded stop reason when no summary was written", () => {
+    renderNode(
+      <MemoryRouter>
+        <LatestRunCard
+          agentId="agent-1"
+          runs={[heartbeatRunFixture({
+            status: "cancelled",
+            error: "Stopped manually",
+            errorCode: "cancelled_by_operator",
+          })]}
+        />
+      </MemoryRouter>,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Stopped manually");
+  });
+
+  it("still prefers a real summary over the stop reason", () => {
+    renderNode(
+      <MemoryRouter>
+        <LatestRunCard
+          agentId="agent-1"
+          runs={[heartbeatRunFixture({
+            status: "cancelled",
+            error: "child process killed: signal SIGTERM",
+            errorCode: "cancelled_by_operator",
+            resultJson: { summary: "Drafted the migration plan" },
+          })]}
+        />
+      </MemoryRouter>,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Drafted the migration plan");
+    expect(text).not.toContain("SIGTERM");
   });
 });

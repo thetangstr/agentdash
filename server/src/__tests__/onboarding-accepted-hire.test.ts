@@ -121,8 +121,8 @@ describe('onboarding accepted hires and postcommit materialization', () => {
       const [enrollment] = await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.agentId, accepted.id));
       expect(enrollment.installedSkillKeys).toHaveLength(1);
       expect(enrollment.skillInstallError).toBeNull();
-      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).map(row => row.action)).toEqual(['workforce.enrolled', 'workforce.skills_installed']);
-      expect(events).toEqual(['workforce.enrolled']);
+      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).map(row => row.action)).toEqual(['workforce.enrolled', 'agent.created', 'workforce.skills_installed']);
+      expect(events).toEqual(['workforce.enrolled', 'agent.created']);
       expect(lostAcknowledgements).toBe(1);
       expect(JSON.stringify(response.body)).toContain(accepted.id);
       expect(JSON.stringify(response.body)).not.toMatch(/PRIVATE_SYNTHETIC|pcp_/);
@@ -130,7 +130,7 @@ describe('onboarding accepted hires and postcommit materialization', () => {
       expect(await db.select().from(assistantMessages).where(eq(assistantMessages.conversationId, f.conversation.id))).toEqual([]);
       expect((await confirm(f)).status).toBe(409);
       expect(await hires(f)).toHaveLength(1);
-      expect(events).toEqual(['workforce.enrolled']);
+      expect(events).toEqual(['workforce.enrolled', 'agent.created']);
     } finally { stop(); }
   });
   it.each(['paused','patch_paused','terminated'])('completion preserves intervening human %s', async status => {
@@ -186,11 +186,41 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     try {
       const response = await confirmPlan(f, application(faultDatabase('second'))); expect(response.status).toBe(409);
       expect((await hires(f)).map(a => a.name)).toEqual(['First']);
-      expect(events).toEqual(['workforce.enrolled']);
+      expect(events).toEqual(['workforce.enrolled', 'agent.created']);
       expect(await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.companyId,f.company.id))).toHaveLength(1);
       expect((await confirmPlan(f)).status).toBe(409); expect(await hires(f)).toHaveLength(1);
       expect((await db.select().from(cosOnboardingStates).where(eq(cosOnboardingStates.conversationId,f.conversation.id)))[0].phase).toBe('materializing');
     } finally { stop(); }
+  });
+  // AgentDash (scan 5, lane access): every plan-card hire writes an
+  // agent.created audit with details.source = "cos_plan", committed atomically
+  // with the agent row.
+  it('logs agent.created with cos_plan source for each plan-card hire', async () => {
+    const f = await fixture(); await plan(f);
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    const response = await confirmPlan(f); expect(response.status).toBe(201);
+    const hired = await hires(f); expect(hired).toHaveLength(2);
+    const rows = await db.select().from(activityLog).where(and(eq(activityLog.companyId, f.company.id), eq(activityLog.action, 'agent.created')));
+    expect(rows).toHaveLength(2);
+    const byEntity = new Map(rows.map(r => [r.entityId, r]));
+    for (const agent of hired) {
+      const row = byEntity.get(agent.id);
+      expect(row).toMatchObject({ actorType: 'user', actorId: f.userId, agentId: agent.id });
+      expect(row?.details).toMatchObject({ source: 'cos_plan', name: agent.name, role: agent.role });
+    }
+  });
+  // AgentDash (PR #1017 review): the interview hire path writes the same
+  // agent.created audit with details.source = "cos_proposal", committed
+  // atomically with the agent row.
+  it('logs agent.created with cos_proposal source for an interview hire', async () => {
+    const f = await fixture();
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    const response = await confirm(f); expect(response.status).toBe(201);
+    const hired = await hires(f); expect(hired).toHaveLength(1);
+    const rows = await db.select().from(activityLog).where(and(eq(activityLog.companyId, f.company.id), eq(activityLog.action, 'agent.created')));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actorType: 'user', actorId: f.userId, agentId: hired[0].id, entityId: hired[0].id });
+    expect(rows[0].details).toMatchObject({ source: 'cos_proposal', name: hired[0].name, role: hired[0].role });
   });
   it.each(['interview', 'plan'])('refuses concurrent and repeated %s confirmations with one accepted set', async kind => {
     const f = await fixture(); if(kind === 'plan') await plan(f);

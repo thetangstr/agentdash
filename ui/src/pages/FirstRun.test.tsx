@@ -157,14 +157,30 @@ describe("FirstRunPage", () => {
   });
 
   // AgentDash (Scan 3, lane J): the code and first-task steps are optional.
-  it("lets the founder skip the optional GitHub step and go Home", async () => {
+  // AgentDash (scan 5, lane access, PR #1017 review): the repo step only
+  // exists while no repository is connected, and the server refuses a first
+  // task without one — so skipping GitHub cannot land on the first-task step.
+  // It leaves the flow for the Chief of Staff instead.
+  it("goes to the Chief of Staff, not the first task, when the founder skips GitHub", async () => {
     mockStatus.mockResolvedValue(status({ nextStep: "repo", model: { required: true, done: true } }));
     await render();
     expect(container.querySelector('[data-testid="first-run-optional-notice"]')?.textContent).toContain("optional");
     const skip = container.querySelector('[data-testid="first-run-skip"]') as HTMLButtonElement;
     expect(skip.textContent).toBe("Skip for now");
     act(() => skip.click());
-    expect(mockNavigate).toHaveBeenCalledWith(expect.stringMatching(/\/dashboard$/), { replace: true });
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
+    // Never the dead-end step the server would refuse.
+    expect(container.textContent).not.toContain("What should your team do first?");
+  });
+
+  it("sends the founder to the Chief of Staff when the first task is skipped", async () => {
+    mockStatus.mockResolvedValue(
+      status({ nextStep: "first_issue", model: { required: true, done: true }, repo: { done: true, repo: "acme/app", projectId: "p1" } }),
+    );
+    await render();
+    const skip = container.querySelector('[data-testid="first-run-skip"]') as HTMLButtonElement;
+    act(() => skip.click());
+    expect(mockNavigate).toHaveBeenCalledWith("/cos", { replace: true });
   });
 
   // AgentDash (b2 polish): revisiting /setup used to renumber "Code

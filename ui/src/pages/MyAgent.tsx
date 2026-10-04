@@ -345,6 +345,15 @@ export default function MyAgent() {
         <p className="text-xs text-muted-foreground">
           {agent.name} · {humanRole(agent.role)} · {agent.status}
         </p>
+        {/* AgentDash (PR #1017 review): the steward guide link, where the
+            steward actually lives — member onboarding cannot show it because
+            nobody holds a stewardship at join time. */}
+        <p className="text-xs text-muted-foreground">
+          New to this?{" "}
+          <Link to="/guides/steward/getting-started" className="underline">
+            Getting started as a steward
+          </Link>
+        </p>
         {needsKnown ? null : (
           <p className="text-xs text-destructive" role="alert">
             {(inbox.error instanceof Error ? inbox.error.message : null) ??

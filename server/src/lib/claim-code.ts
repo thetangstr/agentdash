@@ -19,8 +19,8 @@
 // user.create.before hook: exactly one attempt wins. The row persists, so the
 // code stays dead even if the user count later drops to zero.
 import { randomUUID } from "node:crypto";
-import { count, sql } from "drizzle-orm";
-import { agentdashBoxClaim, authUsers, type Db } from "@paperclipai/db";
+import { sql } from "drizzle-orm";
+import { type Db } from "@paperclipai/db";
 
 /** Internal request header naming one claim attempt (set by the server, stripped from clients). */
 export const CLAIM_ATTEMPT_HEADER = "x-agentdash-claim-attempt";
@@ -45,12 +45,6 @@ export function claimEmailMatches(email: string | null | undefined, env: Env = p
   const bound = configuredClaimEmail(env);
   const candidate = normalizeClaimEmail(email);
   return bound !== null && candidate !== null && candidate === bound;
-}
-
-/** Whether any account exists on this instance. */
-export async function instanceHasUsers(db: Db): Promise<boolean> {
-  const rows = await db.select({ n: count() }).from(authUsers);
-  return Number(rows[0]?.n ?? 0) > 0;
 }
 
 /**
@@ -118,16 +112,33 @@ export async function releaseUnusedClaim(db: Db, attempt: string): Promise<void>
      where id = 'box' and attempt = ${attempt} and not exists (select 1 from "user")`);
 }
 
-// Health polls are anonymous and frequent. `true` is cached for good only once
-// a user exists (#812: never on a claim row alone); otherwise for a few seconds.
-let claimedCache: { value: boolean; permanent: boolean; at: number } | null = null;
+// Health polls are anonymous and frequent. The whole state is cached for good
+// only once a user exists (#812: never on a claim row alone); otherwise for a
+// few seconds.
+let claimedCache: {
+  state: { users: boolean; completed: boolean };
+  permanent: boolean;
+  at: number;
+} | null = null;
+
+/**
+ * The cached claim state, shared by `boxClaimedCached` and /api/health's
+ * `hasUsers` — one EXISTS query per polling window, not one per field.
+ */
+export async function claimStateCached(
+  db: Db,
+  maxAgeMs = 10_000,
+): Promise<{ users: boolean; completed: boolean }> {
+  if (claimedCache?.permanent) return claimedCache.state;
+  if (claimedCache && Date.now() - claimedCache.at < maxAgeMs) return claimedCache.state;
+  const state = await claimState(db);
+  claimedCache = { state, permanent: state.users, at: Date.now() };
+  return state;
+}
+
 export async function boxClaimedCached(db: Db, maxAgeMs = 10_000): Promise<boolean> {
-  if (claimedCache?.permanent) return true;
-  if (claimedCache && Date.now() - claimedCache.at < maxAgeMs) return claimedCache.value;
-  const s = await claimState(db);
-  const value = s.users || s.completed;
-  claimedCache = { value, permanent: s.users, at: Date.now() };
-  return value;
+  const s = await claimStateCached(db, maxAgeMs);
+  return s.users || s.completed;
 }
 export function resetClaimedCacheForTests(): void {
   claimedCache = null;

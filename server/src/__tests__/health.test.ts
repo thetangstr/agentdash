@@ -15,9 +15,11 @@ vi.mock("../dev-server-status.js", () => ({
 
 const mockServedRelease = vi.hoisted(() => vi.fn());
 const mockBoxClaimedCached = vi.hoisted(() => vi.fn());
+const mockClaimStateCached = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/claim-code.js", () => ({
   boxClaimedCached: mockBoxClaimedCached,
+  claimStateCached: mockClaimStateCached,
 }));
 
 vi.mock("../lib/served-release.js", () => ({
@@ -36,6 +38,7 @@ describe("GET /health", () => {
     mockReadPersistedDevServerStatus.mockReturnValue(undefined);
     mockServedRelease.mockReturnValue(null);
     mockBoxClaimedCached.mockResolvedValue(true);
+    mockClaimStateCached.mockResolvedValue({ users: false, completed: false });
   });
 
   afterEach(() => {
@@ -377,6 +380,80 @@ describe("GET /health", () => {
       expect(res.status).toBe(200);
       expect(res.body).not.toHaveProperty("claimed");
       expect(mockBoxClaimedCached).not.toHaveBeenCalled();
+    });
+  });
+
+  // AgentDash (scan 5 / PR #1017 review): `hasUsers` is only a /auth input,
+  // so it is computed only where /auth reads it — a self-serve-bootstrap or
+  // hosted-box install — and read from the cached claim state rather than a
+  // count(*) per anonymous poll.
+  describe("hasUsers", () => {
+    const KEYS = ["AGENTDASH_DEPLOYMENT_KIND", "AGENTDASH_SELF_SERVE_BOOTSTRAP"];
+    const saved = new Map<string, string | undefined>();
+    beforeEach(() => {
+      for (const key of KEYS) {
+        saved.set(key, process.env[key]);
+        delete process.env[key];
+      }
+    });
+    afterEach(() => {
+      for (const key of KEYS) {
+        const value = saved.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    const stubDb = () => ({
+      execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ count: 1 }]),
+        })),
+      })),
+    }) as unknown as Db;
+
+    function authenticatedApp() {
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "none", source: "none" };
+        next();
+      });
+      app.use(
+        "/health",
+        healthRoutes(stubDb(), {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+      return app;
+    }
+
+    it("is false without touching the claim state on an ordinary authenticated install", async () => {
+      const res = await request(authenticatedApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.hasUsers).toBe(false);
+      expect(mockClaimStateCached).not.toHaveBeenCalled();
+    });
+
+    it("reflects the cached claim state on a hosted box", async () => {
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      mockClaimStateCached.mockResolvedValue({ users: true, completed: false });
+      const res = await request(authenticatedApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.hasUsers).toBe(true);
+      expect(mockClaimStateCached).toHaveBeenCalled();
+    });
+
+    it("is computed when self-serve bootstrap is on, hosted or not", async () => {
+      process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP = "true";
+      mockClaimStateCached.mockResolvedValue({ users: true, completed: false });
+      const res = await request(authenticatedApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.hasUsers).toBe(true);
+      expect(mockClaimStateCached).toHaveBeenCalled();
     });
   });
 

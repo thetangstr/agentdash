@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { companies, createDb, onboardingSessions } from "@paperclipai/db";
+import { agents, agentStewardships, companies, createDb, onboardingSessions } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -17,10 +17,12 @@ describeEmbeddedPostgres("member onboarding lifecycle", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-member-onboarding-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  }, 120_000);
 
   afterEach(async () => {
     await db.delete(onboardingSessions);
+    await db.delete(agentStewardships);
+    await db.delete(agents);
     await db.delete(companies);
   });
 
@@ -64,5 +66,31 @@ describeEmbeddedPostgres("member onboarding lifecycle", () => {
     expect(await service.listForUser("invitee-1", [firstCompanyId])).toHaveLength(1);
     expect(await service.listForUser("invitee-1", [firstCompanyId, secondCompanyId])).toHaveLength(2);
     expect(await service.listForUser("invitee-2", [firstCompanyId, secondCompanyId])).toHaveLength(1);
+  });
+
+  // AgentDash (scan 5, lane access): the UI shows steward wording only for
+  // members with an active stewardship — listForUser carries the flag.
+  it("reports isSteward only for members with an active stewardship", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "MKThink", issuePrefix: "MKT" });
+    const [agent] = await db
+      .insert(agents)
+      .values({ companyId, name: "CoS", role: "chief_of_staff", adapterType: "codex_local" })
+      .returning();
+    const [pastAgent] = await db
+      .insert(agents)
+      .values({ companyId, name: "Past agent", role: "engineer", adapterType: "codex_local" })
+      .returning();
+    await db.insert(agentStewardships).values({ companyId, agentId: agent.id, userId: "steward-1" });
+    // An ended stewardship does not count.
+    await db.insert(agentStewardships).values({ companyId, agentId: pastAgent.id, userId: "ex-steward", endedAt: new Date() });
+    const service = memberOnboardingService(db);
+    await service.startOrResume(companyId, "steward-1");
+    await service.startOrResume(companyId, "member-1");
+
+    const [steward] = await service.listForUser("steward-1", [companyId]);
+    const [member] = await service.listForUser("member-1", [companyId]);
+    expect(steward.isSteward).toBe(true);
+    expect(member.isSteward).toBe(false);
   });
 });
