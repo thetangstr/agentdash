@@ -78,6 +78,8 @@ export async function completeClaim(db: Db): Promise<void> {
   await db.execute(sql`
     update agentdash_box_claim set completed_at = now()
      where id = 'box' and completed_at is null and exists (select 1 from "user")`);
+  // A user now exists: any cached pre-signup state is stale.
+  invalidateClaimStateCache();
 }
 
 /**
@@ -140,8 +142,17 @@ export async function boxClaimedCached(db: Db, maxAgeMs = 10_000): Promise<boole
   const s = await claimStateCached(db, maxAgeMs);
   return s.users || s.completed;
 }
-export function resetClaimedCacheForTests(): void {
+/**
+ * Drop the cached state. Called when a user is created: a `users:false`
+ * snapshot taken before the first sign-up would otherwise keep reporting
+ * `hasUsers:false`/`claimed:false` to /auth and the control plane for up to
+ * the polling window.
+ */
+export function invalidateClaimStateCache(): void {
   claimedCache = null;
+}
+export function resetClaimedCacheForTests(): void {
+  invalidateClaimStateCache();
 }
 
 export type ClaimCheck =
