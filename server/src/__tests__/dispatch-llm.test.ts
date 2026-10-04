@@ -706,6 +706,13 @@ describe("stripHermesChatter", () => {
     expect(stripHermesChatter(out)).toBe("The answer.\n⚠ not chatter");
   });
 
+  it("strips the whole leading glyph run, including indented and mixed glyphs", () => {
+    // Hermes writes its boot/status chatter with ✓/✗/→/⚠/ℹ at any indent —
+    // on this adapter all of it is machine output.
+    const out = "  ✓ loaded config\n✗ tool call failed, retrying\n→ resuming\nThe answer.";
+    expect(stripHermesChatter(out)).toBe("The answer.");
+  });
+
   it("returns empty when Hermes emitted only chatter, so the caller can fail loudly", () => {
     // Empty routes to the existing empty-reply path rather than posting a
     // warning as though it were the agent's turn.

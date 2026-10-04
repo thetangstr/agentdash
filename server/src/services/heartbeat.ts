@@ -771,6 +771,7 @@ const heartbeatRunListContextColumns = {
 } as const;
 
 const heartbeatRunListResultColumns = {
+  adapterType: heartbeatRuns.adapterType,
   resultSummary: sql<string | null>`left(${heartbeatRuns.resultJson} ->> 'summary', ${HEARTBEAT_RUN_RESULT_SUMMARY_MAX_CHARS})`.as("resultSummary"),
   resultResult: sql<string | null>`left(${heartbeatRuns.resultJson} ->> 'result', ${HEARTBEAT_RUN_RESULT_SUMMARY_MAX_CHARS})`.as("resultResult"),
   resultMessage: sql<string | null>`left(${heartbeatRuns.resultJson} ->> 'message', ${HEARTBEAT_RUN_RESULT_SUMMARY_MAX_CHARS})`.as("resultMessage"),
@@ -1237,6 +1238,7 @@ export function summarizeHeartbeatRunListResultJson(input: {
   totalCostUsd?: string | null;
   costUsd?: string | null;
   costUsdCamel?: string | null;
+  adapterType?: string | null;
 }): Record<string, unknown> | null {
   const summary: Record<string, unknown> = {};
   for (const [key, value] of [
@@ -1251,7 +1253,7 @@ export function summarizeHeartbeatRunListResultJson(input: {
     // or their result — the run card falls back summary ?? result, so every
     // displayable text field is stripped. A real error stays verbatim.
     if (key !== "error" && normalized) {
-      const cleaned = stripStatusLines(normalized);
+      const cleaned = stripStatusLines(normalized, { adapterType: input.adapterType });
       normalized = cleaned.length > 0 ? cleaned : null;
     }
     if (normalized) summary[key] = normalized;
@@ -2834,6 +2836,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const latestSummary = summarizeHeartbeatRunListResultJson({
+      adapterType: latestRun?.adapterType,
       summary: latestRun?.resultSummary,
       result: latestRun?.resultResult,
       message: latestRun?.resultMessage,
@@ -7563,6 +7566,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           errorMessage: runErrorMessage,
         }),
         adapterResult.summary ?? null,
+        agent.adapterType,
       );
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
@@ -7737,7 +7741,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           try {
             const existingRunComment = await findRunIssueComment(livenessRun.id, livenessRun.companyId, issueId);
             if (!existingRunComment) {
-              const issueComment = buildHeartbeatRunIssueComment(persistedResultJson);
+              const issueComment = buildHeartbeatRunIssueComment(persistedResultJson, agent.adapterType);
               if (issueComment) {
                 await issuesSvc.addComment(issueId, issueComment, { agentId: agent.id, runId: livenessRun.id });
               }
@@ -10000,6 +10004,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           contextWakeReason,
           contextWakeSource,
           contextWakeTriggerDetail,
+          adapterType,
           resultSummary,
           resultResult,
           resultMessage,
@@ -10009,6 +10014,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           resultCostUsdCamel,
           ...rest
         } = row as typeof row & {
+          adapterType?: string | null;
           resultSummary?: string | null;
           resultResult?: string | null;
           resultMessage?: string | null;
@@ -10036,6 +10042,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           resultJson: safeForLegacyEncoding
             ? null
             : summarizeHeartbeatRunListResultJson({
+                adapterType,
                 summary: resultSummary,
                 result: resultResult,
                 message: resultMessage,

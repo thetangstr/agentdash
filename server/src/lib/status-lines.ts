@@ -15,31 +15,33 @@
  * run summary when the adapter picks `cleaned` stdout as the response, so
  * `mergeHeartbeatRunResultJson` applies this too.
  *
- * Only a LEADING run is stripped, and only lines that carry a terminal-status
- * signature:
+ * Only a LEADING run is stripped, and what counts as a status line depends on
+ * the adapter:
  *
  * - A lone in-place redraw. `\r\n` is normalised away first — it is a line
  *   ending, not a marker. A `\r` that survives normalisation is a carriage
  *   return without a newline: the runtime redrew over the line, so only the
  *   fragment after the last `\r` is visible. A line whose visible fragment is
- *   empty was pure chatter.
- * - A leading diagnostic glyph (⚠, ℹ) or a known Hermes status line ("✓
- *   session resumed", "✓ loading tools"). Those are machine output — an
- *   agent's own "✓ Fixed X" checklist or a "→ Next:" pointer is prose and is
- *   kept.
+ *   empty was pure chatter. This applies on every adapter.
+ * - On `hermes_local`, any leading glyph line (⚠, ✓, ✗, →, ℹ, indented or
+ *   not) is machine output — Hermes writes its boot/status chatter exactly
+ *   like that, and an agent's reply never opens with a checklist of its own
+ *   runtime bookkeeping.
+ * - On every other adapter only ⚠/ℹ diagnostics count. A run summary that
+ *   opens "→ Next: …" or "✓ Fixed X" is ordinary agent prose and is kept —
+ *   otherwise the filter would eat real summaries (review-1019).
  *
  * Stripping stops at the first ordinary line, so a real answer that happens
  * to contain a warning further down is left alone.
  */
-// Warning/info glyphs mark runtime diagnostics, never the start of a summary
-// an agent would write itself.
+// Warning/info glyphs mark runtime diagnostics on any adapter.
 const DIAGNOSTIC_GLYPH_LINE = /^\s*[⚠ℹ]/u;
 
-// Hermes prints boot/status chatter with a check glyph. Only the observed
-// status words are matched — a "✓ Fixed X" checklist line stays.
-const HERMES_STATUS_LINE = /^\s*✓\s+(session resumed|resuming|loading|loaded)\b/iu;
+// On the Hermes path every leading glyph line is runtime chatter — the old
+// stripHermesChatter rule, kept scoped to the adapter that produces it.
+const HERMES_GLYPH_LINE = /^\s*[⚠✓✗→ℹ]/u;
 
-export function stripStatusLines(text: string): string {
+export function stripStatusLines(text: string, opts?: { adapterType?: string | null }): string {
   const lines = text
     .replace(/\r\n/g, "\n")
     .split("\n")
@@ -50,13 +52,11 @@ export function stripStatusLines(text: string): string {
         visible: redrawn ? raw.slice(raw.lastIndexOf("\r") + 1) : raw,
       };
     });
+  const glyphLine = opts?.adapterType === "hermes_local" ? HERMES_GLYPH_LINE : DIAGNOSTIC_GLYPH_LINE;
   let start = 0;
   while (start < lines.length) {
     const line = lines[start] ?? { redrawn: false, visible: "" };
-    const isStatusLine =
-      (line.redrawn && line.visible === "") ||
-      DIAGNOSTIC_GLYPH_LINE.test(line.visible) ||
-      HERMES_STATUS_LINE.test(line.visible);
+    const isStatusLine = (line.redrawn && line.visible === "") || glyphLine.test(line.visible);
     if (!isStatusLine) break;
     start += 1;
   }

@@ -130,6 +130,7 @@ describe("mergeHeartbeatRunResultJson", () => {
       mergeHeartbeatRunResultJson(
         { summary: "✓ loading tools\r\nAll 42 checks pass.", stdout: "raw" },
         "ignored fallback",
+        "hermes_local",
       ),
     ).toEqual({ summary: "All 42 checks pass.", stdout: "raw" });
   });
@@ -182,6 +183,25 @@ describe("mergeHeartbeatRunResultJson", () => {
       ),
     ).toEqual({ message: "real message" });
   });
+
+  // AgentDash (review-1019): the aggressive glyph rule is scoped to Hermes —
+  // its runtime writes whole leading ✓/✗/→/⚠/ℹ runs — while every other
+  // adapter keeps leading checklist/pointer prose.
+  it("strips the full leading glyph run for a hermes_local run", () => {
+    const noisy = "✓ loaded config\n  ✗ tool call failed, retrying\n→ resuming\nDone — deployed.";
+    expect(mergeHeartbeatRunResultJson(null, noisy, "hermes_local")).toEqual({
+      summary: "Done — deployed.",
+    });
+  });
+
+  it("keeps the same leading glyph run as prose on every other adapter", () => {
+    const text = "✓ loaded config\nDone — deployed.";
+    for (const adapterType of [undefined, null, "claude_local", "process"]) {
+      expect(mergeHeartbeatRunResultJson(null, text, adapterType)).toEqual({
+        summary: text,
+      });
+    }
+  });
 });
 
 describe("summarizeHeartbeatRunResultJson status lines", () => {
@@ -193,15 +213,26 @@ describe("summarizeHeartbeatRunResultJson status lines", () => {
 
     expect(summary).toEqual({ result: "real output" });
   });
+
+  it("strips a leading hermes checklist for hermes_local but keeps it elsewhere", () => {
+    const row = { summary: "✓ loaded config\nAll 42 checks pass." };
+    expect(summarizeHeartbeatRunResultJson(row, "hermes_local")).toEqual({
+      summary: "All 42 checks pass.",
+    });
+    expect(summarizeHeartbeatRunResultJson(row)).toEqual(row);
+  });
 });
 
 describe("buildHeartbeatRunIssueComment status lines", () => {
   it("skips a chatter-only summary and falls back to the result", () => {
     expect(
-      buildHeartbeatRunIssueComment({
-        summary: "✓ session resumed\r\n",
-        result: "Shipped the fix.",
-      }),
+      buildHeartbeatRunIssueComment(
+        {
+          summary: "✓ session resumed\r\n",
+          result: "Shipped the fix.",
+        },
+        "hermes_local",
+      ),
     ).toBe("Shipped the fix.");
   });
 });
