@@ -105,6 +105,7 @@ import {
 } from "../lib/transcriptPresentation";
 import { cn, formatDateTime, formatShortDate } from "../lib/utils";
 import { issueStatusLabel } from "../lib/issue-status-label";
+import { cancelledRunLabel } from "../lib/cancelledRunLabel";
 // AgentDash: Readable run blocks share the RunTranscriptView presentation.
 import {
   ReadableDetails,
@@ -779,12 +780,20 @@ function useIssueChatRunTranscript(message: ThreadMessage): readonly IssueChatTr
 // footer's duration and token figures come from the run record — the same
 // numbers the run page shows — rather than the transcript's result snapshot.
 const IssueChatRunUsageCtx = createContext<ReadonlyMap<string, ReadableRunUsage> | undefined>(undefined);
+const IssueChatRunStoppedReasonCtx = createContext<ReadonlyMap<string, string> | undefined>(undefined);
 
 function useIssueChatRunUsage(message: ThreadMessage): ReadableRunUsage | null {
   const usageByRun = useContext(IssueChatRunUsageCtx);
   const custom = message.metadata.custom as Record<string, unknown>;
   const runId = typeof custom.runId === "string" ? custom.runId : null;
   return (runId ? usageByRun?.get(runId) : undefined) ?? null;
+}
+
+function useIssueChatRunStoppedReason(message: ThreadMessage): string | null {
+  const stoppedReasonByRun = useContext(IssueChatRunStoppedReasonCtx);
+  const custom = message.metadata.custom as Record<string, unknown>;
+  const runId = typeof custom.runId === "string" ? custom.runId : null;
+  return (runId ? stoppedReasonByRun?.get(runId) : undefined) ?? null;
 }
 
 function IssueChatReadableErrors({ lines }: { lines: string[] }) {
@@ -805,13 +814,19 @@ function IssueChatReadableErrors({ lines }: { lines: string[] }) {
 function IssueChatRunReadableSummary({ message, streaming }: { message: ThreadMessage; streaming: boolean }) {
   const entries = useIssueChatRunTranscript(message);
   const usage = useIssueChatRunUsage(message);
+  const stoppedReason = useIssueChatRunStoppedReason(message);
   const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
   if (!entries) return null;
   return (
     <div className="flex items-start gap-2">
       <div className="min-w-0 flex-1">
         {transcriptMode === "readable" ? (
-          <ReadableRunSummary entries={entries as readonly TranscriptEntry[]} streaming={streaming} usage={usage} />
+          <ReadableRunSummary
+            entries={entries as readonly TranscriptEntry[]}
+            streaming={streaming}
+            usage={usage}
+            stoppedReason={stoppedReason}
+          />
         ) : null}
       </div>
       <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
@@ -3369,6 +3384,15 @@ export function IssueChatThread({
     }
     return map;
   }, [linkedRuns]);
+  // AgentDash (c3): cancelled runs render a neutral "Stopped" footer — the
+  // transcript's own result line reads "Failed" because the process was killed.
+  const runStoppedReasonByRunId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const run of linkedRuns) {
+      if (run.status === "cancelled") map.set(run.runId, cancelledRunLabel(run));
+    }
+    return map;
+  }, [linkedRuns]);
   const rawMessages = useMemo(
     () =>
       buildIssueChatMessages({
@@ -3874,6 +3898,7 @@ export function IssueChatThread({
       <IssueChatCtx.Provider value={chatCtx}>
       <IssueChatTranscriptsCtx.Provider value={resolvedTranscriptByRun}>
       <IssueChatRunUsageCtx.Provider value={runUsageByRunId}>
+      <IssueChatRunStoppedReasonCtx.Provider value={runStoppedReasonByRunId}>
       <div className={cn(variant === "embedded" ? "space-y-3" : "space-y-4")}>
         {resolvedShowJumpToLatest ? (
           <div className="flex justify-end">
@@ -3995,6 +4020,7 @@ export function IssueChatThread({
           </div>
         ) : null}
       </div>
+      </IssueChatRunStoppedReasonCtx.Provider>
       </IssueChatRunUsageCtx.Provider>
       </IssueChatTranscriptsCtx.Provider>
       </IssueChatCtx.Provider>

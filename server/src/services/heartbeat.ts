@@ -2455,6 +2455,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const workspaceOperationsSvc = workspaceOperationService(db);
   const instructionRefreshSvc = agentInstructionRefreshService({ db });
   const activeRunExecutions = new Set<string>();
+  // AgentDash (c3): set the moment a cancel is accepted, before the process is
+  // killed. The adapter-exit path resolves BECAUSE of that kill; without the
+  // marker it reads a stale "running" row and stamps the run "failed" in the
+  // gap before the cancelled write lands.
+  const pendingRunCancellations = new Set<string>();
   // Every fire-and-forget `executeRun` dispatch lands here so tests can drain
   // background execution — including runs chained from a finished run's
   // finally block — instead of racing teardown deletes with fixed sleeps.
@@ -3278,7 +3283,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // (the first-output deadline) cannot overwrite a run that already finished.
     // AgentDash (GH #891): inside a caller's transaction, pass deferPublish so
     // live/plugin events go out only after that transaction commits.
-    options?: { onlyIfStatus?: string; deferPublish?: PostCommitEffects },
+    options?: {
+      onlyIfStatus?: string;
+      // AgentDash (c3): a terminal write may never overwrite a status another
+      // actor already committed — a killed adapter resolving after an operator
+      // cancel must not stamp "failed" over the cancelled row.
+      unlessStatuses?: readonly string[];
+      deferPublish?: PostCommitEffects;
+    },
     executor: Db = db,
   ) {
     const updated = await executor
@@ -3291,7 +3303,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .where(
         options?.onlyIfStatus
           ? and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, options.onlyIfStatus))
-          : eq(heartbeatRuns.id, runId),
+          : options?.unlessStatuses
+            ? and(eq(heartbeatRuns.id, runId), notInArray(heartbeatRuns.status, [...options.unlessStatuses]))
+            : eq(heartbeatRuns.id, runId),
       )
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -3840,6 +3854,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   async function handleRunLivenessContinuation(run: typeof heartbeatRuns.$inferSelect) {
+    // AgentDash (c3): a stopped run stays stopped — no continuation wakes.
+    if (run.status === "cancelled") return;
     const livenessState = run.livenessState as RunLivenessState | null;
     if (livenessState !== "plan_only" && livenessState !== "empty_response") return;
 
@@ -4283,6 +4299,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     run: typeof heartbeatRuns.$inferSelect,
     agent: typeof agents.$inferSelect,
   ) {
+    // AgentDash (c3): a cancelled run can't post a comment — queuing a
+    // missing-comment retry would resurrect work the operator just stopped.
+    // A comment it DID post before the stop stays recorded as satisfied.
+    if (run.status === "cancelled") {
+      if (run.issueCommentStatus !== "not_applicable" && run.issueCommentStatus !== "satisfied") {
+        await patchRunIssueCommentStatus(run.id, {
+          issueCommentStatus: "not_applicable",
+          issueCommentSatisfiedByCommentId: null,
+          issueCommentRetryQueuedAt: null,
+        });
+      }
+      return { outcome: "not_applicable" as const, queuedRun: null };
+    }
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
     if (!issueId) {
@@ -5918,6 +5947,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           const detachedRun = await setRunStatus(run.id, "running", {
             error: detachedMessage,
             errorCode: DETACHED_PROCESS_ERROR_CODE,
+          }, {
+            // AgentDash (c3): never resurrect a run that settled since the
+            // orphan scan read it as "running".
+            unlessStatuses: ["cancelled", "timed_out", "succeeded", "failed"],
           });
           if (detachedRun) {
             await appendRunEvent(detachedRun, await nextRunEventSeq(detachedRun.id), {
@@ -5959,12 +5992,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             errorMessage: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
           },
         ),
+      }, {
+        // AgentDash (c3): a run cancelled between the orphan scan and this
+        // write stays cancelled — process_lost is a guess, not an override.
+        unlessStatuses: ["cancelled", "timed_out", "succeeded"],
       });
-      await setWakeupStatus(run.wakeupRequestId, "failed", {
-        finishedAt: now,
-        error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
-      });
-      if (!finalizedRun) finalizedRun = await getRun(run.id);
+      if (finalizedRun) {
+        await setWakeupStatus(run.wakeupRequestId, "failed", {
+          finishedAt: now,
+          error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
+        });
+      }
       if (!finalizedRun) continue;
       finalizedRun = await classifyAndPersistRunLiveness(finalizedRun, parseObject(finalizedRun.resultJson)) ?? finalizedRun;
       // OBS-1: a reaped run never produced an adapter result, so its facts are
@@ -7389,6 +7427,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
       const latestRun = await getRun(run.id);
+      // AgentDash (c3): the kill that resolved this execute() may not have
+      // committed its cancelled row yet — the marker is the earlier truth.
+      const cancelRequested = pendingRunCancellations.has(run.id);
       const adapterExitedCleanly =
         !adapterResult.timedOut && (adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage;
       // `process_lost` is the reaper's inference, not an observation: it fires
@@ -7402,10 +7443,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         latestRun?.status === "failed" &&
         latestRun.errorCode === PROCESS_LOST_ERROR_CODE;
       const adoptedTerminalStatus =
-        isHeartbeatRunTerminalStatus(latestRun?.status) && !supersedesLivenessGuess;
+        (isHeartbeatRunTerminalStatus(latestRun?.status) || cancelRequested) && !supersedesLivenessGuess;
 
       if (adoptedTerminalStatus) {
-        outcome = latestRun.status;
+        outcome = latestRun && isHeartbeatRunTerminalStatus(latestRun.status)
+          ? latestRun.status
+          : "cancelled";
       } else if (adapterResult.timedOut) {
         outcome = "timed_out";
       } else if (adapterExitedCleanly) {
@@ -7421,7 +7464,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // diagnosis; the adapter's own exit report only says it was signalled.
       const adoptedNoFirstOutput =
         adoptedTerminalStatus && latestRun?.errorCode === NO_FIRST_OUTPUT_ERROR_CODE;
-      const runErrorMessage =
+      let runErrorMessage =
         adoptedNoFirstOutput
           ? (latestRun?.error ?? "No first output before the deadline")
           : outcome === "cancelled"
@@ -7457,7 +7500,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       await flushOutputProgress({ force: true });
 
-      const status =
+      let status =
         outcome === "succeeded"
           ? "succeeded"
           : outcome === "cancelled"
@@ -7513,21 +7556,74 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         adapterResult.summary ?? null,
       );
 
-      let persistedRun = await setRunStatus(run.id, status, {
-        finishedAt: new Date(),
-        error: runErrorMessage,
-        errorCode: runErrorCode,
-        exitCode: adapterResult.exitCode,
-        signal: adapterResult.signal,
-        usageJson,
-        resultJson: persistedResultJson,
-        sessionIdAfter: nextSessionState.displayId ?? nextSessionState.legacySessionId,
-        stdoutExcerpt,
-        stderrExcerpt,
-        logBytes: logSummary?.bytes,
-        logSha256: logSummary?.sha256,
-        logCompressed: logSummary?.compressed ?? false,
-      });
+      // AgentDash (c3 review): an adopted outcome belongs to the actor that
+      // owns the terminal write — the cancel path commits "cancelled" with
+      // the operator's reason itself. Writing here too could only be
+      // rejected by the compare-and-set or, worse, land a generic
+      // "Cancelled" row in the gap before that commit, which the real
+      // cancel's CAS then refuses to overwrite.
+      let persistedRun = adoptedTerminalStatus
+        ? null
+        : await setRunStatus(run.id, status, {
+          finishedAt: new Date(),
+          error: runErrorMessage,
+          errorCode: runErrorCode,
+          exitCode: adapterResult.exitCode,
+          signal: adapterResult.signal,
+          usageJson,
+          resultJson: persistedResultJson,
+          sessionIdAfter: nextSessionState.displayId ?? nextSessionState.legacySessionId,
+          stdoutExcerpt,
+          stderrExcerpt,
+          logBytes: logSummary?.bytes,
+          logSha256: logSummary?.sha256,
+          logCompressed: logSummary?.compressed ?? false,
+        }, {
+          // AgentDash (c3): cancelled/timed_out are committed by other actors
+          // (operator cancel, timeout monitor). "failed" stays writable — the
+          // process_lost supersede above depends on replacing that guess.
+          unlessStatuses: ["cancelled", "timed_out", "succeeded"],
+        });
+      if (!persistedRun) {
+        // The run settled while the adapter was exiting (operator cancel,
+        // timeout monitor). Adopt the persisted outcome: the stale resultJson
+        // above was classified for the wrong outcome, so downstream writes and
+        // events must build on what actually landed.
+        const settledRun = await getRun(run.id);
+        if (settledRun && isHeartbeatRunTerminalStatus(settledRun.status)) {
+          // AgentDash (c3 review): the terminal actor owns status, error,
+          // errorCode, finishedAt and resultJson — but the adapter's evidence
+          // (usage, exit code, excerpts, log bytes/hash, session id) is real
+          // and belongs on the row. Without this write a stopped run that
+          // used tokens showed no usage while its cost events still charged
+          // it, and deadline/lost-process failures lost their stderr and
+          // exit code. Skipped only in the marker gap where the row is still
+          // running and the cancel commit owns the next write.
+          const withEvidence = await db
+            .update(heartbeatRuns)
+            .set({
+              exitCode: adapterResult.exitCode,
+              signal: adapterResult.signal,
+              usageJson,
+              sessionIdAfter: nextSessionState.displayId ?? nextSessionState.legacySessionId,
+              stdoutExcerpt,
+              stderrExcerpt,
+              logBytes: logSummary?.bytes,
+              logSha256: logSummary?.sha256,
+              logCompressed: logSummary?.compressed ?? false,
+              updatedAt: new Date(),
+            })
+            .where(eq(heartbeatRuns.id, run.id))
+            .returning()
+            .then((rows) => rows[0] ?? null);
+          const adopted = withEvidence ?? settledRun;
+          status = adopted.status;
+          outcome = settledRun.status;
+          runErrorMessage = adopted.error;
+          persistedResultJson = parseObject(adopted.resultJson) ?? {};
+          persistedRun = adopted;
+        }
+      }
       if (persistedRun) {
         persistedRun = await classifyAndPersistRunLiveness(persistedRun, persistedResultJson) ?? persistedRun;
         // OBS-1: normalized per-run facts, computed AFTER liveness so the
@@ -7582,16 +7678,38 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       const finalizedRun = persistedRun ?? (await getRun(run.id));
       if (finalizedRun) {
-        await appendRunEvent(finalizedRun, seq++, {
-          eventType: "lifecycle",
-          stream: "system",
-          level: outcome === "succeeded" ? "info" : "error",
-          message: `run ${outcome}`,
-          payload: {
-            status,
-            exitCode: adapterResult.exitCode,
-          },
-        });
+        // AgentDash (c3 review): the cancel path emits its own "run stopped"
+        // when it commits — a second lifecycle event here would print the
+        // stop twice. The marker covers the in-flight commit; a settled
+        // cancelled row needs the event check because other cancel paths
+        // (agent pause, budget) commit without one and this copy is theirs.
+        const suppressLifecycleEvent = outcome === "cancelled" && (
+          cancelRequested ||
+          (await db
+            .select({ id: heartbeatRunEvents.id })
+            .from(heartbeatRunEvents)
+            .where(and(
+              eq(heartbeatRunEvents.runId, finalizedRun.id),
+              eq(heartbeatRunEvents.message, "run stopped"),
+            ))
+            .limit(1)
+            .then((rows) => rows.length > 0))
+        );
+        if (!suppressLifecycleEvent) {
+          await appendRunEvent(finalizedRun, seq++, {
+            eventType: "lifecycle",
+            stream: "system",
+            // AgentDash (c3): a cancelled run is a stop, not a failure — warn at
+            // most, and name it "stopped" so the timeline never reads as an error.
+            level: outcome === "succeeded" ? "info" : outcome === "cancelled" ? "warn" : "error",
+            message: outcome === "cancelled" ? "run stopped" : `run ${outcome}`,
+            payload: {
+              status,
+              exitCode: adapterResult.exitCode,
+              ...(outcome === "cancelled" ? { reason: runErrorMessage } : {}),
+            },
+          });
+        }
         // OBS-1: exactly one warning when metering failed at the source —
         // the run itself is unaffected, but the missing ledger is visible.
         if (meteringStatus === "unmetered_no_ledger") {
@@ -7649,7 +7767,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               sessionParamsJson: nextSessionState.params,
               sessionDisplayId: nextSessionState.displayId,
               lastRunId: finalizedRun.id,
-              lastError: outcome === "succeeded" ? null : (adapterResult.errorMessage ?? "run_failed"),
+              // AgentDash (c3): a stopped run must not poison the session with
+              // "run_failed" — the next run would read it as a crash.
+              lastError: outcome === "succeeded"
+                ? null
+                : outcome === "cancelled"
+                  ? (runErrorMessage ?? "run_cancelled")
+                  : (adapterResult.errorMessage ?? "run_failed"),
             });
           }
         }
@@ -7681,7 +7805,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         logger.warn({ err: logSafeError(flushErr), runId }, "failed to flush run output progress after error");
       });
 
-      const failedRun = await setRunStatus(run.id, "failed", {
+      // AgentDash (c3): a throw caused by our own kill is not a failure. The
+      // cancel marker and the compare-and-set both keep the committed
+      // cancelled row from being overwritten with a failed one.
+      const cancelRequested = pendingRunCancellations.has(run.id);
+      const failedRun = cancelRequested
+        ? null
+        : await setRunStatus(run.id, "failed", {
         error: message,
         errorCode: "adapter_failed",
         finishedAt: new Date(),
@@ -7697,13 +7827,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         logBytes: logSummary?.bytes,
         logSha256: logSummary?.sha256,
         logCompressed: logSummary?.compressed ?? false,
-      });
-      await setWakeupStatus(run.wakeupRequestId, "failed", {
-        finishedAt: new Date(),
-        error: message,
+      }, {
+        unlessStatuses: ["cancelled", "timed_out", "succeeded"],
       });
 
       if (failedRun) {
+        await setWakeupStatus(run.wakeupRequestId, "failed", {
+          finishedAt: new Date(),
+          error: message,
+        });
         await appendRunEvent(failedRun, seq++, {
           eventType: "error",
           stream: "system",
@@ -7770,7 +7902,47 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
       }
 
-      await finalizeAgentStatus(agent.id, "failed");
+      // AgentDash (c3): when the failed write was withheld the run already has
+      // a committed outcome (cancelled by an operator stop, timed_out by the
+      // monitor) — finalize for THAT outcome, not the throw. A committed
+      // terminal row wins over the marker; the marker only covers the gap
+      // where the kill's throw arrived before the cancelled commit did.
+      const settledRow = failedRun ? null : await getRun(run.id).catch(() => null);
+      if (settledRow && isHeartbeatRunTerminalStatus(settledRow.status)) {
+        // AgentDash (c3 review): same evidence-only write as the resolved
+        // path — the settled row keeps its status/error/errorCode/finishedAt,
+        // but the excerpts, log bytes/hash and usage record still belong on
+        // it. A richer usage record already on the row wins.
+        await db
+          .update(heartbeatRuns)
+          .set({
+            ...(settledRow.usageJson == null
+              ? { usageJson: { meteringStatus: "unmetered_no_session" } }
+              : {}),
+            stdoutExcerpt,
+            stderrExcerpt,
+            logBytes: logSummary?.bytes,
+            logSha256: logSummary?.sha256,
+            logCompressed: logSummary?.compressed ?? false,
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, run.id))
+          .catch((evidenceErr) => {
+            logger.warn({ err: logSafeError(evidenceErr), runId }, "failed to persist adapter evidence on settled run");
+          });
+      }
+      const settledStatus = failedRun
+        ? "failed"
+        : settledRow?.status;
+      const settledOutcome = isHeartbeatRunTerminalStatus(settledStatus)
+        ? settledStatus
+        : cancelRequested
+          ? "cancelled"
+          : "failed";
+      await finalizeAgentStatus(
+        agent.id,
+        isHeartbeatRunTerminalStatus(settledOutcome) ? settledOutcome : "failed",
+      );
     }
     } catch (outerErr) {
           // Setup code before adapter.execute threw (e.g. ensureRuntimeState, resolveWorkspaceForRun).
@@ -7782,7 +7954,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           const setupErrorCode = workspaceAttempt ? WORKSPACE_PERSISTENCE_RECOVERY_CODE : "adapter_failed";
           const setupResult = (await getRun(runId, { unsafeFullResultJson: true }).catch(() => null))?.resultJson;
           const setupFailureAgent = await getAgent(run.agentId).catch(() => null);
-          await setRunStatus(runId, "failed", {
+          const setupFailedRun = await setRunStatus(runId, "failed", {
             error: message,
             errorCode: setupErrorCode,
             finishedAt: new Date(),
@@ -7793,13 +7965,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 errorMessage: message,
               }),
             } : {}),
+          }, {
+            unlessStatuses: ["cancelled", "timed_out", "succeeded"],
           }).catch(() => undefined);
-          await setWakeupStatus(run.wakeupRequestId, "failed", {
-            finishedAt: new Date(),
-            error: message,
-          }).catch(() => undefined);
+          // AgentDash (c3): the failed wakeup/event/finalize path only runs
+          // when the failed write actually landed — a run cancelled while
+          // setup was throwing keeps its cancelled wakeup and outcome.
+          if (setupFailedRun) {
+            await setWakeupStatus(run.wakeupRequestId, "failed", {
+              finishedAt: new Date(),
+              error: message,
+            }).catch(() => undefined);
+          }
           const failedRun = await getRun(runId).catch(() => null);
-          if (failedRun) {
+          if (failedRun && failedRun.status === "failed") {
             // Emit a run-log event so the failure is visible in the run timeline,
             // consistent with what the inner catch block does for adapter failures.
             await appendRunEvent(failedRun, 1, {
@@ -7844,7 +8023,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           }
           // Ensure the agent is not left stuck in "running" if the inner catch handler's
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
-          await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
+          // AgentDash (c3): finalize for the settled outcome — a concurrent
+          // cancel must leave the agent idle, not failed.
+          const settledSetupOutcome = failedRun && isHeartbeatRunTerminalStatus(failedRun.status)
+            ? failedRun.status
+            : "failed";
+          await finalizeAgentStatus(run.agentId, settledSetupOutcome).catch(() => undefined);
         } finally {
           const latestRun = await getRun(run.id).catch(() => null);
           // AgentDash (AGE-119): record exactly one agent-run per completed
@@ -8170,11 +8354,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         };
       }
 
+      // AgentDash (c3): a cancelled run never self-continues. Every cancel is
+      // deliberate — operator stop, pause/hold, budget, comment interrupt, or a
+      // closed issue — and each either parks the work or already carries its
+      // own wake (the interrupting comment, the hold release). Auto-recovery
+      // here restarted agents seconds after a manual stop.
       const issueNeedsImmediateRecovery =
         (issue.status === "todo" || issue.status === "in_progress") &&
         !issue.assigneeUserId &&
         issue.assigneeAgentId === run.agentId &&
-        (run.status === "failed" || run.status === "timed_out" || run.status === "cancelled");
+        (run.status === "failed" || run.status === "timed_out");
 
       if (!issueNeedsImmediateRecovery) {
         return { kind: "released" as const };
@@ -9403,52 +9592,71 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
     const agent = await getAgent(run.agentId);
 
-    const running = runningProcesses.get(run.id);
-    if (running) {
-      await terminateHeartbeatRunProcess({
-        pid: running.child.pid ?? run.processPid,
-        processGroupId: running.processGroupId ?? run.processGroupId,
-        graceMs: Math.max(1, running.graceSec) * 1000,
+    // AgentDash (c3): the cancelled write lands BEFORE the kill. Killing first
+    // let the adapter-exit path resolve mid-terminate, read a stale "running"
+    // row, and stamp the run "failed" — the agent then finalized to `error`
+    // and the issue queued a recovery wake nobody asked for.
+    pendingRunCancellations.add(run.id);
+    try {
+      // AgentDash (c3 review): compare-and-set the terminal status — a run
+      // that settled between the status check above and this write is left
+      // exactly as it is, process included.
+      const cancelled = await setRunStatus(run.id, "cancelled", {
+        finishedAt: new Date(),
+        error: reason,
+        errorCode,
+        ...(agent ? {
+          resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
+            resultJson: parseObject(run.resultJson),
+            errorCode,
+            errorMessage: reason,
+          }),
+        } : {}),
+      }, {
+        unlessStatuses: ["succeeded", "failed", "timed_out", "cancelled"],
       });
-    } else if (run.processPid || run.processGroupId) {
-      await terminateHeartbeatRunProcess({
-        pid: run.processPid,
-        processGroupId: run.processGroupId,
+      if (!cancelled) return await getRun(run.id) ?? run;
+
+      await setWakeupStatus(run.wakeupRequestId, "cancelled", {
+        finishedAt: new Date(),
+        error: reason,
       });
-    }
 
-    const cancelled = await setRunStatus(run.id, "cancelled", {
-      finishedAt: new Date(),
-      error: reason,
-      errorCode,
-      ...(agent ? {
-        resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
-          resultJson: parseObject(run.resultJson),
-          errorCode,
-          errorMessage: reason,
-        }),
-      } : {}),
-    });
-
-    await setWakeupStatus(run.wakeupRequestId, "cancelled", {
-      finishedAt: new Date(),
-      error: reason,
-    });
-
-    if (cancelled) {
       await appendRunEvent(cancelled, 1, {
         eventType: "lifecycle",
         stream: "system",
         level: "warn",
-        message: "run cancelled",
+        message: "run stopped",
+        payload: { reason },
       });
-      await releaseIssueExecutionAndPromote(cancelled);
-    }
 
-    runningProcesses.delete(run.id);
-    await finalizeAgentStatus(run.agentId, "cancelled");
-    await startNextQueuedRunForAgent(run.agentId);
-    return cancelled;
+      const running = runningProcesses.get(run.id);
+      const terminateTarget = running
+        ? {
+            pid: running.child.pid ?? run.processPid,
+            processGroupId: running.processGroupId ?? run.processGroupId,
+            graceMs: Math.max(1, running.graceSec) * 1000,
+          }
+        : run.processPid || run.processGroupId
+          ? { pid: run.processPid, processGroupId: run.processGroupId }
+          : null;
+      if (terminateTarget) {
+        // The status is already committed, so a failed kill must not leave the
+        // run looking live — log and let the reaper own the stray process.
+        await terminateHeartbeatRunProcess(terminateTarget).catch((err) => {
+          logger.warn({ err: logSafeError(err), runId }, "failed to terminate run process after cancel");
+        });
+      }
+
+      await releaseIssueExecutionAndPromote(cancelled);
+
+      runningProcesses.delete(run.id);
+      await finalizeAgentStatus(run.agentId, "cancelled");
+      await startNextQueuedRunForAgent(run.agentId);
+      return cancelled;
+    } finally {
+      pendingRunCancellations.delete(run.id);
+    }
   }
 
   async function cancelActiveForAgentInternal(agentId: string, reason = "Cancelled due to agent pause") {
@@ -9459,7 +9667,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES])));
 
     for (const run of runs) {
-      await setRunStatus(run.id, "cancelled", {
+      // AgentDash (c3 review): same compare-and-set as cancelRunInternal — a
+      // run that settled between the select and this write is left exactly
+      // as it is, process included.
+      const cancelled = await setRunStatus(run.id, "cancelled", {
         finishedAt: new Date(),
         error: reason,
         errorCode: "cancelled",
@@ -9470,7 +9681,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             errorMessage: reason,
           }),
         } : {}),
+      }, {
+        unlessStatuses: ["succeeded", "failed", "timed_out", "cancelled"],
       });
+      if (!cancelled) continue;
 
       await setWakeupStatus(run.wakeupRequestId, "cancelled", {
         finishedAt: new Date(),
@@ -9491,7 +9705,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           processGroupId: run.processGroupId,
         });
       }
-      await releaseIssueExecutionAndPromote(run);
+      await releaseIssueExecutionAndPromote(cancelled);
     }
 
     return runs.length;

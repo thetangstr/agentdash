@@ -44,12 +44,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
   }
 
+  // AgentDash (c3 review): forward the spawn so the run row gets
+  // process_pid/process_group_id — without it a cancel cannot kill the child.
   const proc = await runChildProcess(runId, command, args, {
     cwd,
     env,
     timeoutSec,
     graceSec,
     onLog,
+    onSpawn: ctx.onSpawn,
   });
 
   if (proc.timedOut) {

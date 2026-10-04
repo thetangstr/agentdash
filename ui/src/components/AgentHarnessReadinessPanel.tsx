@@ -1,6 +1,7 @@
 import { AlertTriangle, Info, ShieldCheck } from "lucide-react";
 import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION, isBlockingPreflightResult } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
+import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { cn } from "../lib/utils";
 
 type HarnessCheck = {
@@ -46,7 +47,9 @@ function readChecks(value: unknown): HarnessCheck[] {
 }
 
 function formatAdapterType(value: string | null) {
-  return value ? value.replace(/[_-]+/g, " ") : "adapter";
+  // AgentDash (c3 addendum): the proper adapter label ("Hermes (local)"), not
+  // a lowercase slug — and not a bare lowercase "adapter" when unknown.
+  return value ? getAdapterLabel(value) : "Adapter type unknown";
 }
 
 /**
@@ -219,28 +222,38 @@ export function AgentHarnessReadinessPanel({
   onRunPreflight,
   pending,
   error,
+  hasSuccessfulRuns,
   className,
 }: {
   status: AgentHarnessPreflightStatus;
   onRunPreflight?: () => void;
   pending?: boolean;
   error?: string | null;
+  /** AgentDash (c3 addendum): the agent has run successfully — a failed check
+   * then reads as "re-check the setup" in neutral styling, not a red block
+   * that looks like the agent is broken. */
+  hasSuccessfulRuns?: boolean;
   className?: string;
 }) {
   // Nothing wrong, and nothing the reader can act on: render nothing at all.
   // An error from a manual run still shows, because that one was asked for.
   if (!shouldSurfaceHarnessPreflight(status.state) && !error) return null;
 
-  const Icon = status.state === "pass" ? ShieldCheck : status.state === "warn" ? Info : AlertTriangle;
+  const softened = status.state === "fail" && hasSuccessfulRuns === true;
+  const Icon = status.state === "pass" ? ShieldCheck : status.state === "warn" || softened ? Info : AlertTriangle;
+  const title = softened ? "Re-check setup" : status.title;
+  const message = softened
+    ? "Latest setup check failed; this agent has run before. Launching stays blocked until a check passes — re-run it to confirm the failure is real."
+    : status.message;
   return (
-    <section className={cn("rounded-lg border px-4 py-3 text-sm", toneForState(status.state), className)}>
+    <section className={cn("rounded-lg border px-4 py-3 text-sm", softened ? "border-border bg-muted/40 text-muted-foreground" : toneForState(status.state), className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 shrink-0" />
-            <h3 className="font-medium">{personFacingPreflightText(status.title)}</h3>
+            <h3 className="font-medium">{personFacingPreflightText(title)}</h3>
           </div>
-          <p className="mt-1 text-xs opacity-85">{personFacingPreflightText(status.message)}</p>
+          <p className="mt-1 text-xs opacity-85">{personFacingPreflightText(message)}</p>
           <p className="mt-2 text-[11px] opacity-80">
             {formatAdapterType(status.adapterType)}
             {status.testedAt ? ` · Saved evidence ${new Date(status.testedAt).toLocaleString()}` : ""}
@@ -255,7 +268,7 @@ export function AgentHarnessReadinessPanel({
             onClick={onRunPreflight}
             disabled={pending}
           >
-            {pending ? "Checking…" : "Check setup"}
+            {pending ? "Checking…" : softened ? "Re-check setup" : "Check setup"}
           </Button>
         ) : null}
       </div>
