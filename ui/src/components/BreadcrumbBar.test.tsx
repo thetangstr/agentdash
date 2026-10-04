@@ -110,12 +110,11 @@ describe("BreadcrumbBar", () => {
     expect(back).not.toBeNull();
     expect(back!.getAttribute("href")).toBe("/workforce");
 
-    // The chevron shows on phones; the text label is hidden below `sm` so it
-    // can't truncate into a "W"/"Worl" fragment.
-    const chevron = back!.querySelector("svg.sm\\:hidden");
-    expect(chevron).not.toBeNull();
-    const parentLabel = back!.querySelector("span");
-    expect(parentLabel?.classList.contains("max-sm:hidden")).toBe(true);
+    // Phone-only (sm:hidden removes it from the desktop accessibility tree),
+    // icon-only, and at the 44px tap floor — no "W"/"Worl" fragment can render.
+    expect(back!.classList.contains("sm:hidden")).toBe(true);
+    expect(back!.textContent?.trim()).toBe("");
+    expect(back!.querySelector("svg")).not.toBeNull();
 
     // The current page name renders complete, not a fragment.
     expect(container.textContent).toContain("Agent Settings");
@@ -127,9 +126,14 @@ describe("BreadcrumbBar", () => {
       { label: "Agents" },
     ]);
 
-    const back = container.querySelector('a[aria-label="Back to Workforce"]');
-    const parentLabel = back!.querySelector("span")!;
-    expect(parentLabel.textContent).toBe("Workforce");
-    expect(parentLabel.classList.contains("truncate")).toBe(true);
+    // Desktop keeps a text crumb literally named "Workforce": the chevron's
+    // "Back to Workforce" name must not leak onto it (a shared aria-label
+    // collided with pages' own "Back to …" links — first-run e2e).
+    const textCrumb = Array.from(container.querySelectorAll('a[href="/workforce"]'))
+      .find((a) => a.textContent === "Workforce");
+    expect(textCrumb).not.toBeUndefined();
+    expect(textCrumb!.getAttribute("aria-label")).toBeNull();
+    expect(textCrumb!.classList.contains("max-sm:hidden")).toBe(true);
+    expect(textCrumb!.classList.contains("truncate")).toBe(true);
   });
 });

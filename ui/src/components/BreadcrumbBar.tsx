@@ -121,17 +121,27 @@ export function BreadcrumbBar() {
                     {isLast || !crumb.href ? (
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                     ) : (
-                      <BreadcrumbLink asChild>
-                        {/* 44px tap target on phones; the 48px header has the room. */}
-                        <Link
-                          to={crumb.href}
-                          aria-label={`Back to ${crumb.label}`}
-                          className="max-sm:inline-flex max-sm:min-h-11 max-sm:min-w-11 max-sm:max-w-full max-sm:items-center"
-                        >
-                          <ChevronLeft className="h-5 w-5 sm:hidden" aria-hidden="true" />
-                          <span className="min-w-0 truncate max-sm:hidden">{crumb.label}</span>
-                        </Link>
-                      </BreadcrumbLink>
+                      <>
+                        {/* AgentDash (c3-a11y): on phones the parent crumb is a
+                            back chevron named "Back to <parent>" — a truncated
+                            "W"/"Worl" reads as noise. Kept as a separate link so
+                            the desktop crumb keeps its real name (an aria-label
+                            on a shared link renames it at every width). */}
+                        <BreadcrumbLink asChild className="sm:hidden">
+                          <Link
+                            to={crumb.href}
+                            aria-label={`Back to ${crumb.label}`}
+                            className="inline-flex min-h-11 min-w-11 items-center"
+                          >
+                            <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+                          </Link>
+                        </BreadcrumbLink>
+                        <BreadcrumbLink asChild className="max-sm:hidden">
+                          <Link to={crumb.href} className="min-w-0 truncate">
+                            {crumb.label}
+                          </Link>
+                        </BreadcrumbLink>
+                      </>
                     )}
                   </BreadcrumbItem>
                 </Fragment>
