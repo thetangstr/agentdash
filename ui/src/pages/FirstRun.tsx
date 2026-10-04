@@ -14,7 +14,7 @@
 // "Plan with your Chief of Staff". Whether this flow applies to a company is
 // the server's answer (`applies`); when it does not, the page goes to /cos.
 // The page itself never reads the company's profile (one UX).
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -101,19 +101,7 @@ export function FirstRunPage() {
     enabled: Boolean(companyId),
   });
   const status = statusQuery.data;
-  // AgentDash (scan 5, lane access): "Skip for now" advances the flow instead
-  // of jumping Home. The server has no skip state (the step stays the first
-  // incomplete one on a revisit, which still offers it — no unusable loop), so
-  // the advance is kept here, per company.
-  const [skippedCompanyId, setSkippedCompanyId] = useState<string | null>(null);
-  const [skippedSteps, setSkippedSteps] = useState<ReadonlySet<FirstRunStep>>(new Set());
-  const skipped = skippedCompanyId === companyId ? skippedSteps : new Set<FirstRunStep>();
-  const nextStep: FirstRunStep | undefined =
-    status?.nextStep === "repo" && skipped.has("repo")
-      ? status.firstIssue.done
-        ? "done"
-        : "first_issue"
-      : status?.nextStep;
+  const nextStep = status?.nextStep;
   const adapterQuery = useQuery({
     queryKey: ["onboarding-adapter-status"],
     queryFn: () => onboardingApi.adapterStatus(),
@@ -225,14 +213,12 @@ export function FirstRunPage() {
 
   // The code and first-task steps can be skipped; Home keeps offering them.
   const optionalStep = !showRuntime && (nextStep === "repo" || nextStep === "first_issue");
-  // AgentDash (scan 5, lane access): skip advances the flow — repo → first
-  // task, first task → the Chief of Staff — instead of jumping Home.
+  // AgentDash (scan 5, lane access): Skip leaves the flow for the Chief of
+  // Staff rather than advancing past a step it did not do. The repo step only
+  // exists while no repository is connected — the server refuses a first task
+  // without one — so advancing here would land the founder on a step that can
+  // only fail, and the step bar would strike a skipped step through as done.
   const skipOptionalStep = () => {
-    if (nextStep === "repo") {
-      setSkippedCompanyId(company.id);
-      setSkippedSteps((current) => new Set(current).add("repo"));
-      return;
-    }
     navigate("/cos", { replace: true });
   };
 

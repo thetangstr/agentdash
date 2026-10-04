@@ -368,7 +368,8 @@ describe("InviteLandingPage", () => {
     expect(localStorage.getItem("paperclip:pending-invite-token")).toBeNull();
     // AgentDash (scan 5, lane access): the joined confirmation, not member
     // onboarding — the access gate walks the invitee into that next.
-    expect(container.textContent).toContain("You joined the company");
+    // PR #1017 review: it names the workspace, not a generic "the company".
+    expect(container.textContent).toContain("You joined Acme Robotics");
     expect(container.textContent).not.toContain("Member onboarding destination");
 
     await act(async () => {

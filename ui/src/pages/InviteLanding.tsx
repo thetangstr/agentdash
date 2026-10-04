@@ -568,7 +568,7 @@ export function InviteLandingPage() {
                 companyBrandColor={companyBrandColor}
                 className="h-12 w-12 border border-border rounded-xl"
               />
-              <h1 className="text-lg font-semibold">You joined the company</h1>
+              <h1 className="text-lg font-semibold">You joined {companyDisplayName}</h1>
             </div>
             <div className="mt-4">
               <Button asChild className="w-full rounded-xl">

@@ -16,6 +16,13 @@ const mockStewardshipsApi = vi.hoisted(() => ({
 
 vi.mock("@/api/agents", () => ({ agentsApi: mockAgentsApi }));
 vi.mock("@/api/stewardships", () => ({ stewardshipsApi: mockStewardshipsApi }));
+// The guide link goes through the company-aware router Link, which needs the
+// app shell's providers; this suite renders the panel bare.
+vi.mock("@/lib/router", () => ({
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
+    <a href={to}>{children}</a>
+  ),
+}));
 
 const { StewardshipAssignments } = await import("./StewardshipAssignments");
 

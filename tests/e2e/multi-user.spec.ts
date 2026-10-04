@@ -4,12 +4,16 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
  * E2E: Multi-user implementation tests (local_trusted mode).
  *
  * Covers:
- *   1. Company member management API (list, update role, suspend)
+ *   1. Company member management API (list)
  *   2. Human invite creation and acceptance API
  *   3. Company Settings UI — member list, role editing, invite creation
  *   4. Invite landing page UI
  *   5. Role-based access control (member management)
- *   6. Last-owner protection
+ *   6. Self-protection — a board user cannot remove or demote its own membership
+ *
+ * Role change and suspension against a real second member live in
+ * multi-user-authenticated.spec.ts: in local_trusted there is only the
+ * synthetic local-board user, so no second human can ever exist here.
  */
 
 const BASE = process.env.PAPERCLIP_E2E_BASE_URL ?? "http://127.0.0.1:3104";
@@ -214,7 +218,7 @@ test.describe("Multi-user: API", () => {
     }
   });
 
-  test("PATCH /companies/:id/members/:memberId refuses to demote the sole admin", async ({
+  test("PATCH /companies/:id/members/:memberId refuses with 403 when the caller removes itself", async ({
     request,
   }) => {
     // Create a fresh company for this test
@@ -238,8 +242,8 @@ test.describe("Multi-user: API", () => {
     }
 
     // In local_trusted the actor IS local-board, so the self-protection guard
-    // fires first: a board user cannot demote or remove its own membership,
-    // which is what keeps the last admin in place through this API.
+    // is what actually fires here: a board user cannot demote or remove its
+    // own membership (which is also what keeps the last admin in place).
     const demoteRes = await request.patch(
       `${BASE}/api/companies/${fresh.companyId}/members/${boardMember.id}`,
       { data: { membershipRole: "member" } }
@@ -401,72 +405,15 @@ test.describe("Multi-user: Member role management API", () => {
     );
     const { members } = await membersRes.json();
 
-    // Should have at least one member (the creator/local-board)
-    expect(members.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test("PATCH member role updates correctly", async ({ request }) => {
-    // First create an invite and accept it to get a second member
-    const invite = await createHumanInvite(request, companyId, "member");
-    const acceptRes = await request.post(
-      `${BASE}/api/invites/${invite.token}/accept`,
-      { data: { requestType: "human" } }
+    // local_trusted has exactly one human — the synthetic local-board actor —
+    // and the create route makes the creator an admin. Assert that role, not
+    // just that some member exists (PR #1017 review).
+    const boardMember = members.find(
+      (m: { principalId: string }) => m.principalId === "local-board"
     );
-    expect(acceptRes.ok()).toBe(true);
-
-    // List members
-    const membersRes = await request.get(
-      `${BASE}/api/companies/${companyId}/members`
-    );
-    const { members } = await membersRes.json();
-
-    // Find a non-admin member to modify
-    const nonAdmin = members.find(
-      (m: { membershipRole: string }) => m.membershipRole !== "admin"
-    );
-    if (!nonAdmin) {
-      test.skip();
-      return;
-    }
-
-    // Update role to admin
-    const patchRes = await request.patch(
-      `${BASE}/api/companies/${companyId}/members/${nonAdmin.id}`,
-      { data: { membershipRole: "admin" } }
-    );
-    expect(patchRes.ok()).toBe(true);
-    const updated = await patchRes.json();
-    expect(updated.membershipRole).toBe("admin");
-  });
-
-  test("PATCH member status to suspended works", async ({ request }) => {
-    // Create another member
-    const invite = await createHumanInvite(request, companyId, "member");
-    await request.post(`${BASE}/api/invites/${invite.token}/accept`, {
-      data: { requestType: "human" },
-    });
-
-    const membersRes = await request.get(
-      `${BASE}/api/companies/${companyId}/members`
-    );
-    const { members } = await membersRes.json();
-
-    const nonAdmin = members.find(
-      (m: { membershipRole: string; status: string }) =>
-        m.membershipRole !== "admin" && m.status === "active"
-    );
-    if (!nonAdmin) {
-      test.skip();
-      return;
-    }
-
-    const patchRes = await request.patch(
-      `${BASE}/api/companies/${companyId}/members/${nonAdmin.id}`,
-      { data: { status: "suspended" } }
-    );
-    expect(patchRes.ok()).toBe(true);
-    const updated = await patchRes.json();
-    expect(updated.status).toBe("suspended");
+    expect(boardMember).toBeTruthy();
+    expect(boardMember.membershipRole).toBe("admin");
+    expect(boardMember.status).toBe("active");
   });
 });
 

@@ -59,9 +59,9 @@ export function MemberOnboardingPage() {
   return (
     <main className="mx-auto flex min-h-[70vh] max-w-2xl items-center px-6 py-12">
       <section className="w-full rounded-xl border border-border bg-card p-8 shadow-sm">
-        <p className="text-sm font-medium text-primary">
-          {isWelcome && !isSteward ? "Member onboarding" : session.companyName}
-        </p>
+        {/* The eyebrow names the workspace for both readers (PR #1017 review):
+            a generic "Member onboarding" duplicated the panel's own context. */}
+        <p className="text-sm font-medium text-primary">{session.companyName}</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">
           {isWelcome
             ? isSteward

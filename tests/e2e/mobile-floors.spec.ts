@@ -462,13 +462,24 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: path.join(SHOTS_DIR, `floors-${name}.png`), fullPage: true });
 }
 
+/**
+ * Font metrics are audit input: measure only after the real web font has
+ * arrived. No short cap — the test timeout is the bound. A pending fetch that
+ * outlived a cap would leave the audit measuring fallback-font widths, which
+ * is exactly the false overflow this spec exists to catch (PR #1017 review).
+ */
+async function waitForRealFonts(page: Page) {
+  await page.evaluate(() => document.fonts.ready);
+  expect(
+    await page.evaluate(() => document.fonts.check("16px Manrope")),
+    "Manrope is loaded (measuring fallback fonts gives wrong metrics)",
+  ).toBe(true);
+}
+
 async function settle(page: Page) {
   // Let late queries (badges, counts, live runs) land; live pages never go fully idle.
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
-  // Font metrics are audit input: give document.fonts.ready a bounded window.
-  await page
-    .evaluate(() => Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5_000))]))
-    .catch(() => undefined);
+  await waitForRealFonts(page);
 }
 
 // A pending web-font fetch holds the `load` event and can stall page.goto for
@@ -660,6 +671,8 @@ test.describe("Phone floors on every main screen", () => {
       await gotoPage(page, `/${company.issuePrefix}/${target.path}`);
       const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: target.label });
       await expect(crumb).toBeVisible({ timeout: 30_000 });
+      // Each goto is a fresh document; wait for the real font before measuring.
+      await waitForRealFonts(page);
       // Fully on screen — not pushed past the edge.
       const box = (await crumb.boundingBox())!;
       expect(box.x + box.width, `${target.label} label on screen`).toBeLessThanOrEqual(WIDTHS[0].width);
@@ -676,6 +689,7 @@ test.describe("Phone floors on every main screen", () => {
     await gotoPage(page, `/${seeded.company.issuePrefix}/dashboard`);
     const nav = page.getByRole("navigation", { name: "Mobile navigation" });
     await expect(nav).toBeVisible({ timeout: 30_000 });
+    await waitForRealFonts(page);
     const items = await nav.locator("a, button").evaluateAll((els) =>
       els.map((el) => {
         const rect = el.getBoundingClientRect();
@@ -706,6 +720,7 @@ test.describe("Phone floors on every main screen", () => {
     await gotoPage(page, `/${seeded.company.issuePrefix}/agents/${seeded.agentId}`);
     const heading = main(page).getByRole("heading", { name: LONG_AGENT });
     await expect(heading).toBeVisible({ timeout: 30_000 });
+    await waitForRealFonts(page);
     // Shown in full: the heading is not truncated.
     expect(await heading.evaluate((el) => el.scrollWidth <= el.clientWidth + 0.5)).toBe(true);
     // The icon-only actions are named, 44px, and on screen.

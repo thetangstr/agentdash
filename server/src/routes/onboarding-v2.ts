@@ -668,9 +668,26 @@ export function onboardingV2Routes(db: Db) {
     }
     if (proposal.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     const accepted = await acceptOnboardingHires(companyId, conversationId, 'interview', 1, res,
-      async acceptance => agentCreatorFromProposal({
-        agents: agentService(acceptance.executor), instructions: agentInstructionsService(),
-      }).accept({ companyId, reportsToAgentId, proposal, transcript, accountableUserId: req.actor.userId }, acceptance));
+      async acceptance => {
+        const hire = await agentCreatorFromProposal({
+          agents: agentService(acceptance.executor), instructions: agentInstructionsService(),
+        }).accept({ companyId, reportsToAgentId, proposal, transcript, accountableUserId: req.actor.userId }, acceptance);
+        // AgentDash (PR #1017 review): the interview hire path logged no
+        // agent.created — same atomic audit as the plan-card path: inserted
+        // on the acceptance executor, published only after the transaction
+        // commits.
+        acceptance.publications.push(await insertActivity(acceptance.executor, {
+          companyId,
+          actorType: "user",
+          actorId: req.actor.userId!,
+          action: "agent.created",
+          entityType: "agent",
+          entityId: hire.created.id,
+          agentId: hire.created.id,
+          details: { source: "cos_proposal", name: hire.created.name, role: hire.created.role },
+        }));
+        return hire;
+      });
     if (!accepted) return;
     let result: Awaited<ReturnType<ReturnType<typeof agentCreatorFromProposal>['complete']>>;
     try {

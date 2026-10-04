@@ -15,7 +15,7 @@ import { alerterStatus } from "../observability/alerter.js";
 import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
 import { declaredOriginsEnabled, normalizeOrigin } from "../lib/declared-origins.js";
 import { isHostedBox } from "../services/license.js";
-import { boxClaimedCached, instanceHasUsers } from "../lib/claim-code.js";
+import { boxClaimedCached, claimStateCached } from "../lib/claim-code.js";
 import { servedRelease } from "../lib/served-release.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
@@ -189,10 +189,15 @@ export function healthRoutes(
     // claimed box keeps reporting bootstrap_pending while it already has a
     // user, and /auth must open on Sign in then. Exposed on both shapes: the
     // auth page's caller is anonymous by definition, and the count itself is
-    // already inferable from bootstrapStatus/claimed.
+    // already inferable from bootstrapStatus/claimed. Only /auth reads it
+    // (self-serve bootstrap or a hosted box), so it is only computed there —
+    // and from the cached claim state, not a count(*) per poll (PR #1017
+    // review).
     const hasUsers =
-      opts.deploymentMode === "authenticated" && typeof (db as { select?: unknown }).select === "function"
-        ? await instanceHasUsers(db)
+      (selfServeBootstrap || hostedBox) &&
+      opts.deploymentMode === "authenticated" &&
+      typeof (db as { select?: unknown }).select === "function"
+        ? (await claimStateCached(db)).users
         : false;
 
     // AgentDash (#767, SC-6): on a hosted box, whether anyone has claimed it

@@ -174,7 +174,7 @@ async function createAuthenticatedInvite(page: Page, companyPrefix: string) {
   return inviteUrl;
 }
 
-async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser) {
+async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser, companyDisplayName: string) {
   await page.goto(inviteUrl);
   await expect(page.getByTestId("invite-inline-auth")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
@@ -182,7 +182,8 @@ async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser) 
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
   await page.getByRole("button", { name: "Create account and continue" }).click();
-  await expect(page.getByRole("heading", { name: "You joined the company" })).toBeVisible({
+  // The joined confirmation names the workspace (PR #1017 review).
+  await expect(page.getByRole("heading", { name: `You joined ${companyDisplayName}` })).toBeVisible({
     timeout: 60_000,
   });
 }
@@ -303,16 +304,26 @@ test.describe("Multi-user: authenticated mode", () => {
     const inviteUrl = await createAuthenticatedInvite(page, companyPrefix);
 
     const invited = await newPage(browser);
+    let invitedMemberId: string | null = null;
     try {
-      await signUpFromInvite(invited.page, inviteUrl, invitedUser);
+      await signUpFromInvite(invited.page, inviteUrl, invitedUser, companyName);
 
       await expect(invited.page).not.toHaveURL(/\/auth/, { timeout: 60_000 });
 
-      await waitForMember(page, company.id, invitedUser.email);
+      const invitedMember = await waitForMember(page, company.id, invitedUser.email);
+      invitedMemberId = invitedMember.id;
 
       // The joined confirmation offers "Open board"; the member-onboarding
-      // gate then holds the member until both onboarding steps are done.
+      // gate then holds the member until both onboarding steps are done. Its
+      // welcome names the workspace — steward and terminal wording are for
+      // members who actually steward an agent (PR #1017 review).
       await invited.page.getByRole("link", { name: "Open board" }).click();
+      await expect(
+        invited.page.getByRole("heading", { name: `You joined ${companyName}` })
+      ).toBeVisible({ timeout: 60_000 });
+      const onboardingText = (await invited.page.locator("main").innerText()).toLowerCase();
+      expect(onboardingText).not.toContain("steward");
+      expect(onboardingText).not.toContain("terminal");
       await invited.page.getByRole("button", { name: "Continue" }).click();
       await invited.page.getByRole("button", { name: "Open dashboard" }).click();
       await expect(invited.page).toHaveURL(/\/dashboard/, { timeout: 60_000 });
@@ -340,5 +351,28 @@ test.describe("Multi-user: authenticated mode", () => {
     } finally {
       await invited.context.close();
     }
+
+    // Member management against a real second human, moved from
+    // multi-user.spec.ts — in local_trusted no second member can exist
+    // (PR #1017 review). The owner suspends the invitee and changes their
+    // role; both assertions read the echoed member record. The suspend comes
+    // first because the peer-rank guard only lets an admin manage members
+    // below admin — an already-promoted invitee could not be suspended here.
+    expect(invitedMemberId).toBeTruthy();
+    const suspendRes = await sessionJsonRequest<CompanyMember>(
+      page,
+      `${BASE}/api/companies/${company.id}/members/${invitedMemberId}`,
+      { method: "PATCH", data: { status: "suspended" } }
+    );
+    expect(suspendRes.status).toBe(200);
+    expect(suspendRes.json?.status).toBe("suspended");
+
+    const promoteRes = await sessionJsonRequest<CompanyMember>(
+      page,
+      `${BASE}/api/companies/${company.id}/members/${invitedMemberId}`,
+      { method: "PATCH", data: { membershipRole: "admin" } }
+    );
+    expect(promoteRes.status).toBe(200);
+    expect(promoteRes.json?.membershipRole).toBe("admin");
   });
 });
