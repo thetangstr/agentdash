@@ -12,6 +12,7 @@ import { readFallbackChain } from "../lib/adapter-fallback-chain.js";
 import { HttpError } from "../errors.js";
 import { redactForDisplay } from "./redact-for-display.js";
 import { logSafeError } from "./run-log-redaction.js";
+import { stripStatusLines } from "../lib/status-lines.js";
 import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
 
@@ -214,7 +215,7 @@ export function describeAdapterFailure(stdout: string, stderr: string): string {
     .filter((line) => !/^\s*session_id:\s*\S+\s*$/.test(line))
     .join("\n")
     .trim();
-  const out = stripHermesChatter(stdout).replace(/\s+/g, " ").trim();
+  const out = stripStatusLines(stdout).replace(/\s+/g, " ").trim();
   const parts = [err.replace(/\s+/g, " "), out].filter((part) => part.length > 0);
   const sessionId = /session_id:\s*(\S+)/.exec(stderr)?.[1];
   if (parts.length === 0) return sessionId ? `no output (session ${sessionId})` : "no output";
@@ -290,37 +291,10 @@ function spawnWithTimeout(
  * structured message arrays. Concatenates the system prompt and the full
  * conversation history.
  */
-/**
- * Drop Hermes's own chatter from the front of its stdout.
- *
- * Hermes writes status lines to STDOUT rather than stderr, even under `-Q`.
- * Observed for real: a CoS reply reached a colleague's thread reading
- * "⚠ tirith security scanner enabled but not available — command scanning will
- * use pattern matching only\r\nPut weekly revenue versus plan on the board
- * deck…". The answer was correct; it just arrived wearing a security warning,
- * because the adapter treats all of stdout as the agent's words.
- *
- * The specific warning is now off in Hermes config, which is the real fix. This
- * is the backstop, because the failure mode — arbitrary diagnostics posted as an
- * agent's answer — is one bad release away from returning, and the reader of a
- * board pack cannot tell our noise from the model's.
- *
- * Only a LEADING run is stripped, and only lines that carry a terminal-status
- * signature: a trailing carriage return (Hermes redraws these in place) or a
- * leading status glyph. Stripping stops at the first ordinary line, so a real
- * answer that happens to contain "⚠" further down is left alone.
- */
-export function stripHermesChatter(stdout: string): string {
-  const lines = stdout.split("\n");
-  let start = 0;
-  while (start < lines.length) {
-    const line = lines[start] ?? "";
-    const isStatusLine = line.endsWith("\r") || /^\s*[⚠✓✗→ℹ]/u.test(line);
-    if (!isStatusLine) break;
-    start += 1;
-  }
-  return lines.slice(start).join("\n").trim();
-}
+// Leading status-line stripping lives in lib/status-lines.ts so the run-summary
+// merge path can apply the same rule without importing this module. Re-exported
+// under the old name for existing callers/tests.
+export { stripStatusLines as stripHermesChatter } from "../lib/status-lines.js";
 
 // Message content is user-authored; a line that opens with a role header
 // would read as a new turn in the flattened prompt. A leading backslash
@@ -636,7 +610,7 @@ export async function dispatchLLM(
       // configured default.
       const hermesModel = (options?.model ?? "").trim();
       if (hermesModel) hermesArgs.push("-m", hermesModel);
-      const reply = stripHermesChatter(await spawnWithTimeout(hermesCmd, hermesArgs));
+      const reply = stripStatusLines(await spawnWithTimeout(hermesCmd, hermesArgs));
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
         return runFallbackAdapter(input, adapter, "empty reply", options);

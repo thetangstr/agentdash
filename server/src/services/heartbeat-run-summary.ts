@@ -1,3 +1,5 @@
+import { stripStatusLines } from "../lib/status-lines.js";
+
 export const HEARTBEAT_RUN_RESULT_SUMMARY_MAX_CHARS = 500;
 export const HEARTBEAT_RUN_RESULT_OUTPUT_MAX_CHARS = 4_096;
 export const HEARTBEAT_RUN_SAFE_RESULT_JSON_MAX_BYTES = 64 * 1024;
@@ -17,14 +19,44 @@ function readCommentText(value: unknown) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// AgentDash (canary): a runtime status line is never the run summary. The
+// Hermes adapter picks cleaned stdout as its response, so a leading "⚠ tirith
+// security scanner enabled but not available" line became the persisted
+// summary — and the same line reached `result` and `message`, which the run
+// card falls back to. Strip the leading chatter from every summary-shaped
+// input; a value that was only noise disappears instead of landing on the
+// run card.
+function readSummaryText(value: unknown) {
+  if (typeof value !== "string") return null;
+  const cleaned = stripStatusLines(value);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+// The displayable text fields a status line can land in. `error` is excluded
+// on purpose: a real error is served verbatim.
+const RESULT_TEXT_KEYS = ["summary", "result", "message"] as const;
+
+function cleanResultTextFields(base: Record<string, unknown>): Record<string, unknown> {
+  let cleaned: Record<string, unknown> | null = null;
+  for (const key of RESULT_TEXT_KEYS) {
+    if (typeof base[key] !== "string") continue;
+    const value = readSummaryText(base[key]);
+    if (value === base[key]) continue;
+    cleaned ??= { ...base };
+    if (value === null) delete cleaned[key];
+    else cleaned[key] = value;
+  }
+  return cleaned ?? base;
+}
+
 export function mergeHeartbeatRunResultJson(
   resultJson: Record<string, unknown> | null | undefined,
   summary: string | null | undefined,
 ): Record<string, unknown> | null {
-  const normalizedSummary = readCommentText(summary);
-  const baseResult =
+  const normalizedSummary = readSummaryText(summary);
+  let baseResult =
     resultJson && typeof resultJson === "object" && !Array.isArray(resultJson)
-      ? resultJson
+      ? cleanResultTextFields(resultJson)
       : null;
 
   if (!baseResult) {
@@ -55,7 +87,13 @@ export function summarizeHeartbeatRunResultJson(
   const summary: Record<string, unknown> = {};
   const textFields = ["summary", "result", "message", "error"] as const;
   for (const key of textFields) {
-    const value = truncateSummaryText(resultJson[key]);
+    let value = truncateSummaryText(resultJson[key]);
+    // Rows persisted before the merge-time strip can still carry a leading
+    // status line as their summary — or their result, which the card falls
+    // back to. `error` stays verbatim.
+    if (key !== "error" && value !== null) {
+      value = readSummaryText(value);
+    }
     if (value !== null) {
       summary[key] = value;
     }
@@ -100,9 +138,9 @@ export function buildHeartbeatRunIssueComment(
   }
 
   return (
-    readCommentText(resultJson.summary)
-    ?? readCommentText(resultJson.result)
-    ?? readCommentText(resultJson.message)
+    readSummaryText(resultJson.summary)
+    ?? readSummaryText(resultJson.result)
+    ?? readSummaryText(resultJson.message)
     ?? null
   );
 }

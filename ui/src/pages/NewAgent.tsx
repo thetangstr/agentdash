@@ -1,7 +1,7 @@
 import { WorkforceRoleSelect, WorkforceTemplatePreview } from "@/components/WorkforceTemplatePreview";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "@/lib/router";
+import { useNavigate, useSearchParams, Link } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { agentsApi } from "../api/agents";
@@ -291,7 +291,11 @@ export function NewAgent() {
         <h1 className="text-lg font-semibold">Hire a new agent</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Give it a role, a name and what it should do. Prefer to just describe
-          the job? Ask your Chief of Staff to hire one for you.
+          the job?{" "}
+          <Link to="/cos" className="underline">
+            Ask your Chief of Staff
+          </Link>{" "}
+          — it will put together a hire proposal for you to confirm.
         </p>
       </div>
 

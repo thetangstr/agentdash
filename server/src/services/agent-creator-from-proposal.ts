@@ -43,7 +43,7 @@ export function acceptedHireNeedsRepair(agentIds: string[], cause?: unknown) {
   if (cause !== undefined) (error as Error & { cause?: unknown }).cause = cause;
   return error;
 }
-export async function completeManagedHire(deps: Deps, created: Awaited<ReturnType<ReturnType<typeof agentService>['create']>>, files: () => Promise<Record<string, string>>, workforceTemplateId?: string, userId?: string, mintKey = false) {
+export async function completeManagedHire(deps: Deps, created: Awaited<ReturnType<ReturnType<typeof agentService>['create']>>, files: () => Promise<Record<string, string>>, workforceTemplateId?: string, userId?: string, mintKey = false, releaseStatus: 'idle' | 'pending_approval' = 'idle') {
   if (!created.pausedAt) throw conflict('Hire materialization pause is missing');
   const materialized = await deps.instructions.materializeManagedBundle(created, await files(), { entryFile: 'AGENTS.md', replaceExisting: false });
   await deps.agents.completeMaterialization(created.id, created.pausedAt, materialized.adapterConfig);
@@ -54,7 +54,7 @@ export async function completeManagedHire(deps: Deps, created: Awaited<ReturnTyp
     if (enrollment.skillInstallError) throw acceptedHireNeedsRepair([created.id]);
   }
   const apiKey = mintKey ? await deps.agents.createApiKey(created.id, 'default', { source: 'agent_creation' }) : undefined;
-  await deps.agents.completeMaterialization(created.id, created.pausedAt, undefined, true);
+  await deps.agents.completeMaterialization(created.id, created.pausedAt, undefined, releaseStatus);
   return { agentId: created.id, apiKey };
 }
 export function agentCreatorFromProposal(deps: Deps) {
@@ -139,7 +139,11 @@ export function agentCreatorFromProposal(deps: Deps) {
 // status values ("in_review"), "DoD", "board user", "document key" or "work
 // product". Batch 2 strengthened the canonical block: no internal record
 // names ("work product record") and never "complete" or "done" while a change
-// only awaits review. Proposal-created hires add nothing to that.
+// only awaits review. c3-cos strengthened it again: never narrate a status
+// transition ("moving the issue to in_review"), never stack states ("done and
+// ready for review"), and never paste runtime lines (tool output, scanner
+// warnings) into what a person reads. Proposal-created hires add nothing to
+// that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.

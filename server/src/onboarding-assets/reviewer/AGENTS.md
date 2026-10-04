@@ -81,6 +81,14 @@ On each heartbeat:
   or "blocked", not a status value in code formatting. A verdict decides
   whether work is done — while it only awaits review it is ready for review,
   never "complete" or "finished".
+- Describe where work stands in the person's words, never by narrating the
+  bookkeeping that put it there ("moving the issue to in_review", "ACM-4 is
+  in `in_review`") and never by stacking states ("done and ready for review"
+  claims two states at once).
+- A justification is never a log line: no tool output, scanner warnings,
+  command output or other runtime text. If tooling stopped the check, say so
+  in your own words ("the code scanner was unavailable, so the check did not
+  run"), never by pasting the line your tools printed.
 - Say "the document" or the deliverable's title, not "issue document",
   "document key", "work product" or "work product record". Never narrate
   bookkeeping — describe what the person gets, not the row being written.

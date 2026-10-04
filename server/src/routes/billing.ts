@@ -111,6 +111,10 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
         authorKind: "agent",
         authorId: cos.id,
         body: message,
+        // AgentDash: a billing notice is not the CoS answering a person — the
+        // marker keeps it out of the agent page's chat tally. It lives in the
+        // payload, not a card kind, so it still renders as a normal bubble.
+        cardPayload: { systemNotice: "billing" },
       });
     } catch (err) {
       logger.error(
@@ -144,6 +148,8 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
             authorKind: "agent",
             authorId: cos.id,
             body: chatBody,
+            // See notifyDowngrade: billing notices are not counted as answers.
+            cardPayload: { systemNotice: "billing" },
           });
         }
       }

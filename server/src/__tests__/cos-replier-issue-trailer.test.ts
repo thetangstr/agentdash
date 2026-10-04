@@ -8,7 +8,9 @@ import {
   WORKFORCE_PROPOSAL_GUIDANCE,
   cosReplier,
   extractCreateIssueTrailer,
+  extractHirePlanTrailer,
   labelMessageAuthors,
+  steadyStatePrompt,
 } from "../services/cos-replier.js";
 
 const agentId = "33333333-3333-4333-8333-333333333333";
@@ -53,7 +55,7 @@ function setup(
     postMessage: vi.fn().mockImplementation(async (m: { cardKind?: string }) => ({ id: `m-${m.cardKind ?? "text"}` })),
   };
   const issueAction = {
-    roster: vi.fn().mockResolvedValue([{ id: agentId, name: "Ellie", role: "Proposal Drafter" }]),
+    roster: vi.fn().mockResolvedValue([{ id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true, awaitingApproval: false }]),
     turnContext: vi.fn().mockResolvedValue(
       opts.turnContext ?? {
         openIssues: [{ identifier: "ACM-7", title: "Draft the Acme proposal", status: "in_progress", assigneeName: "Ellie" }],
@@ -64,15 +66,16 @@ function setup(
   };
   const requesterName = vi.fn().mockResolvedValue(opts.requesterName === undefined ? "Dana" : opts.requesterName);
   const llm = vi.fn().mockResolvedValue(llmText);
+  const cosState = cosStateIn(opts.phase ?? "ready", opts.goals ?? {}, opts.specId ?? null);
   const replier = cosReplier({
     conversations,
     llm,
-    cosState: cosStateIn(opts.phase ?? "ready", opts.goals ?? {}, opts.specId ?? null),
+    cosState,
     deepInterviewSpecs: opts.spec ? { getById: vi.fn().mockResolvedValue(opts.spec) } : undefined,
     issueAction,
     requesterName,
   } as any);
-  return { conversations, issueAction, requesterName, llm, replier };
+  return { conversations, issueAction, requesterName, llm, cosState, replier };
 }
 
 const block = JSON.stringify({ create_issue: { title: "Draft the Acme proposal", assigneeAgentId: agentId } });
@@ -578,5 +581,114 @@ describe("steady-state task wording", () => {
     expect(system).toContain("I can add this to Ellie's list; confirm below.");
     expect(system).toContain("Never say they will start, get started or begin right away");
     expect(system).not.toContain("say in one sentence who you'd give it to");
+  });
+});
+
+// AgentDash (c3-cos): post-onboarding, "ask your Chief of Staff to hire one"
+// was a dead end — the CoS could only refuse. Now a {"plan": …} trailer in a
+// steady reply posts the same agent_plan_proposal_v1 card onboarding uses, so
+// confirm-plan / revise-plan and the card's Confirm/Revise buttons just work.
+describe("steady-state hire proposals", () => {
+  const hirePlan = {
+    plan: {
+      rationale: "Support load is growing",
+      agents: [
+        {
+          role: "operations_lead",
+          title: "Operations Lead",
+          name: "Moss",
+          adapterType: "hermes_local",
+          responsibilities: ["run the support queue"],
+          kpis: ["first-response under 1 hour"],
+        },
+      ],
+      alignmentToShortTerm: "clears the support backlog",
+      alignmentToLongTerm: "a dedicated ops function",
+    },
+  };
+  const hireTrailerText = [
+    "I can put a hire proposal together — confirm on the card below.",
+    "",
+    "```json",
+    JSON.stringify(hirePlan),
+    "```",
+  ].join("\n");
+
+  it("posts the hire intro plus an agent_plan_proposal_v1 card, without moving the phase", async () => {
+    const { conversations, issueAction, cosState, replier } = setup(hireTrailerText);
+    await reply(replier);
+    const calls = posted(conversations);
+    const card = calls.find((c) => c.cardKind === "agent_plan_proposal_v1");
+    expect(card).toBeTruthy();
+    expect((card!.cardPayload as any).agents[0].name).toBe("Moss");
+    const intro = calls.find((c) => !c.cardKind);
+    expect(intro?.body).toContain("hire proposal");
+    expect(intro?.body).not.toContain('"plan"');
+    // A hire card in a steady conversation never regresses it to "plan".
+    expect(cosState.advancePhase).not.toHaveBeenCalled();
+    expect(issueAction.proposeFromTrailer).not.toHaveBeenCalled();
+    // Review-1019: the card names who asked — confirm-plan refuses anyone else.
+    expect((card!.cardPayload as any).requesterUserId).toBe("user-a");
+  });
+
+  it("tells the CoS a gated hire lands only after board approval", async () => {
+    const roster = [{ id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true, awaitingApproval: false }];
+    const gated = steadyStatePrompt(roster, null, [], true);
+    expect(gated).toContain("board approval");
+    expect(gated).toContain("never that they start on confirm");
+    // The gating clause itself is conditional — the ungated prompt mentions
+    // board approval only in the roster label explainer.
+    const ungated = steadyStatePrompt(roster, null, [], false);
+    expect(ungated).not.toContain("never that they start on confirm");
+    // A hire awaiting approval is named "awaiting board approval", never
+    // "unavailable right now" (review-1019 item 10).
+    const pending = steadyStatePrompt(
+      [{ id: agentId, name: "Quinn", role: "Operations", canTakeWork: false, awaitingApproval: true }],
+      null,
+    );
+    expect(pending).toContain("awaiting board approval");
+    expect(pending).not.toContain("Quinn (Operations): " + agentId + " — unavailable right now");
+    // The plain-language clause travels exactly once (review-1019 item 14).
+    expect(gated.split(COS_PLAIN_LANGUAGE_GUIDANCE).length - 1).toBe(1);
+  });
+
+  it("asks for the hire trailer only when the message clearly asks for a new teammate", async () => {
+    const { llm, replier } = setup("Sure.");
+    await reply(replier);
+    const system = llm.mock.calls[0]![0].system as string;
+    expect(system).toContain('"plan"');
+    expect(system).toContain("NEW teammate");
+    expect(system).toContain("confirm on the card");
+    expect(system).toContain("Never emit both a task and a hire in one reply");
+  });
+
+  it("posts a polite note and no card when the hire trailer is malformed", async () => {
+    const { conversations, replier } = setup(
+      ["Sure, let me get that hire started.", "", "```json", '{"plan":{"agents":"oops"}}', "```"].join("\n"),
+    );
+    await reply(replier);
+    const calls = posted(conversations);
+    expect(calls.every((c) => !c.cardKind)).toBe(true);
+    expect(calls.some((c) => String(c.body).includes("didn't come through cleanly"))).toBe(true);
+    expect(calls.every((c) => !String(c.body).includes("agents"))).toBe(true);
+  });
+
+  it("does not post a hire card when a newer message landed mid-reply", async () => {
+    const { conversations, replier } = setup(hireTrailerText, {
+      laterHistory: [{ id: "m-newer", role: "user", content: "actually never mind" }, ...defaultHistory],
+    });
+    await reply(replier);
+    const calls = posted(conversations);
+    expect(calls.every((c) => !c.cardKind)).toBe(true);
+    expect(calls.some((c) => String(c.body).includes("newer message came in"))).toBe(true);
+  });
+
+  it("extractHirePlanTrailer strips fenced plan blocks and leaves the visible text", () => {
+    const out = extractHirePlanTrailer(`Intro text.\n\n\`\`\`json\n${JSON.stringify(hirePlan)}\n\`\`\``);
+    expect(out?.body).toBe("Intro text.");
+    expect((out?.trailer as any).plan.agents[0].name).toBe("Moss");
+    expect(extractHirePlanTrailer("no trailer here")).toBeNull();
+    const bare = extractHirePlanTrailer(`Hi ${JSON.stringify(hirePlan)}`);
+    expect(bare?.body).toBe("Hi");
   });
 });

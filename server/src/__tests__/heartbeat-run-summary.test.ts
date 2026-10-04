@@ -95,4 +95,113 @@ describe("mergeHeartbeatRunResultJson", () => {
       stdout: "raw stdout",
     });
   });
+
+  // AgentDash (canary): the Hermes adapter picks cleaned stdout as its
+  // response, so a leading runtime warning became the persisted run summary.
+  // A status line is never the summary.
+  it("strips a leading runtime warning from the adapter summary", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\r\nMoved the ticket to review and posted the diff for the reviewer.",
+      ),
+    ).toEqual({
+      summary: "Moved the ticket to review and posted the diff for the reviewer.",
+    });
+  });
+
+  it("drops a summary that was only a status line", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\r\n",
+      ),
+    ).toBeNull();
+    expect(
+      mergeHeartbeatRunResultJson(
+        { summary: "⚠ scanner unavailable", result: "real output" },
+        null,
+      ),
+    ).toEqual({ result: "real output" });
+  });
+
+  it("strips chatter from a summary already inside resultJson", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        { summary: "✓ loading tools\r\nAll 42 checks pass.", stdout: "raw" },
+        "ignored fallback",
+      ),
+    ).toEqual({ summary: "All 42 checks pass.", stdout: "raw" });
+  });
+
+  it("leaves a warning mid-summary alone — only a leading run is chatter", () => {
+    const text = "Deployed the fix.\n⚠ scanner unavailable";
+    expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
+  });
+
+  // AgentDash (review): the glyph set must only cover runtime diagnostics. A
+  // "✓" checklist or a "→ Next:" pointer is an agent's own prose, and a
+  // CRLF-authored summary must not vanish.
+  it("keeps a checklist summary — ✓ and → are agent prose, not runtime noise", () => {
+    const text = "✓ Fixed the deploy script\n✓ Added tests\n→ Next: roll it out";
+    expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
+  });
+
+  it("keeps a CRLF-authored summary and normalises the line endings", () => {
+    expect(
+      mergeHeartbeatRunResultJson(null, "line one\r\nline two\r\n"),
+    ).toEqual({ summary: "line one\nline two" });
+  });
+
+  it("still treats a lone carriage return as an in-place redraw", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "✓ session resumed\rDeploy finished and the diff is posted.",
+      ),
+    ).toEqual({ summary: "Deploy finished and the diff is posted." });
+  });
+
+  it("still strips a mixed warning that was redrawn over a real answer", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "⚠ scanner unavailable\r\nAll 42 checks pass.",
+      ),
+    ).toEqual({ summary: "All 42 checks pass." });
+  });
+
+  it("strips a warning-only result and message, not just the summary", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        {
+          result: "⚠ tirith security scanner enabled but not available",
+          message: "real message",
+        },
+        null,
+      ),
+    ).toEqual({ message: "real message" });
+  });
+});
+
+describe("summarizeHeartbeatRunResultJson status lines", () => {
+  it("never serves a leading status line as the summary", () => {
+    const summary = summarizeHeartbeatRunResultJson({
+      summary: "⚠ tirith security scanner enabled but not available",
+      result: "real output",
+    });
+
+    expect(summary).toEqual({ result: "real output" });
+  });
+});
+
+describe("buildHeartbeatRunIssueComment status lines", () => {
+  it("skips a chatter-only summary and falls back to the result", () => {
+    expect(
+      buildHeartbeatRunIssueComment({
+        summary: "✓ session resumed\r\n",
+        result: "Shipped the fix.",
+      }),
+    ).toBe("Shipped the fix.");
+  });
 });

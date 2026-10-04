@@ -217,6 +217,17 @@ export interface CosIssueRosterEntry {
   id: string;
   name: string;
   role: string;
+  /**
+   * AgentDash (canary c3): a paused or errored teammate is still on the team —
+   * the roster names them so the CoS can say so, flagged false so it does not
+   * hand them work it cannot give.
+   */
+  canTakeWork: boolean;
+  /**
+   * AgentDash (review-1019): a hire waiting on board approval is not
+   * "unavailable right now" — the prompt must say it awaits approval.
+   */
+  awaitingApproval: boolean;
 }
 
 /**
@@ -395,10 +406,12 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
 
   return {
     /**
-     * Agents this person may hand work to, for the steady-state prompt. The
+     * The team this person works with, for the steady-state prompt. The
      * prompt's reply posts into a chat every member can read, so the team
      * list is the company-visible one — a name only the sender may see would
-     * leak to everyone else.
+     * leak to everyone else. Members who cannot take work right now (paused,
+     * error) are still listed, flagged `canTakeWork: false`, so the reply can
+     * answer "where is Scout?" instead of pretending they do not exist.
      */
     roster: async (companyId: string, requester: CosIssueRequester | null | undefined, cosAgentId: string | null) => {
       if (!requester?.userId) return [];
@@ -410,11 +423,17 @@ export function cosIssueAction(deps: CosIssueActionDeps) {
         .filter(
           (a) =>
             a.companyId === companyId &&
-            ASSIGNABLE_AGENT_STATUSES.has(a.status) &&
+            a.status !== "terminated" &&
             !isChiefOfStaff(a, cosAgentId) &&
             (!visibleToAll || visibleToAll.has(a.id)),
         )
-        .map((a): CosIssueRosterEntry => ({ id: a.id, name: a.name, role: a.title || a.role || "agent" }));
+        .map((a): CosIssueRosterEntry => ({
+          id: a.id,
+          name: a.name,
+          role: a.title || a.role || "agent",
+          canTakeWork: ASSIGNABLE_AGENT_STATUSES.has(a.status),
+          awaitingApproval: a.status === "pending_approval",
+        }));
     },
 
     /** Workspace facts this person's reply may rely on; empty without them. */

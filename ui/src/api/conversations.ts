@@ -20,6 +20,8 @@ export interface Message {
   authorId?: string;
   /** The signed-in person who wrote a user message (null on agent messages and old rows). */
   authorUserId?: string | null;
+  /** The agent that wrote an agent message (null on user messages and old rows). */
+  authorAgentId?: string | null;
   body?: string;
   content?: string; // upstream column name
   cardKind?: string | null;

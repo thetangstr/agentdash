@@ -100,6 +100,7 @@ import {
   HEARTBEAT_RUN_SAFE_RESULT_JSON_MAX_BYTES,
   mergeHeartbeatRunResultJson,
 } from "./heartbeat-run-summary.js";
+import { stripStatusLines } from "../lib/status-lines.js";
 import {
   buildHeartbeatRunStopMetadata,
   mergeHeartbeatRunStopMetadata,
@@ -1244,7 +1245,15 @@ export function summarizeHeartbeatRunListResultJson(input: {
     ["message", input.message],
     ["error", input.error],
   ] as const) {
-    const normalized = readNonEmptyString(value);
+    let normalized = readNonEmptyString(value);
+    // AgentDash (canary): rows persisted before the merge-time strip can hold
+    // a leading runtime status line (e.g. a scanner warning) as their summary
+    // or their result — the run card falls back summary ?? result, so every
+    // displayable text field is stripped. A real error stays verbatim.
+    if (key !== "error" && normalized) {
+      const cleaned = stripStatusLines(normalized);
+      normalized = cleaned.length > 0 ? cleaned : null;
+    }
     if (normalized) summary[key] = normalized;
   }
 

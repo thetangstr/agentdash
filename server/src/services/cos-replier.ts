@@ -14,6 +14,8 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../middleware/logger.js";
 import { WORKFORCE_TEMPLATES, isAgentPlanPayload, normalizeAgentPlanTitles, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 import type { Db } from "@paperclipai/db";
+import { companies as companiesTable } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
 import { promptFactText, sanitizePromptData } from "./prompt-fact-text.js";
 import type { DispatchMeter } from "./dispatch-llm.js";
 import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-failure.js";
@@ -61,7 +63,10 @@ export function defaultAgentPlanAdapterType(): string {
 export const COS_PLAIN_LANGUAGE_GUIDANCE = `Write every visible sentence for a busy, non-technical business owner. Never name adapters, runtimes, models or providers (for example "hermes_local" or "claude_local"), JSON field names, role slugs with underscores, or internal process terms such as "artifact evidence", "neutral review", "workforce template" or "heartbeat". Say "Proposal Drafter", not "proposal_drafter", and "a reviewer checks the first job", not "neutral review".`;
 
 // AgentDash: shared catalog guidance for single, generated and revised proposals.
-export const WORKFORCE_PROPOSAL_GUIDANCE = `Available workforce templates (version 1): ${WORKFORCE_TEMPLATES.map(template => `${template.id}: ${template.description}`).join("; ")}. Add optional workforceTemplateId to an agent only when the human explicitly selects that catalog role. Preserve existing selections when revising unrelated details. Ambiguous requests remain custom with the field omitted. A template describes work and grants no permissions; display role, authority and runtime remain independent. A new hire's first job is accepted only after a reviewer checks the delivered work. ${COS_PLAIN_LANGUAGE_GUIDANCE}`;
+// The core text is kept separate so a prompt that already carries the
+// plain-language clause (the steady-state prompt does) does not get it twice.
+const WORKFORCE_PROPOSAL_CORE = `Available workforce templates (version 1): ${WORKFORCE_TEMPLATES.map(template => `${template.id}: ${template.description}`).join("; ")}. Add optional workforceTemplateId to an agent only when the human explicitly selects that catalog role. Preserve existing selections when revising unrelated details. Ambiguous requests remain custom with the field omitted. A template describes work and grants no permissions; display role, authority and runtime remain independent. A new hire's first job is accepted only after a reviewer checks the delivered work.`;
+export const WORKFORCE_PROPOSAL_GUIDANCE = `${WORKFORCE_PROPOSAL_CORE} ${COS_PLAIN_LANGUAGE_GUIDANCE}`;
 
 interface CosStateRow {
   conversationId: string;
@@ -212,14 +217,43 @@ Anything not listed there is unknown to you. ${COS_TRUTHFULNESS_GUIDANCE}`,
 // AgentDash (scan 3, lane G): the steady-state CoS can hand out one task per
 // reply through a fenced JSON trailer, which the server validates and turns
 // into an assigned issue (cos-issue-action.ts).
+//
+// AgentDash (c3-cos): it can also propose a hire. A {"plan": …} trailer is
+// the same agent_plan_proposal_v1 payload onboarding produces, so the card,
+// its Confirm/Revise buttons, confirm-plan, and revise-plan all work without
+// a second flow — the "ask your CoS to hire" advice on the hire page stops
+// being a dead end.
+const STEADY_HIRE_GUIDANCE = `Only when the message clearly asks to bring on a NEW teammate (for example "we need a bookkeeper" or "hire someone to run support"), propose the hire by ending your reply with exactly one fenced JSON block, after your visible reply:
+
+\`\`\`json
+{"plan":{"rationale":"Why this hire helps, in plain words","agents":[{"role":"<short role id, like operations_lead>","title":"<display title, like Operations Lead>","name":"<a short human name>","adapterType":"<adapter>","responsibilities":["..."],"kpis":["..."]}],"alignmentToShortTerm":"What this hire does for them now","alignmentToLongTerm":"How it pays off over time"}}
+\`\`\`
+
+Rules for a hire proposal: list each hire the person asked for as an entry in "agents", never more than they asked for; adapterType must be one of the allowed values below, preferring the default unless they asked for another; the person confirms on the card before anyone is hired — in the visible reply say one neutral sentence, for example "I can put a hire proposal together — confirm on the card below." Never say the hire is done, that the person "now has" a teammate, or that anyone has started; nothing exists until they confirm. Never emit both a task and a hire in one reply. Never show the JSON or an adapterType in the visible reply.`;
+
 export function steadyStatePrompt(
   roster: CosIssueRosterEntry[] | null,
   requester?: { name: string | null } | null,
+  memberNames: readonly string[] = [],
+  requiresApproval = false,
 ): string {
+  // STEADY_STATE_PROMPT already carries the plain-language clause, so the
+  // hire block embeds the workforce core, not the full guidance (review #1019).
+  const hireBlock = `
+
+${WORKFORCE_PROPOSAL_CORE}
+
+${STEADY_HIRE_GUIDANCE}${requiresApproval ? " This company requires board approval for new hires — say the hires join the team once the board approves them, never that they start on confirm." : ""}
+
+For adapterType, choose from: ${AGENT_PLAN_ADAPTER_TYPES}. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the person explicitly asks for another adapter. ${planNamingGuidance(memberNames)}`;
   if (!roster || roster.length === 0) {
-    return `${STEADY_STATE_PROMPT} ${COS_FACTS_CHANNEL_GUIDANCE} You cannot hand out tasks from this chat right now because nobody on the team can take work from this person yet; if asked, say so plainly and suggest hiring someone first.`;
+    return `${STEADY_STATE_PROMPT} ${COS_FACTS_CHANNEL_GUIDANCE} You cannot hand out tasks from this chat right now because nobody on the team can take work from this person yet; if asked, say so plainly.${hireBlock}`;
   }
-  const team = roster.map((a) => `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}`).join("\n");
+  const team = roster
+    .map((a) =>
+      `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}${a.canTakeWork ? "" : a.awaitingApproval ? " — awaiting board approval, cannot take new work yet" : " — unavailable right now, cannot take new work"}`,
+    )
+    .join("\n");
   // The message being answered is the last user turn; it is referenced, not
   // quoted, because quoting raw user text into the system prompt would hand
   // it instruction weight (review-1006 finding 4).
@@ -232,8 +266,10 @@ You are answering the last message in this chat${requester.name ? `, from ${prom
 
 ${COS_FACTS_CHANNEL_GUIDANCE}
 
-You can suggest a task. The person confirms it with one click before anything is created. The team this person can hand work to (name, role, id):
+You can suggest a task. The person confirms it with one click before anything is created. The team this person works with (name, role, id):
 ${team}${requestBlock}
+
+Teammates marked "unavailable right now" or "awaiting board approval" are still part of the team — say so when asked about them — but they cannot take new work, so never name one as an assignee. An approved hire stops awaiting approval; never claim one was rejected or removed unless a fact says so.
 
 Only when the message you are answering clearly asks for a piece of work to be done (for example "get Ellie to draft the proposal for Acme" or "have someone research our top three competitors"), suggest ONE task by ending your reply with exactly one fenced JSON block, after your visible reply:
 
@@ -241,7 +277,7 @@ Only when the message you are answering clearly asks for a piece of work to be d
 {"create_issue":{"title":"Short task title","description":"What done looks like, in plain words","assigneeAgentId":"<id from the list above>"}}
 \`\`\`
 
-Rules: at most one task per reply; nothing may follow the block; pick the assignee whose role fits best and use their id exactly as listed; never invent an id. Do not suggest a task for questions, status checks, thanks, brainstorming, or when you are unsure what they want; ask one short question instead. In the visible reply, say in one neutral sentence whose list you can add it to, for example "I can add this to Ellie's list; confirm below." Never say they will start, get started or begin right away: the person chooses on the card whether the work starts now. Never show the JSON or the id in the visible reply.`;
+Rules: at most one task per reply; nothing may follow the block; pick the assignee whose role fits best and use their id exactly as listed; never invent an id. Do not suggest a task for questions, status checks, thanks, brainstorming, or when you are unsure what they want; ask one short question instead. In the visible reply, say in one neutral sentence whose list you can add it to, for example "I can add this to Ellie's list; confirm below." Never say they will start, get started or begin right away: the person chooses on the card whether the work starts now. Never show the JSON or the id in the visible reply.${hireBlock}`;
 }
 
 function goalsPrompt(state: CosStateRow): string {
@@ -395,22 +431,22 @@ export function labelMessageAuthors(
     });
 }
 
-// AgentDash (scan 3, lane G): find every create_issue block a model might
+// AgentDash (scan 3, lane G; c3-cos): find every `<key>` block a model might
 // write: fenced blocks (any language tag, closed or not, text after them) and
-// bare JSON objects that start with {"create_issue". All of them are removed
+// bare JSON objects that start with {"<key>". All of them are removed
 // from the visible body, so raw JSON and agent ids never reach the chat.
 // `trailer` is the parsed object when there is exactly one block that parses,
-// otherwise { create_issue: null } (the caller turns that into the "didn't
+// otherwise { [key]: null } (the caller turns that into the "didn't
 // come through" note). Null when there is no such block.
-export function extractCreateIssueTrailer(raw: string): { body: string; trailer: unknown } | null {
+function extractKeyedTrailer(raw: string, key: "create_issue" | "plan"): { body: string; trailer: unknown } | null {
   const parse = (text: string): unknown => {
     try {
       const value = JSON.parse(text.trim());
-      return value && typeof value === "object" && !Array.isArray(value) && "create_issue" in value
+      return value && typeof value === "object" && !Array.isArray(value) && key in value
         ? value
-        : { create_issue: null };
+        : { [key]: null };
     } catch {
-      return { create_issue: null };
+      return { [key]: null };
     }
   };
   // Where the object opened at `open` closes (string-aware), or the end of
@@ -439,15 +475,16 @@ export function extractCreateIssueTrailer(raw: string): { body: string; trailer:
   const fences: Array<{ start: number; end: number }> = [];
   // Fenced blocks, closed or running to the end of the reply.
   const fenceRe = /```[^\n`]*\n?([\s\S]*?)(?:```|$)/g;
+  const keyRe = new RegExp(`"${key}"`);
   for (const match of raw.matchAll(fenceRe)) {
     if (match[0].length === 0) break;
     const range = { start: match.index!, end: match.index! + match[0].length };
     fences.push(range);
-    if (/create_issue/.test(match[1] ?? "")) blocks.push({ ...range, content: match[1] ?? "" });
+    if (keyRe.test(match[1] ?? "")) blocks.push({ ...range, content: match[1] ?? "" });
   }
-  // Bare JSON outside fences, only when the object starts with "create_issue".
+  // Bare JSON outside fences, only when the object starts with {"<key>".
   const insideFence = (i: number) => fences.some((f) => i >= f.start && i < f.end);
-  const bareRe = /\{\s*"create_issue"/g;
+  const bareRe = new RegExp(`\\{\\s*"${key}"`, "g");
   for (const match of raw.matchAll(bareRe)) {
     const open = match.index!;
     if (insideFence(open) || blocks.some((b) => open >= b.start && open < b.end)) continue;
@@ -466,9 +503,20 @@ export function extractCreateIssueTrailer(raw: string): { body: string; trailer:
   }
   parts.push(raw.slice(cursor));
   const body = parts.map((part) => part.trim()).filter((part) => part.length > 0).join("\n\n");
-  // More than one block is never acted on: at most one task per reply.
-  const trailer = blocks.length === 1 ? parse(blocks[0]!.content) : { create_issue: null };
+  // More than one block is never acted on: at most one action per reply.
+  const trailer = blocks.length === 1 ? parse(blocks[0]!.content) : { [key]: null };
   return { body, trailer };
+}
+
+export function extractCreateIssueTrailer(raw: string): { body: string; trailer: unknown } | null {
+  return extractKeyedTrailer(raw, "create_issue");
+}
+
+// AgentDash (c3-cos): a steady-state reply may propose a hire with a
+// {"plan": …} trailer — the same agent_plan_proposal_v1 payload the onboarding
+// plan card carries, so confirm-plan and revise-plan handle it unchanged.
+export function extractHirePlanTrailer(raw: string): { body: string; trailer: unknown } | null {
+  return extractKeyedTrailer(raw, "plan");
 }
 
 function isGoalsPatch(
@@ -638,7 +686,23 @@ export function cosReplier(deps: Deps) {
             logger.warn({ err, companyId: input.companyId }, "cos-replier: could not load the requester's name");
           }
         }
-        system = steadyStatePrompt(roster, trigger ? { name: requesterName } : null);
+        // Hire proposals must never promise what the company's gate does not
+        // deliver: with board approval required, "confirm" means "sent to
+        // Approvals", not "hired".
+        let hiresNeedBoardApproval = false;
+        if (deps.db && input.companyId) {
+          try {
+            const company = await deps.db
+              .select({ requireBoardApprovalForNewAgents: companiesTable.requireBoardApprovalForNewAgents })
+              .from(companiesTable)
+              .where(eq(companiesTable.id, input.companyId))
+              .then((rows) => rows[0] ?? null);
+            hiresNeedBoardApproval = company?.requireBoardApprovalForNewAgents === true;
+          } catch (err) {
+            logger.warn({ err, companyId: input.companyId }, "cos-replier: could not read the hire-approval flag");
+          }
+        }
+        system = steadyStatePrompt(roster, trigger ? { name: requesterName } : null, memberNames, hiresNeedBoardApproval);
         // labelMessageAuthors emits one entry per non-error card in
         // chronological order, so its index maps 1:1 onto this list.
         const chronological = recent
@@ -705,7 +769,16 @@ export function cosReplier(deps: Deps) {
       // Set once a plan intro is up, so a failed card post that lands in the
       // outer catch below does not post the same text a second time.
       let planIntroPosted = false;
-      const postPlan = async (proposedPlan: AgentPlanProposalV1Payload, proposedBody: string) => {
+      // AgentDash (c3-cos): in steady state a {"plan": …} trailer proposes a
+      // hire. The conversation is past onboarding, so the card must NOT move
+      // its phase back to "plan" — confirm-plan and revise-plan act on the
+      // card itself regardless of phase. trackPhaseProposal stays on for the
+      // onboarding flow, where recording the proposal keeps the phase machine.
+      const postPlan = async (
+        proposedPlan: AgentPlanProposalV1Payload,
+        proposedBody: string,
+        opts: { trackPhaseProposal?: boolean; requesterUserId?: string | null } = {},
+      ) => {
         // Never an agent named after a person in the company; titles verbatim.
         const { plan, body: planBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
         let introMsg: unknown = null;
@@ -724,18 +797,25 @@ export function cosReplier(deps: Deps) {
           authorId: input.cosAgentId,
           body: "",
           cardKind: PLAN_CARD_KIND,
-          cardPayload: plan as unknown as Record<string, unknown>,
+          cardPayload: {
+            ...plan,
+            // Review-1019: only the person who asked may confirm a
+            // steady-state hire card, like the task cards (item 11).
+            ...(opts.requesterUserId ? { requesterUserId: opts.requesterUserId } : {}),
+          } as unknown as Record<string, unknown>,
           companyId: input.companyId,
         });
-        try {
-          await cosState?.advancePhase(input.conversationId, "plan", {
-            proposalMessageId: cardMsg?.id ?? null,
-          });
-        } catch (err) {
-          logger.warn(
-            { err, conversationId: input.conversationId },
-            "cos-replier: plan card posted but recording it as the proposal failed",
-          );
+        if (opts.trackPhaseProposal !== false) {
+          try {
+            await cosState?.advancePhase(input.conversationId, "plan", {
+              proposalMessageId: cardMsg?.id ?? null,
+            });
+          } catch (err) {
+            logger.warn(
+              { err, conversationId: input.conversationId },
+              "cos-replier: plan card posted but recording it as the proposal failed",
+            );
+          }
         }
         return introMsg ?? cardMsg;
       };
@@ -870,13 +950,20 @@ export function cosReplier(deps: Deps) {
         );
       }
 
+      // AgentDash (c3-cos): a steady-state reply may carry a {"plan": …} hire
+      // proposal. It posts the same agent_plan_proposal_v1 card onboarding
+      // does, so Confirm/Revise, confirm-plan and revise-plan work unchanged.
+      const planTrailer = steady && deps.issueAction && input.companyId ? extractHirePlanTrailer(text) : null;
+      // Strip the plan block first so a stray create_issue alongside it is
+      // still removed from the visible text.
+      const issueSource = planTrailer ? planTrailer.body : text;
       // AgentDash (scan 3, lane G): a steady-state create_issue block. It is
       // always stripped; a valid one becomes a "Create this task?" card that
       // only the requester can confirm, anything else a polite inline note.
-      const issueTrailer = steady && deps.issueAction && input.companyId ? extractCreateIssueTrailer(text) : null;
-      if (issueTrailer && deps.issueAction && input.companyId) {
+      const issueTrailer = steady && deps.issueAction && input.companyId ? extractCreateIssueTrailer(issueSource) : null;
+      if ((planTrailer || issueTrailer) && deps.issueAction && input.companyId) {
         const companyId = input.companyId;
-        // Honour it only while it answers the newest message a person wrote.
+        // Honour a trailer only while it answers the newest message a person wrote.
         let triggerIsNewest = false;
         if (input.triggerMessageId) {
           try {
@@ -887,6 +974,58 @@ export function cosReplier(deps: Deps) {
             logger.warn({ err, conversationId: input.conversationId }, "cos-replier: could not re-read the conversation");
           }
         }
+
+        if (planTrailer) {
+          const wrapped = planTrailer.trailer;
+          const rawPlan =
+            wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)
+              ? (wrapped as Record<string, unknown>).plan
+              : null;
+          const normalized = normalizeAgentPlanTitles(rawPlan);
+          const plan = isAgentPlanPayload(normalized) ? normalized : null;
+          // issueTrailer ran on the plan-stripped body, so its body has every
+          // block kind removed; the plan body is the fallback.
+          const hireBody = (issueTrailer?.body ?? planTrailer.body).trim();
+          const hireNote = !plan
+            ? "I meant to propose that hire, but the details didn't come through cleanly, so nothing was set up. Tell me again who you'd like to bring on."
+            : !triggerIsNewest
+              ? "A newer message came in while I was answering, so I didn't set up the hire proposal. Ask me again if you still want it."
+              : null;
+          if (hireNote) {
+            const replyBody = [hireBody, hireNote].filter((part) => part.length > 0).join("\n\n");
+            if (replyBody.length === 0) return null;
+            try {
+              return await post(replyBody);
+            } catch (err) {
+              logger.warn({ err, conversationId: input.conversationId }, "cos-replier: could not post the hire note");
+              return null;
+            }
+          }
+          try {
+            return await postPlan(
+              plan!,
+              hireBody || "Here's the hire proposal — confirm on the card below.",
+              { trackPhaseProposal: false, requesterUserId: input.requestedBy?.userId ?? null },
+            );
+          } catch (err) {
+            logger.warn(
+              { err, conversationId: input.conversationId },
+              planIntroPosted
+                ? "cos-replier: hire card could not be posted after its intro; the next message retries"
+                : "cos-replier: could not post the hire plan card",
+            );
+            if (planIntroPosted || hireBody.length === 0) return null;
+            try {
+              return await post(hireBody);
+            } catch {
+              return null;
+            }
+          }
+        }
+
+        // planTrailer handled above returns on every path; reaching here means
+        // the create_issue trailer is the one to act on.
+        if (!issueTrailer) return post(visibleBody);
         const outcome = await deps.issueAction.proposeFromTrailer({
           companyId,
           conversationId: input.conversationId,

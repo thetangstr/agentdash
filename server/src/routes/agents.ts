@@ -8,7 +8,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agentConnectCodes, agentWakeupRequests, agents as agentsTable, assistantConversations, assistantMessages, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, count, desc, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, ne, not, or, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -729,6 +729,7 @@ export function agentRoutes(
    */
   async function buildAgentRunHealth(
     agentId: string,
+    companyId: string,
     tokenCeilingPause: AgentRunHealth["tokenCeilingPause"] = null,
   ) {
     const [tally] = await db
@@ -758,6 +759,12 @@ export function agentRoutes(
     // every message all day still reports total: 0. Count its agent-authored
     // replies so "never run" does not claim the agent did nothing, and the
     // month count lets the spend read "Billed by your model provider" (BYOK).
+    //
+    // Attribution is per message: the company inbox is one shared conversation
+    // whose assistantAgentId is null, so replies by the CoS and by summoned
+    // teammates can only be told apart by the message's author_agent_id. Rows
+    // from before that column still count through a conversation owned by the
+    // agent (the old 1:1 conversations did set assistantAgentId).
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
@@ -769,11 +776,31 @@ export function agentRoutes(
       .from(assistantMessages)
       .innerJoin(
         assistantConversations,
-        eq(assistantMessages.conversationId, assistantConversations.id),
+        and(
+          eq(assistantMessages.conversationId, assistantConversations.id),
+          // The join is company-scoped: author_agent_id cannot be trusted to
+          // imply the conversation's company on its own.
+          eq(assistantConversations.companyId, companyId),
+        ),
       )
       .where(and(
         eq(assistantMessages.role, "agent"),
-        eq(assistantConversations.assistantAgentId, agentId),
+        or(
+          eq(assistantMessages.authorAgentId, agentId),
+          and(
+            isNull(assistantMessages.authorAgentId),
+            eq(assistantConversations.assistantAgentId, agentId),
+          ),
+        ),
+        // Not answers: a dispatch-failure card is the absence of a reply, and
+        // a billing/system notice is not the agent answering a person. System
+        // notices carry cardPayload.systemNotice; they render as ordinary
+        // bubbles, so the marker lives in the payload, not a card kind.
+        or(
+          isNull(assistantMessages.cardKind),
+          ne(assistantMessages.cardKind, "cos_dispatch_error_v1"),
+        ),
+        isNull(sql`${assistantMessages.cardPayload}->>'systemNotice'`),
       ));
     const chatTurns = Number(chatTally?.total ?? 0);
     const chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);
@@ -823,7 +850,7 @@ export function agentRoutes(
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
       accountability.resolveForAgent(agent.companyId, agent.id),
-      buildAgentRunHealth(agent.id, tokenCeilingPause),
+      buildAgentRunHealth(agent.id, agent.companyId, tokenCeilingPause),
       // AgentDash (AGE-1): state the model/provider that will serve the next
       // run, resolved the same way heartbeat resolves it, or an explicit
       // unknown — never the instance-level adapter preset. Present and null

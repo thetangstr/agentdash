@@ -491,7 +491,10 @@ export function agentService(db: Db) {
     update: updateAgent,
 
     // AgentDash: only the onboarding pause instance may be completed/released.
-    completeMaterialization: async (id: string, pausedAt: Date, adapterConfig?: Record<string, unknown>, release = false) => db.transaction(async tx => {
+    // The release lands at `idle` unless the company gates hires on board
+    // approval — then materialization completes at `pending_approval` and the
+    // hire_agent approval is what activates it.
+    completeMaterialization: async (id: string, pausedAt: Date, adapterConfig?: Record<string, unknown>, release?: 'idle' | 'pending_approval') => db.transaction(async tx => {
       const [current] = await tx.select().from(agents).where(eq(agents.id, id)).for('update');
       const metadata = current && isPlainRecord(current.metadata) ? current.metadata : {};
       if (!current || current.status !== 'paused' || current.pauseReason !== 'system'
@@ -500,7 +503,7 @@ export function agentService(db: Db) {
       }
       return agentService(tx as unknown as Db).update(id, {
         ...(adapterConfig ? { adapterConfig: { ...current.adapterConfig, ...adapterConfig } } : {}),
-        ...(release ? { status: 'idle', pauseReason: null, pausedAt: null, metadata: { ...metadata, onboardingMaterialization: 'complete' } } : {}),
+        ...(release ? { status: release, pauseReason: null, pausedAt: null, metadata: { ...metadata, onboardingMaterialization: 'complete' } } : {}),
       });
     }),
 
