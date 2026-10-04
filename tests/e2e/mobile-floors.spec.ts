@@ -633,6 +633,27 @@ test.describe("Phone floors on every main screen", () => {
     }
   });
 
+  test("breadcrumb at 390px: one chevron named 'Up to <parent>', unique against page back links", async ({ page }) => {
+    await page.setViewportSize(WIDTHS[0]);
+
+    // The run page's four-crumb trail collapses to a single chevron for the
+    // closest linked parent — never one chevron per parent with separators.
+    await page.goto(`/${seeded.company.issuePrefix}/agents/${seeded.runAgentId}/runs/${seeded.runId}`);
+    await expect(main(page).getByText(/Nothing new is waiting/).first()).toBeVisible({ timeout: 30_000 });
+    const nav = page.getByRole("navigation", { name: "breadcrumb" });
+    const chevron = nav.getByRole("link", { name: /^Up to / });
+    await expect(chevron).toHaveCount(1);
+    await expect(nav.getByRole("link", { name: "Up to Runs" })).toBeVisible();
+    await expect(nav.getByText(/Run [0-9a-f]{8}/)).toBeVisible();
+
+    // /connect-assistant has its own "Back to Home" link; the breadcrumb's
+    // chevron must not duplicate that name.
+    await page.goto("/connect-assistant");
+    await expect(page.getByTestId("assistant-mcp-url")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("link", { name: "Back to Home" })).toHaveCount(1);
+    await expect(page.getByRole("link", { name: "Up to Home" })).toHaveCount(1);
+  });
+
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);
     await page.goto(`/${seeded.company.issuePrefix}/dashboard`);

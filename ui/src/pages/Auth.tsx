@@ -164,8 +164,8 @@ export function AuthPage() {
           </h1>
           <p className="mt-2 text-sm text-text-secondary">
             {mode === "sign_in"
-              ? "Use your email and password to access this instance."
-              : "Create an account for this instance. Email confirmation is not required."}
+              ? "Use your email and password to sign in to your workspace."
+              : "Create an account for your workspace. Email confirmation is not required."}
           </p>
 
           {/* AgentDash: SSO — social sign-in buttons. Each renders only when the

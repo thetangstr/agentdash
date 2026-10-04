@@ -5,7 +5,7 @@ import { getAdapterLabel, plainRuntimeLabel } from "./adapter-display-registry";
 describe("plainRuntimeLabel", () => {
   it("names local harnesses by where they run, not by harness", () => {
     for (const type of ["hermes_local", "claude_local", "codex_local", "cursor"]) {
-      expect(plainRuntimeLabel(type)).toBe("Runs on your workspace server");
+      expect(plainRuntimeLabel(type)).toBe("Runs on your server");
     }
   });
 

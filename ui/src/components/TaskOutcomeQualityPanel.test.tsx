@@ -6,7 +6,7 @@ import type { DashboardTaskOutcomeQuality } from "@paperclipai/shared";
 import { TaskOutcomeQualityPanel } from "./TaskOutcomeQualityPanel";
 
 describe("TaskOutcomeQualityPanel", () => {
-  it("renders task acceptance, DoD coverage, and cost per accepted task", () => {
+  it("renders task acceptance, definition-of-done coverage, and cost per accepted task", () => {
     const quality: DashboardTaskOutcomeQuality = {
       windowDays: 30,
       issuesInScope: 4,
@@ -32,7 +32,10 @@ describe("TaskOutcomeQualityPanel", () => {
     expect(html).toContain("50%");
     expect(html).toContain("75%");
     expect(html).toContain("$23.00");
-    expect(html).toContain("green run left a task open");
-    expect(html).toContain("green runs pending review");
+    expect(html).toContain("Definition of done coverage");
+    expect(html).toContain("successful run left a task open");
+    expect(html).toContain("successful runs pending review");
+    expect(html).not.toContain("DoD");
+    expect(html).not.toContain("green run");
   });
 });

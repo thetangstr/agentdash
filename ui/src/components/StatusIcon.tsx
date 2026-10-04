@@ -73,17 +73,22 @@ export function StatusIcon({ status, blockerAttention, onChange, className, show
       ? "stalled"
       : undefined;
 
+  // AgentDash (c3-a11y): the bare circle is only labelled when it stands
+  // alone — inside a labelled button it is decorative, and an aria-label on a
+  // plain span is not announced without a role.
+  const labelledAlone = !onChange && !showLabel;
   const circle = (
     <span
       className={cn(
         "relative inline-flex h-4 w-4 rounded-full border-2 shrink-0",
         colorClass,
-        onChange && !showLabel && "cursor-pointer",
         className
       )}
       data-blocker-attention-state={blockerAttentionState}
-      aria-label={ariaLabel}
-      title={ariaLabel}
+      role={labelledAlone ? "img" : undefined}
+      aria-hidden={labelledAlone ? undefined : true}
+      aria-label={labelledAlone ? ariaLabel : undefined}
+      title={labelledAlone ? ariaLabel : undefined}
     >
       {isDone && (
         <span className="absolute inset-0 m-auto h-2 w-2 rounded-full bg-current" />
@@ -97,14 +102,32 @@ export function StatusIcon({ status, blockerAttention, onChange, className, show
     </span>
   );
 
-  if (!onChange) return showLabel ? <span className="inline-flex items-center gap-1.5">{circle}<span className="text-sm">{statusLabel(status)}</span></span> : circle;
+  if (!onChange) {
+    return showLabel ? (
+      <span className="inline-flex items-center gap-1.5" title={ariaLabel}>
+        {circle}
+        <span className="text-sm">{statusLabel(status)}</span>
+      </span>
+    ) : circle;
+  }
 
   const trigger = showLabel ? (
-    <button className="inline-flex items-center gap-1.5 cursor-pointer hover:bg-accent/50 rounded px-1 -mx-1 py-0.5 transition-colors">
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      className="inline-flex items-center gap-1.5 cursor-pointer hover:bg-accent/50 rounded px-1 -mx-1 py-0.5 transition-colors"
+    >
       {circle}
       <span className="text-sm">{statusLabel(status)}</span>
     </button>
-  ) : circle;
+  ) : (
+    // -m-3.5/p-3.5 grows the tap area to 44px without changing the 16px icon's
+    // layout footprint (WCAG 2.5.8 / mobile-floors tap-target audit).
+    <button type="button" aria-label={ariaLabel} title={ariaLabel} className="inline-flex cursor-pointer -m-3.5 p-3.5">
+      {circle}
+    </button>
+  );
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

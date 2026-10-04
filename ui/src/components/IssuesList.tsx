@@ -1468,20 +1468,26 @@ export function IssuesList({
 
         <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
           {/* View mode toggle */}
-          <div className="flex items-center border border-border rounded-md overflow-hidden mr-1">
+          <div role="group" aria-label="Issues view" className="flex items-center border border-border rounded-md overflow-hidden mr-1">
             <button
+              type="button"
+              aria-label="List view"
+              aria-pressed={viewState.viewMode === "list"}
               className={`p-1.5 transition-colors ${viewState.viewMode === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
               onClick={() => updateView({ viewMode: "list" })}
               title="List view"
             >
-              <List className="h-3.5 w-3.5" />
+              <List className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
             <button
+              type="button"
+              aria-label="Board view"
+              aria-pressed={viewState.viewMode === "board"}
               className={`p-1.5 transition-colors ${viewState.viewMode === "board" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
               onClick={() => updateView({ viewMode: "board" })}
               title="Board view"
             >
-              <Columns3 className="h-3.5 w-3.5" />
+              <Columns3 className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           </div>
 
@@ -1492,6 +1498,8 @@ export function IssuesList({
               size="icon"
               className={cn("hidden h-8 w-8 shrink-0 sm:inline-flex", viewState.nestingEnabled && "bg-accent")}
               onClick={() => updateView({ nestingEnabled: !viewState.nestingEnabled })}
+              aria-label="Nest sub-issues under their parent"
+              aria-pressed={viewState.nestingEnabled}
               title={viewState.nestingEnabled ? "Disable parent-child nesting" : "Enable parent-child nesting"}
             >
               <ListTree className="h-3.5 w-3.5" />
@@ -1525,7 +1533,7 @@ export function IssuesList({
           {viewState.viewMode === "list" && (
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Sort">
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" aria-label="Sort issues" title="Sort">
                   <ArrowUpDown className="h-3.5 w-3.5" />
                 </Button>
               </PopoverTrigger>
@@ -1543,7 +1551,7 @@ export function IssuesList({
               the checkmark tracks the grouping actually applied. */}
           <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Group">
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" aria-label="Group issues" title="Group">
                   <Layers className="h-3.5 w-3.5" />
                 </Button>
               </PopoverTrigger>

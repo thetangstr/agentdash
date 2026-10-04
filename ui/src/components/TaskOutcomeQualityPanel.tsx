@@ -43,8 +43,8 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
     ? "n/a"
     : formatCents(quality.spendPerAcceptedIssueCents);
   const openTaskRunLabel = quality.greenRunsWithOpenTasks === 1
-    ? "1 green run left a task open"
-    : `${quality.greenRunsWithOpenTasks} green runs left tasks open`;
+    ? "1 successful run left a task open"
+    : `${quality.greenRunsWithOpenTasks} successful runs left tasks open`;
   const hasSecondarySignals =
     quality.greenRunsWithOpenTasks > 0 ||
     quality.greenRunsPendingReview > 0 ||
@@ -61,7 +61,7 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
             <h3 className="text-sm font-medium">Task outcome quality</h3>
           </div>
           <p className="mt-1 text-xs opacity-80">
-            Last {quality.windowDays}d accepted tasks against DoD, not just green agent runs.
+            Last {quality.windowDays}d accepted tasks against their definition of done, not just successful agent runs.
           </p>
         </div>
         <div className="text-right tabular-nums">
@@ -74,7 +74,7 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
 
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
         <Stat
-          label="DoD coverage"
+          label="Definition of done coverage"
           value={`${quality.dodCoveragePercent}%`}
           detail={`${quality.issuesWithDefinitionOfDone}/${quality.issuesInScope} tasks`}
         />
@@ -101,7 +101,7 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
           {quality.greenRunsPendingReview > 0 ? (
             <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>{quality.greenRunsPendingReview} green runs pending review</span>
+              <span>{quality.greenRunsPendingReview} successful runs pending review</span>
             </div>
           ) : null}
           {quality.unreviewedDoneIssues > 0 ? (

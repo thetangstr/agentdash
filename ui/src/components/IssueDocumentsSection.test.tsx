@@ -17,6 +17,7 @@ const mockIssuesApi = vi.hoisted(() => ({
   upsertDocument: vi.fn(),
   deleteDocument: vi.fn(),
   getDocument: vi.fn(),
+  listShipped: vi.fn(),
 }));
 
 const markdownEditorMockState = vi.hoisted(() => ({
@@ -255,6 +256,7 @@ describe("IssueDocumentsSection", () => {
     window.localStorage.clear();
     vi.clearAllMocks();
     markdownEditorMockState.emitMountEmptyChange = false;
+    mockIssuesApi.listShipped.mockResolvedValue({ items: [], total: 0, nextCursor: null, monthTotal: null });
   });
 
   afterEach(() => {
@@ -714,6 +716,100 @@ describe("IssueDocumentsSection", () => {
       root.unmount();
     });
     expect(handles[handles.length - 1]).toBeNull();
+    queryClient.clear();
+  });
+
+  // AgentDash (c3-a11y review): the Helpful / Needs work thumbs hide only on
+  // the document the awaiting-review deliverable binds to — not on every
+  // document, and not at all when the review actions aren't showing.
+  it("hides the thumbs only on the deliverable's document while it awaits review", async () => {
+    const issue = createIssue();
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    mockIssuesApi.listDocuments.mockResolvedValue([
+      createIssueDocument({ key: "proposal", title: "Proposal", body: "proposal body", updatedByAgentId: "agent-1", updatedByUserId: null }),
+      createIssueDocument({ id: "document-2", key: "notes", title: "Notes", body: "notes body", updatedByAgentId: "agent-1", updatedByUserId: null }),
+    ]);
+    mockIssuesApi.listShipped.mockResolvedValue({
+      items: [
+        {
+          id: "wp-1",
+          companyId: "company-1",
+          issueId: "issue-1",
+          type: "document",
+          status: "ready_for_review",
+          metadata: { documentKey: "proposal" },
+        },
+      ],
+      total: 1,
+      nextCursor: null,
+      monthTotal: null,
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} awaitingReview onVote={async () => {}} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    const proposal = container.querySelector("#document-proposal")!;
+    const notes = container.querySelector("#document-notes")!;
+    expect(proposal.textContent).not.toContain("Helpful");
+    expect(proposal.textContent).not.toContain("Needs work");
+    expect(notes.textContent).toContain("Helpful");
+
+    await act(async () => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("keeps the thumbs when the review actions are not showing", async () => {
+    const issue = createIssue();
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    mockIssuesApi.listDocuments.mockResolvedValue([
+      createIssueDocument({ key: "proposal", title: "Proposal", body: "proposal body", updatedByAgentId: "agent-1", updatedByUserId: null }),
+    ]);
+    mockIssuesApi.listShipped.mockResolvedValue({
+      items: [
+        {
+          id: "wp-1",
+          companyId: "company-1",
+          issueId: "issue-1",
+          type: "document",
+          status: "ready_for_review",
+          metadata: { documentKey: "proposal" },
+        },
+      ],
+      total: 1,
+      nextCursor: null,
+      monthTotal: null,
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          {/* awaitingReview defaults to false — e.g. a member without board
+              access, a live issue, or a done/cancelled one. */}
+          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} onVote={async () => {}} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    expect(container.querySelector("#document-proposal")!.textContent).toContain("Helpful");
+
+    await act(async () => {
+      root.unmount();
+    });
     queryClient.clear();
   });
 });

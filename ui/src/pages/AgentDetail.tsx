@@ -31,6 +31,7 @@ import { adapterLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
+import { displayMaskedSecrets, SECRET_MASK_DISPLAY } from "../lib/redactSecrets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 import { StatusBadge } from "../components/StatusBadge";
@@ -145,14 +146,14 @@ const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string 
 
 const RUN_LOG_PAGE_BYTES = 256_000;
 
-const REDACTED_ENV_VALUE = "***REDACTED***";
+const REDACTED_ENV_VALUE = SECRET_MASK_DISPLAY;
 const SECRET_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
 const COMMAND_ENV_KEY_RE = /(^command$|^cmd$|command[-_]?line|resolved[-_]?command|PAPERCLIP_RESOLVED_COMMAND)/i;
 const JWT_VALUE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
 
 function redactPathText(value: string, censorUsernameInLogs: boolean) {
-  return redactHomePathUserSegments(value, { enabled: censorUsernameInLogs });
+  return displayMaskedSecrets(redactHomePathUserSegments(value, { enabled: censorUsernameInLogs }));
 }
 
 function redactPathValue<T>(value: T, censorUsernameInLogs: boolean): T {
@@ -176,14 +177,14 @@ function redactEnvValue(key: string, value: unknown, censorUsernameInLogs: boole
     !Array.isArray(value) &&
     (value as { type?: unknown }).type === "secret_ref"
   ) {
-    return "***SECRET_REF***";
+    return SECRET_MASK_DISPLAY;
   }
   if (shouldRedactSecretValue(key, value)) return REDACTED_ENV_VALUE;
   if (value === null || value === undefined) return "";
   if (typeof value === "string" && COMMAND_ENV_KEY_RE.test(key)) return redactCommandText(value, censorUsernameInLogs);
   if (typeof value === "string") return redactPathText(value, censorUsernameInLogs);
   try {
-    return JSON.stringify(redactPathValue(value, censorUsernameInLogs));
+    return displayMaskedSecrets(JSON.stringify(redactPathValue(value, censorUsernameInLogs)));
   } catch {
     return redactPathText(String(value), censorUsernameInLogs);
   }
@@ -1160,6 +1161,7 @@ export function AgentDetail() {
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
+            ariaLabel="Agent sections"
             items={AGENT_DETAIL_TOP_TABS}
             value={agentDetailTabValue(activeView)}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -1283,6 +1285,7 @@ export function AgentDetail() {
         >
           <PageTabBar
             align="start"
+            ariaLabel="Agent settings sections"
             items={AGENT_DETAIL_SETTINGS_TABS}
             value={activeView}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -1489,7 +1492,7 @@ export function LatestRunCard({
 
         {summary ? (
           <div className="pointer-events-none relative overflow-hidden max-h-16 [&_a]:pointer-events-auto">
-            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{summary}</MarkdownBody>
+            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{displayMaskedSecrets(summary)}</MarkdownBody>
           </div>
         ) : showEmptySummary && !isLive && !run.error ? (
           <p className="text-sm text-muted-foreground" data-testid="latest-run-no-summary">
@@ -3744,7 +3747,7 @@ export function AgentSkillsTab({
 
 /* ---- Runs Tab ---- */
 
-function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
+export function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
@@ -3780,7 +3783,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
       </div>
       {summary && (
         <span className="text-xs text-muted-foreground truncate pl-5.5">
-          {summary.slice(0, 60)}
+          {displayMaskedSecrets(summary).slice(0, 60)}
         </span>
       )}
       {(metrics.totalTokens > 0 || metrics.cost > 0) && (
@@ -4212,8 +4215,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
               if (!adapterType && !displayProvider && !displayModel) return null;
               // AgentDash (Scan 3, lane J): plain words, not "HERMES LOCAL
               // kimi-coding/k3"; the raw values stay in the hover titles.
-              const modelText = displayModel
-                ? (displayProvider ? `${displayProvider}/${displayModel}` : displayModel)
+              // AgentDash (c3-a11y): "auto" (provider, or an "auto/x" prefix)
+              // is the adapter's own routing detail — "Model: auto/k3" reads
+              // as noise. Show the model name, or nothing when "auto" is all
+              // there is.
+              const modelName = displayModel?.startsWith("auto/")
+                ? displayModel.slice("auto/".length)
+                : displayModel;
+              const modelText = modelName && modelName !== "auto"
+                ? (displayProvider && displayProvider !== "auto" && !modelName.includes("/") && !displayModel?.startsWith("auto/")
+                  ? `${displayProvider}/${modelName}`
+                  : modelName)
                 : null;
               return (
                 <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap" data-testid="run-runtime-summary">

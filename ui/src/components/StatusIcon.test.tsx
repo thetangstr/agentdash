@@ -99,4 +99,19 @@ describe("StatusIcon", () => {
     expect(html).not.toContain("border-cyan-600");
     expect(html).not.toContain("border-red-600");
   });
+
+  // AgentDash (c3-a11y): the icon-only status control in the Issues list is a
+  // real button named after the status; the standalone circle names itself.
+  it("names the icon-only status button after the current status", () => {
+    const html = renderToStaticMarkup(<StatusIcon status="in_progress" onChange={() => {}} />);
+    expect(html).toContain("<button");
+    expect(html).toContain('aria-label="In Progress"');
+    expect(html).toContain('title="In Progress"');
+  });
+
+  it("exposes the standalone icon's label to assistive tech", () => {
+    const html = renderToStaticMarkup(<StatusIcon status="todo" />);
+    expect(html).toContain('role="img"');
+    expect(html).toContain('aria-label="Todo"');
+  });
 });
