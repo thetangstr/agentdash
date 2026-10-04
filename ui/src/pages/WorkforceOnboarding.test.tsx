@@ -80,7 +80,7 @@ it('enrolls the selected role, exposes owner and separates review from acceptanc
   expect(host.textContent).toContain('Open first job, artifacts and review');
 });
 
-it('does not start missing-input work for an inactive accountable human', async () => {
+it('does not start missing-input work for an inactive accountable person', async () => {
   ownerActive = false; enrollment = { id: 'e', companyId: 'one', agentId: 'a', templateId: 'sales-support', templateVersion: 1, objective: null, metrics: [], goalId: null, learnedBriefRevision: null, firstJobIssueId: null, installedSkillKeys: [], skillInstallError: null };
   render(); await flush(); await flush();
   expect(host.textContent).toContain('active assignment required');
@@ -118,7 +118,7 @@ it.each([
   ['workforce', 'workforce.learning_acknowledged', 'ready', 'Ready for work'],
   ['issue', 'issue.document_updated', 'awaiting_review', 'Awaiting review'],
   ['issue', 'issue.work_product_deleted', 'working', 'Working on first job'],
-  ['issue', 'issue.updated', 'needs_input', 'Needs human input'],
+  ['issue', 'issue.updated', 'needs_input', 'Needs input'],
 ])('refreshes mounted readiness for %s %s', async (entity, action, nextPhase, label) => {
   enrollment = { id: 'e', companyId: 'one', agentId: 'a', templateId: 'marketing-content', templateVersion: 1, metrics: [], firstJobIssueId: 'job' };
   phase = nextPhase === 'ready' ? 'learning' : 'ready';

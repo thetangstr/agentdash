@@ -286,6 +286,13 @@ export function dashboardService(db: Db) {
         );
 
       const monthSpendCents = Number(monthSpend);
+      // AgentDash (batch 4): unmetered runs leave no cost events, so spend and
+      // tokens both read zero. The month's run count lets Home tell "nothing
+      // ran" ($0.00) from "runs recorded no usage" (Not measured).
+      const [{ monthRuns }] = await db
+        .select({ monthRuns: sql<number>`count(*)::double precision` })
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.companyId, companyId), gte(heartbeatRuns.createdAt, monthStart)));
       const runActivityDayExpr = sql<string>`to_char(${heartbeatRuns.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`;
       const runActivityRows = await db
         .select({
@@ -569,6 +576,7 @@ export function dashboardService(db: Db) {
         costs: {
           monthSpendCents,
           monthTokens: Number(monthTokens),
+          monthRuns: Number(monthRuns),
           monthBudgetCents: company.budgetMonthlyCents,
           monthUtilizationPercent: Number(utilization.toFixed(2)),
         },

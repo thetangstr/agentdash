@@ -73,6 +73,13 @@ export interface DashboardSummary {
      */
     /** Input + output tokens; cached input is not counted. */
     monthTokens: number;
+    /**
+     * Runs started this month. Unmetered runs record no cost events, so when
+     * spend and tokens are both zero this is the difference between "nothing
+     * ran" and "usage was never measured" — the figure reads "Not measured",
+     * never "$0.00".
+     */
+    monthRuns: number;
     monthBudgetCents: number;
     monthUtilizationPercent: number;
   };

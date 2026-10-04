@@ -3,6 +3,7 @@ import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import type { Goal } from "@paperclipai/shared";
 import { GOAL_STATUSES, GOAL_LEVELS } from "@paperclipai/shared";
+import { goalLevelLabel } from "../lib/goal-level-label";
 import { agentsApi } from "../api/agents";
 import { goalsApi } from "../api/goals";
 import { useCompany } from "../context/CompanyContext";
@@ -34,11 +35,13 @@ function label(s: string): string {
 function PickerButton({
   current,
   options,
+  optionLabel = label,
   onChange,
   children,
 }: {
   current: string;
   options: readonly string[];
+  optionLabel?: (value: string) => string;
   onChange: (value: string) => void;
   children: React.ReactNode;
 }) {
@@ -62,7 +65,7 @@ function PickerButton({
               setOpen(false);
             }}
           >
-            {label(opt)}
+            {optionLabel(opt)}
           </Button>
         ))}
       </PopoverContent>
@@ -115,12 +118,13 @@ export function GoalProperties({ goal, onUpdate }: GoalPropertiesProps) {
             <PickerButton
               current={goal.level}
               options={GOAL_LEVELS}
+              optionLabel={goalLevelLabel}
               onChange={(level) => onUpdate({ level })}
             >
-              <span className="text-sm capitalize">{goal.level}</span>
+              <span className="text-sm">{goalLevelLabel(goal.level)}</span>
             </PickerButton>
           ) : (
-            <span className="text-sm capitalize">{goal.level}</span>
+            <span className="text-sm">{goalLevelLabel(goal.level)}</span>
           )}
         </PropertyRow>
 

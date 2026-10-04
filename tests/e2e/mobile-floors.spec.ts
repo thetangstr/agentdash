@@ -189,6 +189,12 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
   });
   expect(dodRes.ok(), await dodRes.text()).toBe(true);
 
+  // A long-named goal: /evaluation lists it as a "Without a card yet" badge,
+  // the case that once pushed the page past the viewport on a phone.
+  await post(request, `/api/companies/${company.id}/goals`, {
+    title: "Five paying design-partner warehouses running the new gripper within twelve months plus a repeatable deployment playbook",
+  });
+
   // A local company skill: /agents/new offers it in Advanced → Company skills,
   // and its label row is part of the tap-target audit.
   await post(request, `/api/companies/${company.id}/skills`, {

@@ -64,7 +64,7 @@ export function IssueResultBlock({
   const [busy, setBusy] = useState<"accept" | "changes" | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Re-render when the "counting…" window closes, so a run that never
-  // reported usage falls back to "not metered yet" without a refetch.
+  // reported usage falls back to "not measured" without a refetch.
   const [, setWindowClosedAt] = useState(0);
   const countingEndsAt =
     data && data.items.length > 0 && !data.items[0]!.usage?.metered ? usageCountingEndsAt(data.items) : null;

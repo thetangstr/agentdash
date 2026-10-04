@@ -132,6 +132,19 @@ describe("MarkdownBody", () => {
     expect(html).not.toContain("javascript:");
   });
 
+  // Canary c4: "•••• hidden@db.internal" autolinked "hidden@db.internal" as
+  // mailto. The "(hidden)" mask cannot form an email local part.
+  it("does not autolink the redaction mask as an email", () => {
+    const html = renderMarkdown(
+      "I found these in the config: postgres://admin:•••• (hidden)@db.internal:5432/app and KEY = •••• (hidden)\"]",
+    );
+
+    expect(html).not.toContain("mailto:");
+    expect(html).not.toContain("<a ");
+    expect(html).toContain("•••• (hidden)@db.internal");
+    expect(html).toContain("•••• (hidden)&quot;]");
+  });
+
   it("renders raw HTML tags as escaped text", () => {
     const html = renderMarkdown(
       '<script>fetch("/api/secrets")</script>\n<iframe src="https://example.com"></iframe>\n<p onclick="steal()">Plain text</p>',

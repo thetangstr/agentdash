@@ -4593,6 +4593,8 @@ components:
               type: number
             monthTokens:
               type: number
+            monthRuns:
+              type: number
             monthBudgetCents:
               type: number
             monthUtilizationPercent:
@@ -4600,6 +4602,7 @@ components:
           required:
             - monthSpendCents
             - monthTokens
+            - monthRuns
             - monthBudgetCents
             - monthUtilizationPercent
         pendingApprovals:

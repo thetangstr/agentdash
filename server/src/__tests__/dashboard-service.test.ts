@@ -608,4 +608,55 @@ describeEmbeddedPostgres("dashboard service", () => {
     // Input + output only; the 20k cached input is not counted (scan 3 lane L).
     expect(summary.costs.monthTokens).toBe(107_000);
   });
+
+  // AgentDash (batch 4): Home shows "Not measured" for unmetered usage — it
+  // needs the month's run count to tell that from "nothing ran".
+  it("counts this month's runs in costs.monthRuns, scoped to the company and the month", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const agentId = randomUUID();
+    const now = new Date();
+    const lastMonth = new Date(getUtcMonthStart(now).getTime() - 60_000);
+
+    await db.insert(companies).values([
+      {
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      },
+      {
+        id: otherCompanyId,
+        name: "Other",
+        issuePrefix: `T${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      },
+    ]);
+
+    await db.insert(agents).values([
+      {
+        id: agentId,
+        companyId,
+        name: "CodexCoder",
+        role: "engineer",
+        status: "running",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+
+    await db.insert(heartbeatRuns).values([
+      { id: randomUUID(), companyId, agentId, invocationSource: "assignment", status: "succeeded", createdAt: now },
+      { id: randomUUID(), companyId, agentId, invocationSource: "assignment", status: "failed", createdAt: now },
+      // Last month and another company's run this month must not be counted.
+      { id: randomUUID(), companyId, agentId, invocationSource: "assignment", status: "succeeded", createdAt: lastMonth },
+      { id: randomUUID(), companyId: otherCompanyId, agentId, invocationSource: "assignment", status: "succeeded", createdAt: now },
+    ]);
+
+    const summary = await dashboardService(db).summary(companyId);
+
+    expect(summary.costs.monthRuns).toBe(2);
+  });
 });

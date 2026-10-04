@@ -21,6 +21,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { EntityRow } from "../components/EntityRow";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { cn, projectUrl } from "../lib/utils";
+import { goalLevelLabel } from "../lib/goal-level-label";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -217,7 +218,7 @@ export function GoalDetail() {
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <span className="text-xs uppercase text-muted-foreground">
-            {goal.level}
+            {goalLevelLabel(goal.level)}
           </span>
           <StatusBadge status={goal.status} />
           <div className="ml-auto flex items-center gap-1">
