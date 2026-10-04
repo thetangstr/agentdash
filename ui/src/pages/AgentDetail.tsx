@@ -36,6 +36,7 @@ import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 import { StatusBadge } from "../components/StatusBadge";
 import { accessApi } from "../api/access";
+import { costsApi } from "../api/costs";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
@@ -59,6 +60,8 @@ import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE,
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { cancelledRunLabel } from "../lib/cancelledRunLabel";
+import { shortenInstancePaths } from "../lib/instancePaths";
+import { redactSecrets } from "../lib/redactSecrets";
 import {
   AgentRunFailureGuidance,
   readAgentRunFailureClassification,
@@ -124,6 +127,7 @@ import {
   type AgentResolvedRuntime,
   type AgentRunHealth,
   type AgentTokenCeilingStatus,
+  type CostByAgent,
   RUN_CANCELLED_BY_OPERATOR_CODE,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
@@ -1428,7 +1432,7 @@ export function LatestRunCard({
   // Extract a clean 2-3 line excerpt: first non-empty, non-header, non-list-mark lines
   const summary = useMemo(() => {
     if (!summaryRaw) return "";
-    const lines = summaryRaw
+    const lines = shortenInstancePaths(redactSecrets(summaryRaw))
       .replace(/^#{1,6}\s+/gm, "")
       .split("\n")
       .map((l) => l.trim())
@@ -1672,8 +1676,22 @@ export function agentBilledByProvider(
   },
   runs: Pick<HeartbeatRun, "usageJson" | "resultJson" | "createdAt">[],
   now: Date = new Date(),
+  // AgentDash (batch 3): this month's cost-events row — the same source the
+  // Costs page reads. Run-level usageJson is empty on unmetered runs, so the
+  // runs heuristic below misses BYOK usage the events did capture. The row is
+  // authoritative once the query settles (null = no events this month);
+  // while it loads the run-based heuristic answers provisionally.
+  monthCost?: Pick<CostByAgent, "costCents" | "inputTokens" | "cachedInputTokens" | "outputTokens"> | null,
 ): boolean {
   if ((agent.spentMonthlyCents ?? 0) > 0) return false;
+  if (monthCost !== undefined) {
+    if ((monthCost?.costCents ?? 0) > 0) return false;
+    const tokens =
+      (monthCost?.inputTokens ?? 0) +
+      (monthCost?.cachedInputTokens ?? 0) +
+      (monthCost?.outputTokens ?? 0);
+    return tokens > 0 || (agent.runHealth?.chatTurnsThisMonth ?? 0) > 0;
+  }
   // This month (UTC, the month spentMonthlyCents covers) only.
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
   const thisMonth = runs.filter((run) => new Date(run.createdAt).getTime() >= monthStart);
@@ -1690,10 +1708,13 @@ export function AgentVitalsStrip({
   agent,
   runs,
   assignedIssues,
+  monthCost,
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
   assignedIssues: { id: string; title: string; status: string; identifier?: string | null }[];
+  /** This month's cost-events row for the agent; undefined while loading. */
+  monthCost?: CostByAgent | null;
 }) {
   const liveRun = [...runs]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -1757,12 +1778,12 @@ export function AgentVitalsStrip({
       <VitalCard label="Spend this month">
         {/* AgentDash (scan 4 lane O1): on BYOK the model provider bills the
             tokens, so "$0.00" next to real usage read as "free". */}
-        {agentBilledByProvider(agent, runs) ? (
+        {agentBilledByProvider(agent, runs, new Date(), monthCost) ? (
           <span className="text-muted-foreground" data-testid="agent-spend-byok">
             {BILLED_BY_PROVIDER_NOTE}
           </span>
         ) : (
-          <span className="font-medium">{formatCents(agent.spentMonthlyCents ?? 0)}</span>
+          <span className="font-medium">{formatCents(monthCost?.costCents ?? agent.spentMonthlyCents ?? 0)}</span>
         )}
       </VitalCard>
     </div>
@@ -1795,6 +1816,25 @@ function AgentOverview({
     queryFn: () => accessApi.listUserDirectory(agent.companyId),
     enabled: !!agent.companyId,
   });
+  // AgentDash (batch 3): spend/token figures read the same cost events the
+  // Costs page reads. Run-level usageJson is empty on unmetered runs, so
+  // runtimeState/spentMonthlyCents alone undercount exactly where the
+  // figures matter.
+  const costEventsMonthStart = new Date(
+    Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1),
+  ).toISOString();
+  const { data: agentCostRows } = useQuery({
+    queryKey: queryKeys.agentCostEvents(agent.companyId, agent.id, costEventsMonthStart),
+    queryFn: async () => {
+      const [allTime, month] = await Promise.all([
+        costsApi.byAgent(agent.companyId),
+        costsApi.byAgent(agent.companyId, costEventsMonthStart),
+      ]);
+      const pick = (rows: CostByAgent[]) => rows.find((row) => row.agentId === agent.id) ?? null;
+      return { total: pick(allTime), month: pick(month) };
+    },
+    enabled: !!agent.companyId,
+  });
   // Agent visibility (2026-09-30): an administrator's call; everyone else
   // reads the resolved value. The server refuses the write for anyone else.
   const visibilityQueryClient = useQueryClient();
@@ -1825,7 +1865,7 @@ function AgentOverview({
       {/* GH #795: the overview leads with doing/shipped/spend and a health
           warning when recent runs keep leaving nothing behind. */}
       <AgentRunHealthNote runs={runs} />
-      <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} />
+      <AgentVitalsStrip agent={agent} runs={runs} assignedIssues={assignedIssues} monthCost={agentCostRows?.month} />
 
       <details className="rounded-xl border p-3"><summary className="cursor-pointer text-sm font-medium max-sm:-my-3 max-sm:py-3">Workforce role and first-job readiness</summary><WorkforceAgentPanel key={`${agent.companyId}:${agent.id}`} companyId={agent.companyId} agent={agent}/></details>
 
@@ -2007,7 +2047,7 @@ function AgentOverview({
       {/* Costs */}
       <div className="space-y-3">
         <h3 className="text-sm font-medium">Costs</h3>
-        <CostsSection runtimeState={runtimeState} runs={runs} chatTurns={agent.runHealth?.chatTurns ?? 0} />
+        <CostsSection runtimeState={runtimeState} runs={runs} chatTurns={agent.runHealth?.chatTurns ?? 0} costRow={agentCostRows?.total} />
       </div>
     </div>
   );
@@ -2146,10 +2186,17 @@ export function CostsSection({
   runtimeState,
   runs,
   chatTurns = 0,
+  costRow,
 }: {
   runtimeState?: AgentRuntimeState;
   runs: HeartbeatRun[];
   chatTurns?: number;
+  /**
+   * AgentDash (batch 3): the agent's all-time cost-events row — the same
+   * source the Costs page reads. `undefined` while the query loads (falls
+   * back to runtimeState counters); `null` once loaded with no events.
+   */
+  costRow?: CostByAgent | null;
 }) {
   const runsWithCost = runs
     .filter((r) => {
@@ -2158,32 +2205,50 @@ export function CostsSection({
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  // Cost events are authoritative once loaded — unmetered runs leave
+  // usageJson empty, so runtimeState counters can sit at 0 while the Costs
+  // page shows real tokens for this agent.
+  const totals =
+    costRow !== undefined
+      ? {
+          input: costRow?.inputTokens ?? 0,
+          output: costRow?.outputTokens ?? 0,
+          cached: costRow?.cachedInputTokens ?? 0,
+          costCents: costRow?.costCents ?? 0,
+        }
+      : runtimeState
+        ? {
+            input: runtimeState.totalInputTokens ?? 0,
+            output: runtimeState.totalOutputTokens ?? 0,
+            cached: runtimeState.totalCachedInputTokens ?? 0,
+            costCents: runtimeState.totalCostCents ?? 0,
+          }
+        : null;
+
   // AgentDash (batch 2 canary): on BYOK the model provider bills the usage —
   // metered tokens or CoS chat turns — so "Total cost $0.00" next to real work
   // reads as "free". Say who bills instead, the same as "Spend this month".
-  const totalTokens = runtimeState
-    ? (runtimeState.totalInputTokens ?? 0) + (runtimeState.totalOutputTokens ?? 0) + (runtimeState.totalCachedInputTokens ?? 0)
-    : 0;
+  const totalTokens = totals ? totals.input + totals.output + totals.cached : 0;
   const billedByProvider =
-    runtimeState != null && (runtimeState.totalCostCents ?? 0) === 0 && (totalTokens > 0 || chatTurns > 0);
+    totals != null && totals.costCents === 0 && (totalTokens > 0 || chatTurns > 0);
 
   return (
     <div className="space-y-4">
-      {runtimeState && (
+      {totals && (
         <div className="border border-border rounded-lg p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 tabular-nums">
             <div>
               <span className="text-xs text-muted-foreground block">Input tokens</span>
-              <span className="text-lg font-semibold">{formatTokens(runtimeState.totalInputTokens)}</span>
+              <span className="text-lg font-semibold">{formatTokens(totals.input)}</span>
             </div>
             <div>
               <span className="text-xs text-muted-foreground block">Output tokens</span>
-              <span className="text-lg font-semibold">{formatTokens(runtimeState.totalOutputTokens)}</span>
+              <span className="text-lg font-semibold">{formatTokens(totals.output)}</span>
             </div>
             <div>
               <span className="text-xs text-muted-foreground block">Cached reads</span>
               <span className="text-lg font-semibold" title={TOKENS_COUNTED_NOTE}>
-                {formatTokens(runtimeState.totalCachedInputTokens)}
+                {formatTokens(totals.cached)}
               </span>
             </div>
             <div>
@@ -2194,8 +2259,8 @@ export function CostsSection({
                 and substantively false. When tokens exist but no priced spend
                 does, the honest cell names who bills them.
               */}
-              {runtimeState.totalCostCents > 0 ? (
-                <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              {totals.costCents > 0 ? (
+                <span className="text-lg font-semibold">{formatCents(totals.costCents)}</span>
               ) : billedByProvider ? (
                 <span className="block text-sm font-medium leading-6">{BILLED_BY_PROVIDER_NOTE}</span>
               ) : (
@@ -3732,11 +3797,15 @@ export function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; i
   const resultSummary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : "";
-  const summary = resultSummary
-    ? resultSummary
-    : run.status === "cancelled"
-      ? cancelledRunLabel(run)
-      : (run.error ?? "");
+  const summary = shortenInstancePaths(
+    redactSecrets(
+      resultSummary
+        ? resultSummary
+        : run.status === "cancelled"
+          ? cancelledRunLabel(run)
+          : (run.error ?? ""),
+    ),
+  );
 
   return (
     <Link

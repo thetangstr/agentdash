@@ -43,7 +43,10 @@ export interface DashboardTaskOutcomeQuality {
   greenRunsPendingReview: number;
   greenRunsWithOpenTasks: number;
   issueLinkedSpendCents: number;
+  /** Input + output tokens on issue-linked cost events; cached reads excluded. */
   issueLinkedTokens: number;
+  /** Cached input reads on the same events, reported separately. */
+  issueLinkedCachedTokens: number;
   spendPerAcceptedIssueCents: number | null;
 }
 

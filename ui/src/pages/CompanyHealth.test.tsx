@@ -67,6 +67,7 @@ const taskQuality: DashboardTaskOutcomeQuality = {
   greenRunsWithOpenTasks: 1,
   issueLinkedSpendCents: 2300,
   issueLinkedTokens: 2600,
+  issueLinkedCachedTokens: 40_000,
   spendPerAcceptedIssueCents: 2300,
 };
 

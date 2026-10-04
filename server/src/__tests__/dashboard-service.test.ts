@@ -544,7 +544,10 @@ describeEmbeddedPostgres("dashboard service", () => {
       greenRunsPendingReview: 2,
       greenRunsWithOpenTasks: 1,
       issueLinkedSpendCents: 2300,
-      issueLinkedTokens: 2600,
+      // AgentDash (batch 3): input + output only (2400); the 200 cached
+      // reads are reported separately, never folded into the headline figure.
+      issueLinkedTokens: 2400,
+      issueLinkedCachedTokens: 200,
       spendPerAcceptedIssueCents: 2300,
     });
   });

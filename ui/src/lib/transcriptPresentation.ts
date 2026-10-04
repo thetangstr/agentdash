@@ -1,3 +1,5 @@
+import { shortenInstancePaths } from "./instancePaths";
+
 type TranscriptDensity = "comfortable" | "compact";
 
 type TranscriptActivity = {
@@ -277,7 +279,7 @@ export function summarizeToolResult(
   if (structured) {
     if (structured.body) {
       const line = outcomeLine(structured.body);
-      if (line) return truncate(line, density === "compact" ? 84 : 140);
+      if (line) return truncate(shortenInstancePaths(line), density === "compact" ? 84 : 140);
     }
     if (structured.status === "completed") return "Completed";
     if (structured.status === "failed" || structured.status === "error") {
@@ -285,7 +287,7 @@ export function summarizeToolResult(
     }
   }
   const line = outcomeLine(result);
-  if (line) return truncate(line, density === "compact" ? 84 : 140);
+  if (line) return truncate(shortenInstancePaths(line), density === "compact" ? 84 : 140);
   return isError ? "Failed" : "Done";
 }
 

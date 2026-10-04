@@ -4,7 +4,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { summarizeToolCall } from "../../lib/readableTranscript";
-import { ReadableToolGroup, type ReadableToolGroupItem } from "./ReadableTranscript";
+import { ThemeProvider } from "../../context/ThemeContext";
+import {
+  ReadableFooter,
+  ReadableToolGroup,
+  ReadableTranscriptView,
+  type ReadableToolGroupItem,
+} from "./ReadableTranscript";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -112,5 +118,64 @@ describe("ReadableToolGroup redaction", () => {
     act(() => root.render(<ReadableToolGroup items={[item("a", "WebFetch", input, "completed", "ok")]} />));
     act(() => container.querySelector<HTMLElement>("[data-readable-tool] [role=button]")!.click());
     expect(container.innerHTML).not.toContain(SECRET);
+  });
+});
+
+describe("readable transcript secrets behind instance paths", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  // AgentDash (review #1016): shortening must run after redaction — a secret
+  // that happens to be a path basename must never render as the file name.
+  const SECRET_PATH = `API_KEY=/paperclip/instances/default/secrets/plainsecretvalue123456`;
+
+  it("the footer text never shows a secret that is a path basename", () => {
+    act(() =>
+      root.render(
+        <ThemeProvider>
+          <ReadableFooter
+            footer={{
+              ts: "",
+              isError: false,
+              outcome: "Done",
+              text: `wrote the key to ${SECRET_PATH}`,
+              errors: [],
+              durationMs: null,
+              inputTokens: 0,
+              outputTokens: 0,
+              cachedTokens: 0,
+              costUsd: 0,
+            }}
+          />
+        </ThemeProvider>,
+      ),
+    );
+    expect(container.textContent).not.toContain("plainsecretvalue123456");
+    expect(container.textContent).toContain("API_KEY=•••• hidden");
+  });
+
+  it("a message block never shows a secret that is a path basename", () => {
+    act(() =>
+      root.render(
+        <ThemeProvider>
+          <ReadableTranscriptView
+            entries={[{ kind: "assistant", ts: "", text: `saved it under ${SECRET_PATH}` }]}
+          />
+        </ThemeProvider>,
+      ),
+    );
+    expect(container.textContent).not.toContain("plainsecretvalue123456");
+    expect(container.textContent).toContain("API_KEY=•••• hidden");
   });
 });

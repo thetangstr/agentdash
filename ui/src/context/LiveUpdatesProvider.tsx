@@ -746,6 +746,15 @@ function invalidateActivityQueries(
           queryClient.invalidateQueries({ queryKey: queryKeys.issues.interactions(ref), ...invalidationOptions });
         }
       }
+      // AgentDash (batch 3): the issue's Result row joins a document
+      // deliverable's newest revision, and a sent-back deliverable's resubmit
+      // flip arrives as issue.work_product_updated — both must refetch the
+      // shipped queries or the row reads stale next to the Documents section.
+      if (action?.startsWith("issue.document_") || action?.startsWith("issue.work_product_")) {
+        // The ["shipped", companyId] prefix covers the issue-scoped Result
+        // query and every feed filter combination.
+        queryClient.invalidateQueries({ queryKey: queryKeys.shipped(companyId).slice(0, 2) });
+      }
     }
     return;
   }
