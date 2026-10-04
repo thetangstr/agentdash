@@ -1,9 +1,10 @@
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals, bridgeTasks } from "@paperclipai/db";
+import { agents, approvalComments, approvals, assistantConversations, assistantMessages, bridgeTasks } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { redactRunLogText } from "./run-log-redaction.js";
+import { emitMessageUpdated } from "../realtime/conversation-events.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
@@ -290,6 +291,76 @@ export function approvalService(db: Db) {
     return rows;
   }
 
+  /**
+   * AgentDash (cos-followups-2 item 4): a decided hire approval must move the
+   * CoS plan card off "Sent for approval" — the card payload is the only
+   * state that survives a reload. The card stays pending while any sibling
+   * hire still waits, reads "Not approved" once a rejection lands, and only
+   * returns to "Team hired" when every hire has been approved. Called after
+   * the agent lifecycle write so `pending_approval` siblings are counted with
+   * this decision already applied.
+   */
+  async function updateCosPlanCardOnHireDecision(
+    companyId: string,
+    agentId: string,
+    rejected: boolean,
+  ) {
+    // select().from().where() is the only chain the lightweight db stubs
+    // implement — keep it flat (no join/orderBy/limit) and pick the latest
+    // matching card below.
+    const rows = await db
+      .select({
+        id: assistantMessages.id,
+        conversationId: assistantMessages.conversationId,
+        createdAt: assistantMessages.createdAt,
+        cardPayload: assistantMessages.cardPayload,
+      })
+      .from(assistantMessages)
+      .where(
+        and(
+          eq(assistantMessages.cardKind, "agent_plan_proposal_v1"),
+          sql`exists (
+            select 1
+            from jsonb_array_elements_text(${assistantMessages.cardPayload} -> 'confirmedAgentIds') as confirmed_id
+            where confirmed_id = ${agentId}
+          )`,
+          inArray(
+            assistantMessages.conversationId,
+            db
+              .select({ id: assistantConversations.id })
+              .from(assistantConversations)
+              .where(eq(assistantConversations.companyId, companyId)),
+          ),
+        ),
+      );
+    const message = rows.sort(
+      (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
+    )[0];
+    const payload = message?.cardPayload;
+    if (!message || !payload || typeof payload !== "object" || Array.isArray(payload)) return;
+    const cardPayload = payload as Record<string, unknown>;
+    const confirmedIds = Array.isArray(cardPayload.confirmedAgentIds)
+      ? cardPayload.confirmedAgentIds.filter((id): id is string => typeof id === "string")
+      : [];
+    const siblings = confirmedIds.length > 0
+      ? await db
+          .select({ status: agents.status })
+          .from(agents)
+          .where(inArray(agents.id, confirmedIds))
+      : [];
+    const stillPending = siblings.some((sibling) => sibling.status === "pending_approval");
+    const next = {
+      ...cardPayload,
+      pendingApproval: stillPending,
+      approvalRejected: rejected || cardPayload.approvalRejected === true,
+    };
+    await db
+      .update(assistantMessages)
+      .set({ cardPayload: next })
+      .where(eq(assistantMessages.id, message.id));
+    emitMessageUpdated({ ...message, companyId, cardPayload: next });
+  }
+
   return {
     listPendingHireApprovalsForAgent,
 
@@ -364,6 +435,7 @@ export function approvalService(db: Db) {
           // since and fire the hook a second time.
           const activation = await agentsSvc.activatePendingApproval(payloadAgentId);
           if (activation?.activated) hireApprovedAgentId = payloadAgentId;
+          await updateCosPlanCardOnHireDecision(updated.companyId, payloadAgentId, false);
         } else {
           const created = await agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),
@@ -447,6 +519,7 @@ export function approvalService(db: Db) {
             endedByUserId: decidedByUserId,
             onlyIfStatus: "pending_approval",
           });
+          await updateCosPlanCardOnHireDecision(updated.companyId, payloadAgentId, true);
         }
       }
 

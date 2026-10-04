@@ -174,6 +174,57 @@ describe("AgentPlanProposal", () => {
     });
   });
 
+  // AgentDash (cos-followups-2 item 4): once the board decides, the card
+  // leaves "Sent for approval" — a rejection reads "Not approved", never
+  // back to "Team hired".
+  it("says 'Not approved' when the board rejected the hires", async () => {
+    const rejected: AgentPlanProposalV1Payload = {
+      ...samplePayload,
+      confirmedAt: "2026-10-04T00:00:00.000Z",
+      confirmedAgentIds: ["a1", "a2"],
+      pendingApproval: false,
+      approvalRejected: true,
+    };
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={rejected} onConfirm={vi.fn()} onRevise={vi.fn()} />,
+      );
+    });
+
+    expect(container.textContent).toContain("Not approved");
+    expect(container.textContent).not.toContain("Team hired");
+    expect(container.textContent).not.toContain("Sent for approval");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("says 'Team hired' once every approval landed approved", async () => {
+    const approved: AgentPlanProposalV1Payload = {
+      ...samplePayload,
+      confirmedAt: "2026-10-04T00:00:00.000Z",
+      confirmedAgentIds: ["a1", "a2"],
+      pendingApproval: false,
+      approvalRejected: false,
+    };
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AgentPlanProposal payload={approved} onConfirm={vi.fn()} onRevise={vi.fn()} />,
+      );
+    });
+
+    expect(container.textContent).toContain("Team hired");
+    expect(container.textContent).not.toContain("Not approved");
+    expect(container.textContent).not.toContain("Sent for approval");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   // AgentDash (review-1025 item 5): a 409 carrying details.repair is the
   // repair contract — a hire half-materialized, not a hired team. Show what
   // the server said instead of "Team hired".

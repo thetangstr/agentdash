@@ -58,9 +58,16 @@ export interface AgentPlanProposalV1Payload {
    * AgentDash (review-1025 item 2): set by /onboarding/confirm-plan alongside
    * confirmedAt when the hires were filed for board approval instead of
    * activated — the card says "Sent for approval", not "Team hired", even
-   * after a reload.
+   * after a reload. The approval service clears it once every hire approval
+   * has been decided.
    */
   pendingApproval?: boolean;
+  /**
+   * AgentDash (cos-followups-2 item 4): set by the approval service when a
+   * hire approval on this plan is rejected — the card says "Not approved"
+   * instead of going back to "Team hired".
+   */
+  approvalRejected?: boolean;
   /**
    * AgentDash (review-1019): steady-state hire cards stamp who asked for the
    * team; /confirm-plan refuses anyone else, matching task-card behaviour.

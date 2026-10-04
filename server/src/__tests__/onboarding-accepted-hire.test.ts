@@ -3,7 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
-import { agents, companies, companyMemberships, authUsers, boardApiKeys, assistantConversations, assistantMessages, agentApiKeys, activityLog, workforceEnrollments, cosOnboardingStates, createDb, type Db } from '@paperclipai/db';
+import { agents, companies, companyMemberships, authUsers, boardApiKeys, assistantConversations, assistantMessages, agentApiKeys, activityLog, workforceEnrollments, cosOnboardingStates, goals, createDb, type Db } from '@paperclipai/db';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
@@ -11,11 +11,33 @@ import { hashBearerToken } from '../services/board-auth.js';
 import { agentCreatorFromProposal } from '../services/agent-creator-from-proposal.js';
 import { workforceService } from '../services/workforce.js';
 import { agentService } from '../services/agents.js';
+import { approvalService } from '../services/approvals.js';
 import { subscribeCompanyLiveEvents } from '../services/live-events.js';
 
-const boundary = vi.hoisted(() => ({ failSkills: false, materialize: undefined as undefined | ((agent: any, files: Record<string,string>) => Promise<any>) }));
+const boundary = vi.hoisted(() => ({ failSkills: false, failApproval: false, materialize: undefined as undefined | ((agent: any, files: Record<string,string>) => Promise<any>) }));
 vi.mock('../services/agent-proposer.js', () => ({ agentProposer: () => ({ propose: async () => ({ name: 'New hire', role: 'Marketing', oneLineOkr: 'Publish evidence', rationale: 'Need content', workforceTemplateId: 'marketing-content' }) }) }));
 vi.mock('../services/agent-instructions.js', async importOriginal => ({ ...await importOriginal<any>(), agentInstructionsService: () => ({ materializeManagedBundle: async (agent: any, files: Record<string,string>) => boundary.materialize!(agent, files) }) }));
+// The real approval service, with a one-shot filing failure for the
+// receipt-committed-but-approval-missing retry path.
+vi.mock('../services/approvals.js', async importOriginal => {
+  const mod = await importOriginal<typeof import('../services/approvals.js')>();
+  return {
+    ...mod,
+    approvalService: (connection: Db) => {
+      const svc = mod.approvalService(connection);
+      return {
+        ...svc,
+        create: async (...args: Parameters<typeof svc.create>) => {
+          if (boundary.failApproval) {
+            boundary.failApproval = false;
+            throw new Error('synthetic approval filing failure');
+          }
+          return svc.create(...args);
+        },
+      };
+    },
+  };
+});
 // External skill filesystem is mocked; enrollment/assignment transactions remain real.
 vi.mock('../services/company-skills.js', () => ({ companySkillService: () => ({ getByKey: async () => null, createLocalSkill: async (companyId: string, input: any) => { if(boundary.failSkills) throw new Error('Synthetic install failure'); return { key: `company/${companyId}/${input.slug}`, markdown: input.markdown }; } }) }));
 
@@ -30,7 +52,7 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     routes = onboardingV2Routes; app = application(db);
   });
   afterAll(async () => { await temp?.cleanup(); });
-  afterEach(() => { vi.unstubAllEnvs(); boundary.materialize = undefined; boundary.failSkills = false; });
+  afterEach(() => { vi.unstubAllEnvs(); boundary.materialize = undefined; boundary.failSkills = false; boundary.failApproval = false; });
   async function fixture(enabled = true) {
     vi.stubEnv('AGENTDASH_BILLING_DISABLED', enabled ? 'false' : 'true'); vi.stubEnv('STRIPE_SECRET_KEY', 'test-capacity-only-no-provider');
     const userId = randomUUID(), token = `pcp_board_${randomUUID()}`;
@@ -271,6 +293,81 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     expect(stale.status).toBe(409); expect(stale.body.details).toMatchObject({ code: 'superseded_plan', latestMessageId: latest.id });
     expect(await hires(f)).toHaveLength(0);
     expect((await send(latest.id)).status).toBe(201); expect(await hires(f)).toHaveLength(2);
+  });
+
+  async function singleHirePlan(f: Awaited<ReturnType<typeof fixture>>) {
+    const [row] = await db.insert(assistantMessages).values({ conversationId: f.conversation.id, role: 'assistant', content: 'Plan', cardKind: 'agent_plan_proposal_v1', cardPayload: {
+      rationale: 'Grow', alignmentToShortTerm: 'Campaign', alignmentToLongTerm: 'Revenue',
+      agents: [{ name: 'Builder', role: 'engineer', adapterType: 'codex_local', responsibilities: ['Build'], kpis: ['PRs'] }],
+    } }).returning(); return row;
+  }
+
+  // AgentDash (cos-followups-2 item 1): a gated confirm on an already-`ready`
+  // conversation must not rewind the phase to `materializing` — a retry after
+  // an approval-filing failure would then replay the onboarding message and
+  // rematerialize goals for a conversation that finished onboarding.
+  it('keeps a ready conversation ready when approval filing fails — the retry owes no onboarding bookkeeping', async () => {
+    const f = await fixture();
+    await db.update(companies).set({ requireBoardApprovalForNewAgents: true }).where(eq(companies.id, f.company.id));
+    await db.update(cosOnboardingStates).set({ phase: 'ready', goals: { longTerm: 'Lead the category', shortTerm: 'Ship v1' } }).where(eq(cosOnboardingStates.conversationId, f.conversation.id));
+    await singleHirePlan(f);
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+    boundary.failApproval = true;
+
+    const first = await confirmPlan(f);
+    expect(first.status).toBe(409);
+    expect((await hires(f))[0].status).toBe('pending_approval');
+    // The phase never left `ready` — materializing was never written.
+    expect((await db.select().from(cosOnboardingStates).where(eq(cosOnboardingStates.conversationId, f.conversation.id)))[0].phase).toBe('ready');
+
+    const second = await confirmPlan(f);
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ pendingApproval: true });
+    // The retry posted only the steady-state approval notice — not the
+    // onboarding variant and not a "team created" repost.
+    const bodies = (await db.select().from(assistantMessages).where(eq(assistantMessages.conversationId, f.conversation.id))).map(m => m.content);
+    expect(bodies).toEqual(['Plan', 'Those hires are waiting on board approval — I have sent each one to Approvals.']);
+    // And the captured goals were not rematerialized for a ready conversation.
+    expect(await db.select().from(goals).where(eq(goals.companyId, f.company.id))).toEqual([]);
+  });
+
+  // AgentDash (cos-followups-2 item 4): a decided hire approval must move the
+  // plan card off "Sent for approval" — approving clears pendingApproval;
+  // rejecting stamps approvalRejected so the card reads "Not approved".
+  it('clears pendingApproval on the plan card when the hire approval is approved', async () => {
+    const f = await fixture();
+    await db.update(companies).set({ requireBoardApprovalForNewAgents: true }).where(eq(companies.id, f.company.id));
+    const card = await singleHirePlan(f);
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+
+    const res = await confirmPlan(f);
+    expect(res.status).toBe(201);
+    expect(res.body.pendingApproval).toBe(true);
+    const [approvalId] = res.body.approvalIds;
+    expect((await hires(f))[0].status).toBe('pending_approval');
+    const before = (await db.select().from(assistantMessages).where(eq(assistantMessages.id, card.id)))[0];
+    expect(before.cardPayload).toMatchObject({ pendingApproval: true });
+
+    await approvalService(db).approve(approvalId, f.userId);
+    const stored = (await db.select().from(assistantMessages).where(eq(assistantMessages.id, card.id)))[0];
+    expect(stored.cardPayload).toMatchObject({ pendingApproval: false, approvalRejected: false });
+    expect((await hires(f))[0].status).not.toBe('pending_approval');
+  });
+
+  it('stamps approvalRejected on the plan card when the hire approval is rejected', async () => {
+    const f = await fixture();
+    await db.update(companies).set({ requireBoardApprovalForNewAgents: true }).where(eq(companies.id, f.company.id));
+    const card = await singleHirePlan(f);
+    boundary.materialize = async () => ({ adapterConfig: { nativeBundle: true } });
+
+    const res = await confirmPlan(f);
+    expect(res.status).toBe(201);
+    const [approvalId] = res.body.approvalIds;
+
+    await approvalService(db).reject(approvalId, f.userId);
+    const stored = (await db.select().from(assistantMessages).where(eq(assistantMessages.id, card.id)))[0];
+    expect(stored.cardPayload).toMatchObject({ pendingApproval: false, approvalRejected: true });
+    expect((await hires(f))[0].status).toBe('terminated');
   });
 
 });

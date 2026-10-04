@@ -236,6 +236,27 @@ describe("mergeHeartbeatRunResultJson", () => {
     ).toEqual({ summary: "Shipped the fix." });
   });
 
+  // AgentDash (cos-followups-2 item 3): the CRLF shape check is for
+  // unmistakable machine noise — glyph checklists, prose notes and a sentence
+  // that ends in "…" are real answers even when they arrive CRLF-terminated.
+  it("keeps a CRLF-authored ✓ checklist — ✓ is not a machine signature on its own", () => {
+    expect(
+      mergeHeartbeatRunResultJson(null, "✓ Fixed X\r\n✓ Added tests\r\n→ Next: roll it out"),
+    ).toEqual({ summary: "✓ Fixed X\n✓ Added tests\n→ Next: roll it out" });
+  });
+
+  it("keeps a CRLF-authored ℹ Note — prose notes are not diagnostics", () => {
+    expect(
+      mergeHeartbeatRunResultJson(null, "ℹ Note: reversible\r\nRollback 2 min"),
+    ).toEqual({ summary: "ℹ Note: reversible\nRollback 2 min" });
+  });
+
+  it("keeps a CRLF line that ends in … when it is prose, not a progress line", () => {
+    expect(
+      mergeHeartbeatRunResultJson(null, "Let me check…\r\nThe build is green."),
+    ).toEqual({ summary: "Let me check…\nThe build is green." });
+  });
+
   it("strips a warning-only result and message, not just the summary", () => {
     expect(
       mergeHeartbeatRunResultJson(

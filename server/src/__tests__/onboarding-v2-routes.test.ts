@@ -1257,6 +1257,65 @@ describe("POST /api/onboarding/confirm-plan", () => {
     expect(res.body.details?.agentIds).toEqual(["agent-2"]);
     expect(mockApprovalCreate).not.toHaveBeenCalled();
   });
+
+  // AgentDash (cos-followups-2 item 2): a retry that finds every hire already
+  // waiting on an open approval filed nothing — reposting the CoS notice on
+  // every retry spams the thread.
+  it("posts the CoS approval notice once across retries that file nothing new", async () => {
+    const planPayload = {
+      rationale: "one hire",
+      agents: [
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+      ],
+      alignmentToShortTerm: "s",
+      alignmentToLongTerm: "l",
+    };
+    mockAgents.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "c1",
+      name: "Quinn",
+      status: "pending_approval",
+      metadata: {},
+    });
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    // First retry: mid-materialization with no open approval — files one and
+    // posts the notice. Second: phase is ready and the approval is open —
+    // nothing repaired, so nothing is reposted.
+    mockCosState.get
+      .mockResolvedValueOnce({ conversationId: "conv1", phase: "materializing" })
+      .mockResolvedValue({ conversationId: "conv1", phase: "ready" });
+    mockListPendingHireApprovals
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ id: "approval-retry" }]);
+    mockApprovalCreate.mockImplementation(async (_companyId: string, data: any) => ({ id: "approval-retry", type: data.type }));
+
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{
+          id: "conv1",
+          companyId: "c1",
+          metadata: { agentdashAcceptedHires: { "plan:msg1": { attemptId: "a1", agentIds: ["agent-1"] } } },
+        }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+        // The second request re-reads the plan card; the conversation row is
+        // cached by the stub from the first request.
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+      { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: true }] },
+    );
+
+    const first = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+    expect(first.status).toBe(200);
+    expect(mockApprovalCreate).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+
+    const second = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+    expect(second.status).toBe(200);
+    expect(second.body.approvalIds).toEqual(["approval-retry"]);
+    expect(mockApprovalCreate).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("POST /api/onboarding/revise-plan", () => {
