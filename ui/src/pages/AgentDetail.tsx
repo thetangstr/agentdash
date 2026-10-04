@@ -57,6 +57,7 @@ import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd 
 import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
+import { cancelledRunLabel } from "../lib/cancelledRunLabel";
 import {
   AgentRunFailureGuidance,
   readAgentRunFailureClassification,
@@ -1215,6 +1216,7 @@ export function AgentDetail() {
           status={harnessPreflightStatus}
           onRunPreflight={() => harnessPreflight.mutate()}
           pending={harnessPreflight.isPending}
+          hasSuccessfulRuns={(agent.runHealth?.succeeded ?? 0) > 0}
           error={
             harnessPreflight.error instanceof Error
               ? harnessPreflight.error.message
@@ -1409,7 +1411,9 @@ export function LatestRunCard({
   const StatusIcon = statusInfo.icon;
   const summaryRaw = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
-    : run.error ?? "";
+    : run.status === "cancelled"
+      ? cancelledRunLabel(run)
+      : (run.error ?? "");
 
   // Extract a clean 2-3 line excerpt: first non-empty, non-header, non-list-mark lines
   const summary = useMemo(() => {
@@ -3698,13 +3702,21 @@ export function AgentSkillsTab({
 
 /* ---- Runs Tab ---- */
 
+// AgentDash (c3): the label every surface uses for a cancelled run — the
+// recorded reason, neutral — lives in lib/cancelledRunLabel.
+
 function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
-  const summary = run.resultJson
+  const resultSummary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
-    : run.error ?? "";
+    : "";
+  const summary = resultSummary
+    ? resultSummary
+    : run.status === "cancelled"
+      ? cancelledRunLabel(run)
+      : (run.error ?? "");
 
   return (
     <Link
@@ -4231,7 +4243,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
               </div>
             )}
             <RunQuotaUpgrade run={run} />
-            {failureClassification ? (
+            {/* AgentDash (c3): a stopped run has nothing to recover from — the
+                classification the killed adapter's failed write may have left
+                in resultJson is stale, not guidance. */}
+            {failureClassification && run.status !== "cancelled" ? (
               <AgentRunFailureGuidance classification={failureClassification} actions={recoveryActions} />
             ) : null}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
@@ -4281,7 +4296,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 )}
               </div>
             )}
-            {hasNonZeroExit && (
+            {/* AgentDash (c3): exit 130 on a cancelled run is just the kill we
+                sent — not a red failure signal. The reason line above names it. */}
+            {hasNonZeroExit && run.status !== "cancelled" && (
               <div className="text-xs text-red-600 dark:text-red-400">
                 Exit code {run.exitCode}
                 {run.signal && <span className="text-muted-foreground ml-1">(signal: {run.signal})</span>}
@@ -4931,6 +4948,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           streaming={isLive}
           emptyMessage={run.logRef ? "Waiting for transcript..." : "No persisted transcript for this run."}
           usage={runUsage}
+          stoppedReason={run.status === "cancelled" ? cancelledRunLabel(run) : null}
         />
         {hasMoreLog && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">

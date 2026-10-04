@@ -64,6 +64,53 @@ describe("RunTranscriptView", () => {
     expect(html).toContain("<h2>Summary</h2>");
   });
 
+  // AgentDash (c3): a killed process reports "Failed" in the transcript's own
+  // result line; a cancelled run's footer must read as a neutral stop instead.
+  it("renders a neutral Stopped footer for a cancelled run", () => {
+    const cancelledRun: TranscriptEntry[] = [
+      { kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: "Working on it" },
+      {
+        kind: "result",
+        ts: "2026-03-12T00:00:30.000Z",
+        text: "Interrupted: process received SIGINT",
+        inputTokens: 500,
+        outputTokens: 100,
+        cachedTokens: 0,
+        costUsd: 0.004,
+        subtype: "error",
+        isError: true,
+        errors: ["Interrupted: process received SIGINT"],
+      },
+    ];
+    const html = render(<RunTranscriptView entries={cancelledRun} stoppedReason="Stopped manually" />);
+    expect(html).toContain('data-readable-footer="ok"');
+    expect(html).toContain("Stopped · 29s");
+    expect(html).toContain("Stopped manually");
+    expect(html).not.toContain("Failed");
+    expect(html).not.toContain("process received SIGINT");
+  });
+
+  it("keeps the red Failed footer for a genuinely failed run", () => {
+    const failedRun: TranscriptEntry[] = [
+      {
+        kind: "result",
+        ts: "2026-03-12T00:00:30.000Z",
+        text: "Adapter exploded",
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        costUsd: 0,
+        subtype: "error",
+        isError: true,
+        errors: ["Adapter exploded"],
+      },
+    ];
+    const html = render(<RunTranscriptView entries={failedRun} />);
+    expect(html).toContain('data-readable-footer="error"');
+    expect(html).toContain("Failed");
+    expect(html).toContain("Adapter exploded");
+  });
+
   it("treats the legacy nice mode as readable", () => {
     const html = render(<RunTranscriptView mode="nice" entries={toolRun} />);
     expect(html).toContain('data-transcript-mode="readable"');
