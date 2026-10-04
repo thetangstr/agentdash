@@ -350,7 +350,10 @@ export default function MyAgent() {
             nobody holds a stewardship at join time. */}
         <p className="text-xs text-muted-foreground">
           New to this?{" "}
-          <Link to="/guides/steward/getting-started" className="underline">
+          <Link
+            to="/guides/steward/getting-started"
+            className="underline max-sm:-my-3 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
+          >
             Getting started as a steward
           </Link>
         </p>

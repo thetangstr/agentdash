@@ -31,7 +31,7 @@ import { adapterLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
-import { displayMaskedSecrets, SECRET_MASK_DISPLAY } from "../lib/redactSecrets";
+import { displayMaskedSecrets, redactSecrets, SECRET_MASK_DISPLAY } from "../lib/redactSecrets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { getAdapterLabel, plainRuntimeLabel } from "../adapters/adapter-display-registry";
 import { StatusBadge } from "../components/StatusBadge";
@@ -61,7 +61,6 @@ import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { cancelledRunLabel } from "../lib/cancelledRunLabel";
 import { shortenInstancePaths } from "../lib/instancePaths";
-import { redactSecrets } from "../lib/redactSecrets";
 import {
   AgentRunFailureGuidance,
   readAgentRunFailureClassification,

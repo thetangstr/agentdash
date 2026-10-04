@@ -840,15 +840,21 @@ export function summarizeToolOutcome(
   return quietCredentialError(summarizeToolResult(result, status === "error", "compact"), status);
 }
 
-/** The leading `command:`/`status:`/`exit_code:` lines a structured exec
- *  result prepends to its output (Codex's command_execution shape). */
+/** The leading `command:`/`status:`/`exit_code:` block a structured exec
+ *  result prepends to its output (Codex's command_execution shape): a
+ *  `command:` line first, optional further metadata lines, then a blank
+ *  line before the body. Output that merely starts with a `status:`-style
+ *  line (or has no blank-line separator) is not this header — it stays. */
+const EXEC_RESULT_COMMAND_LINE = /^command\s*:/i;
 const EXEC_RESULT_HEADER_LINE = /^(?:command|status|exit_code)\s*:/i;
 
 function stripExecResultHeader(result: string): string {
   const lines = result.split(/\r?\n/);
-  let index = 0;
+  if (!EXEC_RESULT_COMMAND_LINE.test(lines[0]?.trim() ?? "")) return result;
+  let index = 1;
   while (index < lines.length && EXEC_RESULT_HEADER_LINE.test(lines[index].trim())) index += 1;
-  return lines.slice(index).join("\n");
+  if (index >= lines.length || lines[index].trim() !== "") return result;
+  return lines.slice(index + 1).join("\n");
 }
 
 /** The absolute path a call says it writes to (Hermes keeps it under `detail`). */
