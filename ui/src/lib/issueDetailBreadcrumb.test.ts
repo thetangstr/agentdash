@@ -137,6 +137,19 @@ describe("issueDetailBreadcrumb", () => {
     });
   });
 
+  it("rejects a stored breadcrumb with an empty label so the page falls back", () => {
+    // c3 copy: an empty label used to render as a bare leading "›" on phones.
+    const state = {
+      issueDetailBreadcrumb: { label: "", href: "/issues" },
+      issueDetailSource: "issues",
+    };
+    expect(readIssueDetailBreadcrumb("PAP-465", state)).toBeNull();
+    expect(readIssueDetailBreadcrumb("PAP-465", state, "?from=issues")).toEqual({
+      label: "Work",
+      href: "/issues",
+    });
+  });
+
   it("can detect legacy query-based breadcrumb links", () => {
     expect(hasLegacyIssueDetailQuery("?from=inbox&fromHref=%2Finbox%2Fmine")).toBe(true);
     expect(hasLegacyIssueDetailQuery("?q=test")).toBe(false);

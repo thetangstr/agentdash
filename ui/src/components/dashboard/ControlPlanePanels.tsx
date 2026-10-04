@@ -24,7 +24,7 @@ import { buildCompanyUserProfileMap } from "../../lib/company-members";
 import { formatCents, formatTokens } from "../../lib/utils";
 import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE } from "../../lib/token-figures";
 import { timeAgo } from "../../lib/timeAgo";
-import { agentIdentityLineUnderName } from "../../lib/agent-identity";
+import { agentIdentityLineUnderName, humanizeAgentRole, isGenericAgentRole } from "../../lib/agent-identity";
 import { ActivityRow } from "../ActivityRow";
 import { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS, isSystemPlumbingActivity } from "../../lib/activity-format";
 
@@ -306,7 +306,13 @@ function FleetPanel({ agents, isLoading, error }: { agents: Agent[] | undefined;
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{agent.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {agentIdentityLineUnderName(agent) || "Agent"}
+                      {/* AgentDash (c3 copy): when the name suppresses the
+                          identity line ("Chief of Staff" named Chief of Staff)
+                          still name the role — "Agent" read as a different
+                          hire than the CoS the desktop row described. */}
+                      {agentIdentityLineUnderName(agent)
+                        || (isGenericAgentRole(agent.role) ? "" : humanizeAgentRole(agent.role))
+                        || "Agent"}
                     </span>
                   </span>
                   <span className="shrink-0 text-right text-xs text-muted-foreground">

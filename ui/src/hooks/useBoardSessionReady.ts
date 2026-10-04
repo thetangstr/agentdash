@@ -78,3 +78,31 @@ export function useBoardOrgAccess(): boolean {
   if (!access.data) return false;
   return access.data.isInstanceAdmin || access.data.companyIds.length > 0;
 }
+
+/**
+ * AgentDash (c3 copy): whether this board session is an instance admin —
+ * used to keep operator-only notices (e.g. the adapter alpha warning) off an
+ * owner's screen. Local trusted mode is the admin by definition; a session
+ * without the flag is not. Fails open like the other gates.
+ */
+export function useIsInstanceAdmin(): boolean {
+  const sessionReady = useBoardSessionReady();
+  const health = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+  });
+  const authenticatedMode = health.data?.deploymentMode === "authenticated";
+  const access = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+    enabled: sessionReady && authenticatedMode,
+    retry: false,
+  });
+
+  if (!sessionReady) return false;
+  if (!authenticatedMode) return true;
+  if (access.isError) return true;
+  if (!access.data) return false;
+  return access.data.isInstanceAdmin;
+}

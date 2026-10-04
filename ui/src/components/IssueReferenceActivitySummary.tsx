@@ -28,12 +28,11 @@ function Section({
   if (items.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span
-        aria-label={label}
-        className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-      >
+      {/* AgentDash (c3 copy): a lone colored + or – before the chips read as
+          a cryptic glyph — the words say what happened to the references. */}
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
         {icon}
-        <span className="sr-only">{label}</span>
+        <span>{label}</span>
       </span>
       {items.map((issue) => (
         <IssueReferencePill

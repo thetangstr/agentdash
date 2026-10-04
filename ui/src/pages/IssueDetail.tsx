@@ -2526,13 +2526,11 @@ export function IssueDetail() {
   });
 
   useEffect(() => {
-    setBreadcrumbs([
-      sourceBreadcrumb,
-      { label: hasLiveRuns ? `🔵 ${breadcrumbTitle}` : breadcrumbTitle },
-    ]);
+    // AgentDash (c3 copy): the live state is already a "Live" badge in the
+    // header — the 🔵 emoji in the breadcrumb was a raw glyph, not a control.
+    setBreadcrumbs([sourceBreadcrumb, { label: breadcrumbTitle }]);
   }, [
     breadcrumbTitle,
-    hasLiveRuns,
     setBreadcrumbs,
     sourceBreadcrumb.href,
     sourceBreadcrumb.label,

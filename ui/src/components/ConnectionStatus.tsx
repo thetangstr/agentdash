@@ -39,7 +39,9 @@ export function ConnectionStatus() {
   return (
     <div className="flex items-center gap-1.5" title={label} data-testid="connection-status" role="status" aria-label={label}>
       <span className={`size-2 rounded-full ${color} shrink-0`} />
-      <span className="text-xs text-muted-foreground hidden md:inline">{label}</span>
+      {/* AgentDash (c3 copy): the word shows on phones too — a bare dot left
+          a "Reconnecting…" state unreadable at the exact moment it mattered. */}
+      <span className="text-xs text-muted-foreground">{label}</span>
     </div>
   );
 }

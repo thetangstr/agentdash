@@ -112,6 +112,21 @@ describe("ControlPlanePanels", () => {
     expect(q("dashboard-activity-empty")).not.toBeNull();
   });
 
+  // AgentDash (c3 copy): a CoS literally named "Chief of Staff" used to fall
+  // through the identity-line suppression into the generic "Agent" subtitle.
+  it("names the role under a Chief of Staff whose name is its title", async () => {
+    mockAgentsApi.list.mockResolvedValue([
+      { id: "agent-cos", name: "Chief of Staff", role: "chief_of_staff", status: "idle", lastHeartbeatAt: null },
+      { id: "agent-1", name: "Agent 1", role: "general", status: "idle", lastHeartbeatAt: null },
+    ]);
+    await render();
+    const rows = container.querySelectorAll('[data-testid="dashboard-fleet-row"]');
+    // Name + role subtitle — "Chief of Staff" appears twice, not "Agent".
+    expect(rows[0]?.textContent?.match(/Chief of Staff/g) ?? []).toHaveLength(2);
+    expect(rows[0]?.textContent).not.toContain("Agent");
+    expect(rows[1]?.textContent).toContain("Agent");
+  });
+
   it("shows an error in the fleet and activity panels when those queries fail", async () => {
     mockAgentsApi.list.mockRejectedValue(new Error("nope"));
     mockActivityApi.list.mockRejectedValue(new Error("nope"));

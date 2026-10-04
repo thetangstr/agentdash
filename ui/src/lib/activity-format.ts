@@ -259,6 +259,42 @@ function formatIssueUpdatedAction(details: ActivityDetails, options: ActivityFor
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+/**
+ * AgentDash (c3 copy): a run stops for a reason the person should read —
+ * "cancelled heartbeat" attributed it like a manual kill. The actor is who
+ * stopped it; the reason is why ("the issue was marked done"), so a stop that
+ * happened as a side effect no longer reads as the person ending the run.
+ */
+const HEARTBEAT_CANCEL_REASONS: Record<string, string> = {
+  issue_status_done: "the issue was marked done",
+  issue_status_cancelled: "the issue was cancelled",
+  issue_comment_interrupt: "a new comment interrupted it",
+};
+
+function formatHeartbeatCancelledPhrase(details: ActivityDetails, options: ActivityFormatOptions): string {
+  const agentId = typeof details?.agentId === "string" ? details.agentId : null;
+  const agentName = (agentId ? options.agentMap?.get(agentId)?.name : null) ?? "the agent";
+  const source = typeof details?.source === "string" ? details.source : null;
+  const reason = source ? (HEARTBEAT_CANCEL_REASONS[source] ?? humanizeValue(source)) : null;
+  return `stopped ${agentName === "the agent" ? "the agent's" : `${agentName}'s`} run${reason ? ` — ${reason}` : ""}`;
+}
+
+/**
+ * AgentDash (c3 copy): closing an issue accepts its deliverable — the audit
+ * row used to read "updated a deliverable", which hid what actually happened.
+ * The document key names the deliverable when it is not the generic one.
+ */
+function formatWorkProductAcceptedPhrase(details: ActivityDetails): string {
+  const key = typeof details?.documentKey === "string" && details.documentKey && details.documentKey !== "deliverable"
+    ? details.documentKey
+    : null;
+  return key ? `accepted the ${key}` : "accepted the deliverable";
+}
+
+function isWorkProductAcceptance(action: string, details: ActivityDetails): boolean {
+  return action === "issue.work_product_updated" && details?.reason === "issue_accepted";
+}
+
 function formatStructuredIssueChange(input: {
   action: string;
   details: ActivityDetails;
@@ -311,6 +347,14 @@ export function formatActivityVerb(
     if (issueUpdatedVerb) return issueUpdatedVerb;
   }
 
+  if (action === "heartbeat.cancelled") {
+    return formatHeartbeatCancelledPhrase(details, options);
+  }
+
+  if (isWorkProductAcceptance(action, details)) {
+    return `${formatWorkProductAcceptedPhrase(details)} on`;
+  }
+
   const structuredChange = formatStructuredIssueChange({
     action,
     details,
@@ -330,6 +374,14 @@ export function formatIssueActivityAction(
   if (action === "issue.updated") {
     const issueUpdatedAction = formatIssueUpdatedAction(details, options);
     if (issueUpdatedAction) return issueUpdatedAction;
+  }
+
+  if (action === "heartbeat.cancelled") {
+    return formatHeartbeatCancelledPhrase(details, options);
+  }
+
+  if (isWorkProductAcceptance(action, details)) {
+    return formatWorkProductAcceptedPhrase(details);
   }
 
   const structuredChange = formatStructuredIssueChange({

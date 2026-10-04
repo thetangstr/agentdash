@@ -7,7 +7,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Cpu, Plus, Power, Trash2, FolderOpen, Package, RefreshCw, Download } from "lucide-react";
-import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { adaptersApi } from "@/api/adapters";
 import type { AdapterInfo } from "@/api/adapters";
@@ -32,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { ChoosePathButton } from "@/components/PathInstructionsModal";
 import { invalidateDynamicParser } from "@/adapters/dynamic-loader";
 import { invalidateConfigSchemaCache } from "@/adapters/schema-config-fields";
+import { useIsInstanceAdmin } from "@/hooks/useBoardSessionReady";
 
 function AdapterRow({
   adapter,
@@ -252,8 +252,8 @@ function ReinstallDialog({
 }
 
 export function AdapterManager() {
-  const { selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const isInstanceAdmin = useIsInstanceAdmin();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
 
@@ -265,12 +265,13 @@ export function AdapterManager() {
   const [reinstallTarget, setReinstallTarget] = useState<AdapterInfo | null>(null);
 
   useEffect(() => {
+    // AgentDash (c3 copy): this page lives under Instance Settings — same
+    // trail as About/Changelog/Updates, not Company → Settings.
     setBreadcrumbs([
-      { label: selectedCompany?.name ?? "Company", href: "/dashboard" },
-      { label: "Settings", href: "/instance/settings/general" },
+      { label: "Instance Settings", href: "/instance/settings/general" },
       { label: "Adapters" },
     ]);
-  }, [selectedCompany?.name, setBreadcrumbs]);
+  }, [setBreadcrumbs]);
 
   const { data: adapters, isLoading, error } = useQuery({
     queryKey: queryKeys.adapters.all,
@@ -415,9 +416,13 @@ export function AdapterManager() {
         <div className="flex items-center gap-2">
           <Cpu className="h-6 w-6 text-muted-foreground" />
           <h1 className="text-xl font-semibold">Adapters</h1>
-          <Badge variant="outline" className="text-amber-600 border-amber-400">
-            Alpha
-          </Badge>
+          {/* AgentDash (c3 copy): the alpha badge and notice are operator
+              information — owners see a plain page. */}
+          {isInstanceAdmin && (
+            <Badge variant="outline" className="text-amber-600 border-amber-400">
+              Alpha
+            </Badge>
+          )}
         </div>
 
         <Dialog open={installDialogOpen} onOpenChange={setInstallDialogOpen}>
@@ -526,8 +531,8 @@ export function AdapterManager() {
         </Dialog>
       </div>
 
-      {/* Alpha notice */}
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+      {/* Alpha notice — instance-admin only, like the badge above. */}
+      {isInstanceAdmin && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
         <div className="flex items-start gap-3">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
           <div className="space-y-1 text-sm">
@@ -538,7 +543,7 @@ export function AdapterManager() {
             </p>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* External adapters */}
       <section className="space-y-3">

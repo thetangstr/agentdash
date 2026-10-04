@@ -34,7 +34,14 @@ const ISSUE_DETAIL_STORAGE_KEY_PREFIX = "paperclip:issue-detail-breadcrumb:";
 function isIssueDetailBreadcrumb(value: unknown): value is IssueDetailBreadcrumb {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<IssueDetailBreadcrumb>;
-  return typeof candidate.label === "string" && typeof candidate.href === "string";
+  // AgentDash (c3 copy): an empty label used to pass this check and rendered
+  // as a leading "›" on phones. A crumb with no label is no crumb — reject it
+  // so the fallback ("Work" / "Inbox") stands in instead.
+  return (
+    typeof candidate.label === "string" &&
+    candidate.label.trim().length > 0 &&
+    typeof candidate.href === "string"
+  );
 }
 
 function isIssueDetailSource(value: unknown): value is IssueDetailSource {

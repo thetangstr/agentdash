@@ -102,3 +102,43 @@ describe("bookkeeping activity", () => {
     expect(formatIssueActivityAction("issue.work_product_updated")).toBe("updated a deliverable");
   });
 });
+
+// AgentDash (c3 copy): "cancelled heartbeat" hid who and why — the row names
+// the agent's run and the reason it stopped.
+describe("heartbeat cancellations", () => {
+  it("names the agent's run and the reason it stopped", () => {
+    const details = { agentId: "agent-scout", source: "issue_status_done" };
+    const agents = new Map<string, Agent>([["agent-scout", { id: "agent-scout", name: "Scout" } as Agent]]);
+    expect(formatActivityVerb("heartbeat.cancelled", details, { agentMap: agents })).toBe(
+      "stopped Scout's run — the issue was marked done",
+    );
+    expect(formatIssueActivityAction("heartbeat.cancelled", details, { agentMap: agents })).toBe(
+      "stopped Scout's run — the issue was marked done",
+    );
+  });
+
+  it("humanizes other sources and falls back to a generic agent name", () => {
+    expect(formatActivityVerb("heartbeat.cancelled", { agentId: "agent-x", source: "issue_comment_interrupt" })).toBe(
+      "stopped the agent's run — a new comment interrupted it",
+    );
+    expect(formatActivityVerb("heartbeat.cancelled", { agentId: "agent-x", source: "watchdog_stop" })).toBe(
+      "stopped the agent's run — watchdog stop",
+    );
+    expect(formatActivityVerb("heartbeat.cancelled", {})).toBe("stopped the agent's run");
+  });
+});
+
+// AgentDash (c3 copy): closing an issue accepts its deliverable — say so.
+describe("deliverable acceptance", () => {
+  it("reads accepted, not updated, when the reason is issue acceptance", () => {
+    const details = { reason: "issue_accepted" };
+    expect(formatActivityVerb("issue.work_product_updated", details)).toBe("accepted the deliverable on");
+    expect(formatIssueActivityAction("issue.work_product_updated", details)).toBe("accepted the deliverable");
+  });
+
+  it("names the document when it is not the generic deliverable", () => {
+    expect(formatIssueActivityAction("issue.work_product_updated", { reason: "issue_accepted", documentKey: "report" })).toBe(
+      "accepted the report",
+    );
+  });
+});
