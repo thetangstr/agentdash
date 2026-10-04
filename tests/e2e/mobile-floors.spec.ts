@@ -769,7 +769,9 @@ test.describe("Phone floors on every main screen", () => {
   test("desktop: the floating status cluster never covers the last row", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoPage(page, `/${seeded.company.issuePrefix}/activity`);
-    await expect(main(page).getByRole("heading").first()).toBeVisible({ timeout: 30_000 });
+    // The Activity page has no in-content heading — its title lives in the
+    // breadcrumb bar — so wait on the always-rendered filter control.
+    await expect(main(page).getByRole("combobox")).toBeVisible({ timeout: 30_000 });
     await settle(page);
 
     const cluster = page.locator(".fixed.bottom-4.right-4");
