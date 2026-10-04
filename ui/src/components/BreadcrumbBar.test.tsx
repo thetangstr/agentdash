@@ -106,7 +106,7 @@ describe("BreadcrumbBar", () => {
       { label: "Agent Settings" },
     ]);
 
-    const back = container.querySelector('a[aria-label="Back to Workforce Management Console"]');
+    const back = container.querySelector('a[aria-label="Up to Workforce Management Console"]');
     expect(back).not.toBeNull();
     expect(back!.getAttribute("href")).toBe("/workforce");
 
@@ -118,6 +118,35 @@ describe("BreadcrumbBar", () => {
 
     // The current page name renders complete, not a fragment.
     expect(container.textContent).toContain("Agent Settings");
+  });
+
+  it("shows only the closest linked parent as a chevron on phones — earlier crumbs and separators hide", () => {
+    renderBar([
+      { label: "Team", href: "/agents" },
+      { label: "Maya", href: "/agents/maya/dashboard" },
+      { label: "Runs", href: "/agents/maya/runs" },
+      { label: "Run c04a79" },
+    ]);
+
+    // One chevron, named for the closest parent — never "Back to …", which
+    // pages already use for their own back links (connect-assistant e2e).
+    const ups = container.querySelectorAll('a[aria-label^="Up to "]');
+    expect(ups).toHaveLength(1);
+    expect(ups[0]!.getAttribute("aria-label")).toBe("Up to Runs");
+    expect(ups[0]!.getAttribute("href")).toBe("/agents/maya/runs");
+    expect(container.querySelector('a[aria-label^="Back to "]')).toBeNull();
+
+    // Earlier crumbs' items and every separator are desktop-only.
+    const items = Array.from(container.querySelectorAll("li[data-slot='breadcrumb-item'], nav li"));
+    const hiddenItems = items.filter((li) => li.classList.contains("max-sm:hidden"));
+    const teamItem = items.find((li) => li.textContent === "Team");
+    expect(teamItem!.classList.contains("max-sm:hidden")).toBe(true);
+    const mayaItem = items.find((li) => li.textContent === "Maya");
+    expect(mayaItem!.classList.contains("max-sm:hidden")).toBe(true);
+    const separators = Array.from(container.querySelectorAll("li[role='presentation']"));
+    expect(separators.length).toBe(3);
+    expect(separators.every((li) => li.classList.contains("max-sm:hidden"))).toBe(true);
+    expect(hiddenItems.length).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps the parent crumb's text label for desktop widths", () => {

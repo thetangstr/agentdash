@@ -70,7 +70,7 @@ export function SidebarCompanyMenu({ open: controlledOpen, onOpenChange }: Sideb
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="h-auto flex-1 justify-start gap-1 px-2 py-1.5 text-left"
+          className="h-auto min-w-0 flex-1 justify-start gap-1 px-2 py-1.5 text-left"
           aria-label={selectedCompany ? `Open ${selectedCompany.name} menu` : "Open company menu"}
           disabled={!selectedCompany}
         >

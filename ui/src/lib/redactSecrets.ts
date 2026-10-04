@@ -27,7 +27,7 @@ export const SECRET_MASK_DISPLAY = "•••• hidden";
 // text redacts the "••••" run as a value, emitting "***REDACTED*** hidden",
 // which must collapse back to one mask.
 const KNOWN_MASK_RE =
-  /\*\*\*(?:REDACTED|SECRET_REF)\*\*\*(?: hidden)?|\[(?:REDACTED(?:_[A-Z]+)*|redacted-github-token)\]/g;
+  /\*\*\*(?:REDACTED|SECRET_REF)\*\*\*(?: hidden\b)?|\[(?:REDACTED(?:_[A-Z]+)*|redacted-(?:github-token|key|token))\]/g;
 
 /** Rewrite every baked-in mask marker to the one display mask. */
 export function displayMaskedSecrets(text: string): string {

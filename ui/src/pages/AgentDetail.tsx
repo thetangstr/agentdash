@@ -1492,7 +1492,7 @@ export function LatestRunCard({
 
         {summary ? (
           <div className="pointer-events-none relative overflow-hidden max-h-16 [&_a]:pointer-events-auto">
-            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{summary}</MarkdownBody>
+            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{displayMaskedSecrets(summary)}</MarkdownBody>
           </div>
         ) : showEmptySummary && !isLive && !run.error ? (
           <p className="text-sm text-muted-foreground" data-testid="latest-run-no-summary">
@@ -3701,7 +3701,7 @@ export function AgentSkillsTab({
 
 /* ---- Runs Tab ---- */
 
-function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
+export function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
@@ -3737,7 +3737,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
       </div>
       {summary && (
         <span className="text-xs text-muted-foreground truncate pl-5.5">
-          {summary.slice(0, 60)}
+          {displayMaskedSecrets(summary).slice(0, 60)}
         </span>
       )}
       {(metrics.totalTokens > 0 || metrics.cost > 0) && (
@@ -4177,7 +4177,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 ? displayModel.slice("auto/".length)
                 : displayModel;
               const modelText = modelName && modelName !== "auto"
-                ? (displayProvider && displayProvider !== "auto" && !modelName.includes("/")
+                ? (displayProvider && displayProvider !== "auto" && !modelName.includes("/") && !displayModel?.startsWith("auto/")
                   ? `${displayProvider}/${modelName}`
                   : modelName)
                 : null;

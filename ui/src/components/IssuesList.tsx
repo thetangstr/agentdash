@@ -1498,7 +1498,7 @@ export function IssuesList({
               size="icon"
               className={cn("hidden h-8 w-8 shrink-0 sm:inline-flex", viewState.nestingEnabled && "bg-accent")}
               onClick={() => updateView({ nestingEnabled: !viewState.nestingEnabled })}
-              aria-label={viewState.nestingEnabled ? "Group sub-issues under their parent" : "Show sub-issues as separate rows"}
+              aria-label="Nest sub-issues under their parent"
               aria-pressed={viewState.nestingEnabled}
               title={viewState.nestingEnabled ? "Disable parent-child nesting" : "Enable parent-child nesting"}
             >

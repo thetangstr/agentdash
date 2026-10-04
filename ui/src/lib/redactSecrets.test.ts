@@ -28,9 +28,17 @@ describe("displayMaskedSecrets", () => {
     ["typed server markers", "[REDACTED_PEM_BLOCK]"],
     ["typed server markers", "[REDACTED_JWT]"],
     ["git helper marker", "[redacted-github-token]"],
+    ["MCP assistant key mask", "[redacted-key]"],
+    ["MCP assistant token mask", "[redacted-token]"],
     ["env secret-ref", "***SECRET_REF***"],
   ])("shows one mask for a stored %s", (_label, marker) => {
     expect(displayMaskedSecrets(`token=${marker}`)).toBe(`token=${SECRET_MASK_DISPLAY}`);
+  });
+
+  it("does not eat into the next word after a mask", () => {
+    // The idempotency tail is word-bounded: "***REDACTED*** hiddenly" keeps
+    // its following text instead of losing " hidden" to the mask rewrite.
+    expect(displayMaskedSecrets("***REDACTED*** hiddenly fine")).toBe(`${SECRET_MASK_DISPLAY} hiddenly fine`);
   });
 
   it("leaves non-mask text alone", () => {
