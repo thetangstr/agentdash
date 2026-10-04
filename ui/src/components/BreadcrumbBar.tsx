@@ -122,7 +122,11 @@ export function BreadcrumbBar() {
                   {i > 0 && <BreadcrumbSeparator className="max-sm:hidden" />}
                   <BreadcrumbItem
                     className={cn(
-                      isLast ? "min-w-0 max-sm:shrink-0" : "shrink-0",
+                      // AgentDash (c3 follow-up): the last crumb may shrink on
+                      // phones too — the parent is a chevron there, so a very
+                      // long page title truncates with an ellipsis instead of
+                      // overflowing the bar.
+                      isLast ? "min-w-0" : "shrink-0",
                       !isLast && !isPhoneParent && "max-sm:hidden",
                     )}
                   >

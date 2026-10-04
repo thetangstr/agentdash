@@ -19,6 +19,7 @@ import {
   summarizeNotice,
 } from "./transcriptPresentation";
 import { visibleRunCostUsd } from "./utils";
+import { cancelledRunLabel } from "./cancelledRunLabel";
 import type { ReadableRunUsage } from "../components/transcript/ReadableTranscript";
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
@@ -628,6 +629,8 @@ function runDurationLabel(run: {
   startedAt: Date | string | null;
   finishedAt?: Date | string | null;
   resultJson?: Record<string, unknown> | null;
+  error?: string | null;
+  errorCode?: string | null;
 }) {
   const start = run.startedAt ?? run.createdAt;
   const end = run.finishedAt ?? null;
@@ -642,11 +645,15 @@ function runDurationLabel(run: {
       return durationText ? `Failed after ${durationText}` : "Run failed";
     case "timed_out":
       return durationText ? `Timed out after ${durationText}` : "Run timed out";
-    case "cancelled":
+    case "cancelled": {
       if (stopReason === "paused") {
         return durationText ? `Paused by board after ${durationText}` : "Paused by board";
       }
-      return durationText ? `Cancelled after ${durationText}` : "Run cancelled";
+      // AgentDash (c3 follow-up): "cancelled" is an internal status; the chat
+      // speaks the neutral Stopped vocabulary the run footer already uses.
+      const stopped = cancelledRunLabel(run);
+      return durationText ? `${stopped} after ${durationText}` : stopped;
+    }
     case "queued":
       return "Queued";
     case "running":
