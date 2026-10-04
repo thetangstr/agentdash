@@ -1,8 +1,13 @@
-// AgentDash (batch 4, c4-model-tiers): the agentService.create funnel is the
-// one path every hire flow shares — the CoS proposal creator, onboarding
-// /confirm-plan, the CoS single-agent hire card, and workforce-template hires
-// all insert through it. A hermes_local agent created without an explicit
-// model gets its role's tier; an explicit model a person set always wins.
+// AgentDash (batch 4, c4-model-tiers + review-1028): the agentService.create
+// funnel is the one path every hire flow shares — the CoS proposal creator,
+// onboarding /confirm-plan, the CoS single-agent hire card, and
+// workforce-template hires all insert through it. A hermes_local agent
+// created without an explicit model gets its role's tier — only while the
+// instance opted in (AGENTDASH_HERMES_MODEL_TIERS=on) and no BYOK marker
+// sits on the box. An explicit model a person set always wins.
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
@@ -16,9 +21,18 @@ import { agentService } from "../services/agents.js";
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
+const ENV_KEYS = [
+  "AGENTDASH_HERMES_MODEL_TIERS",
+  "HERMES_PROFILES_DIR",
+  "AGENTDASH_HERMES_ROOT",
+  "AGENTDASH_HERMES_PROFILE_TEMPLATE",
+] as const;
+
 describeEmbeddedPostgres("agentService.create applies hermes model tiers", () => {
   let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
   let db!: Db;
+  let profilesDir: string;
+  let savedEnv: Record<string, string | undefined>;
 
   beforeAll(async () => {
     temp = await startEmbeddedPostgresTestDatabase("agent-model-tiers-");
@@ -28,6 +42,11 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
   afterEach(async () => {
     await db.delete(agents);
     await db.delete(companies);
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    rmSync(profilesDir, { recursive: true, force: true });
   });
 
   afterAll(async () => {
@@ -50,7 +69,28 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
       .then((rows) => rows[0]!);
   }
 
+  // Opt the instance in and point the BYOK marker check at an empty temp
+  // dir — a dev box's real ~/.hermes could hold a marker and make every
+  // tier case environment-dependent.
+  function tiersOn() {
+    savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    profilesDir = mkdtempSync(join(tmpdir(), "hermes-tiers-create-"));
+    process.env.HERMES_PROFILES_DIR = profilesDir;
+    delete process.env.AGENTDASH_HERMES_ROOT;
+    delete process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "on";
+  }
+
+  function writeByokMarker(provider = "zai") {
+    mkdirSync(join(profilesDir, "agentdash"), { recursive: true });
+    writeFileSync(
+      join(profilesDir, "agentdash", "agentdash-provider.json"),
+      JSON.stringify({ provider, model: "glm-5.3-flash" }),
+    );
+  }
+
   it("stamps the high tier on a modelless hermes_local leadership hire", async () => {
+    tiersOn();
     const c = await company();
     const created = await agentService(db).create(c.id, {
       name: "Ava",
@@ -70,6 +110,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
   });
 
   it("stamps the low tier on a modelless hermes_local ops hire", async () => {
+    tiersOn();
     const c = await company();
     const created = await agentService(db).create(c.id, {
       name: "Bex",
@@ -86,6 +127,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
   });
 
   it("maps a lead-engineer title to high even under a general role enum", async () => {
+    tiersOn();
     const c = await company();
     const created = await agentService(db).create(c.id, {
       name: "Cid",
@@ -99,6 +141,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
   });
 
   it("never overwrites an explicit model, and records no tier for it", async () => {
+    tiersOn();
     const c = await company();
     const created = await agentService(db).create(c.id, {
       name: "Dee",
@@ -112,6 +155,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
   });
 
   it("leaves non-hermes adapters alone", async () => {
+    tiersOn();
     const c = await company();
     const created = await agentService(db).create(c.id, {
       name: "Eli",
@@ -125,6 +169,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
   });
 
   it("merges the tier stamp with caller metadata instead of replacing it", async () => {
+    tiersOn();
     const c = await company();
     const created = await agentService(db).create(c.id, {
       name: "Fay",
@@ -136,5 +181,37 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
     expect(await storedConfig(created.id)).toMatchObject({
       metadata: { source: "workforce-template", modelTier: "high" },
     });
+  });
+
+  it("applies nothing with the switch off — the pre-tier behaviour (review-1028)", async () => {
+    tiersOn();
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    const c = await company();
+    const created = await agentService(db).create(c.id, {
+      name: "Gil",
+      role: "chief_of_staff",
+      adapterType: "hermes_local",
+      adapterConfig: {},
+    });
+    expect(created.adapterConfig ?? {}).not.toHaveProperty("model");
+    const stored = await storedConfig(created.id);
+    expect(stored.adapterConfig ?? {}).not.toHaveProperty("model");
+    expect(stored.metadata ?? {}).not.toHaveProperty("modelTier");
+  });
+
+  it("applies nothing on a BYOK box even with the switch on (review-1028)", async () => {
+    tiersOn();
+    writeByokMarker("zai");
+    const c = await company();
+    const created = await agentService(db).create(c.id, {
+      name: "Hal",
+      role: "ceo",
+      adapterType: "hermes_local",
+      adapterConfig: {},
+    });
+    expect(created.adapterConfig ?? {}).not.toHaveProperty("model");
+    const stored = await storedConfig(created.id);
+    expect(stored.adapterConfig ?? {}).not.toHaveProperty("model");
+    expect(stored.metadata ?? {}).not.toHaveProperty("modelTier");
   });
 });

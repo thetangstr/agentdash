@@ -13,6 +13,15 @@ export interface ProposalPayload {
    * payloads generated before the tier feature.
    */
   adapterType?: AgentAdapterType;
+  /**
+   * AgentDash (review-1028): stamped server-side with the resolved tier and
+   * model this instance would apply (`enabled` tiers only), so the card
+   * renders what the server computed — env overrides included — rather than
+   * re-deriving it from the shipped defaults. Absent when the tiers are
+   * off, and the card then looks exactly like a pre-tier card.
+   */
+  modelTier?: "high" | "low";
+  model?: string;
 }
 
 export interface InvitePromptPayload {
@@ -45,6 +54,14 @@ export interface AgentPlanProposalAgent {
    */
   title?: string;
   adapterType: AgentAdapterType;
+  /**
+   * AgentDash (review-1028): stamped server-side with the resolved tier and
+   * model this instance would apply, like `ProposalPayload.modelTier` —
+   * present only while the tiers are enabled on the instance that wrote
+   * the card.
+   */
+  modelTier?: "high" | "low";
+  model?: string;
   responsibilities: string[];
   kpis: string[];
 }

@@ -18,8 +18,16 @@
  * activity row per changed agent with this command as the actor.
  *
  * An explicit `adapterConfig.model` is a choice a person made; the command
- * lists it as kept and never overwrites it. If the model happens to be one
- * of the tier ids already, the agent is shown as already on its tier.
+ * lists it as kept and never overwrites it. An explicit `provider` that is
+ * not the tier's is a choice too — the agent is kept whole rather than
+ * given a tier model on someone else's provider. If the model happens to
+ * be one of the tier ids already, the agent is shown as already on its
+ * tier.
+ *
+ * BYOK: on a box where a company configured its own provider key (the
+ * marker `configureHermesProvider` writes into the template profile), the
+ * tiers must never apply — the same rule creation and dispatch follow.
+ * A dry run still lists the agents; --apply refuses.
  *
  * Harness preflight: the readiness digest is computed over adapterConfig
  * (see server/src/services/agent-harness-preflight-readiness.ts), so every
@@ -29,12 +37,16 @@
  */
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { and, asc, eq, ne } from "drizzle-orm";
 import { activityLog, agents, companies, createDb } from "@paperclipai/db";
 import {
   AGENT_MODEL_TIER_METADATA_KEY,
   applyHermesModelTierDefault,
   HERMES_LOCAL_ADAPTER_TYPE,
+  isUuidLike,
   modelTierForRole,
   resolveHermesModelTier,
   type HermesModelTierId,
@@ -97,11 +109,16 @@ export async function planModelTiers(db: Reader, companyId: string): Promise<Age
     const spec = resolveHermesModelTier(tier);
     const currentModel = nonEmpty(config.model);
     const currentProvider = nonEmpty(config.provider);
+    // Review-1028 (item 3): an explicit provider that is not the tier's is
+    // an explicit choice — same rule applyHermesModelTierDefault follows —
+    // so the dry run and --apply agree on what would change.
     const action: ModelTierPlanAction =
       row.status === "terminated"
         ? "terminated"
         : currentModel === null
-          ? "fill"
+          ? currentProvider !== null && currentProvider !== spec.provider
+            ? "explicit_kept"
+            : "fill"
           : currentModel === spec.model
             ? "already_on_tier"
             : "explicit_kept";
@@ -166,7 +183,7 @@ export async function applyModelTiers(
       };
       await tx
         .update(agents)
-        .set({ adapterConfig: tiered.adapterConfig, metadata })
+        .set({ adapterConfig: tiered.adapterConfig, metadata, updatedAt: new Date() })
         .where(eq(agents.id, item.agentId));
       await tx.insert(activityLog).values({
         companyId: input.companyId,
@@ -204,9 +221,34 @@ function describePlan(item: AgentModelTierPlan): string {
     case "already_on_tier":
       return `  ${pc.green("on tier")}   ${who}\n             ${current}  already on the ${item.tier} tier`;
     case "explicit_kept":
-      return `  ${pc.cyan("explicit")}  ${who}\n             ${current}  kept — an explicit model always wins (tier would be ${proposed})`;
+      return `  ${pc.cyan("explicit")}  ${who}\n             ${current}  kept — an explicit model or provider always wins (tier would be ${proposed})`;
     case "terminated":
       return `  ${pc.gray("terminated")} ${who}\n             ${current}  skipped`;
+  }
+}
+
+/**
+ * Mirrors `hermesProviderConfiguredSync` in
+ * server/src/services/hermes-provider-setup.ts: true when a company has
+ * configured its own provider key through the model-key setup — the marker
+ * in `<profiles>/<template>/agentdash-provider.json`. The paths follow the
+ * same env vars (AGENTDASH_HERMES_ROOT, HERMES_PROFILES_DIR,
+ * AGENTDASH_HERMES_PROFILE_TEMPLATE). On a BYOK box the tiers must never
+ * apply, so --apply refuses and a dry run warns.
+ */
+const BYOK_MARKER_PROVIDERS = new Set(["zai", "openrouter", "anthropic", "openai"]);
+
+function byokProviderMarkerConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  const root = (env.AGENTDASH_HERMES_ROOT ?? "").trim() || join(homedir(), ".hermes");
+  const profilesDir = (env.HERMES_PROFILES_DIR ?? "").trim() || join(root, "profiles");
+  const template = (env.AGENTDASH_HERMES_PROFILE_TEMPLATE ?? "").trim() || "agentdash";
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(profilesDir, template, "agentdash-provider.json"), "utf8"),
+    );
+    return BYOK_MARKER_PROVIDERS.has(raw?.provider);
+  } catch {
+    return false;
   }
 }
 
@@ -229,6 +271,21 @@ export async function applyModelTiersCommand(opts: {
     process.exitCode = 1;
     return;
   }
+  if (!isUuidLike(opts.company)) {
+    p.log.error(`--company expects the company's UUID, got "${opts.company}".`);
+    process.exitCode = 1;
+    return;
+  }
+  const byok = byokProviderMarkerConfigured();
+  if (byok && opts.apply) {
+    p.log.error(
+      "This box holds a company's own model provider key (the agentdash-provider.json marker in the "
+        + "Hermes template profile). The tiers must never apply on a BYOK box — the same rule "
+        + "creation and CoS dispatch follow. Remove the marker or run this on a token-plan box.",
+    );
+    process.exitCode = 1;
+    return;
+  }
   const db = createDb(dbUrl);
   const closable = db as typeof db & { $client?: { end?: (o?: { timeout?: number }) => Promise<void> } };
   try {
@@ -240,6 +297,12 @@ export async function applyModelTiersCommand(opts: {
       p.log.error("No active company with that id.");
       process.exitCode = 1;
       return;
+    }
+    if (byok) {
+      p.log.warn(
+        "BYOK marker present — this box runs on a company's own provider key; the tier plan "
+          + "below is informational only and --apply would refuse here.",
+      );
     }
     const plan = await planModelTiers(db, opts.company);
     p.log.info(`${pc.bold(company.name)} (${company.id}): ${plan.length} hermes_local agent(s)`);

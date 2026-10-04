@@ -2,10 +2,7 @@ import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — agent hire proposal
 import {
   HERMES_LOCAL_ADAPTER_TYPE,
-  mapProposedAgentRole,
-  modelTierForRole,
-  proposedRoleTitle,
-  resolveHermesModelTier,
+  describeHermesModel,
   type ProposalPayload,
 } from "@paperclipai/shared";
 import { useState } from "react";
@@ -27,18 +24,15 @@ export function ProposalCard({
         {payload.name} — {payload.role}
       </div>
       <WorkforceTemplatePreview templateId={payload.workforceTemplateId}/>
-      {payload.adapterType === HERMES_LOCAL_ADAPTER_TYPE && (() => {
-        // AgentDash (c4-model-tiers): the tier this hire got — plain words,
-        // never the raw id.
-        const spec = resolveHermesModelTier(
-          modelTierForRole(mapProposedAgentRole(payload.role), proposedRoleTitle(payload.role)),
-        );
-        return (
-          <p className="mt-1 text-xs text-text-tertiary" data-testid="proposal-agent-model">
-            Model: {spec.displayName} · {spec.tierLabel}
-          </p>
-        );
-      })()}
+      {payload.adapterType === HERMES_LOCAL_ADAPTER_TYPE && payload.modelTier && payload.model && (
+        // AgentDash (review-1028): render the tier+model the SERVER stamped on
+        // the payload — never recompute it here, so env overrides and the
+        // opt-in/BYOK gate are honored. Absent on older payloads and whenever
+        // tiers are off or BYOK-protected.
+        <p className="mt-1 text-xs text-text-tertiary" data-testid="proposal-agent-model">
+          Model: {describeHermesModel({ model: payload.model, modelTier: payload.modelTier })?.text}
+        </p>
+      )}
       <div className="mt-2 text-text-primary">{payload.oneLineOkr}</div>
       <div className="mt-2 text-sm text-text-secondary">{payload.rationale}</div>
       <div className="mt-4 flex gap-2">

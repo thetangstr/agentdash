@@ -10,7 +10,6 @@ import type {
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   modelTierForRole,
-  resolveHermesModelTier,
   supportedEnvironmentDriversForAdapter,
 } from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
@@ -62,6 +61,7 @@ import { getAdapterDisplay, getAdapterLabel } from "../adapters/adapter-display-
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { buildAgentUpdatePatch, type AgentConfigOverlay } from "../lib/agent-config-patch";
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
+import { useHermesModelTiers } from "../adapters/use-hermes-model-tiers";
 
 /* ---- Create mode values ---- */
 
@@ -389,6 +389,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
 
   // Section toggle state — advanced always starts collapsed
   const [runPolicyAdvancedOpen, setRunPolicyAdvancedOpen] = useState(false);
+  // AgentDash (review-1028): the hermes_local tiers as the server resolves
+  // them on this instance (opt-in + BYOK gate + env overrides applied).
+  const hermesModelTiers = useHermesModelTiers();
   // Popover states
   const [modelOpen, setModelOpen] = useState(false);
   const [cheapModelOpen, setCheapModelOpen] = useState(false);
@@ -970,15 +973,20 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 defaultInheritedLabel={
                   adapterType === "hermes_local"
                     ? (() => {
-                        // AgentDash (c4-model-tiers): "Default" for hermes_local
-                        // is the agent's role tier, not a hermes-config default.
+                        // AgentDash (review-1028): "Default" for hermes_local
+                        // is the agent's role tier only when the server says
+                        // the opt-in tiers are actually applied on this
+                        // instance; otherwise it is a hermes-config default.
+                        if (!hermesModelTiers?.enabled) {
+                          return "Default (inherited from hermes config)";
+                        }
                         const roleTierRole = isCreate
                           ? props.createRole ?? null
                           : props.agent.role ?? null;
                         const roleTierTitle = isCreate
                           ? props.createTitle ?? null
                           : (props.agent.title as string | null) ?? null;
-                        const spec = resolveHermesModelTier(modelTierForRole(roleTierRole, roleTierTitle));
+                        const spec = hermesModelTiers[modelTierForRole(roleTierRole, roleTierTitle)];
                         return `Default (${spec.displayName} · ${spec.tierLabel})`;
                       })()
                     : undefined

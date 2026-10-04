@@ -84,7 +84,28 @@ describe("ApprovalPayloadRenderer", () => {
     act(() => { root.unmount(); });
   });
 
-  it("names the tier a modelless hermes_local hire will get", () => {
+  it("renders the server-stamped tier+model when the payload carries them", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <HireAgentPayload
+          payload={{
+            name: "Bex",
+            role: "engineer",
+            adapterType: "hermes_local",
+            modelTier: "low",
+            model: "deepseek-v4-flash",
+          }}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("DeepSeek V4.1 Flash · ops tier");
+    act(() => { root.unmount(); });
+  });
+
+  it("shows NO model line for a modelless hermes_local hire — never a guessed tier", () => {
+    // Review-1028 (item 6): when the server stamped nothing — tiers off,
+    // BYOK, or an older payload — guessing a tier here would lie.
     const root = createRoot(container);
     act(() => {
       root.render(
@@ -93,7 +114,8 @@ describe("ApprovalPayloadRenderer", () => {
         />,
       );
     });
-    expect(container.textContent).toContain("DeepSeek V4.1 Flash · ops tier");
+    expect(container.textContent).not.toContain("Model");
+    expect(container.textContent).not.toContain("tier");
     act(() => { root.unmount(); });
   });
 

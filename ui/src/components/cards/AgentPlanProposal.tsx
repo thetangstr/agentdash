@@ -5,10 +5,7 @@ import { useState } from "react";
 import {
   AGENT_ROLE_LABELS,
   HERMES_LOCAL_ADAPTER_TYPE,
-  mapProposedAgentRole,
-  modelTierForRole,
-  proposedRoleTitle,
-  resolveHermesModelTier,
+  describeHermesModel,
   type AgentPlanProposalV1Payload,
 } from "@paperclipai/shared";
 import { ApiError } from "../../api/client";
@@ -178,19 +175,15 @@ export function AgentPlanProposal({
                 {role ? <span className="text-text-secondary font-normal"> — {role}</span> : null}
               </div>
               <WorkforceTemplatePreview templateId={agent.workforceTemplateId}/>
-              {agent.adapterType === HERMES_LOCAL_ADAPTER_TYPE && (() => {
-                // AgentDash (c4-model-tiers): the tier this hire will get —
-                // plain words ("DeepSeek V4.1 Flash · ops tier"), never the
-                // raw id.
-                const spec = resolveHermesModelTier(
-                  modelTierForRole(mapProposedAgentRole(agent.role), proposedRoleTitle(agent.title ?? agent.role)),
-                );
-                return (
-                  <p className="mt-1 text-xs text-text-tertiary" data-testid="plan-agent-model">
-                    Model: {spec.displayName} · {spec.tierLabel}
-                  </p>
-                );
-              })()}
+              {agent.adapterType === HERMES_LOCAL_ADAPTER_TYPE && agent.modelTier && agent.model && (
+                // AgentDash (review-1028): render the tier+model the SERVER
+                // stamped on the plan — never recompute here, so env
+                // overrides and the opt-in/BYOK gate are honored. Absent on
+                // older payloads and whenever tiers are off or BYOK-protected.
+                <p className="mt-1 text-xs text-text-tertiary" data-testid="plan-agent-model">
+                  Model: {describeHermesModel({ model: agent.model, modelTier: agent.modelTier })?.text}
+                </p>
+              )}
               {responsibilities.length > 0 && (
                 // AgentDash (c3-a11y): an agent can carry several
                 // responsibilities — show them all; a tight bullet list stays

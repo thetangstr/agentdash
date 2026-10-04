@@ -4,8 +4,6 @@ import {
   AGENT_MODEL_TIER_METADATA_KEY,
   describeHermesModel,
   HERMES_LOCAL_ADAPTER_TYPE,
-  modelTierForRole,
-  resolveHermesModelTier,
 } from "@paperclipai/shared";
 
 export const typeLabel: Record<string, string> = {
@@ -90,14 +88,24 @@ function SkillList({ values }: { values: unknown }) {
 }
 
 /**
- * AgentDash (c4-model-tiers): the hire card's plain-words model line —
- * "Qwen 3.8 Max · high tier". The stamped adapterConfig value wins; when the
- * payload predates tiers (no model), the role's tier is shown as the default
- * that will apply. Returns null for non-hermes adapters and for custom
- * models with no plain-words name.
+ * AgentDash (c4-model-tiers / review-1028): the hire card's plain-words
+ * model line — "Qwen 3.8 Max · high tier". Order of truth:
+ *   1. the tier+model the server stamped on the payload (`modelTier` +
+ *      `model`) — exact, env-override- and gate-aware;
+ *   2. an explicit `adapterConfig.model` on the payload;
+ *   3. nothing — when no model is stamped or configured, hermes' own
+ *      config decides and guessing a tier would lie.
+ * Returns null for non-hermes adapters and for custom models with no
+ * plain-words name.
  */
 function hermesModelLine(payload: Record<string, unknown>): string | null {
   if (payload.adapterType !== HERMES_LOCAL_ADAPTER_TYPE) return null;
+  const stampedModel = typeof payload.model === "string" ? payload.model : null;
+  const stampedTier =
+    payload.modelTier === "high" || payload.modelTier === "low" ? payload.modelTier : null;
+  if (stampedModel) {
+    return describeHermesModel({ model: stampedModel, modelTier: stampedTier })?.text ?? stampedModel;
+  }
   const adapterConfig =
     payload.adapterConfig && typeof payload.adapterConfig === "object"
       ? (payload.adapterConfig as Record<string, unknown>)
@@ -114,12 +122,7 @@ function hermesModelLine(payload: Record<string, unknown>): string | null {
   if (configuredModel) {
     return describeHermesModel({ model: configuredModel, modelTier: recordedTier })?.text ?? configuredModel;
   }
-  const tier = modelTierForRole(
-    typeof payload.role === "string" ? payload.role : null,
-    typeof payload.title === "string" ? payload.title : null,
-  );
-  const spec = resolveHermesModelTier(tier);
-  return `${spec.displayName} · ${spec.tierLabel}`;
+  return null;
 }
 
 export function HireAgentPayload({ payload }: { payload: Record<string, unknown> }) {

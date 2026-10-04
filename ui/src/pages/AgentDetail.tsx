@@ -4348,7 +4348,13 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
               // AgentDash (c4-model-tiers): a tier model reads "Qwen 3.8 Max ·
               // high tier" here too; the raw provider/model stays on hover.
               const described = modelName && modelName !== "auto"
-                ? describeHermesModel({ model: modelName })
+                ? describeHermesModel({
+                    model: modelName,
+                    provider:
+                      displayProvider && displayProvider !== "auto" && !modelName.includes("/")
+                        ? displayProvider
+                        : null,
+                  })
                 : null;
               const modelText = described?.text ?? rawModelText;
               const modelTitle = described ? rawModelText : modelText;
@@ -5412,8 +5418,13 @@ function ResolvedRuntimeLabel({ resolved, modelTier }: { resolved: AgentResolved
           ? "host default (hermes config)"
           : null;
   // AgentDash (c4-model-tiers): tier models get their plain-words name —
-  // "Qwen 3.8 Max · high tier" — with the raw provider/model on hover.
-  const described = describeHermesModel({ model: resolved.model, modelTier });
+  // "Qwen 3.8 Max · high tier" — and a non-tier model with no plain-words
+  // name shows its raw "provider/model" label rather than a bare id.
+  const described = describeHermesModel({
+    model: resolved.model,
+    provider: resolved.provider,
+    modelTier,
+  });
   const rawLabel = resolved.provider && resolved.provider !== "auto"
     ? `${resolved.provider}/${resolved.model}`
     : resolved.model;

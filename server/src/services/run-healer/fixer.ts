@@ -12,7 +12,8 @@ import type { HealDiagnosis } from "./diagnosis.js";
 import { heartbeatService } from "../heartbeat.js";
 import { agentService } from "../agents.js";
 import { nextFallbackHop, readFallbackChain } from "../../lib/adapter-fallback-chain.js";
-import { HERMES_MODEL_TIERS } from "@paperclipai/shared";
+import { HERMES_LOCAL_ADAPTER_TYPE, hermesModelTierForModel, resolveHermesModelTier } from "@paperclipai/shared";
+import { hermesModelTiersActive } from "../hermes-model-tiers.js";
 
 /**
  * AGE-113 invariant: automatic recovery may not switch an agent's adapter or
@@ -27,25 +28,84 @@ import { HERMES_MODEL_TIERS } from "@paperclipai/shared";
  * surfaced so a human can decide whether to change the configuration.
  */
 // AgentDash (batch 4, c4-model-tiers): a hermes_local agent's recovery
-// suggestion moves within Hermes first — the shipped high–low tier pair —
-// before crossing providers. `adapter:model` entries match the
-// AGENTDASH_FALLBACK_CHAIN hop format; the first entry that is not the
-// agent's current (adapter, model) is what gets suggested.
+// suggestion moves within Hermes first — the high–low tier pair, resolved
+// per call so env overrides are honoured — before crossing providers.
+// `adapter:model` entries match the AGENTDASH_FALLBACK_CHAIN hop format;
+// the first entry that is not the agent's current (adapter, model) is what
+// gets suggested.
 const ADAPTER_FALLBACK_CHAIN: Record<string, string[]> = {
   claude_local: ["claude_api", "opencode_local", "hermes_local"],
   claude_api: ["opencode_local", "hermes_local"],
   codex_local: ["opencode_local"],
   gemini_local: ["claude_api", "opencode_local"],
   opencode_local: ["hermes_local"],
-  hermes_local: [
-    `hermes_local:${HERMES_MODEL_TIERS.high.model}`,
-    `hermes_local:${HERMES_MODEL_TIERS.low.model}`,
-    "claude_api",
-  ],
   pi_local: ["claude_api", "opencode_local"],
   acpx_local: ["claude_api"],
   openclaw_gateway: ["claude_api"],
 };
+
+// AgentDash (review-1028, item 8): the hermes_local hops are computed, not
+// constant — env-resolved tier models, and only while the tiers are active
+// on this instance (suggesting a provider that is not configured is not a
+// suggestion). Cross-provider `claude_api` stays last either way.
+function hermesLocalFallbackChain(): string[] {
+  const hops: string[] = [];
+  if (hermesModelTiersActive()) {
+    hops.push(`hermes_local:${resolveHermesModelTier("high").model}`);
+    hops.push(`hermes_local:${resolveHermesModelTier("low").model}`);
+  }
+  hops.push("claude_api");
+  return hops;
+}
+
+function fallbackChainForAdapter(adapterType: string): string[] {
+  if (adapterType === HERMES_LOCAL_ADAPTER_TYPE) return hermesLocalFallbackChain();
+  return ADAPTER_FALLBACK_CHAIN[adapterType] ?? [];
+}
+
+/**
+ * Where an operator-configured chain or the built-in table WOULD have moved
+ * this agent — the suggestion that rides in the escalation. An
+ * AGENTDASH_FALLBACK_CHAIN takes precedence; otherwise the built-in table,
+ * whose hermes_local entries carry `adapter:model` so "the high tier" and
+ * "the low tier" are distinct hops. The hop the agent already sits on is
+ * skipped (a suggestion must be a real move), and when the agent's provider
+ * IS one of the tier providers the other tier hop is skipped too — the
+ * failure is provider-level then (the token plan itself is down) and a
+ * different model on the same provider is the same call again, so the
+ * suggestion goes to the cross-provider hop.
+ */
+export function suggestHealerFallbackTarget(input: {
+  adapterType: string;
+  model: string;
+  provider: string;
+}): string | null {
+  const envChain = readFallbackChain();
+  if (envChain.length > 0) {
+    const next = nextFallbackHop(envChain, { adapter: input.adapterType, model: input.model });
+    return next ? `${next.adapter}${next.model ? `:${next.model}` : ""}` : null;
+  }
+  const fallbackChain = fallbackChainForAdapter(input.adapterType);
+  const currentProvider = input.provider.trim();
+  const tierProviders = new Set(
+    (["high", "low"] as const).map((tier) => resolveHermesModelTier(tier).provider),
+  );
+  return (
+    fallbackChain.find((hop) => {
+      const sep = hop.indexOf(":");
+      const hopAdapter = sep < 0 ? hop : hop.slice(0, sep);
+      const hopModel = sep < 0 ? "" : hop.slice(sep + 1);
+      if (hopAdapter === input.adapterType && hopModel === input.model) return false;
+      if (
+        currentProvider
+        && tierProviders.has(currentProvider)
+        && hopModel
+        && hermesModelTierForModel(hopModel)
+      ) return false;
+      return true;
+    }) ?? null
+  );
+}
 
 export type HealFixResult = {
   succeeded: boolean;
@@ -141,22 +201,12 @@ async function executeAdapterSwitchFix(
     const currentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
     const currentModel = typeof currentConfig.model === "string" ? currentConfig.model : "";
 
-    let suggestedTarget: string | null = null;
-    const envChain = readFallbackChain();
-    if (envChain.length > 0) {
-      const next = nextFallbackHop(envChain, { adapter: currentAdapter, model: currentModel });
-      suggestedTarget = next ? `${next.adapter}${next.model ? `:${next.model}` : ""}` : null;
-    } else {
-      const fallbackChain = ADAPTER_FALLBACK_CHAIN[currentAdapter] ?? [];
-      // AgentDash (c4-model-tiers): entries may carry `adapter:model`; skip
-      // the hop the agent is already on so the suggestion is a real move.
-      suggestedTarget = fallbackChain.find((hop) => {
-        const sep = hop.indexOf(":");
-        const hopAdapter = sep < 0 ? hop : hop.slice(0, sep);
-        const hopModel = sep < 0 ? "" : hop.slice(sep + 1);
-        return hopAdapter !== currentAdapter || hopModel !== currentModel;
-      }) ?? null;
-    }
+    const suggestedTarget = suggestHealerFallbackTarget({
+      adapterType: currentAdapter,
+      model: currentModel,
+      provider:
+        typeof currentConfig.provider === "string" ? currentConfig.provider : "",
+    });
 
     logger.warn(
       {

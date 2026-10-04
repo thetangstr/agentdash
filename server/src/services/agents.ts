@@ -25,11 +25,12 @@ import {
   issueComments,
   issueReviewQueueState,
 } from "@paperclipai/db";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, AGENT_MODEL_TIER_METADATA_KEY, applyHermesModelTierDefault, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, AGENT_MODEL_TIER_METADATA_KEY, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { deprovisionAgentProfile, hermesManagedProfilesEnabled } from "./hermes-profile.js";
+import { applyHermesModelTierIfActive } from "./hermes-model-tiers.js";
 import { assignUnassignedReviewItems } from "./review-queue-assignments.js";
 import { endStewardshipForTerminatedAgent } from "./agent-stewardships.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
@@ -486,7 +487,11 @@ export function agentService(db: Db) {
       // explicit model gets its role's high/low tier; an explicit model a
       // person set always wins. The applied tier lands in metadata so the
       // agent page can label the model in plain words.
-      const tiered = applyHermesModelTierDefault({
+      // AgentDash (review-1028): `applyHermesModelTierIfActive` adds the
+      // instance gate — tiers only apply when the operator opted in and the
+      // box is not on a company's own model key; otherwise hermes_local
+      // keeps Hermes' own configured default, exactly as before.
+      const tiered = applyHermesModelTierIfActive({
         adapterType: data.adapterType,
         adapterConfig: isPlainRecord(data.adapterConfig) ? data.adapterConfig : {},
         role,

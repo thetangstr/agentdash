@@ -12,8 +12,11 @@ import { logger } from "../middleware/logger.js";
  *
  * Two hops may name the same adapter with different models — that is the
  * point: "Qwen 3.8 Max via Hermes, then DeepSeek V4.1 Flash via Hermes" is
- * one adapter, two hops (the shipped high–low tier pair).
- * A hop without a model runs the adapter on its own configured default.
+ * one adapter, two hops (the shipped high–low tier pair). A hop whose model
+ * is a tier model is dispatched with that tier's provider too, so the pair
+ * above lands on the token plan, not on Hermes' own default provider.
+ * A hop without a model runs the adapter on its own configured default —
+ * it never inherits the high-tier default the PRIMARY call gets.
  *
  * The chain is read from the environment on every call, like
  * AGENTDASH_MK_INVITE_CODES, so an operator can change it with an env edit
