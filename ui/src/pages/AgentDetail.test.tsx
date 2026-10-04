@@ -604,4 +604,23 @@ describe("LatestRunCard on a cancelled run", () => {
     const text = container!.textContent ?? "";
     expect(text).toContain("Stopped manually");
   });
+
+  it("still prefers a real summary over the stop reason", () => {
+    renderNode(
+      <MemoryRouter>
+        <LatestRunCard
+          agentId="agent-1"
+          runs={[heartbeatRunFixture({
+            status: "cancelled",
+            error: "child process killed: signal SIGTERM",
+            errorCode: "cancelled_by_operator",
+            resultJson: { summary: "Drafted the migration plan" },
+          })]}
+        />
+      </MemoryRouter>,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Drafted the migration plan");
+    expect(text).not.toContain("SIGTERM");
+  });
 });
