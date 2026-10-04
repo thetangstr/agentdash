@@ -746,7 +746,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
               // one — it gets its own code and wording so clients (and
               // people) can tell "say what you saw" apart from "it changed".
               if (seenRevision === undefined) {
-                throw conflict("Tell us which document revision you saw before accepting: read the latest revision, then try again.", {
+                throw conflict("Open the issue and review the latest document before marking it done.", {
                   code: "document_revision_required",
                   documentKey,
                   latestRevisionNumber: doc.latestRevisionNumber,

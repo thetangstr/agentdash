@@ -66,18 +66,26 @@ export function buildIssuesSearchUrl(currentHref: string, search: string): strin
 /** AgentDash (review #1003, round 2): the toast a failed issue update shows
  * on the list/board. A document_revision_required refusal links to the issue
  * page, where the documents can actually be read before accepting. */
-export function issueUpdateErrorToast(err: unknown, issueId: string) {
+export function issueUpdateErrorToast(err: unknown, issueId: string, identifier?: string | null) {
   const code =
     err instanceof ApiError
       ? (err.body as { details?: { code?: unknown } } | null | undefined)?.details?.code
       : undefined;
+  // AgentDash (c3 copy): a document_revision_required refusal is a guard doing
+  // its job, not a failure — it reads as a step ("review, then done"), in
+  // neutral styling with a link to where the document can be read.
+  if (code === "document_revision_required") {
+    return {
+      title: `Review ${identifier ?? "the issue"} before marking it done`,
+      body: "Open the issue to review the latest document.",
+      tone: "info" as const,
+      action: { label: "Open the issue", href: createIssueDetailPath(issueId) },
+    };
+  }
   return {
     title: "Issue update failed",
     body: err instanceof Error ? err.message : "Unable to save issue changes",
     tone: "error" as const,
-    ...(code === "document_revision_required"
-      ? { action: { label: "Open the issue", href: createIssueDetailPath(issueId) } }
-      : {}),
   };
 }
 
@@ -206,7 +214,8 @@ export function Issues() {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId!) });
     },
     onError: (err, variables) => {
-      pushToast(issueUpdateErrorToast(err, variables.id));
+      const identifier = issues.find((issue) => issue.id === variables.id)?.identifier;
+      pushToast(issueUpdateErrorToast(err, variables.id, identifier));
     },
   });
 

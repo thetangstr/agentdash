@@ -68,7 +68,7 @@ it('resets private drafts and selected worker on company switch', async () => {
   render('two'); await flush(); await flush(); expect(host.textContent).not.toContain('Mira'); expect(host.innerHTML).not.toContain('Unsaved secret');
 });
 it('enrolls the selected role, exposes owner and separates review from acceptance and targets', async () => {
-  render(); await flush(); await flush(); await field('Workforce role', 'sales-support'); await click('Enroll role');
+  render(); await flush(); await flush(); await field('Workforce role', 'sales-support'); await click('Assign role');
   expect(requests.find(r => r.method === 'POST' && r.url.endsWith('/enrollment'))?.body).toEqual({ templateId: 'sales-support' });
   expect(host.textContent).toContain('Dana'); expect(host.textContent).toContain('Awaiting review'); expect(host.textContent).toContain('Outcome measurements: Unknown');
   await field('Department objective', 'Qualify 20 leads'); await click('Save department targets');

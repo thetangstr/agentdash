@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdapterManager } from "./AdapterManager";
 
 const listMock = vi.hoisted(() => vi.fn());
+const adminMock = vi.hoisted(() => vi.fn(() => true));
+const setBreadcrumbsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/api/adapters", () => ({
   adaptersApi: {
@@ -21,15 +23,12 @@ vi.mock("@/api/adapters", () => ({
   },
 }));
 
-vi.mock("@/context/CompanyContext", () => ({
-  useCompany: () => ({
-    selectedCompanyId: "company-1",
-    selectedCompany: { id: "company-1", name: "Paperclip", issuePrefix: "PAP" },
-  }),
+vi.mock("@/hooks/useBoardSessionReady", () => ({
+  useIsInstanceAdmin: () => adminMock(),
 }));
 
 vi.mock("@/context/BreadcrumbContext", () => ({
-  useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
+  useBreadcrumbs: () => ({ setBreadcrumbs: setBreadcrumbsMock }),
 }));
 
 vi.mock("@/context/ToastContext", () => ({
@@ -45,6 +44,8 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
   listMock.mockReset();
+  adminMock.mockReset().mockReturnValue(true);
+  setBreadcrumbsMock.mockReset();
 });
 
 afterEach(() => {
@@ -101,5 +102,39 @@ describe("AdapterManager", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("No external adapters installed");
     expect(text).not.toContain("not the same as none being installed");
+  });
+
+  it("registers the page under Instance Settings, not the company name", async () => {
+    listMock.mockResolvedValue([]);
+
+    await render();
+
+    expect(setBreadcrumbsMock).toHaveBeenCalledWith([
+      { label: "Instance Settings", href: "/instance/settings/general" },
+      { label: "Adapters" },
+    ]);
+  });
+
+  it("shows the alpha badge and notice to instance admins", async () => {
+    listMock.mockResolvedValue([]);
+    adminMock.mockReturnValue(true);
+
+    await render();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Alpha");
+    expect(text).toContain("External adapters are alpha.");
+  });
+
+  it("hides the alpha badge and notice from everyone else", async () => {
+    listMock.mockResolvedValue([]);
+    adminMock.mockReturnValue(false);
+
+    await render();
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("Alpha");
+    expect(text).not.toContain("External adapters are alpha.");
+    expect(text).toContain("Adapters");
   });
 });
