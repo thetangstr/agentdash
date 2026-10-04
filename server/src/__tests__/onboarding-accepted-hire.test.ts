@@ -326,7 +326,7 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     // The retry posted only the steady-state approval notice — not the
     // onboarding variant and not a "team created" repost.
     const bodies = (await db.select().from(assistantMessages).where(eq(assistantMessages.conversationId, f.conversation.id))).map(m => m.content);
-    expect(bodies).toEqual(['Plan', 'Those hires are waiting on board approval — I have sent each one to Approvals.']);
+    expect(bodies).toEqual(['Plan', 'That hire is waiting for a decision — I have sent it to [Decisions](/decisions).']);
     // And the captured goals were not rematerialized for a ready conversation.
     expect(await db.select().from(goals).where(eq(goals.companyId, f.company.id))).toEqual([]);
   });

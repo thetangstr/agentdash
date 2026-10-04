@@ -172,7 +172,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={samplePayload} onConfirm={onConfirm} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
@@ -193,7 +195,9 @@ describe("AgentPlanProposal", () => {
     };
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={decided} onConfirm={onConfirm} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={decided} onConfirm={onConfirm} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
@@ -247,7 +251,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={rejected} onConfirm={vi.fn()} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={rejected} onConfirm={vi.fn()} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
@@ -271,7 +277,9 @@ describe("AgentPlanProposal", () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AgentPlanProposal payload={approved} onConfirm={vi.fn()} onRevise={vi.fn()} />,
+        <QueryClientProvider client={queryClient}>
+          <AgentPlanProposal payload={approved} onConfirm={vi.fn()} onRevise={vi.fn()} />
+        </QueryClientProvider>,
       );
     });
 
