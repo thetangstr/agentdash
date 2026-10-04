@@ -23,6 +23,7 @@ describe("TaskOutcomeQualityPanel", () => {
       greenRunsWithOpenTasks: 1,
       issueLinkedSpendCents: 2300,
       issueLinkedTokens: 2600,
+      issueLinkedCachedTokens: 50_000,
       spendPerAcceptedIssueCents: 2300,
     };
 
@@ -37,5 +38,9 @@ describe("TaskOutcomeQualityPanel", () => {
     expect(html).toContain("successful runs pending review");
     expect(html).not.toContain("DoD");
     expect(html).not.toContain("green run");
+    // AgentDash (batch 3): counted tokens headline; cached reads sit beside
+    // it, labeled, never summed in.
+    expect(html).toContain("2,600 issue-linked tokens");
+    expect(html).toContain("50,000 cached reads");
   });
 });

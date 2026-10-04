@@ -52,16 +52,36 @@ export function workProductDocumentKey(metadata: unknown): string | null {
   return typeof key === "string" && key.length > 0 ? key : null;
 }
 
+export interface IssueDocumentRevisionInfo {
+  issueId: string;
+  key: string;
+  latestRevisionId: string | null;
+  latestRevisionNumber: number;
+  updatedAt: Date;
+}
+
+/** The map key `listIssueDocumentsByKey` returns rows under. */
+export function issueDocumentKey(issueId: string, key: string): string {
+  return `${issueId}${key}`;
+}
+
+/**
+ * Documents linked to issues under the given keys, keyed by
+ * `issueId + "\0" + key`. The issue joins the key — document keys repeat
+ * across issues ("spec" on two issues is two documents).
+ */
 export async function listIssueDocumentsByKey(
   executor: Pick<Db, "select">,
   companyId: string,
-  issueId: string,
-  keys: string[],
+  keysByIssue: ReadonlyMap<string, readonly string[]>,
 ) {
-  const unique = [...new Set(keys)];
-  if (unique.length === 0) return new Map<string, { key: string; latestRevisionId: string | null; latestRevisionNumber: number; updatedAt: Date }>();
+  const issueIds = [...keysByIssue.keys()];
+  const keys = [...new Set([...keysByIssue.values()].flat())];
+  const map = new Map<string, IssueDocumentRevisionInfo>();
+  if (issueIds.length === 0 || keys.length === 0) return map;
   const rows = await executor
     .select({
+      issueId: issueDocuments.issueId,
       key: issueDocuments.key,
       latestRevisionId: documents.latestRevisionId,
       latestRevisionNumber: documents.latestRevisionNumber,
@@ -74,10 +94,14 @@ export async function listIssueDocumentsByKey(
     .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
     .where(and(
       eq(issueDocuments.companyId, companyId),
-      eq(issueDocuments.issueId, issueId),
-      inArray(issueDocuments.key, unique),
+      inArray(issueDocuments.issueId, issueIds),
+      inArray(issueDocuments.key, keys),
     ));
-  return new Map(rows.map((row) => [row.key, row]));
+  for (const row of rows) {
+    if (!keysByIssue.get(row.issueId)?.includes(row.key)) continue;
+    map.set(issueDocumentKey(row.issueId, row.key), row);
+  }
+  return map;
 }
 
 // AgentDash (review #1003): liveness for the resubmission gate counts only
@@ -133,8 +157,11 @@ export async function resubmitSentBackDeliverables(
       eq(issueWorkProducts.status, "changes_requested"),
     ));
   if (sentBack.length === 0) return 0;
-  const docsByKey = await listIssueDocumentsByKey(executor, issue.companyId, issue.id,
-    sentBack.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key));
+  const docsByKey = await listIssueDocumentsByKey(
+    executor,
+    issue.companyId,
+    new Map([[issue.id, sentBack.map((product) => workProductDocumentKey(product.metadata)).filter((key): key is string => !!key)]]),
+  );
   const liveRunIds = new Set((await listLiveAssigneeIssueRuns(executor, issue)).map((run) => run.id));
   // A still-running assignee resubmitting itself counts as live even before
   // its row settles in the table.
@@ -147,7 +174,7 @@ export async function resubmitSentBackDeliverables(
   for (const product of sentBack) {
     const documentKey = workProductDocumentKey(product.metadata);
     if (documentKey) {
-      const doc = docsByKey.get(documentKey);
+      const doc = docsByKey.get(issueDocumentKey(issue.id, documentKey));
       const meta = product.metadata as Record<string, unknown> | null;
       const requestedRevision =
         typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
@@ -423,6 +450,9 @@ export function workProductService(db: Db) {
           runAgentName: runAgents.name,
           assigneeAgentId: assigneeAgents.id,
           assigneeAgentName: assigneeAgents.name,
+          // AgentDash (batch 3): stamped at run finalization; an `unmetered_*`
+          // value lets the client close the "counting…" window at once.
+          creatingRunMeteringStatus: sql<string | null>`${heartbeatRuns.usageJson} ->> 'meteringStatus'`,
         })
         .from(issueWorkProducts)
         .innerJoin(issues, eq(issues.id, issueWorkProducts.issueId))
@@ -444,6 +474,19 @@ export function workProductService(db: Db) {
         .where(and(...filters))
         .then((r) => Number(r[0]?.count ?? 0));
       const usage = await usageByIssue(companyId, [...new Set(page.map((r) => r.issueId))]);
+      // AgentDash (batch 3): a document deliverable's row must age from its
+      // newest revision, not from when the work-product record was written —
+      // a revision landing after review reads stale otherwise.
+      const documentKeysByIssue = new Map<string, string[]>();
+      for (const row of page) {
+        if (row.product.type !== "document") continue;
+        const key = workProductDocumentKey(row.product.metadata);
+        if (!key) continue;
+        const keys = documentKeysByIssue.get(row.issueId) ?? [];
+        keys.push(key);
+        documentKeysByIssue.set(row.issueId, keys);
+      }
+      const documentsByKey = await listIssueDocumentsByKey(db, companyId, documentKeysByIssue);
       const items: ShippedWorkProduct[] = page.map((row) => ({
         ...toIssueWorkProduct(row.product),
         issue: {
@@ -459,6 +502,14 @@ export function workProductService(db: Db) {
             ? { id: row.assigneeAgentId, name: row.assigneeAgentName ?? "" }
             : null,
         usage: usage.get(row.issueId) ?? { ...UNMETERED },
+        document: (() => {
+          const key = row.product.type === "document" ? workProductDocumentKey(row.product.metadata) : null;
+          const doc = key ? documentsByKey.get(issueDocumentKey(row.issueId, key)) : undefined;
+          return doc
+            ? { key: doc.key, latestRevisionNumber: doc.latestRevisionNumber, updatedAt: doc.updatedAt }
+            : null;
+        })(),
+        creatingRunMeteringStatus: row.creatingRunMeteringStatus ?? null,
       }));
       const last = page[page.length - 1];
       const nextCursor = rows.length > limit && last ? encodeShippedCursor(last.product.createdAt, last.product.id) : null;

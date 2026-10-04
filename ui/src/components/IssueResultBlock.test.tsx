@@ -51,6 +51,8 @@ function shippedItem(overrides: Partial<ShippedWorkProduct> = {}): ShippedWorkPr
     issue: { id: "issue-1", identifier: "ACME-1", title: "Add a health badge", status: "done", projectId: null },
     agent: { id: "agent-1", name: "Maya" },
     usage: { metered: true, inputTokens: 12_000, cachedInputTokens: 0, outputTokens: 400, costCents: 0 },
+    document: null,
+    creatingRunMeteringStatus: null,
     ...overrides,
   };
 }
@@ -238,6 +240,31 @@ describe("IssueResultBlock", () => {
     expect(container.textContent).toContain("not metered yet");
     expect(container.textContent).not.toMatch(/\b0 tokens|\$0\.00/);
     expect(container.querySelector('[data-testid="work-product-state"]')?.textContent).toBe("open");
+  });
+
+  // AgentDash (batch 3): a document revision landing after the product row
+  // was recorded must freshen the row's "when" — "6m ago" next to "rev 2",
+  // not the stale "10m ago" of the work-product record.
+  it("ages a document deliverable from its newest revision, not its record", async () => {
+    mockIssuesApi.listShipped.mockResolvedValue({
+      items: [
+        shippedItem({
+          type: "document",
+          url: null,
+          title: "Competitor scan",
+          status: "ready_for_review",
+          createdAt: new Date(Date.now() - 10 * 60 * 1000),
+          document: { key: "scan", latestRevisionNumber: 2, updatedAt: new Date(Date.now() - 6 * 60 * 1000).toISOString() },
+        }),
+      ],
+      total: 1,
+      nextCursor: null,
+      monthTotal: null,
+    });
+    await render();
+    const block = container.querySelector('[data-testid="issue-result-block"]');
+    expect(block?.textContent).toContain("6m ago");
+    expect(block?.textContent).not.toContain("10m ago");
   });
 
   it("renders nothing when the issue has no work products", async () => {

@@ -118,6 +118,7 @@ import {
 import type { TranscriptEntry } from "../adapters";
 import { summarizeToolCall } from "../lib/readableTranscript";
 import { CREDENTIALS_HIDDEN_NOTE, redactSecrets, redactSecretsInValue } from "../lib/redactSecrets";
+import { shortenInstancePaths } from "../lib/instancePaths";
 import { useTranscriptModePreference } from "../lib/transcriptModePreference";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -611,7 +612,7 @@ const IssueChatTextPart = memo(function IssueChatTextPart({ text, recessed }: { 
       softBreaks
       onImageClick={onImageClick}
     >
-      {redactSecrets(text)}
+      {shortenInstancePaths(redactSecrets(text))}
     </MarkdownBody>
   );
 });

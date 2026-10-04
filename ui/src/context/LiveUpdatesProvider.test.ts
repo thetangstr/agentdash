@@ -719,6 +719,42 @@ describe('review waiting invalidation', () => {
 });
 
 
+describe('result row refresh (batch 3)', () => {
+  it.each([
+    'issue.document_created', 'issue.document_updated', 'issue.document_restored', 'issue.document_deleted',
+    'issue.work_product_created', 'issue.work_product_updated', 'issue.work_product_deleted',
+  ])('invalidates the company shipped queries on %s', (action) => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.shipped('company-1', { issueId: 'issue-1' }), { items: [] });
+    client.setQueryData(queryKeys.shipped('company-1'), { items: [] });
+    client.setQueryData(queryKeys.shipped('company-2', { issueId: 'issue-9' }), { items: [] });
+    __liveUpdatesTestUtils.invalidateActivityQueries(
+      client,
+      'company-1',
+      { entityType: 'issue', entityId: 'issue-1', action, details: null },
+      { userId: null, agentId: null },
+    );
+    // Both the issue-scoped Result block and the company feed must refetch.
+    expect(client.getQueryState(queryKeys.shipped('company-1', { issueId: 'issue-1' }))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(queryKeys.shipped('company-1'))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(queryKeys.shipped('company-2', { issueId: 'issue-9' }))?.isInvalidated).toBe(false);
+    client.clear();
+  });
+
+  it('leaves shipped queries alone for a plain comment', () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.shipped('company-1', { issueId: 'issue-1' }), { items: [] });
+    __liveUpdatesTestUtils.invalidateActivityQueries(
+      client,
+      'company-1',
+      { entityType: 'issue', entityId: 'issue-1', action: 'issue.comment_added', details: null },
+      { userId: null, agentId: null },
+    );
+    expect(client.getQueryState(queryKeys.shipped('company-1', { issueId: 'issue-1' }))?.isInvalidated).toBe(false);
+    client.clear();
+  });
+});
+
 describe('workforce readiness activity invalidation', () => {
   it.each([
     ['workforce', 'workforce.brief_updated'], ['workforce', 'workforce.learning_acknowledged'],

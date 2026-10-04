@@ -853,9 +853,85 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
     expect(
       summarizeJsonOutput('{"a":1,"b":2}{"identifier":"WHI-9","titl'),
     ).toBe("Response: 2 fields · Got issue WHI-9");
-    // Non-JSON text between bodies is not JSON output at all.
-    expect(summarizeJsonOutput('{"a":1} tail')).toBeNull();
     expect(summarizeJsonOutput("plain text")).toBeNull();
+  });
+
+  // AgentDash (batch 3): a script result is the response body plus the shell's
+  // own noise around it — a KEY_SET echo before it, an `exit code N` tail after
+  // it (the Hermes envelope appends one on failure), a `--- stderr ---` block.
+  // None of those make the body stop being a response.
+  it("summarises JSON bodies surrounded by script noise instead of showing raw JSON", () => {
+    const company =
+      '{"id":"9862d76d-aa9f-4fb4-a344-a13d61d0945e","name":"Acme Robotics","description":"Robots","issuePrefix":"ACM"}';
+    expect(summarizeJsonOutput(`${company}\nexit code 1`)).toBe("Got company Acme Robotics · exit code 1");
+    expect(
+      summarizeJsonOutput(`KEY_SET\n${company}`),
+    ).toBe("KEY_SET · Got company Acme Robotics");
+    // stderr after a body stays visible — the error is part of the outcome.
+    expect(
+      summarizeJsonOutput(`${company}\n--- stderr ---\ncurl: (22) The requested URL returned error: 404`),
+    ).toBe("Got company Acme Robotics · curl: (22) The requested URL returned error: 404");
+    // Both sides at once, plus a second body.
+    expect(
+      summarizeJsonOutput(
+        `KEY_SET\n{"identifier":"ACM-6","title":"x"}\n=== COMMENTS ===\n{"items":[1,2]}`,
+      ),
+    ).toBe("KEY_SET · Got issue ACM-6 · === COMMENTS === · Response: 2 items");
+    // Text with no JSON body is still not JSON output.
+    expect(summarizeJsonOutput("plain text")).toBeNull();
+    expect(summarizeJsonOutput("not json {")).toBeNull();
+    // Prose braces that do not parse do not count as a body.
+    expect(summarizeJsonOutput("expected {x} got {y}")).toBeNull();
+  });
+
+  it("names the records a call returned — company, agent, document, revision, comment", () => {
+    expect(
+      summarizeJsonOutput(
+        '{"id":"9862d76d","name":"Acme Robotics","description":"Robots","issuePrefix":"ACM","budgetMonthlyCents":0}',
+      ),
+    ).toBe("Got company Acme Robotics");
+    expect(
+      summarizeJsonOutput(
+        '{"id":"a1","companyId":"c1","name":"Quinn","urlKey":"quinn","role":"content_lead","adapterType":"hermes_local"}',
+      ),
+    ).toBe("Got agent Quinn");
+    expect(
+      summarizeJsonOutput(
+        '{"id":"70cb28ef","companyId":"c1","issueId":"i1","key":"product-description","title":"Gripper product description","format":"markdown"}',
+      ),
+    ).toBe("Got document Gripper product description");
+    expect(
+      summarizeJsonOutput(
+        '{"id":"r1","documentId":"d1","issueId":"i1","revisionNumber":2,"title":"Draft v2"}',
+      ),
+    ).toBe("Got document revision 2 — Draft v2");
+    expect(
+      summarizeJsonOutput('{"id":"cm1","issueId":"i1","body":"Looks good — ship the second sentence"}'),
+    ).toBe("Got comment — Looks good — ship the second sentence");
+    // A pull-request work product has issueId + title but is not a document.
+    expect(
+      summarizeJsonOutput('{"id":"wp1","issueId":"i1","type":"pull_request","title":"PR #12 health badge"}'),
+    ).toBe("Got PR #12 health badge");
+    // A wrapped entity names what is inside.
+    expect(
+      summarizeJsonOutput('{"issue":{"identifier":"ACM-2","title":"Brief"},"extra":true}'),
+    ).toBe("Got issue ACM-2");
+    // A truncated company still names what it could.
+    expect(
+      summarizeJsonOutput('{"id":"9862d76d","name":"Acme Robotics","des'),
+    ).toBe("Got Acme Robotics");
+    // An opaque object still falls back to its field count.
+    expect(summarizeJsonOutput('{"id":"c1","x":2}')).toBe("Response: 2 fields");
+  });
+
+  it("keeps JSON summary phrases redacted", () => {
+    // The company name slot must not smuggle a secret past redaction.
+    const result = summarizeToolOutcome(
+      '{"id":"c1","name":"key sk-abcdefghijklmnopqrstuvwxyz","issuePrefix":"ACM"}',
+      "completed",
+    );
+    expect(result).not.toContain("sk-");
+    expect(result).toContain("Got company");
   });
 
   it("drops a write_file outcome that echoes the file path and a duration", () => {
@@ -890,5 +966,11 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
         { detail: "/repo/src/a.ts" },
       ),
     ).toBe("/repo/src/a.ts(3,1): error TS2307: Cannot find module");
+  });
+
+  it("shortens instance workspace paths in result text", () => {
+    const ws = "/paperclip/instances/default/workspaces/43e8155e-a1b2-4c3d-9e8f-001122334455";
+    expect(summarizeJsonOutput(`wrote ${ws}/scan.md\n{"a":1}`)).toBe("wrote scan.md · Response: 1 field");
+    expect(summarizeToolOutcome(`saved ${ws}/notes/plan.md`, "completed")).toBe("saved notes/plan.md");
   });
 });
