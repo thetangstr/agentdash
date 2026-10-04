@@ -140,6 +140,29 @@ describe("what reaches the screen", () => {
     expect(html).toContain("Check setup");
   });
 
+  /**
+   * A failed check on an agent that has already run successfully is not the
+   * red "this agent is broken" block — the evidence is probably stale, so the
+   * panel asks for a re-check in neutral styling.
+   */
+  it("softens a failed check into 'Re-check setup' when the agent has run successfully", () => {
+    const html = render(
+      evidence({ status: "fail" }),
+      { onRunPreflight: () => undefined, hasSuccessfulRuns: true },
+    );
+
+    expect(html).toContain("Re-check setup");
+    expect(html).toContain("has run before");
+    expect(html).toContain("Launching stays blocked");
+    expect(html).not.toContain("Setup check failed");
+  });
+
+  it("keeps the hard failure styling when the agent has never run successfully", () => {
+    const html = render(evidence({ status: "fail" }), { onRunPreflight: () => undefined });
+    expect(html).toContain("Setup check failed");
+    expect(html).not.toContain("Re-check setup");
+  });
+
   it("renders warnings as an advisory note, not a failure", () => {
     const html = render(evidence({ status: "warn" }));
     expect(html).toContain("Setup check passed with warnings");

@@ -7,6 +7,7 @@ import type { TranscriptEntry } from "../../adapters";
 import { MarkdownBody } from "../MarkdownBody";
 import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
+import { shortenInstancePaths } from "../../lib/instancePaths";
 import { redactSecretsInValue } from "../../lib/redactSecrets";
 import {
   formatRunDuration,
@@ -22,7 +23,7 @@ import {
   type ReadableTranscriptCache,
 } from "../../lib/readableTranscript";
 import type { TranscriptViewMode } from "../../lib/transcriptModePreference";
-import { Check, ChevronDown, ChevronRight, CircleAlert, CircleDashed, GitCompare, Loader2, User, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleAlert, CircleDashed, GitCompare, Loader2, Square, User, X } from "lucide-react";
 
 /**
  * Readable model for a run, built incrementally: while a run streams, only the
@@ -430,60 +431,93 @@ export interface ReadableRunUsage {
   durationMs?: number | null;
 }
 
+// AgentDash (c3 review): a stopped run whose transcript has no result line
+// still gets the neutral "Stopped" footer — the run record's reason is the
+// whole story.
+const STOPPED_FALLBACK_FOOTER: ReadableResultFooter = {
+  ts: "",
+  isError: false,
+  outcome: "Stopped",
+  text: null,
+  errors: [],
+  durationMs: null,
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  costUsd: 0,
+};
+
 export function ReadableFooter({
   footer,
   density = "comfortable",
   usage,
+  stoppedReason,
 }: {
   footer: ReadableResultFooter;
   density?: ReadableDensity;
   usage?: ReadableRunUsage | null;
+  /** AgentDash (c3): set for a cancelled run — the transcript's own result
+   * line reads "Failed · Interrupted" because the process was killed; the
+   * footer renders the stop reason in neutral styling instead. */
+  stoppedReason?: string | null;
 }) {
+  const stopped = stoppedReason != null;
+  const isError = footer.isError && !stopped;
   const duration = formatRunDuration(usage?.durationMs ?? footer.durationMs);
   const inputTokens = usage ? usage.inputTokens : footer.inputTokens;
   const outputTokens = usage ? usage.outputTokens : footer.outputTokens;
   const costUsd = usage ? usage.costUsd ?? 0 : footer.costUsd;
   const hasTokens = inputTokens > 0 || outputTokens > 0;
   const parts = [
-    footer.outcome,
+    stopped ? "Stopped" : footer.outcome,
     duration,
     hasTokens ? `${formatTokens(inputTokens)} in / ${formatTokens(outputTokens)} out` : null,
     costUsd > 0 ? `$${costUsd.toFixed(4)}` : null,
   ].filter((part): part is string => Boolean(part));
+  const footerText = stopped ? stoppedReason : footer.text;
+  const footerErrors = stopped ? [] : footer.errors;
 
   return (
     <div
-      data-readable-footer={footer.isError ? "error" : "ok"}
+      data-readable-footer={isError ? "error" : "ok"}
       className={cn(
         "border-t border-border/50 pt-2",
-        footer.isError && "rounded-lg border border-red-500/20 bg-red-500/[0.05] p-2.5",
+        isError && "rounded-lg border border-red-500/20 bg-red-500/[0.05] p-2.5",
       )}
     >
       <div
         className={cn(
           "flex items-center gap-1.5 text-[11px] max-sm:text-xs",
-          footer.isError ? "text-red-700 dark:text-red-300" : "text-muted-foreground",
+          isError ? "text-red-700 dark:text-red-300" : "text-muted-foreground",
         )}
       >
-        {footer.isError ? <X className="h-3.5 w-3.5 shrink-0" /> : <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />}
+        {stopped ? (
+          <Square className="h-3.5 w-3.5 shrink-0" />
+        ) : isError ? (
+          <X className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        )}
         <span>{parts.join(" · ")}</span>
       </div>
-      {footer.isError && footer.errors.length > 0 && (
+      {isError && footerErrors.length > 0 && (
         <ul className="mt-1 list-disc pl-5 text-xs text-red-700 dark:text-red-300">
-          {footer.errors.map((error, index) => (
+          {footerErrors.map((error, index) => (
             <li key={index} className="break-words">{redactSecrets(error)}</li>
           ))}
         </ul>
       )}
-      {footer.text && !(footer.isError && footer.errors.includes(footer.text)) && (
+      {footerText && !(isError && footerErrors.includes(footerText)) && (
         <MarkdownBody
           className={cn(
             "mt-1.5 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-            footer.isError ? "text-red-700 dark:text-red-300" : "text-foreground/80",
+            isError ? "text-red-700 dark:text-red-300" : "text-foreground/80",
             density === "compact" ? "text-[11px] max-sm:text-xs leading-5" : "text-xs leading-5",
           )}
         >
-          {redactSecrets(footer.text)}
+          {/* AgentDash (review #1016): redact first — a secret that is a path
+              basename must never survive as the shortened file name. */}
+          {shortenInstancePaths(redactSecrets(footerText))}
         </MarkdownBody>
       )}
     </div>
@@ -516,7 +550,7 @@ function ReadableMessage({
           compact ? "text-xs leading-5 text-foreground/90" : "text-sm text-foreground",
         )}
       >
-        {redactSecrets(block.text)}
+        {shortenInstancePaths(redactSecrets(block.text))}
       </MarkdownBody>
       {block.streaming && (
         <div className="mt-1.5 inline-flex items-center gap-1 text-[10px] max-sm:text-xs font-medium italic text-muted-foreground">
@@ -599,6 +633,7 @@ export function ReadableTranscriptView({
   className,
   thinkingClassName,
   usage,
+  stoppedReason,
 }: {
   entries: readonly TranscriptEntry[];
   streaming?: boolean;
@@ -608,6 +643,8 @@ export function ReadableTranscriptView({
   thinkingClassName?: string;
   /** The run's metered usage; when set, the footer shows it instead of the transcript's result line. */
   usage?: ReadableRunUsage | null;
+  /** Cancelled-run stop reason; renders the footer as a neutral "Stopped". */
+  stoppedReason?: string | null;
 }) {
   const transcript = useReadableTranscript(entries, streaming);
   const blocks = limit ? transcript.blocks.slice(-limit) : transcript.blocks;
@@ -622,11 +659,15 @@ export function ReadableTranscriptView({
           {block.type === "message" && <ReadableMessage block={block} density={density} />}
           {block.type === "tools" && <ReadableToolGroup items={block.items} density={density} />}
           {block.type === "diff" && <ReadableDiff block={block} />}
-          {block.type === "error" && <ReadableErrorLines lines={block.lines} />}
+          {/* AgentDash (c3 review): a stopped run shows no red error lines —
+              the kill produced that noise; the reason is in the footer. */}
+          {block.type === "error" && stoppedReason == null && <ReadableErrorLines lines={block.lines} />}
         </div>
       ))}
       <ReadableDetails lines={transcript.details} density={density} thinkingClassName={thinkingClassName} />
-      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} usage={usage} />}
+      {(transcript.footer || stoppedReason != null) && (
+        <ReadableFooter footer={transcript.footer ?? STOPPED_FALLBACK_FOOTER} density={density} usage={usage} stoppedReason={stoppedReason} />
+      )}
     </div>
   );
 }
@@ -641,23 +682,33 @@ export function ReadableRunSummary({
   streaming = false,
   density = "compact",
   usage,
+  stoppedReason,
 }: {
   entries: readonly TranscriptEntry[];
   streaming?: boolean;
   density?: ReadableDensity;
   /** The run record's final usage; wins over the transcript's result line. */
   usage?: ReadableRunUsage | null;
+  /** Cancelled-run stop reason; renders the footer as a neutral "Stopped". */
+  stoppedReason?: string | null;
 }) {
   const transcript = useReadableTranscript(entries, streaming);
   // The chat shows assistant text and tool calls from its own message parts;
-  // error-looking stderr only exists in the entries, so surface it here.
-  const errorLines = transcript.blocks.flatMap((block) => (block.type === "error" ? block.lines : []));
-  if (transcript.details.length === 0 && !transcript.footer && errorLines.length === 0) return null;
+  // error-looking stderr only exists in the entries, so surface it here —
+  // unless the run was stopped, in which case the killed process's error
+  // noise is exactly what the neutral footer replaces.
+  const stopped = stoppedReason != null;
+  const errorLines = stopped
+    ? []
+    : transcript.blocks.flatMap((block) => (block.type === "error" ? block.lines : []));
+  if (transcript.details.length === 0 && !transcript.footer && errorLines.length === 0 && !stopped) return null;
   return (
     <div className="space-y-2" data-readable-run-summary>
       {errorLines.length > 0 && <ReadableErrorLines lines={errorLines} />}
       <ReadableDetails lines={transcript.details} density={density} />
-      {transcript.footer && <ReadableFooter footer={transcript.footer} density={density} usage={usage} />}
+      {(transcript.footer || stopped) && (
+        <ReadableFooter footer={transcript.footer ?? STOPPED_FALLBACK_FOOTER} density={density} usage={usage} stoppedReason={stoppedReason} />
+      )}
     </div>
   );
 }

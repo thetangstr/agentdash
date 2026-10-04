@@ -5,6 +5,8 @@ import { Coins, ExternalLink, FileText, GitMerge, GitPullRequest, GitPullRequest
 import { useIsPhone } from "../hooks/useIsPhone";
 import { Link } from "@/lib/router";
 import { cn, issueUrl } from "../lib/utils";
+import { shortenInstancePaths } from "../lib/instancePaths";
+import { redactSecrets } from "../lib/redactSecrets";
 import { timeAgo } from "../lib/timeAgo";
 import {
   TOKENS_COUNTED_NOTE,
@@ -14,6 +16,7 @@ import {
   workProductDisplayTitle,
   workProductHref,
   workProductState,
+  workProductTimestamp,
   workProductTypeLabel,
   type WorkProductStateTone,
 } from "../lib/shipped";
@@ -70,7 +73,7 @@ function CompactShippedWorkProductRow({ product, showUsage }: { product: Shipped
   const meta = [
     product.issue.identifier ?? product.issue.title,
     product.agent?.name ?? null,
-    timeAgo(product.createdAt),
+    timeAgo(workProductTimestamp(product)),
   ].filter((part): part is string => Boolean(part));
   return (
     <div className="flex items-start gap-2 py-1 pl-3 pr-1" data-testid="shipped-row" data-compact="true">
@@ -186,7 +189,7 @@ export function ShippedWorkProductRow({
           <p className="text-xs text-muted-foreground" data-testid="work-product-local-note">{LOCAL_FILE_NOTE}</p>
         ) : null}
         {product.summary && !target?.external ? (
-          <p className="line-clamp-2 text-xs text-muted-foreground">{product.summary}</p>
+          <p className="line-clamp-2 text-xs text-muted-foreground">{shortenInstancePaths(redactSecrets(product.summary))}</p>
         ) : null}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
           <span>{workProductTypeLabel(product.type)}</span>
@@ -206,7 +209,7 @@ export function ShippedWorkProductRow({
             </>
           ) : null}
           <span aria-hidden>·</span>
-          <span title={new Date(product.createdAt).toLocaleString()}>{timeAgo(product.createdAt)}</span>
+          <span title={new Date(workProductTimestamp(product)).toLocaleString()}>{timeAgo(workProductTimestamp(product))}</span>
           {showUsage ? (
             <>
               <span aria-hidden>·</span>

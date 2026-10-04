@@ -18,6 +18,12 @@ vi.mock("../components/MarkdownEditor", () => ({
   MarkdownEditor: () => null,
 }));
 
+// The summary body renders through MarkdownBody, which needs ThemeProvider;
+// these tests assert text content, not markdown rendering.
+vi.mock("../components/MarkdownBody", () => ({
+  MarkdownBody: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+
 // Links are navigation affordances; the assertions care about hrefs, not the
 // router's company-prefix resolution.
 vi.mock("@/lib/router", async (importOriginal) => {

@@ -24,6 +24,7 @@ import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
+import { isAwaitingReview } from "../lib/shipped";
 import {
   hasLegacyIssueDetailQuery,
   createIssueDetailPath,
@@ -1331,14 +1332,14 @@ export function IssueDetail() {
     queryFn: () => issuesApi.listShipped(issue!.companyId, { issueId: issue!.id }),
     enabled: !!issue && canManageTreeControl,
   });
-  const awaitingReview = Boolean(
-    canManageTreeControl
-    && issue
-    && issue.status !== "done"
-    && issue.status !== "cancelled"
-    && !hasLiveRuns
-    && (shippedForReview?.items ?? []).some((product) => product.status === "ready_for_review"),
-  );
+  const awaitingReview = isAwaitingReview({
+    canReview: canManageTreeControl && !!issue,
+    issueStatus: issue?.status,
+    issueLive: hasLiveRuns,
+    hasReadyForReview: (shippedForReview?.items ?? []).some(
+      (product) => product.status === "ready_for_review",
+    ),
+  });
   const { data: feedbackVotes } = useQuery({
     queryKey: queryKeys.issues.feedbackVotes(issueId!),
     queryFn: () => issuesApi.listFeedbackVotes(issueId!),

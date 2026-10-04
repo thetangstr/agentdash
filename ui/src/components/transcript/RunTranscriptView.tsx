@@ -29,6 +29,8 @@ interface RunTranscriptViewProps {
   thinkingClassName?: string;
   /** The run's metered usage, so the readable footer matches the run's own figures. */
   usage?: ReadableRunUsage | null;
+  /** AgentDash (c3): cancelled-run stop reason; the readable footer renders "Stopped" neutrally instead of the killed process's "Failed". */
+  stoppedReason?: string | null;
 }
 
 function findScrollParent(element: HTMLElement): HTMLElement | Window {
@@ -158,6 +160,7 @@ export function RunTranscriptView({
   className,
   thinkingClassName,
   usage,
+  stoppedReason,
 }: RunTranscriptViewProps) {
   if (entries.length === 0) {
     return (
@@ -188,6 +191,7 @@ export function RunTranscriptView({
       className={className}
       thinkingClassName={thinkingClassName}
       usage={usage}
+      stoppedReason={stoppedReason}
     />
   );
 }

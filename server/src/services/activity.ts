@@ -448,6 +448,8 @@ export function activityService(db: Db) {
           invocationSource: heartbeatRuns.invocationSource,
           usageJson: summarizedUsageJson,
           resultJson: summarizedResultJson,
+          error: heartbeatRuns.error,
+          errorCode: heartbeatRuns.errorCode,
           logBytes: heartbeatRuns.logBytes,
           retryOfRunId: heartbeatRuns.retryOfRunId,
           scheduledRetryAt: heartbeatRuns.scheduledRetryAt,

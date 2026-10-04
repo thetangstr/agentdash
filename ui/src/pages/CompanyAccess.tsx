@@ -347,7 +347,7 @@ export function CompanyAccess() {
         ) : null}
 
         <div className="overflow-hidden rounded-xl border border-border">
-          <div className="grid grid-cols-[minmax(0,1.5fr)_120px_120px_minmax(0,1.2fr)_180px] gap-3 border-b border-border px-4 py-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="hidden grid-cols-[minmax(0,1.5fr)_120px_120px_minmax(0,1.2fr)_180px] gap-3 border-b border-border px-4 py-3 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:grid">
             <div>User account</div>
             <div>Role</div>
             <div>Status</div>
@@ -360,28 +360,29 @@ export function CompanyAccess() {
             members.map((member) => {
               const removalReason = member.removal?.reason ?? null;
               const canArchive = member.removal?.canArchive ?? true;
+              const displayName = member.user?.name?.trim() || member.user?.email || member.principalId;
+              const displayEmail = member.user?.email || member.principalId;
+              const roleLabel = member.membershipRole
+                ? HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[member.membershipRole]
+                : "Unset";
               return (
-                <div
-                  key={member.id}
-                  className="grid grid-cols-[minmax(0,1.5fr)_120px_120px_minmax(0,1.2fr)_180px] gap-3 border-b border-border px-4 py-3 last:border-b-0"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-medium">{member.user?.name?.trim() || member.user?.email || member.principalId}</div>
-                    <div className="truncate text-xs text-muted-foreground">{member.user?.email || member.principalId}</div>
-                  </div>
-                  <div className="text-sm">
-                    {member.membershipRole
-                      ? HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS[member.membershipRole]
-                      : "Unset"}
-                  </div>
-                  <div>
-                    <Badge variant={member.status === "active" ? "secondary" : member.status === "suspended" ? "destructive" : "outline"}>
-                      {member.status.replace("_", " ")}
-                    </Badge>
-                  </div>
-                  <div className="min-w-0 text-sm text-muted-foreground">{formatGrantSummary(member)}</div>
-                  <div className="space-y-1 text-right">
-                    <div className="flex justify-end gap-2">
+                <div key={member.id} className="border-b border-border px-4 py-3 last:border-b-0">
+                  {/* Stacked card below sm: the five-column table cannot carry
+                      name + email + actions inside a phone width without hiding
+                      the identity or clipping Edit/Remove. */}
+                  <div className="space-y-3 sm:hidden" data-testid={`member-card-${member.id}`}>
+                    <div className="min-w-0">
+                      <div className="break-words font-medium">{displayName}</div>
+                      <div className="break-all text-sm text-muted-foreground">{displayEmail}</div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm">{roleLabel}</span>
+                      <Badge variant={member.status === "active" ? "secondary" : member.status === "suspended" ? "destructive" : "outline"}>
+                        {member.status.replace("_", " ")}
+                      </Badge>
+                    </div>
+                    <div className="min-w-0 text-sm text-muted-foreground">{formatGrantSummary(member)}</div>
+                    <div className="flex gap-2">
                       <Button size="sm" variant="outline" onClick={() => setEditingMemberId(member.id)}>
                         Edit
                       </Button>
@@ -399,6 +400,39 @@ export function CompanyAccess() {
                     {removalReason ? (
                       <div className="text-xs text-muted-foreground">{removalReason}</div>
                     ) : null}
+                  </div>
+                  <div className="hidden grid-cols-[minmax(0,1.5fr)_120px_120px_minmax(0,1.2fr)_180px] gap-3 sm:grid">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">{displayName}</div>
+                      <div className="truncate text-xs text-muted-foreground">{displayEmail}</div>
+                    </div>
+                    <div className="text-sm">{roleLabel}</div>
+                    <div>
+                      <Badge variant={member.status === "active" ? "secondary" : member.status === "suspended" ? "destructive" : "outline"}>
+                        {member.status.replace("_", " ")}
+                      </Badge>
+                    </div>
+                    <div className="min-w-0 text-sm text-muted-foreground">{formatGrantSummary(member)}</div>
+                    <div className="space-y-1 text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setEditingMemberId(member.id)}>
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRemovingMemberId(member.id)}
+                          disabled={!canArchive}
+                          title={removalReason ?? undefined}
+                        >
+                          <Trash2 className="mr-1 h-3.5 w-3.5" />
+                          Remove
+                        </Button>
+                      </div>
+                      {removalReason ? (
+                        <div className="text-xs text-muted-foreground">{removalReason}</div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               );

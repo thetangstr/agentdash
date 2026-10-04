@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { publishActivity, type ActivityPublication } from "../services/activity-log.js";
+import { insertActivity, publishActivity, type ActivityPublication } from "../services/activity-log.js";
 import { acceptedHireNeedsRepair, completeManagedHire, onboardingMaterializationPause } from "../services/agent-creator-from-proposal.js";
 import { workforceService } from "../services/workforce.js";
 import { founderStewardshipDeps, onboardingHireAccountability } from "../services/founder-stewardship.js";
@@ -668,9 +668,26 @@ export function onboardingV2Routes(db: Db) {
     }
     if (proposal.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     const accepted = await acceptOnboardingHires(companyId, conversationId, 'interview', 1, res,
-      async acceptance => agentCreatorFromProposal({
-        agents: agentService(acceptance.executor), instructions: agentInstructionsService(),
-      }).accept({ companyId, reportsToAgentId, proposal, transcript, accountableUserId: req.actor.userId }, acceptance));
+      async acceptance => {
+        const hire = await agentCreatorFromProposal({
+          agents: agentService(acceptance.executor), instructions: agentInstructionsService(),
+        }).accept({ companyId, reportsToAgentId, proposal, transcript, accountableUserId: req.actor.userId }, acceptance);
+        // AgentDash (PR #1017 review): the interview hire path logged no
+        // agent.created — same atomic audit as the plan-card path: inserted
+        // on the acceptance executor, published only after the transaction
+        // commits.
+        acceptance.publications.push(await insertActivity(acceptance.executor, {
+          companyId,
+          actorType: "user",
+          actorId: req.actor.userId!,
+          action: "agent.created",
+          entityType: "agent",
+          entityId: hire.created.id,
+          agentId: hire.created.id,
+          details: { source: "cos_proposal", name: hire.created.name, role: hire.created.role },
+        }));
+        return hire;
+      });
     if (!accepted) return;
     let result: Awaited<ReturnType<ReturnType<typeof agentCreatorFromProposal>['complete']>>;
     try {
@@ -809,6 +826,20 @@ export function onboardingV2Routes(db: Db) {
         ...hireAccountability,
         ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
       }, acceptance);
+      // AgentDash (scan 5, lane access): the plan-card hire path creates agents
+      // inline, so the route owns the agent.created audit — same atomicity as
+      // the hire receipt: inserted on the acceptance executor, published only
+      // after the transaction commits.
+      acceptance.publications.push(await insertActivity(acceptance.executor, {
+        companyId,
+        actorType: "user",
+        actorId: req.actor.userId!,
+        action: "agent.created",
+        entityType: "agent",
+        entityId: created.id,
+        agentId: created.id,
+        details: { source: "cos_plan", name: created.name, role: created.role },
+      }));
       return { created, planAgent, cosAgentId: cos?.id ?? null };
     });
     if (!accepted) return;

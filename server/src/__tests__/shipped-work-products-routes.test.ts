@@ -2,13 +2,16 @@ import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import {
   agents,
   companies,
   companyMemberships,
   costEvents,
   createDb,
+  documents,
   heartbeatRuns,
+  issueDocuments,
   issueWorkProducts,
   issues,
   projects,
@@ -347,6 +350,148 @@ describeEmbeddedPostgres("GET /companies/:companyId/work-products (Shipped feed)
     expect(res.body.total).toBe(3);
     const byIssue = await request(app).get(`/api/companies/${COMPANY}/work-products?issueId=${HIDDEN_ISSUE}`);
     expect(byIssue.body.items).toEqual([]);
+  });
+
+  it("exposes the linked document's newest revision on a document deliverable", async () => {
+    const docIssue = randomUUID();
+    const docId = randomUUID();
+    await db.insert(issues).values({
+      id: docIssue,
+      companyId: COMPANY,
+      title: "Competitor scan",
+      identifier: "SHP-9",
+      status: "in_review",
+      assigneeAgentId: PRIYA,
+    });
+    await db.insert(documents).values({
+      id: docId,
+      companyId: COMPANY,
+      title: "Competitor scan",
+      latestBody: "v1",
+      latestRevisionNumber: 1,
+      createdAt: minutesAgo(9),
+      updatedAt: minutesAgo(9),
+    });
+    await db.insert(issueDocuments).values({
+      companyId: COMPANY,
+      issueId: docIssue,
+      documentId: docId,
+      key: "scan",
+    });
+    await db.insert(issueWorkProducts).values({
+      companyId: COMPANY,
+      issueId: docIssue,
+      type: "document",
+      provider: "paperclip",
+      title: "Competitor scan",
+      status: "ready_for_review",
+      metadata: { documentKey: "scan" },
+      createdAt: minutesAgo(8),
+      updatedAt: minutesAgo(8),
+    });
+
+    const app = appAs(asUser("owner", "owner"));
+    const before = await request(app).get(`/api/companies/${COMPANY}/work-products?issueId=${docIssue}`);
+    expect(before.status).toBe(200);
+    expect(before.body.items[0].document).toMatchObject({ key: "scan", latestRevisionNumber: 1 });
+    const firstUpdatedAt = new Date(before.body.items[0].document.updatedAt).getTime();
+
+    // A revision lands later: the join must read it, not the product row.
+    const revisedAt = new Date();
+    await db.update(documents).set({ latestRevisionNumber: 2, updatedAt: revisedAt }).where(eq(documents.id, docId));
+    const after = await request(app).get(`/api/companies/${COMPANY}/work-products?issueId=${docIssue}`);
+    expect(after.body.items[0].document).toMatchObject({ key: "scan", latestRevisionNumber: 2 });
+    expect(new Date(after.body.items[0].document.updatedAt).getTime()).toBeGreaterThan(firstUpdatedAt);
+  });
+
+  it("exposes the creating run's metering status so a finished unmetered run ends 'counting…'", async () => {
+    const unmeteredIssue = randomUUID();
+    const unmeteredRun = randomUUID();
+    await db.insert(issues).values({
+      id: unmeteredIssue,
+      companyId: COMPANY,
+      title: "Desk notes",
+      identifier: "SHP-10",
+      status: "in_review",
+      assigneeAgentId: PRIYA,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: unmeteredRun,
+      companyId: COMPANY,
+      agentId: PRIYA,
+      status: "succeeded",
+      invocationSource: "assignment",
+      usageJson: { meteringStatus: "unmetered_no_session" },
+    });
+    await db.insert(issueWorkProducts).values({
+      companyId: COMPANY,
+      issueId: unmeteredIssue,
+      type: "document",
+      provider: "paperclip",
+      title: "Desk notes",
+      status: "ready_for_review",
+      createdByRunId: unmeteredRun,
+      createdAt: minutesAgo(3),
+      updatedAt: minutesAgo(3),
+    });
+
+    const res = await request(appAs(asUser("owner", "owner"))).get(
+      `/api/companies/${COMPANY}/work-products?issueId=${unmeteredIssue}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].creatingRunMeteringStatus).toBe("unmetered_no_session");
+
+    // Products without a creating run (or an unstamped one) report null.
+    const all = await request(appAs(asUser("owner", "owner"))).get(`/api/companies/${COMPANY}/work-products`);
+    const handwritten = all.body.items.find((item: { title: string }) => item.title === "Secret PR");
+    expect(handwritten.creatingRunMeteringStatus).toBeNull();
+  });
+
+  // AgentDash (review #1016): the process-lost reaper and the setup-failure
+  // path never write usageJson — their unmetered status lives only in
+  // resultJson.runFacts. Without the coalesce a reaped run's deliverable
+  // would hold "counting…" open for ten minutes.
+  it("reads the reaped run's metering status from resultJson.runFacts", async () => {
+    const reapedIssue = randomUUID();
+    const reapedRun = randomUUID();
+    await db.insert(issues).values({
+      id: reapedIssue,
+      companyId: COMPANY,
+      title: "Lost process notes",
+      identifier: "SHP-11",
+      status: "in_review",
+      assigneeAgentId: PRIYA,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: reapedRun,
+      companyId: COMPANY,
+      agentId: PRIYA,
+      status: "failed",
+      invocationSource: "assignment",
+      resultJson: {
+        runFacts: {
+          meteringStatus: "unmetered_no_session",
+          outcome: "process_lost",
+        },
+      },
+    });
+    await db.insert(issueWorkProducts).values({
+      companyId: COMPANY,
+      issueId: reapedIssue,
+      type: "document",
+      provider: "paperclip",
+      title: "Lost process notes",
+      status: "ready_for_review",
+      createdByRunId: reapedRun,
+      createdAt: minutesAgo(3),
+      updatedAt: minutesAgo(3),
+    });
+
+    const res = await request(appAs(asUser("owner", "owner"))).get(
+      `/api/companies/${COMPANY}/work-products?issueId=${reapedIssue}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].creatingRunMeteringStatus).toBe("unmetered_no_session");
   });
 
   it("rejects malformed filters and cursors with 400", async () => {

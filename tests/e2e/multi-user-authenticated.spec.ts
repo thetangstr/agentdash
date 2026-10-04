@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 
 const BASE = process.env.PAPERCLIP_E2E_BASE_URL ?? "http://127.0.0.1:3105";
 const DATA_DIR = process.env.PAPERCLIP_E2E_DATA_DIR ?? process.env.PAPERCLIP_HOME;
@@ -38,6 +38,13 @@ type SessionJsonResponse<T> = {
   text: string;
   json: T | null;
 };
+
+// Pending web-font fetches hold the document `load` event; on runners with
+// slow or filtered egress a single font can stall page.goto for minutes.
+// The UI renders fine on fallback fonts, so abort external font requests.
+async function abortExternalFonts(target: Page | BrowserContext) {
+  await target.route(/fonts\.(gstatic|googleapis)\.com/, (route) => route.abort());
+}
 
 const runId = Date.now();
 const companyName = `MU-Auth-${runId}`;
@@ -106,7 +113,7 @@ async function signUp(page: Page, user: HumanUser) {
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
   await page.getByRole("button", { name: "Create Account" }).click();
-  await expect(page).not.toHaveURL(/\/auth/, { timeout: 20_000 });
+  await expect(page).not.toHaveURL(/\/auth/, { timeout: 60_000 });
 }
 
 async function acceptBootstrapInvite(page: Page, inviteUrl: string) {
@@ -140,14 +147,14 @@ async function createCompanyForSession(page: Page, nextCompanyName: string) {
 async function createAuthenticatedInvite(page: Page, companyPrefix: string) {
   await page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
   await expect(page.getByRole("heading", { name: "Company Invites" })).toBeVisible({
-    timeout: 20_000,
+    timeout: 60_000,
   });
   await expect(page.getByRole("radio", { name: /^Member\b/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /Auto-approve on accept/ })).toBeChecked();
   await page.getByRole("button", { name: "Create invite" }).click();
-  await expect(page.getByText("Latest invite link")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Latest invite link")).toBeVisible({ timeout: 60_000 });
   const inviteUrlField = page.getByTestId("latest-invite-url");
-  await expect(inviteUrlField).toBeVisible({ timeout: 20_000 });
+  await expect(inviteUrlField).toBeVisible({ timeout: 60_000 });
   const inviteUrl = (await inviteUrlField.textContent())?.trim() ?? "";
   expect(inviteUrl).toContain("/invite/");
 
@@ -167,16 +174,17 @@ async function createAuthenticatedInvite(page: Page, companyPrefix: string) {
   return inviteUrl;
 }
 
-async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser) {
+async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser, companyDisplayName: string) {
   await page.goto(inviteUrl);
-  await expect(page.getByTestId("invite-inline-auth")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("invite-inline-auth")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
   await page.getByLabel("Name").fill(user.name);
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
   await page.getByRole("button", { name: "Create account and continue" }).click();
-  await expect(page.getByRole("heading", { name: "You joined the company" })).toBeVisible({
-    timeout: 20_000,
+  // The joined confirmation names the workspace (PR #1017 review).
+  await expect(page.getByRole("heading", { name: `You joined ${companyDisplayName}` })).toBeVisible({
+    timeout: 60_000,
   });
 }
 
@@ -259,6 +267,7 @@ async function newPage(browser: Browser) {
     window.localStorage.clear();
     window.sessionStorage.clear();
   });
+  await abortExternalFonts(context);
   const page = await context.newPage();
   return { context, page };
 }
@@ -268,7 +277,11 @@ test.describe("Multi-user: authenticated mode", () => {
     browser,
     page,
   }) => {
-    test.setTimeout(180_000);
+    // Multi-phase test: sign-up, bootstrap-invite script (spawns pnpm+tsx),
+    // company create, invite UI, and a second browser context. Each vite-dev
+    // page boot costs ~60s on a loaded machine, so 180 s is not enough headroom.
+    test.setTimeout(480_000);
+    await abortExternalFonts(page);
 
     const healthRes = await page.request.get(`${BASE}/api/health`);
     expect(healthRes.ok()).toBe(true);
@@ -291,17 +304,34 @@ test.describe("Multi-user: authenticated mode", () => {
     const inviteUrl = await createAuthenticatedInvite(page, companyPrefix);
 
     const invited = await newPage(browser);
+    let invitedMemberId: string | null = null;
     try {
-      await signUpFromInvite(invited.page, inviteUrl, invitedUser);
+      await signUpFromInvite(invited.page, inviteUrl, invitedUser, companyName);
 
-      await expect(invited.page).not.toHaveURL(/\/auth/, { timeout: 10_000 });
+      await expect(invited.page).not.toHaveURL(/\/auth/, { timeout: 60_000 });
 
-      await waitForMember(page, company.id, invitedUser.email);
+      const invitedMember = await waitForMember(page, company.id, invitedUser.email);
+      invitedMemberId = invitedMember.id;
+
+      // The joined confirmation offers "Open board"; the member-onboarding
+      // gate then holds the member until both onboarding steps are done. Its
+      // welcome names the workspace — steward and terminal wording are for
+      // members who actually steward an agent (PR #1017 review).
+      await invited.page.getByRole("link", { name: "Open board" }).click();
+      await expect(
+        invited.page.getByRole("heading", { name: `You joined ${companyName}` })
+      ).toBeVisible({ timeout: 60_000 });
+      const onboardingText = (await invited.page.locator("main").innerText()).toLowerCase();
+      expect(onboardingText).not.toContain("steward");
+      expect(onboardingText).not.toContain("terminal");
+      await invited.page.getByRole("button", { name: "Continue" }).click();
+      await invited.page.getByRole("button", { name: "Open dashboard" }).click();
+      await expect(invited.page).toHaveURL(/\/dashboard/, { timeout: 60_000 });
 
       await invited.page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
       await expect(
         invited.page.getByText("You do not have permission to manage company invites.")
-      ).toBeVisible({ timeout: 20_000 });
+      ).toBeVisible({ timeout: 60_000 });
       await expect(
         invited.page.getByRole("button", { name: "Create invite" })
       ).toHaveCount(0);
@@ -321,5 +351,28 @@ test.describe("Multi-user: authenticated mode", () => {
     } finally {
       await invited.context.close();
     }
+
+    // Member management against a real second human, moved from
+    // multi-user.spec.ts — in local_trusted no second member can exist
+    // (PR #1017 review). The owner suspends the invitee and changes their
+    // role; both assertions read the echoed member record. The suspend comes
+    // first because the peer-rank guard only lets an admin manage members
+    // below admin — an already-promoted invitee could not be suspended here.
+    expect(invitedMemberId).toBeTruthy();
+    const suspendRes = await sessionJsonRequest<CompanyMember>(
+      page,
+      `${BASE}/api/companies/${company.id}/members/${invitedMemberId}`,
+      { method: "PATCH", data: { status: "suspended" } }
+    );
+    expect(suspendRes.status).toBe(200);
+    expect(suspendRes.json?.status).toBe("suspended");
+
+    const promoteRes = await sessionJsonRequest<CompanyMember>(
+      page,
+      `${BASE}/api/companies/${company.id}/members/${invitedMemberId}`,
+      { method: "PATCH", data: { membershipRole: "admin" } }
+    );
+    expect(promoteRes.status).toBe(200);
+    expect(promoteRes.json?.membershipRole).toBe("admin");
   });
 });

@@ -7,9 +7,12 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
-import type { AgentRunHealth, AgentTokenCeilingStatus } from "@paperclipai/shared";
+import type { AgentRunHealth, AgentTokenCeilingStatus, HeartbeatRun } from "@paperclipai/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ToastProvider } from "../context/ToastContext";
 
 // AgentDetail's import graph reaches `@mdxeditor/editor` via AgentConfigForm →
 // MarkdownEditor, and its Sandpack dependency throws inside jsdom's CSS
@@ -18,9 +21,42 @@ vi.mock("../components/MarkdownEditor", () => ({
   MarkdownEditor: () => null,
 }));
 
+// MarkdownBody needs ThemeProvider and the editor stack; rendered text is all
+// these tests assert on, so it is a passthrough.
+vi.mock("../components/MarkdownBody", () => ({
+  MarkdownBody: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+
+// ScrollToBottom reads the page panel context; there is no panel in a bare
+// component render.
+vi.mock("../context/PanelContext", () => ({
+  usePanel: () => ({ togglePanelVisible: vi.fn() }),
+}));
+
+// The app router resolves company prefixes through CompanyContext; these
+// tests assert rendered content, not navigation, so navigation primitives
+// are stubs.
+vi.mock("@/lib/router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/router")>();
+  const StubLink = ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  );
+  return {
+    ...actual,
+    Link: StubLink,
+    CompanyLink: StubLink,
+    useNavigate: () => () => undefined,
+    useParams: () => ({}),
+    Navigate: () => null,
+    useBeforeUnload: () => undefined,
+  };
+});
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { TokenCeilingStatusLine, agentBilledByProvider, monthCountedTokens, AgentSpendFigure, AgentRunHealthSummary, RunStderrExcerpt, CostsSection } = await import("./AgentDetail");
+const { TokenCeilingStatusLine, agentBilledByProvider, monthCountedTokens, AgentSpendFigure, AgentRunHealthSummary, RunStderrExcerpt, CostsSection, RunDetail, LatestRunCard } = await import("./AgentDetail");
 
 function statusFixture(overrides: Partial<AgentTokenCeilingStatus> = {}): AgentTokenCeilingStatus {
   return {
@@ -208,6 +244,46 @@ describe("agentBilledByProvider", () => {
         { spentMonthlyCents: 0, runHealth: { chatTurnsThisMonth: 14 } },
         [],
         now,
+      ),
+    ).toBe(true);
+  });
+
+  // Batch 3: the canary agent page read "Spend this month $0.00" while the
+  // Costs page showed 132.7k tokens — unmetered runs leave usageJson empty,
+  // so the run-level heuristic undercounted. Cost events are authoritative.
+  it("reads this month's cost-events row over run-level usage when loaded", () => {
+    const unmeteredRuns = [
+      { usageJson: { meteringStatus: "unmetered_no_session" }, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" } as never,
+    ];
+    // Run usage is empty, but the events row carries the real tokens.
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0 },
+        unmeteredRuns,
+        now,
+        { costCents: 0, inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 12_700 },
+      ),
+    ).toBe(true);
+    // A priced company (this month's events carry dollars) is not BYOK.
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0 },
+        [],
+        now,
+        { costCents: 420, inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 12_700 },
+      ),
+    ).toBe(false);
+    // Loaded with no events and no chat turns: nothing ran this month.
+    expect(agentBilledByProvider({ spentMonthlyCents: 0 }, unmeteredRuns, now, null)).toBe(false);
+  });
+
+  it("treats cached-only cost events as billed by the provider", () => {
+    expect(
+      agentBilledByProvider(
+        { spentMonthlyCents: 0 },
+        [],
+        now,
+        { costCents: 0, inputTokens: 0, cachedInputTokens: 50_000, outputTokens: 0 },
       ),
     ).toBe(true);
   });
@@ -455,12 +531,12 @@ describe("CostsSection on BYOK", () => {
     } as never;
   }
 
-  function renderCosts(runtimeState?: Record<string, unknown>, runs: unknown[] = []) {
+  function renderCosts(runtimeState?: Record<string, unknown>, costRow?: Record<string, unknown> | null, runs: unknown[] = []) {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => {
-      root!.render(<CostsSection runtimeState={runtimeState as never} runs={runs as never} />);
+      root!.render(<CostsSection runtimeState={runtimeState as never} runs={runs as never} costRow={costRow as never} />);
     });
     return container.textContent ?? "";
   }
@@ -495,15 +571,195 @@ describe("CostsSection on BYOK", () => {
     const unpriced = [
       { id: "run-12345678", status: "succeeded", usageJson: { inputTokens: 32_000, outputTokens: 2_900 }, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" },
     ];
-    renderCosts(runtimeState(), unpriced);
+    renderCosts(runtimeState(), undefined, unpriced);
     expect(headers()).toEqual(["Date", "Run", "Input", "Output"]);
 
     const priced = [
       ...unpriced,
       { id: "run-87654321", status: "succeeded", usageJson: { inputTokens: 1_000, outputTokens: 100, costUsd: 0.12 }, resultJson: null, createdAt: "2026-10-03T09:00:00.000Z" },
     ];
-    const text = renderCosts(runtimeState(), priced);
+    const text = renderCosts(runtimeState(), undefined, priced);
     expect(headers()).toEqual(["Date", "Run", "Input", "Output", "Cost"]);
     expect(text).toContain("$0.1200");
+  });
+
+  // Batch 3: cost events are the same source the Costs page reads — use them
+  // once loaded, even when runtimeState counters undercount unmetered runs.
+  it("reads tokens from the cost-events row when the run counters sit at 0", () => {
+    const text = renderCosts(
+      runtimeState({ totalInputTokens: 0, totalOutputTokens: 0, totalCachedInputTokens: 0, totalCostCents: 0 }),
+      { costCents: 0, inputTokens: 120_000, cachedInputTokens: 50_000, outputTokens: 12_700 },
+    );
+    expect(text).toContain("120.0k");
+    expect(text).toContain("12.7k");
+    expect(text).toContain("50.0k");
+    expect(text).toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+  });
+
+  it("reads priced spend from the cost-events row", () => {
+    const text = renderCosts(
+      runtimeState({ totalInputTokens: 0, totalOutputTokens: 0, totalCachedInputTokens: 0, totalCostCents: 0 }),
+      { costCents: 1337, inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 12_700 },
+    );
+    expect(text).toContain("$13.37");
+    expect(text).not.toContain("Billed by your model provider");
+  });
+
+  it("shows zeroed figures when the cost-events query loaded with no events", () => {
+    const text = renderCosts(undefined, null);
+    expect(text).toContain("Total cost");
+    expect(text).toContain("—");
+    expect(text).not.toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+  });
+});
+
+function heartbeatRunFixture(overrides: Partial<HeartbeatRun> = {}): HeartbeatRun {
+  return {
+    id: "run-1",
+    companyId: "company-1",
+    agentId: "agent-1",
+    invocationSource: "on_demand",
+    triggerDetail: "manual",
+    status: "cancelled",
+    startedAt: new Date("2026-10-03T10:00:00.000Z"),
+    finishedAt: new Date("2026-10-03T10:00:05.000Z"),
+    error: null,
+    wakeupRequestId: null,
+    exitCode: null,
+    signal: null,
+    usageJson: null,
+    resultJson: null,
+    sessionIdBefore: null,
+    sessionIdAfter: null,
+    logStore: null,
+    logRef: null,
+    logBytes: null,
+    logSha256: null,
+    logCompressed: false,
+    stdoutExcerpt: null,
+    stderrExcerpt: null,
+    errorCode: null,
+    externalRunId: null,
+    processPid: null,
+    processGroupId: null,
+    processStartedAt: null,
+    lastOutputAt: null,
+    lastOutputSeq: 0,
+    lastOutputStream: null,
+    lastOutputBytes: null,
+    retryOfRunId: null,
+    processLossRetryCount: 0,
+    livenessState: null,
+    livenessReason: null,
+    continuationAttempt: 0,
+    lastUsefulActionAt: null,
+    nextAction: null,
+    contextSnapshot: null,
+    createdAt: new Date("2026-10-03T10:00:00.000Z"),
+    updatedAt: new Date("2026-10-03T10:00:05.000Z"),
+    ...overrides,
+  };
+}
+
+describe("RunDetail on a cancelled run", () => {
+  function renderRunDetail(run: HeartbeatRun) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderNode(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ToastProvider>
+            <TooltipProvider>
+              <RunDetail run={run} agentRouteId="agent-1" adapterType="process" adapterConfig={{}} />
+            </TooltipProvider>
+          </ToastProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return container!.textContent ?? "";
+  }
+
+  it("hides the harness-recovery panel and the red exit code left by the killed adapter", () => {
+    // The stale-failure canary: the adapter's post-kill write left a failed
+    // classification in resultJson and exit 130 on the row, but the run is
+    // cancelled — none of that is red failure chrome.
+    const text = renderRunDetail(heartbeatRunFixture({
+      error: "Stopped manually",
+      errorCode: "cancelled_by_operator",
+      exitCode: 130,
+      signal: "SIGTERM",
+      resultJson: {
+        failureClassification: {
+          category: "unknown",
+          severity: "operator_action_required",
+          title: "Run failed",
+          detail: "The run ended unexpectedly.",
+          nextActions: ["retry"],
+        },
+      },
+    }));
+    expect(text).not.toContain("Harness recovery");
+    expect(text).not.toContain("Exit code");
+    expect(text).toContain("Stopped manually");
+  });
+
+  it("still shows failure chrome on a genuinely failed run", () => {
+    const text = renderRunDetail(heartbeatRunFixture({
+      status: "failed",
+      error: "adapter exited",
+      exitCode: 1,
+      resultJson: {
+        failureClassification: {
+          category: "unknown",
+          severity: "operator_action_required",
+          title: "Run failed",
+          detail: "The run ended unexpectedly.",
+          nextActions: ["retry"],
+        },
+      },
+    }));
+    expect(text).toContain("Harness recovery");
+    expect(text).toContain("Exit code 1");
+  });
+});
+
+describe("LatestRunCard on a cancelled run", () => {
+  it("shows the recorded stop reason when no summary was written", () => {
+    renderNode(
+      <MemoryRouter>
+        <LatestRunCard
+          agentId="agent-1"
+          runs={[heartbeatRunFixture({
+            status: "cancelled",
+            error: "Stopped manually",
+            errorCode: "cancelled_by_operator",
+          })]}
+        />
+      </MemoryRouter>,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Stopped manually");
+  });
+
+  it("still prefers a real summary over the stop reason", () => {
+    renderNode(
+      <MemoryRouter>
+        <LatestRunCard
+          agentId="agent-1"
+          runs={[heartbeatRunFixture({
+            status: "cancelled",
+            error: "child process killed: signal SIGTERM",
+            errorCode: "cancelled_by_operator",
+            resultJson: { summary: "Drafted the migration plan" },
+          })]}
+        />
+      </MemoryRouter>,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Drafted the migration plan");
+    expect(text).not.toContain("SIGTERM");
   });
 });

@@ -615,7 +615,10 @@ describe("agent routes adapter validation", () => {
     );
   });
 
-  it("returns 422 on a saved-agent preflight whose warn means the adapter cannot run", async () => {
+  // AgentDash (c3 addendum): the re-check endpoint returns its outcome as
+  // data — a blocking warn is persisted as evidence and reported 200, while
+  // the launch gate in claimQueuedRun is what refuses the run.
+  it("returns 200 and persists a blocking-warn result on the saved-agent re-check", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     registerServerAdapter(blockingWarnPreflightAdapter);
     mockAgentService.getById.mockResolvedValue({
@@ -650,8 +653,22 @@ describe("agent routes adapter validation", () => {
         .send({}),
     );
 
-    expect(res.status, JSON.stringify(res.body)).toBe(422);
-    expect(mockAgentService.update).not.toHaveBeenCalled();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.result).toMatchObject({
+      adapterType: "external_preflight_warn_blocking",
+      status: "warn",
+    });
+    expect(res.body.readiness).toMatchObject({ ready: false });
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          harnessPreflight: expect.objectContaining({
+            status: "warn",
+          }),
+        }),
+      }),
+    );
   });
 
   it("passes the saved agent to the adapter's environment test (Hermes managed profiles need its id)", async () => {
@@ -706,7 +723,9 @@ describe("agent routes adapter validation", () => {
     });
   });
 
-  it("uses saved-agent wording when saved-agent harness preflight fails", async () => {
+  // AgentDash (c3 addendum): a failed re-check is the answer, not an error —
+  // 200 with the failed result saved as evidence, never a 422 to log.
+  it("returns 200 and persists a failed result on the saved-agent re-check", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     registerServerAdapter(failingPreflightAdapter);
     mockAgentService.getById.mockResolvedValue({
@@ -741,8 +760,80 @@ describe("agent routes adapter validation", () => {
         .send({}),
     );
 
-    expect(res.status, JSON.stringify(res.body)).toBe(422);
-    expect(res.body.error).toContain("before running this agent");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.result).toMatchObject({
+      adapterType: "external_preflight_fail",
+      status: "fail",
+    });
+    expect(res.body.readiness).toMatchObject({ ready: false, reason: "not_passed" });
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          harnessPreflight: expect.objectContaining({
+            status: "fail",
+          }),
+        }),
+      }),
+    );
+  });
+
+  // AgentDash (c3 review): the 200 re-check does not weaken the launch gate —
+  // the failed evidence it persists still blocks invoke/wakeup with a 422.
+  it("still 422s invoke after a failed re-check returned its result as data", async () => {
+    vi.stubEnv("AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT", "true");
+    const agent = {
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "External Agent",
+      urlKey: "external-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "external_preflight_fail",
+      adapterConfig: {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null as unknown,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    mockAgentService.getById.mockResolvedValue(agent);
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(failingPreflightAdapter);
+
+    const app = await createApp();
+    const recheck = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({}),
+    );
+    expect(recheck.status, JSON.stringify(recheck.body)).toBe(200);
+    expect(recheck.body.readiness.ready).toBe(false);
+
+    // The persisted failure is what the next agent read sees.
+    const persisted = (mockAgentService.update.mock.calls.at(-1)?.[1] as { metadata?: unknown }).metadata;
+    mockAgentService.getById.mockResolvedValue({ ...agent, metadata: persisted });
+
+    const invoke = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/heartbeat/invoke")
+        .send({}),
+    );
+    expect(invoke.status, JSON.stringify(invoke.body)).toBe(422);
+    expect(invoke.body.details).toMatchObject({
+      code: "agent_harness_preflight_required",
+      reason: "not_passed",
+    });
+    expect(mockHeartbeatService.invoke).not.toHaveBeenCalled();
   });
 
   it("blocks launch-mode heartbeat invoke until saved-agent harness preflight is current", async () => {

@@ -76,6 +76,19 @@ export interface ShippedWorkProduct extends IssueWorkProduct {
   };
   agent: { id: string; name: string } | null;
   usage: ShippedIssueUsage;
+  /**
+   * AgentDash (batch 3): for a document deliverable, the linked issue
+   * document's latest revision. A revision that lands after the product was
+   * recorded is newer work, so the row's "when" shows this time.
+   */
+  document: { key: string; latestRevisionNumber: number; updatedAt: Date | string } | null;
+  /**
+   * AgentDash (batch 3): the creating run's `usageJson.meteringStatus`,
+   * stamped at run finalization. An `unmetered_*` value means the run
+   * finished and its usage will never arrive, so "counting…" must not keep
+   * waiting on it. Null while the run is live or predates metering stamps.
+   */
+  creatingRunMeteringStatus: string | null;
 }
 
 export interface ShippedMonthTotal {

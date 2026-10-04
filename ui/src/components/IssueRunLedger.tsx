@@ -813,7 +813,11 @@ export function IssueRunLedgerContent({
             const continuation = continuationLabel(run);
             const retryState = describeRunRetryState(run);
             const agentName = compactAgentName(run, agentMap);
-            const failureClassification = readAgentRunFailureClassification(run.resultJson);
+            // AgentDash (c3): a cancelled run's stale classification is the
+            // killed adapter's guess, not guidance — suppress it entirely.
+            const failureClassification = run.status === "cancelled"
+              ? null
+              : readAgentRunFailureClassification(run.resultJson);
             return (
               <article
                 key={`run:${run.runId}`}

@@ -4,6 +4,7 @@ import type { Agent } from "@paperclipai/shared";
 import { agentsApi } from "@/api/agents";
 import { stewardshipsApi } from "@/api/stewardships";
 import type { CompanyMember } from "@/api/access";
+import { Link } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
 
 interface Props {
@@ -123,7 +124,12 @@ export function StewardshipAssignments({ companyId, members, canManage }: Props)
         </h2>
         <p className="text-xs text-muted-foreground">
           One active agent per person, one active steward per agent. History is preserved when
-          stewardship moves.
+          stewardship moves. New stewards can start with{" "}
+          {/* AgentDash (PR #1017 review): the guide, where a stewardship is assigned. */}
+          <Link to="/guides/steward/getting-started" className="underline">
+            Getting started as a steward
+          </Link>
+          .
         </p>
       </div>
 

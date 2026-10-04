@@ -142,6 +142,7 @@ vi.mock("../services/deep-interview-crystallize.js", () => ({
 vi.mock("@paperclipai/db", () => ({
   authUsers: { id: "id", name: "name", email: "email" },
   activityLog: { companyId: "company_id", action: "action", actorId: "actor_id", createdAt: "created_at" },
+  instanceSettings: { singletonKey: "singleton_key", general: "general", experimental: "experimental" },
   companies: { id: "id", name: "name" },
   companyMemberships: {
     id: "id",
@@ -214,6 +215,9 @@ function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
       from: (table: unknown) => { selectedTable = table; return chain; },
       for: () => chain,
       update: () => { updating = true; return chain; },
+      // AgentDash (c3-access): confirm-plan now writes the agent.created audit
+      // row inside the hire transaction, so the stub needs an insert chain.
+      insert: () => ({ values: async () => [] }),
       set: (patch: unknown) => { receiptConversation = { ...receiptConversation, ...(patch as object) }; return chain; },
       where: () => chain,
       orderBy: () => chain,

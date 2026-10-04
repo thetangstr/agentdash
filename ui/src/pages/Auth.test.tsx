@@ -169,6 +169,7 @@ describe("AuthPage default form (scan 2, E5)", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "bootstrap_pending",
       selfServeBootstrap: true,
+      hasUsers: false,
     });
     expect(container.querySelector("h1")?.textContent).toBe("Create your workspace");
     expect(container.querySelector("input#name")).not.toBeNull();
@@ -181,15 +182,32 @@ describe("AuthPage default form (scan 2, E5)", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "ready",
       selfServeBootstrap: true,
+      hasUsers: true,
     });
     expect(container.querySelector("h1")?.textContent).toBe("Welcome back");
     act(() => root.unmount());
   });
 
-  it("defaultAuthMode needs both a pending bootstrap and self-serve", () => {
-    expect(defaultAuthMode({ bootstrapStatus: "bootstrap_pending", selfServeBootstrap: true })).toBe("sign_up");
-    expect(defaultAuthMode({ bootstrapStatus: "bootstrap_pending", selfServeBootstrap: false })).toBe("sign_in");
-    expect(defaultAuthMode({ bootstrapStatus: "ready", selfServeBootstrap: true })).toBe("sign_in");
+  // AgentDash (scan 5, lane access): the claim-link case — a user exists but
+  // bootstrap is still pending (no instance_admin role yet). Sign-in must win.
+  it("opens on Sign in when a user exists even while bootstrap is pending", async () => {
+    const root = await renderWithHealth({
+      status: "ok",
+      deploymentMode: "authenticated",
+      bootstrapStatus: "bootstrap_pending",
+      selfServeBootstrap: true,
+      hasUsers: true,
+    });
+    expect(container.querySelector("h1")?.textContent).toBe("Welcome back");
+    expect(container.querySelector("input#name")).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("defaultAuthMode opens sign-up only for a self-serve instance with no users", () => {
+    expect(defaultAuthMode({ selfServeBootstrap: true, hasUsers: false })).toBe("sign_up");
+    expect(defaultAuthMode({ selfServeBootstrap: true, hasUsers: true })).toBe("sign_in");
+    expect(defaultAuthMode({ selfServeBootstrap: false, hasUsers: false })).toBe("sign_in");
+    expect(defaultAuthMode({ selfServeBootstrap: true })).toBe("sign_in");
     expect(defaultAuthMode(undefined)).toBe("sign_in");
   });
 });

@@ -1353,6 +1353,7 @@ export const storybookDashboardSummary: DashboardSummary = {
     greenRunsWithOpenTasks: 1,
     issueLinkedSpendCents: 31_500,
     issueLinkedTokens: 184_000,
+    issueLinkedCachedTokens: 62_000,
     spendPerAcceptedIssueCents: 6_300,
   },
 };

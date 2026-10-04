@@ -13,8 +13,10 @@ import {
   companies,
   createDb,
   heartbeatRuns,
+  issueComments,
   issues,
 } from "@paperclipai/db";
+import { RUN_CANCELLED_BY_OPERATOR_CODE } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -339,5 +341,80 @@ describeEmbeddedPostgres("stranded-work recovery on a brand-new company (Lane F1
       .where(eq(issues.id, ids.checkedOutBySibling))
       .then((rows) => rows[0]);
     expect(sibling?.status).toBe("in_progress");
+  });
+
+  // AgentDash (c3 review): the 30s stranded-issue sweep used to restart an
+  // agent the operator had just stopped — an in_progress issue whose latest
+  // run was `cancelled` looked stranded. An operator stop parks the issue
+  // until a person or a new event asks for work again.
+  it("does not requeue an operator-stopped issue, and lets a new comment ask for work again", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+    const stoppedAt = new Date(Date.now() - 10 * 60_000);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Operator Stop Co",
+      issuePrefix: "OSC",
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Scout",
+      role: "general",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Work the operator stopped",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      issueNumber: 1,
+      identifier: "OSC-1",
+      startedAt: new Date(stoppedAt.getTime() - 5 * 60_000),
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      status: "cancelled",
+      errorCode: RUN_CANCELLED_BY_OPERATOR_CODE,
+      error: "Stopped manually",
+      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_assigned" },
+      startedAt: new Date(stoppedAt.getTime() - 4 * 60_000),
+      finishedAt: stoppedAt,
+    });
+
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+    const first = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(first.continuationRequeued).toBe(0);
+    expect(first.dispatchRequeued).toBe(0);
+    expect(first.assignmentDispatched).toBe(0);
+    expect(first.issueIds).not.toContain(issueId);
+    const runsAfterStop = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+    expect(runsAfterStop).toHaveLength(1);
+
+    // A new comment is the event that asks for work again: the sweep resumes
+    // its normal recovery behavior for the issue.
+    await db.insert(issueComments).values({
+      companyId,
+      issueId,
+      authorUserId: "board",
+      body: "please pick this back up",
+    });
+    const second = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(second.continuationRequeued + second.assignmentDispatched + second.dispatchRequeued).toBeGreaterThan(0);
+    const runsAfterComment = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+    expect(runsAfterComment.length).toBeGreaterThan(1);
   });
 });
