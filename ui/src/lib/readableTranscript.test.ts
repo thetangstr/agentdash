@@ -1057,4 +1057,15 @@ describe("structured exec result headers", () => {
     expect(content).toContain("Acme Robotics");
     expect(summarizeToolOutcome(content, "completed")).toBe("Got company Acme Robotics");
   });
+
+  // AgentDash (transcript follow-ups): only the Codex shape — `command:`
+  // first, then a blank line — is a header to strip. Plain output that
+  // happens to open with a status-style line is user content.
+  it("keeps output that merely starts with a `status:` line", () => {
+    expect(summarizeToolOutcome("status: ok\nall checks passed", "completed")).toContain("status: ok");
+  });
+
+  it("keeps header-shaped lines that have no blank-line separator", () => {
+    expect(summarizeToolOutcome("command: ls\noutput: total 3", "completed")).toContain("command: ls");
+  });
 });

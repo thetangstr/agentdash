@@ -62,7 +62,7 @@ export interface IssueDocumentRevisionInfo {
 
 /** The map key `listIssueDocumentsByKey` returns rows under. */
 export function issueDocumentKey(issueId: string, key: string): string {
-  return `${issueId}\\0${key}`;
+  return `${issueId}\u0000${key}`;
 }
 
 /**
