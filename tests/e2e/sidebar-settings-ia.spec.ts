@@ -98,8 +98,14 @@ test.describe("sidebar keeps work, Settings holds configuration", () => {
       if (label === "Skills") {
         const listed = await request.get(`${BASE_URL}/api/companies/${company.id}/skills`);
         expect(listed.ok(), await listed.text()).toBe(true);
-        const skills = (await listed.json()) as unknown[];
-        if (Array.isArray(skills) && skills.length > 0) {
+        const skills = (await listed.json()) as Array<{ sourceBadge?: string | null; sourceLabel?: string | null }>;
+        // The page hides bundled development skills (AgentDash c4-polish),
+        // so the API list can be non-empty while nothing visible exists to
+        // auto-select.
+        const visible = Array.isArray(skills)
+          ? skills.filter((s) => !(s.sourceBadge === "paperclip" && s.sourceLabel === "Paperclip bundled"))
+          : [];
+        if (visible.length > 0) {
           await expect(page).toHaveURL(new RegExp(`${pathname}/[^/]+$`));
         }
       }
