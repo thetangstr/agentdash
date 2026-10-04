@@ -388,11 +388,13 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
     expect(publishLiveEvent).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('PATCH human cancelled follow up retains reopen without explicit resume (%s)', async reopen => {
+  // AgentDash (c4-stops): a plain human comment on a cancelled issue is inert
+  // — reopening takes the explicit flag.
+  it.each([false, true])('PATCH human cancelled follow up %s reopen', async reopen => {
     const f = await fixture();
     await db.update(issues).set({ status: 'cancelled' }).where(eq(issues.id, f.issue.id));
     expect((await patch(f, { comment: 'Human follow up', ...(reopen ? { reopen: true } : {}) })).status).toBe(200);
-    expect((await snapshot(f)).issue.status).toBe('todo');
+    expect((await snapshot(f)).issue.status).toBe(reopen ? 'todo' : 'cancelled');
   });
 
   it('closed workspace permits human field edits but refuses comment and worker work', async () => {

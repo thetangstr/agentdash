@@ -123,7 +123,24 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
       intent: { body: 'Prepared comment' }, attribution: {}, validate: async () => undefined };
   }
 
-  it.each([{}, { reopen: true }, { resume: true }])('commits comment/reopen/audits/confirmation atomically for %j', async intent => {
+  // AgentDash (c4-stops): a plain FYI comment on finished work commits and
+  // still supersedes pending confirmations, but it neither reopens the issue
+  // nor wakes the assignee — reopening needs the explicit intent.
+  it('commits a plain comment on a done issue without reopen or wake', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'done' }).where(eq(issues.id, f.issue.id));
+    await db.insert(issueThreadInteractions).values({ companyId: f.company.id, issueId: f.issue.id,
+      kind: 'request_confirmation', payload: { version: 1, prompt: 'Proceed?', supersedeOnUserComment: true } });
+    const response = await post(f, {});
+    expect(response.status).toBe(201);
+    const state = await snapshot(f);
+    expect(state.issue.status).toBe('done');
+    expect(state.comments).toHaveLength(1);
+    expect(state.confirmations[0].status).toBe('expired');
+    expect(effects.wake).not.toHaveBeenCalled();
+  });
+
+  it.each([{ reopen: true }, { resume: true }])('commits comment/reopen/audits/confirmation atomically for %j', async intent => {
     const f = await fixture();
     await db.update(issues).set({ status: 'done' }).where(eq(issues.id, f.issue.id));
     await db.insert(issueThreadInteractions).values({ companyId: f.company.id, issueId: f.issue.id,
@@ -157,7 +174,7 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
       replacementId = replacement.id;
       await db.update(issues).set({ executionRunId: replacement.id }).where(eq(issues.id, f.issue.id));
     });
-    const response = await post(f, { body: '@Worker @Other follow up', interrupt: true });
+    const response = await post(f, { body: '@Worker @Other follow up', interrupt: true, reopen: true });
     expect(response.status).toBe(201);
     expect(effects.cancel.mock.calls).toEqual([[f.run.id]]);
     expect(effects.wake.mock.calls.map(call => call[0])).toEqual([f.agent.id, other.id]);
@@ -325,10 +342,21 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
     expect(state.run.status).toBe('running');
   });
 
-  it.each([{}, { reopen: true }])('preserves canonical board cancelled follow-up for %j', async intent => {
+  // AgentDash (c4-stops): a plain board comment on a cancelled issue is FYI —
+  // it stays cancelled and nobody is woken. An explicit reopen is the only
+  // comment path back to todo.
+  it('leaves a cancelled issue cancelled on a plain board comment', async () => {
     const f = await fixture();
     await db.update(issues).set({ status: 'cancelled' }).where(eq(issues.id, f.issue.id));
-    expect((await post(f, intent)).status).toBe(201);
+    expect((await post(f, {})).status).toBe(201);
+    expect((await snapshot(f)).issue.status).toBe('cancelled');
+    expect(effects.wake).not.toHaveBeenCalled();
+  });
+
+  it('preserves the canonical board cancelled follow-up on explicit reopen', async () => {
+    const f = await fixture();
+    await db.update(issues).set({ status: 'cancelled' }).where(eq(issues.id, f.issue.id));
+    expect((await post(f, { reopen: true })).status).toBe(201);
     expect((await snapshot(f)).issue.status).toBe('todo');
     expect(effects.wake).toHaveBeenCalledTimes(1);
   });
