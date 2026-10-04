@@ -197,6 +197,12 @@ describe("CoSConversation", () => {
     });
     await act(async () => {});
     expect(container.querySelector('[data-testid="cos-review-team-link"]')?.textContent).toContain("Review your team");
+    // c3-a11y: the phone header link's accessible name matches its visible
+    // text and says where it goes.
+    const headerLink = container.querySelector('[data-testid="cos-workforce-header-link"]');
+    expect(headerLink?.textContent?.trim()).toBe("Review workforce");
+    expect(headerLink?.getAttribute("aria-label")).toBe("Review workforce");
+    expect(headerLink?.getAttribute("href")).toBe("/workforce");
     list.mockReturnValue([]);
   });
 

@@ -627,7 +627,7 @@ export function Routines() {
             Routines
           </h1>
           <p className="text-sm text-muted-foreground">
-            Recurring work definitions that materialize into auditable execution issues.
+            Work that repeats on a schedule — each run creates a tracked task.
           </p>
         </div>
         <Button onClick={() => setComposerOpen(true)}>

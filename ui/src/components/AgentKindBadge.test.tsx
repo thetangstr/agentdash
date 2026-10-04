@@ -100,15 +100,21 @@ describe("AgentKindBadge", () => {
     });
   }
 
-  it("labels each kind distinctly", () => {
+  it("labels each kind distinctly, in plain words", () => {
     render(autonomous);
-    expect(container.textContent).toContain("Autonomous");
+    expect(container.textContent).toContain("Runs solo");
+
+    container.remove();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    render(stewarded);
+    expect(container.textContent).toContain("Run by Ada");
 
     container.remove();
     container = document.createElement("div");
     document.body.appendChild(container);
     render(unpaired);
-    expect(container.textContent).toContain("Needs a steward");
+    expect(container.textContent).toContain("No one runs it yet");
   });
 
   it("carries the same explanation in the tooltip as the panel shows", () => {
@@ -122,7 +128,7 @@ describe("AgentKindBadge", () => {
       createRoot(container).render(<AgentKindBadge agent={unpaired} hideUnpaired />);
     });
     expect(container.textContent).toContain("No one accountable");
-    expect(container.textContent).not.toContain("Needs a steward");
+    expect(container.textContent).not.toContain("No one runs it yet");
     expect(container.querySelector('[data-testid="agent-kind-unaccountable"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="agent-kind-unpaired"]')).toBeNull();
 
@@ -132,6 +138,6 @@ describe("AgentKindBadge", () => {
     act(() => {
       createRoot(container).render(<AgentKindBadge agent={stewarded} hideUnpaired />);
     });
-    expect(container.textContent).toContain("Stewarded");
+    expect(container.textContent).toContain("Run by Ada");
   });
 });
