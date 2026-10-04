@@ -484,7 +484,9 @@ describe("MyAgent", () => {
           revision: 3,
           payload: {},
           createdAt: new Date(Date.now() - 2 * 86400 * 1000).toISOString(),
-          expiresAt: new Date(Date.now() + 4 * 3600 * 1000).toISOString(),
+          // timeUntil floors to whole hours, so an exact 4h offset reads as
+          // "3h" the moment a second elapses. 4.5h keeps "4h" for half an hour.
+          expiresAt: new Date(Date.now() + 4.5 * 3600 * 1000).toISOString(),
           decidedAt: null,
           requestingAgent: { id: "agent-1", name: "Casper", role: "marketing" },
           risk: { level: "high", reason: "This leaves the company and cannot be taken back." },

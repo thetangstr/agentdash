@@ -1991,6 +1991,16 @@ function AgentOverview({
           <p className="pt-1 text-xs leading-relaxed text-muted-foreground">
             {agentKindExplanation(agent)}
           </p>
+          {/* AgentDash (PR #1017 review): the "Needs a steward" state is where
+              a steward is born — the person about to be assigned should land on
+              the steward guide, not just a pairing select. */}
+          {agentKind(agent) === "unpaired" ? (
+            <p className="text-xs">
+              <Link to="/guides/steward/getting-started" className="underline">
+                Getting started as a steward
+              </Link>
+            </p>
+          ) : null}
         </div>
       </div>
 

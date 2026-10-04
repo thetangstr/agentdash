@@ -8,11 +8,16 @@ export default defineConfig({
   testMatch: "multi-user-authenticated.spec.ts",
   timeout: 180_000,
   expect: {
-    timeout: 20_000,
+    // Dev-mode page boots can take ~60s on a saturated machine; render-bound
+    // expects need more than the usual 5s/20s.
+    timeout: 60_000,
   },
   retries: 0,
   use: {
     baseURL: BASE_URL,
+    // Module scripts hold `load`; a dev-mode module graph can take >30s to
+    // evaluate on a loaded runner.
+    navigationTimeout: 90_000,
     headless: true,
     screenshot: "only-on-failure",
     trace: "on-first-retry",

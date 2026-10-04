@@ -56,6 +56,8 @@ export interface MemberOnboardingSession {
   currentStep: "welcome" | "workspace";
   completedAt: string | null;
   updatedAt: string;
+  /** AgentDash (scan 5, lane access): actively stewards an agent in this company — steward copy shows only then. */
+  isSteward: boolean;
 }
 
 // AgentDash (#725): the Hermes provider step on a hosted box.

@@ -226,7 +226,9 @@ async function seed(request: APIRequestContext): Promise<Seeded> {
         const res = await request.get(`/api/heartbeat-runs/${run.id}`);
         return res.ok() ? ((await res.json()) as { status: string }).status : `http ${res.status()}`;
       },
-      { timeout: 60_000, intervals: [500, 1000, 2000] },
+      // Stays inside the 180s beforeAll budget; the adapter tick is slow
+      // under machine load even for the fake run.
+      { timeout: 120_000, intervals: [500, 1000, 2000] },
     )
     .toMatch(/^(succeeded|failed|timed_out|cancelled)$/);
 
@@ -460,10 +462,31 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: path.join(SHOTS_DIR, `floors-${name}.png`), fullPage: true });
 }
 
+/**
+ * Font metrics are audit input: measure only after the real web font has
+ * arrived. No short cap — the test timeout is the bound. A pending fetch that
+ * outlived a cap would leave the audit measuring fallback-font widths, which
+ * is exactly the false overflow this spec exists to catch (PR #1017 review).
+ */
+async function waitForRealFonts(page: Page) {
+  await page.evaluate(() => document.fonts.ready);
+  expect(
+    await page.evaluate(() => document.fonts.check("16px Manrope")),
+    "Manrope is loaded (measuring fallback fonts gives wrong metrics)",
+  ).toBe(true);
+}
+
 async function settle(page: Page) {
   // Let late queries (badges, counts, live runs) land; live pages never go fully idle.
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+  await waitForRealFonts(page);
 }
+
+// A pending web-font fetch holds the `load` event and can stall page.goto for
+// minutes on a slow-egress machine. The audit must still measure the real web
+// font (aborting it changes text metrics), so navigate on DOMContentLoaded and
+// let the ready/settle waits absorb the rest.
+const gotoPage = (page: Page, to: string) => page.goto(to, { waitUntil: "domcontentloaded" });
 
 type Target = {
   name: string;
@@ -585,7 +608,7 @@ test.describe("Phone floors on every main screen", () => {
         test(`${name}: no sideways scroll, small text, small, unnamed or overlapping targets`, async ({ page }) => {
           await page.setViewportSize(size);
           const to = target.path(seeded);
-          await page.goto(to.startsWith("/") ? to : `/${seeded.company.issuePrefix}/${to}`);
+          await gotoPage(page, to.startsWith("/") ? to : `/${seeded.company.issuePrefix}/${to}`);
           await expect(target.ready(page, seeded).first()).toBeVisible({ timeout: 30_000 });
           await settle(page);
           await target.prepare?.(page);
@@ -606,6 +629,32 @@ test.describe("Phone floors on every main screen", () => {
     });
   }
 
+  test("access page at 390px: each member is a readable card with on-screen actions", async ({ page }) => {
+    await page.setViewportSize(WIDTHS[0]);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/company/settings/access`);
+    await expect(main(page).getByRole("heading", { name: "Humans" })).toBeVisible({ timeout: 30_000 });
+    await settle(page);
+
+    // Below sm the five-column grid is replaced by stacked member cards; the
+    // column header stays in the DOM but is CSS-hidden.
+    await expect(main(page).getByText("User account")).toBeHidden();
+
+    const cards = main(page).locator('[data-testid^="member-card-"]');
+    await expect(cards.first()).toBeVisible();
+    for (const card of await cards.all()) {
+      // Identity, role and status stay visible — nothing truncated away.
+      const box = (await card.boundingBox())!;
+      expect(box.width, "member card fits the viewport").toBeLessThanOrEqual(WIDTHS[0].width);
+      for (const name of ["Edit", "Remove"]) {
+        const action = card.getByRole("button", { name, exact: true });
+        await expect(action).toBeVisible();
+        const actionBox = (await action.boundingBox())!;
+        // Fully on screen: the card never clips the control.
+        expect(actionBox.x + actionBox.width, `${name} button on screen`).toBeLessThanOrEqual(WIDTHS[0].width);
+      }
+    }
+  });
+
   test("breadcrumb at 390px: a long workspace name does not clip the page label", async ({ page, request }) => {
     // ~40-char name: the parent crumb must truncate, never clip the page label.
     const longName = "Tanaka Family Travel Holdings Co. Ltd"; // 39
@@ -619,9 +668,11 @@ test.describe("Phone floors on every main screen", () => {
       { path: "workforce", label: "Workforce" },
       { path: "company/settings", label: "Settings" },
     ]) {
-      await page.goto(`/${company.issuePrefix}/${target.path}`);
+      await gotoPage(page, `/${company.issuePrefix}/${target.path}`);
       const crumb = page.locator('[data-slot="breadcrumb-page"]', { hasText: target.label });
       await expect(crumb).toBeVisible({ timeout: 30_000 });
+      // Each goto is a fresh document; wait for the real font before measuring.
+      await waitForRealFonts(page);
       // Fully on screen — not pushed past the edge.
       const box = (await crumb.boundingBox())!;
       expect(box.x + box.width, `${target.label} label on screen`).toBeLessThanOrEqual(WIDTHS[0].width);
@@ -656,9 +707,10 @@ test.describe("Phone floors on every main screen", () => {
 
   test("bottom nav at 360px: labels at least 12px, shown in full, items at least 44px", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);
-    await page.goto(`/${seeded.company.issuePrefix}/dashboard`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/dashboard`);
     const nav = page.getByRole("navigation", { name: "Mobile navigation" });
     await expect(nav).toBeVisible({ timeout: 30_000 });
+    await waitForRealFonts(page);
     const items = await nav.locator("a, button").evaluateAll((els) =>
       els.map((el) => {
         const rect = el.getBoundingClientRect();
@@ -686,9 +738,10 @@ test.describe("Phone floors on every main screen", () => {
 
   test("agent header at 360px: a long name is not squeezed by the actions", async ({ page }) => {
     await page.setViewportSize(WIDTHS[1]);
-    await page.goto(`/${seeded.company.issuePrefix}/agents/${seeded.agentId}`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/agents/${seeded.agentId}`);
     const heading = main(page).getByRole("heading", { name: LONG_AGENT });
     await expect(heading).toBeVisible({ timeout: 30_000 });
+    await waitForRealFonts(page);
     // Shown in full: the heading is not truncated.
     expect(await heading.evaluate((el) => el.scrollWidth <= el.clientWidth + 0.5)).toBe(true);
     // The icon-only actions are named, 44px, and on screen.
@@ -704,7 +757,7 @@ test.describe("Phone floors on every main screen", () => {
 
   test("issue page: a toast sits above the bottom nav and the docked composer", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await page.goto(`/${seeded.company.issuePrefix}/issues/${seeded.issueRef}`);
+    await gotoPage(page, `/${seeded.company.issuePrefix}/issues/${seeded.issueRef}`);
     await expect(main(page).getByText(/Draft is attached as a document/)).toBeVisible({ timeout: 30_000 });
     const composer = page.getByTestId("issue-chat-composer-dock");
     await expect(composer).toBeVisible();
