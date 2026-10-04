@@ -801,6 +801,15 @@ export function agentRoutes(
           ne(assistantMessages.cardKind, "cos_dispatch_error_v1"),
         ),
         isNull(sql`${assistantMessages.cardPayload}->>'systemNotice'`),
+        // Notices posted before the marker existed carry only their canned
+        // bodies (routes/billing.ts notifyDowngrade, notifyTrialWillEnd — the
+        // strings have not changed since #290/#291, so a prefix match is
+        // exact, not a guess).
+        sql`not (
+          ${assistantMessages.content} like ${"Heads up: Stripe couldn't charge your card%"}
+          or ${assistantMessages.content} like ${"Your Pro subscription ended%"}
+          or ${assistantMessages.content} like ${"Heads up: your Pro trial ends in%"}
+        )`,
       ));
     const chatTurns = Number(chatTally?.total ?? 0);
     const chatTurnsThisMonth = Number(chatTally?.thisMonth ?? 0);

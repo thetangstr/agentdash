@@ -280,7 +280,9 @@ export function CoSConversation({ layout = "fullscreen" }: { layout?: CoSConvers
       // is the only path that materializes here.)
       // AgentDash (scan 4, lane N): errors reach the plan card, which shows a
       // 409 ("already hired") as "Team hired" and anything else as a message.
-      await onboardingApi.confirmPlan({
+      // The response reaches the card too — pendingApproval switches the
+      // label to "Sent for approval".
+      return await onboardingApi.confirmPlan({
         conversationId: bootstrapped.conversationId,
         ...(messageId ? { messageId } : {}),
       });

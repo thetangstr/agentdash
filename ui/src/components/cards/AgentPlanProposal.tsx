@@ -7,11 +7,20 @@ import { ApiError } from "../../api/client";
 
 // AgentDash (scan 4, lane N): shown once the plan's team is hired.
 export const PLAN_HIRED_LABEL = "Team hired ✓";
+// AgentDash (cos-followups review): when the company gates hires on board
+// approval, "Team hired" would claim a team that cannot work yet — the
+// response's pendingApproval switches the label to the honest state.
+export const PLAN_SENT_FOR_APPROVAL_LABEL = "Sent for approval";
 export const PLAN_SUPERSEDED_NOTE = "A newer plan below replaced this one.";
 
+function conflictDetails(err: ApiError): Record<string, unknown> | null {
+  const details = (err.body as { details?: unknown } | null)?.details;
+  return details && typeof details === "object" ? (details as Record<string, unknown>) : null;
+}
+
 function conflictCode(err: ApiError): string | null {
-  const details = (err.body as { details?: { code?: unknown } } | null)?.details;
-  return typeof details?.code === "string" ? details.code : null;
+  const code = conflictDetails(err)?.code;
+  return typeof code === "string" ? code : null;
 }
 
 const ROLE_LABELS = AGENT_ROLE_LABELS as Record<string, string>;
@@ -54,8 +63,12 @@ export function AgentPlanProposal({
   payload: AgentPlanProposalV1Payload;
   /** A newer plan card replaced this one: no actions, a short note instead. */
   superseded?: boolean;
-  /** May reject: a 409 means the team was already hired. */
-  onConfirm: () => Promise<void> | void;
+  /**
+   * May reject: a 409 means the team was already hired. A resolved
+   * `pendingApproval` means the hires are waiting on board approval, so the
+   * card says "Sent for approval" rather than "Team hired".
+   */
+  onConfirm: () => Promise<{ pendingApproval?: boolean } | void> | { pendingApproval?: boolean } | void;
   // #210: accept a free-text delta so the server can produce a revised plan
   // instead of just acknowledging "reject". Callers that don't care about
   // text can still pass a no-op.
@@ -66,25 +79,37 @@ export function AgentPlanProposal({
   const [submitting, setSubmitting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [hiredHere, setHiredHere] = useState(false);
+  const [sentForApproval, setSentForApproval] = useState(false);
   const [supersededHere, setSupersededHere] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const trimmed = revisionText.trim();
   // Hired: the server marked the card (confirmedAt), or this click (or a 409
   // answering it) says the team already exists.
   const hired = hiredHere || (typeof payload?.confirmedAt === "string" && payload.confirmedAt.length > 0);
+  // Awaiting the board: this click returned pendingApproval, or the card was
+  // persisted that way — the label survives a reload and other tabs.
+  const awaitingApproval = sentForApproval || payload?.pendingApproval === true;
 
   async function confirm() {
     if (hired || confirming) return;
     setConfirming(true);
     setConfirmError(null);
     try {
-      await onConfirm();
+      const outcome = await onConfirm();
+      setSentForApproval(outcome?.pendingApproval === true);
       setHiredHere(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && conflictCode(err) === "superseded_plan") {
         setSupersededHere(true);
       } else if (err instanceof ApiError && err.status === 409) {
-        setHiredHere(true);
+        // A 409 carrying details.repair is the repair contract, not "the team
+        // exists" — show what the server said instead of claiming "Team
+        // hired".
+        if (typeof conflictDetails(err)?.repair === "string") {
+          setConfirmError(err.message || "Couldn't set up the team. Try again.");
+        } else {
+          setHiredHere(true);
+        }
       } else {
         setConfirmError(err instanceof Error && err.message ? err.message : "Couldn't set up the team. Try again.");
       }
@@ -180,7 +205,7 @@ export function AgentPlanProposal({
             disabled
             aria-disabled="true"
           >
-            {PLAN_HIRED_LABEL}
+            {awaitingApproval ? PLAN_SENT_FOR_APPROVAL_LABEL : PLAN_HIRED_LABEL}
           </button>
           <button
             type="button"
