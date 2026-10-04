@@ -4,7 +4,7 @@ import { getAdapterLabel, plainRuntimeLabel } from "./adapter-display-registry";
 // AgentDash (Scan 3, lane J): where an agent runs, in plain words.
 describe("plainRuntimeLabel", () => {
   it("names local harnesses by where they run, not by harness", () => {
-    for (const type of ["hermes_local", "claude_local", "codex_local", "cursor"]) {
+    for (const type of ["hermes_local", "claude_local", "codex_local", "cursor", "process"]) {
       expect(plainRuntimeLabel(type)).toBe("Runs on your server");
     }
   });
@@ -15,6 +15,6 @@ describe("plainRuntimeLabel", () => {
   });
 
   it("falls back to the adapter label for anything else", () => {
-    expect(plainRuntimeLabel("process")).toBe(getAdapterLabel("process"));
+    expect(plainRuntimeLabel("custom_adapter")).toBe(getAdapterLabel("custom_adapter"));
   });
 });
