@@ -349,6 +349,8 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           assigneeAgentId: requestedAssigneeAgentId,
           actorType: actor.actorType,
           actorId: actor.actorId,
+          assigneeChangedToAgent:
+            requestedAssigneeAgentId !== null && requestedAssigneeAgentId !== existing.assigneeAgentId,
         }));
     const updateReferenceSummaryBefore = titleOrDescriptionChanged
       ? await issueReferencesSvc.listIssueReferenceSummary(existing.id, executor)

@@ -248,6 +248,32 @@ const STREAM_SECTION_MARKER_ONLY = /^-{2,}\s*(?:stdout|stderr|traceback|console|
 const STREAM_SECTION_MARKER = /\s*-{2,}\s*(?:stdout|stderr|traceback|console|output)\s*-{2,}\s*/i;
 const DURATION_ONLY = /^\d+(?:\.\d+)?\s*(?:ms|s|min|h)\b\.?$/i;
 
+// AgentDash (c4-stops): wire plumbing inside a tool's output is never the
+// line a collapsed row should quote. Covers the shapes seen on hosted run
+// transcripts: `=== SINGLE COMMENT ===` section banners, `HTTP: 201` status
+// echoes, `exit code: 0` tails, bare `workProducts:` key headers, and
+// `NAME=value` env assignments. The full output still shows verbatim when a
+// row is expanded — this only decides what the collapsed row quotes.
+const SECTION_BANNER_LINE = /^\s*(?:={2,}|-{3,}|\*{2,}|~{2,})\s*\S.*?[^\s=*~]\s*(?:={2,}|-{3,}|\*{2,}|~{2,})\s*$/;
+const RULE_LINE = /^\s*(?:={2,}|-{3,}|\*{3,}|_{3,}|~{3,})\s*$/;
+const HTTP_STATUS_LINE = /^\s*HTTP(?:\/[\d.]+)?\s*:?\s*\d{3}\b/i;
+const EXIT_CODE_PLUMBING_LINE = /^\s*exit[_ ]?code\s*[:=]?\s*-?\d+\s*$/i;
+const BARE_KEY_LINE = /^\s*[A-Za-z_][\w.-]*\s*:\s*$/;
+const ENV_ASSIGNMENT_LINE = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+$/;
+
+export function isPlumbingOutputLine(line: string): boolean {
+  return (
+    STREAM_SECTION_MARKER_ONLY.test(line)
+    || SECTION_BANNER_LINE.test(line)
+    || RULE_LINE.test(line)
+    || HTTP_STATUS_LINE.test(line)
+    || EXIT_CODE_PLUMBING_LINE.test(line)
+    || BARE_KEY_LINE.test(line)
+    || ENV_ASSIGNMENT_LINE.test(line)
+    || DURATION_ONLY.test(line)
+  );
+}
+
 /**
  * The line a collapsed tool row should quote: the first real line, skipping
  * stream-section markers. A marker embedded mid-line folds to what it marked
@@ -257,7 +283,7 @@ const DURATION_ONLY = /^\d+(?:\.\d+)?\s*(?:ms|s|min|h)\b\.?$/i;
 function outcomeLine(result: string): string | null {
   for (const line of result.split(/\r?\n/)) {
     const compact = compactWhitespace(line);
-    if (!compact || STREAM_SECTION_MARKER_ONLY.test(compact)) continue;
+    if (!compact || isPlumbingOutputLine(compact)) continue;
     if (!STREAM_SECTION_MARKER.test(compact)) return compact;
     const segments = compact
       .split(STREAM_SECTION_MARKER)

@@ -130,7 +130,7 @@ export const AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION = 2;
  * (heartbeat.cancelRun). System-initiated cancellations always carry their own
  * reason.
  */
-export const RUN_CANCELLED_BY_OPERATOR_MESSAGE = "Cancelled by control plane";
+export const RUN_CANCELLED_BY_OPERATOR_MESSAGE = "Stopped manually";
 /**
  * The `heartbeat_runs.error_code` written only by the operator-facing cancel
  * route — this code, not the message text, is how the UI tells a manual stop

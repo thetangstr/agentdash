@@ -126,13 +126,22 @@ export function shouldImplicitlyMoveCommentedIssueToTodo(input: {
   assigneeAgentId: string | null | undefined;
   actorType: "agent" | "user";
   actorId: string;
+  /**
+   * True when the same mutation hands the closed issue to a different agent.
+   * Assigning finished work to someone is itself the "more work" signal, so a
+   * reassignment reopens; a plain comment does not (c4-stops: an FYI note on a
+   * done/cancelled issue must not reopen it or wake the assignee).
+   */
+  assigneeChangedToAgent?: boolean;
 }) {
-  // Only human comments should implicitly reopen finished work.
+  // Only human comments should implicitly reopen blocked work.
   // Agent-authored comments remain communicative unless reopen was explicit.
   if (input.actorType !== "user") return false;
-  if (!isClosedIssueStatus(input.issueStatus) && input.issueStatus !== "blocked") return false;
-  if (typeof input.assigneeAgentId !== "string" || input.assigneeAgentId.length === 0) return false;
-  return true;
+  if (input.issueStatus === "blocked") {
+    return typeof input.assigneeAgentId === "string" && input.assigneeAgentId.length > 0;
+  }
+  if (isClosedIssueStatus(input.issueStatus)) return input.assigneeChangedToAgent === true;
+  return false;
 }
 
 export async function selectActiveIssueRun(executor: IssueCommentExecutor, issue: Pick<Issue, "id" | "executionRunId" | "assigneeAgentId">) {

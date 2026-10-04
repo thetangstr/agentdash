@@ -59,7 +59,9 @@ import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd 
 import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens, formatCountedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
-import { cancelledRunLabel } from "../lib/cancelledRunLabel";
+import { cancelledRunLabel, normalizeStoppedRunEventMessage } from "../lib/cancelledRunLabel";
+import { runStatusLabel } from "../lib/run-status-label";
+import { latestRunByCreatedAt } from "../lib/issue-stopped";
 import { shortenInstancePaths } from "../lib/instancePaths";
 import {
   AgentRunFailureGuidance,
@@ -1490,7 +1492,7 @@ export function LatestRunCard({
         />
         <div className="flex items-center gap-2">
           <StatusIcon className={cn("h-3.5 w-3.5", statusInfo.color, run.status === "running" && "animate-spin")} />
-          <StatusBadge status={run.status} />
+          <StatusBadge status={run.status} label={runStatusLabel(run.status)} />
           <span className="font-mono text-xs text-muted-foreground">{run.id.slice(0, 8)}</span>
           <span className={cn(
             "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
@@ -1632,7 +1634,7 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
             </p>
           ) : lastCancelled ? (
             <p className="mt-2 text-xs text-muted-foreground" role="status">
-              Last run cancelled{runHealth.last?.error ? `: ${runHealth.last.error}` : ""}
+              Last run stopped{runHealth.last?.error ? `: ${runHealth.last.error}` : ""}
             </p>
           ) : runHealth.last?.status && runHealth.last.status !== "succeeded" ? (
             <p className="mt-2 text-xs text-destructive" role="alert">
@@ -1773,7 +1775,16 @@ export function AgentVitalsStrip({
     .find((run) => run.status === "running" || run.status === "queued");
   const liveIssueId = asNonEmptyString(liveRun?.contextSnapshot?.issueId);
   const liveIssue = liveIssueId ? assignedIssues.find((issue) => issue.id === liveIssueId) : undefined;
-  const inProgressIssue = assignedIssues.find((issue) => issue.status === "in_progress");
+  // AgentDash (c4-stops): a stopped run leaves its issue `in_progress` with
+  // nothing live. "Doing now" skips an issue whose newest bound run was
+  // cancelled — it is stopped work awaiting an explicit resume, not work.
+  const inProgressIssue = assignedIssues.find((issue) => {
+    if (issue.status !== "in_progress") return false;
+    const latestBoundRun = latestRunByCreatedAt(
+      runs.filter((run) => run.contextSnapshot?.issueId === issue.id),
+    );
+    return latestBoundRun?.status !== "cancelled";
+  });
 
   const { data: lastShipped } = useQuery({
     queryKey: [...queryKeys.shipped(agent.companyId, { agentId: agent.id, accepted: true }), "agent-vitals"],
@@ -4050,6 +4061,16 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
     mutationFn: () => heartbeatsApi.cancel(run.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
+      // Refetch this run and any issue-bound run state so the stopped status
+      // shows immediately instead of waiting for the live event.
+      queryClient.invalidateQueries({ queryKey: queryKeys.runDetail(run.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.liveRuns(run.companyId) });
+      const issueId = asNonEmptyString(asRecord(run.contextSnapshot)?.issueId);
+      if (issueId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.liveRuns(issueId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.activeRun(issueId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.runs(issueId) });
+      }
     },
   });
   const canResumeLostRun = run.errorCode === "process_lost" && run.status === "failed";
@@ -4278,7 +4299,7 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
           {/* Left column: status + timing */}
           <div className="flex-1 p-4 space-y-3">
             <div className="flex items-center gap-2">
-              <StatusBadge status={run.status} />
+              <StatusBadge status={run.status} label={runStatusLabel(run.status)} />
               {(run.status === "running" || run.status === "queued") && (
                 <Button
                   variant="ghost"
@@ -4287,7 +4308,7 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
                   onClick={() => cancelRun.mutate()}
                   disabled={cancelRun.isPending}
                 >
-                  {cancelRun.isPending ? "Cancelling…" : "Cancel"}
+                  {cancelRun.isPending ? "Stopping…" : "Stop"}
                 </Button>
               )}
               {canResumeLostRun && (
@@ -4380,15 +4401,10 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
             {run.error && (
               <div className="text-xs">
                 {run.status === "cancelled" ? (
-                  run.errorCode === RUN_CANCELLED_BY_OPERATOR_CODE ? (
-                    // A manual stop is the operator's action, not a failure —
-                    // "Cancelled by control plane" in red read as an error.
-                    <span className="text-muted-foreground">Stopped manually.</span>
-                  ) : (
-                    // System cancellations (budget pause, quota, hold) still
-                    // name the real reason — neutral, not an error.
-                    <span className="text-muted-foreground">{run.error}</span>
-                  )
+                  // A stop is a deliberate end, not a failure — show the stop
+                  // reason ("Stopped manually", or the system's real reason)
+                  // neutral, never in red, even for pre-release rows.
+                  <span className="text-muted-foreground">{cancelledRunLabel(run)}</span>
                 ) : (
                   <>
                     <span className="text-red-600 dark:text-red-400">{run.error}</span>
@@ -5173,8 +5189,15 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           <div className="mb-2 text-xs font-medium text-muted-foreground">Events ({events.length})</div>
           <div className="bg-neutral-100 dark:bg-neutral-950 rounded-lg p-3 font-mono text-xs space-y-0.5">
             {events.map((evt) => {
+              // AgentDash (c4-stops): on a stopped run, pre-release events
+              // were stored as warn "run cancelled"/"run failed" — render
+              // them neutral info with the stopped wording.
+              const message = evt.message
+                ? normalizeStoppedRunEventMessage(evt.message, run.status)
+                : null;
+              const eventStopped = message !== null && message !== evt.message;
               const color = evt.color
-                ?? (evt.level ? levelColors[evt.level] : null)
+                ?? (evt.level ? levelColors[eventStopped ? "info" : evt.level] : null)
                 ?? (evt.stream ? streamColors[evt.stream] : null)
                 ?? "text-foreground";
 
@@ -5187,8 +5210,8 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
                     {evt.stream ? `[${evt.stream}]` : ""}
                   </span>
                   <span className={cn("break-all", color)}>
-                    {evt.message
-                      ? redactPathText(evt.message, censorUsernameInLogs)
+                    {message
+                      ? redactPathText(message, censorUsernameInLogs)
                       : evt.payload
                         ? JSON.stringify(redactPathValue(evt.payload, censorUsernameInLogs))
                         : ""}

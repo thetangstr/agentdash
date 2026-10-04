@@ -396,7 +396,7 @@ describe("AgentRunHealthSummary", () => {
     const text = container!.textContent ?? "";
     expect(text).not.toContain("stopped manually");
     expect(text).not.toContain("stopped by you");
-    expect(text).toContain("Last run cancelled: Cancelled due to budget pause");
+    expect(text).toContain("Last run stopped: Cancelled due to budget pause");
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });
 
@@ -423,7 +423,7 @@ describe("AgentRunHealthSummary", () => {
     const text = container!.textContent ?? "";
     expect(text).not.toContain("stopped manually");
     expect(text).toContain(
-      "Last run cancelled: Interrupted: the issue was held by a subtree pause",
+      "Last run stopped: Interrupted: the issue was held by a subtree pause",
     );
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });

@@ -5,6 +5,7 @@ import type {
   WorkspaceOperation,
 } from "@paperclipai/shared";
 import { api } from "./client";
+import { markRunStoppedLocally } from "../lib/locallyStoppedRuns";
 
 export interface RunLivenessFields {
   livenessState: HeartbeatRun["livenessState"];
@@ -102,7 +103,10 @@ export const heartbeatsApi = {
     api.get<{ operationId: string; store: string; logRef: string; content: string; nextOffset?: number }>(
       `/workspace-operations/${operationId}/log?offset=${encodeURIComponent(String(offset))}&limitBytes=${encodeURIComponent(String(limitBytes))}`,
     ),
-  cancel: (runId: string) => api.post<void>(`/heartbeat-runs/${runId}/cancel`, {}),
+  cancel: (runId: string) => {
+    markRunStoppedLocally(runId);
+    return api.post<void>(`/heartbeat-runs/${runId}/cancel`, {});
+  },
   recordWatchdogDecision: (input: WatchdogDecisionInput) =>
     api.post(`/heartbeat-runs/${input.runId}/watchdog-decisions`, {
       decision: input.decision,

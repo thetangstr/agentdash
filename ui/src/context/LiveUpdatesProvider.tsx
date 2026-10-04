@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import type { Agent, Issue, IssueComment, LiveEvent } from "@paperclipai/shared";
+import { RUN_CANCELLED_BY_OPERATOR_CODE } from "@paperclipai/shared";
 import type { RunForIssue } from "../api/activity";
 import type { ActiveRunForIssue, LiveRunForIssue } from "../api/heartbeats";
 import type { CompanyUserDirectoryResponse } from "../api/access";
@@ -10,6 +11,7 @@ import { useCompany } from "./CompanyContext";
 import type { ToastInput } from "./ToastContext";
 import { useToastActions } from "./ToastContext";
 import { upsertIssueCommentInPages } from "../lib/optimistic-issue-comments";
+import { wasRunStoppedLocally } from "../lib/locallyStoppedRuns";
 import { clearIssueExecutionRun, removeLiveRunById } from "../lib/optimistic-issue-runs";
 import { queryKeys } from "../lib/queryKeys";
 import { workforceKeys } from "../api/workforce";
@@ -583,18 +585,29 @@ function buildRunStatusToast(
   if (!runId || !agentId || !status || !RUN_TOAST_STATUSES.has(status)) return null;
 
   const error = readString(payload.error);
+  const errorCode = readString(payload.errorCode);
   const triggerDetail = readString(payload.triggerDetail);
   const name = nameOf(agentId) ?? `Agent ${shortId(agentId)}`;
-  const tone = status === "succeeded" ? "success" : status === "cancelled" ? "warn" : "error";
+  const manualStop = errorCode === RUN_CANCELLED_BY_OPERATOR_CODE;
+  // A deliberate stop is an expected action, not a warning; a cancellation
+  // with any other reason stays a warn-level notice with that reason.
+  const tone =
+    status === "succeeded" ? "success"
+      : status === "cancelled" ? (manualStop || wasRunStoppedLocally(runId) ? "info" : "warn")
+        : "error";
   const statusLabel =
     status === "succeeded" ? "succeeded"
       : status === "failed" ? "failed"
         : status === "timed_out" ? "timed out"
-          : "cancelled";
+          : "stopped";
   const title = `${name} run ${statusLabel}`;
 
   let body: string | undefined;
-  if (error) {
+  if (status === "cancelled") {
+    if (wasRunStoppedLocally(runId)) body = "Stopped by you.";
+    else if (manualStop) body = "Stopped manually.";
+    else if (error) body = truncate(error, 100);
+  } else if (error) {
     body = truncate(error, 100);
   } else if (triggerDetail) {
     body = `Trigger: ${triggerDetail}`;

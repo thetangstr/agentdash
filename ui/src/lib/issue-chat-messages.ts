@@ -20,6 +20,7 @@ import {
 } from "./transcriptPresentation";
 import { visibleRunCostUsd } from "./utils";
 import { cancelledRunLabel } from "./cancelledRunLabel";
+import { runStatusLabel } from "./run-status-label";
 import type { ReadableRunUsage } from "../components/transcript/ReadableTranscript";
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
@@ -403,7 +404,7 @@ function authorNameForComment(
 }
 
 function formatStatusLabel(status: string) {
-  return status.replace(/_/g, " ");
+  return runStatusLabel(status);
 }
 
 function createCommentMessage(args: {

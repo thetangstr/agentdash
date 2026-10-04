@@ -424,6 +424,53 @@ describe.sequential("issue comment reopen routes", () => {
     );
   });
 
+  // AgentDash (c4-stops): a PATCH comment without a reopen flag or an
+  // assignment change is FYI on finished work — it must not reopen or wake.
+  it("does not reopen closed issues via a plain PATCH comment", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("done"));
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeIssue("done"),
+      ...patch,
+    }));
+
+    const res = await request(await installActor(createApp()))
+      .patch("/api/issues/11111111-1111-4111-8111-111111111111")
+      .send({ comment: "FYI only" });
+
+    expect(res.status).toBe(200);
+    for (const [, patch] of mockIssueService.update.mock.calls) {
+      expect(patch).not.toMatchObject({ status: "todo" });
+    }
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.updated",
+        details: expect.objectContaining({ reopened: true }),
+      }),
+    );
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+      expect.objectContaining({ reason: "issue_reopened_via_comment" }),
+    );
+  });
+
+  it("does not reopen a closed issue when a PATCH comment re-assigns to the same agent", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("done"));
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeIssue("done"),
+      ...patch,
+    }));
+
+    const res = await request(await installActor(createApp()))
+      .patch("/api/issues/11111111-1111-4111-8111-111111111111")
+      .send({ comment: "FYI only", assigneeAgentId: "22222222-2222-4222-8222-222222222222" });
+
+    expect(res.status).toBe(200);
+    for (const [, patch] of mockIssueService.update.mock.calls) {
+      expect(patch).not.toMatchObject({ status: "todo" });
+    }
+  });
+
   it("resolves assignee shortnames before updating an issue", async () => {
     mockIssueService.getById.mockResolvedValue(makeIssue("todo"));
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
@@ -504,7 +551,41 @@ describe.sequential("issue comment reopen routes", () => {
     );
   });
 
-  it("implicitly reopens closed issues via POST comments when an agent is assigned", async () => {
+  // AgentDash (c4-stops): an FYI comment on finished work stays a comment.
+  // Reopening — and therefore waking the assignee — requires an explicit
+  // reopen/resume flag or an assignment change.
+  it("leaves closed issues closed on a plain POST comment and does not wake the assignee", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("done"));
+
+    const res = await request(await installActor(createApp()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "FYI only" });
+
+    expect(res.status).toBe(201);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.updated",
+        details: expect.objectContaining({ reopened: true }),
+      }),
+    );
+  });
+
+  it("leaves cancelled issues cancelled on a plain POST comment and does not wake the assignee", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue("cancelled"));
+
+    const res = await request(await installActor(createApp()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "FYI only" });
+
+    expect(res.status).toBe(201);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("still reopens closed issues via POST comments when reopen is explicit", async () => {
     mockIssueService.getById.mockResolvedValue(makeIssue("done"));
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...makeIssue("done"),
@@ -513,7 +594,7 @@ describe.sequential("issue comment reopen routes", () => {
 
     const res = await request(await installActor(createApp()))
       .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
-      .send({ body: "hello" });
+      .send({ body: "please pick this back up", reopen: true });
 
     expect(res.status).toBe(201);
     expect(mockIssueService.update).toHaveBeenCalledWith(

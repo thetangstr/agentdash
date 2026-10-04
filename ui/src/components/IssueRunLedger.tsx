@@ -17,6 +17,7 @@ import { cn, relativeTime } from "../lib/utils";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { describeRunRetryState } from "../lib/runRetryState";
+import { runStatusLabel } from "../lib/run-status-label";
 import {
   AgentRunFailureGuidance,
   failureClassificationBadgeTone,
@@ -296,7 +297,7 @@ function mergeRuns(
 }
 
 function statusLabel(status: string) {
-  return status.replace(/_/g, " ");
+  return runStatusLabel(status);
 }
 
 function isActiveRun(run: Pick<LedgerRun, "status" | "isLive">) {
