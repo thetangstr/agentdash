@@ -7591,11 +7591,37 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // events must build on what actually landed.
         const settledRun = await getRun(run.id);
         if (settledRun && isHeartbeatRunTerminalStatus(settledRun.status)) {
-          status = settledRun.status;
+          // AgentDash (c3 review): the terminal actor owns status, error,
+          // errorCode, finishedAt and resultJson — but the adapter's evidence
+          // (usage, exit code, excerpts, log bytes/hash, session id) is real
+          // and belongs on the row. Without this write a stopped run that
+          // used tokens showed no usage while its cost events still charged
+          // it, and deadline/lost-process failures lost their stderr and
+          // exit code. Skipped only in the marker gap where the row is still
+          // running and the cancel commit owns the next write.
+          const withEvidence = await db
+            .update(heartbeatRuns)
+            .set({
+              exitCode: adapterResult.exitCode,
+              signal: adapterResult.signal,
+              usageJson,
+              sessionIdAfter: nextSessionState.displayId ?? nextSessionState.legacySessionId,
+              stdoutExcerpt,
+              stderrExcerpt,
+              logBytes: logSummary?.bytes,
+              logSha256: logSummary?.sha256,
+              logCompressed: logSummary?.compressed ?? false,
+              updatedAt: new Date(),
+            })
+            .where(eq(heartbeatRuns.id, run.id))
+            .returning()
+            .then((rows) => rows[0] ?? null);
+          const adopted = withEvidence ?? settledRun;
+          status = adopted.status;
           outcome = settledRun.status;
-          runErrorMessage = settledRun.error;
-          persistedResultJson = parseObject(settledRun.resultJson) ?? {};
-          persistedRun = settledRun;
+          runErrorMessage = adopted.error;
+          persistedResultJson = parseObject(adopted.resultJson) ?? {};
+          persistedRun = adopted;
         }
       }
       if (persistedRun) {
@@ -7881,9 +7907,33 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // monitor) — finalize for THAT outcome, not the throw. A committed
       // terminal row wins over the marker; the marker only covers the gap
       // where the kill's throw arrived before the cancelled commit did.
+      const settledRow = failedRun ? null : await getRun(run.id).catch(() => null);
+      if (settledRow && isHeartbeatRunTerminalStatus(settledRow.status)) {
+        // AgentDash (c3 review): same evidence-only write as the resolved
+        // path — the settled row keeps its status/error/errorCode/finishedAt,
+        // but the excerpts, log bytes/hash and usage record still belong on
+        // it. A richer usage record already on the row wins.
+        await db
+          .update(heartbeatRuns)
+          .set({
+            ...(settledRow.usageJson == null
+              ? { usageJson: { meteringStatus: "unmetered_no_session" } }
+              : {}),
+            stdoutExcerpt,
+            stderrExcerpt,
+            logBytes: logSummary?.bytes,
+            logSha256: logSummary?.sha256,
+            logCompressed: logSummary?.compressed ?? false,
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, run.id))
+          .catch((evidenceErr) => {
+            logger.warn({ err: logSafeError(evidenceErr), runId }, "failed to persist adapter evidence on settled run");
+          });
+      }
       const settledStatus = failedRun
         ? "failed"
-        : (await getRun(run.id).catch(() => null))?.status;
+        : settledRow?.status;
       const settledOutcome = isHeartbeatRunTerminalStatus(settledStatus)
         ? settledStatus
         : cancelRequested

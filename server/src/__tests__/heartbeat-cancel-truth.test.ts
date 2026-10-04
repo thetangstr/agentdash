@@ -159,7 +159,7 @@ describe("heartbeat cancel truth (c3)", () => {
     const started = await startEmbeddedPostgresTestDatabase("paperclip-heartbeat-cancel-truth-");
     db = createDb(started.connectionString);
     tempDb = started;
-  }, 120_000);
+  }, 600_000);
 
   afterAll(async () => {
     await closeDbClient(db);
@@ -492,7 +492,7 @@ describe("heartbeat cancel truth (c3)", () => {
       adapterType: "process",
       adapterConfig: {
         command: "sh",
-        args: ["-c", "trap 'exit 130' TERM; sleep 30 & wait"],
+        args: ["-c", "echo c3-stderr-marker >&2; trap 'exit 130' TERM; sleep 60 & wait"],
         graceSec: 1,
       },
       runtimeConfig: {},
@@ -564,6 +564,14 @@ describe("heartbeat cancel truth (c3)", () => {
       .then((rows) => rows[0]);
     expect(settled?.status).toBe("cancelled");
     expect(settled?.errorCode).toBe(RUN_CANCELLED_BY_OPERATOR_CODE);
+
+    // AgentDash (c3 review): the adopted outcome keeps the adapter's evidence —
+    // the kill's exit code, the stderr it wrote before dying, the log bytes,
+    // and the usage record its cost events still charge against.
+    expect(settled?.exitCode).toBe(130);
+    expect(settled?.stderrExcerpt).toContain("c3-stderr-marker");
+    expect(settled?.logBytes).toBeGreaterThan(0);
+    expect(settled?.usageJson).not.toBeNull();
 
     const agent = await db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0]);
     expect(agent?.status).toBe("idle");

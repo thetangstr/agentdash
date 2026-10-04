@@ -1411,8 +1411,8 @@ export function LatestRunCard({
   const StatusIcon = statusInfo.icon;
   // AgentDash (c3): same rule as RunListItem — real summary text wins; a
   // cancelled run with no summary still gets its stop reason, never the raw
-  // adapter error. (The cancel path does write a summary, so this matters
-  // exactly when it didn't.)
+  // adapter error. (The cancel path writes no summary, so a stopped run
+  // almost always lands here.)
   const resultSummary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : "";
