@@ -84,6 +84,41 @@ describe("agent harness preflight readiness", () => {
     });
   });
 
+  // AgentDash (c4 trust, review #1026): staleness must outrank outcome — a
+  // failed check against a CHANGED config reads as stale so the page
+  // re-checks the current config in the background, instead of pinning the
+  // old failure forever.
+  it("marks a failed preflight stale after the saved config changes", () => {
+    const metadata = withAgentHarnessPreflightMetadata(null, {
+      ...baseInput,
+      result: {
+        adapterType: "codex_local",
+        status: "fail" as const,
+        checks: [{ code: "missing_token", level: "error" as const, message: "Missing token" }],
+        testedAt: "2026-05-29T12:00:00.000Z",
+      },
+    });
+
+    expect(
+      evaluateAgentHarnessPreflightReadiness({
+        ...baseInput,
+        adapterConfig: { ...baseInput.adapterConfig, model: "gpt-5.6" },
+        metadata,
+      }),
+    ).toMatchObject({
+      ready: false,
+      reason: "stale",
+    });
+
+    // Same evidence on the unchanged config still reports the failure.
+    expect(
+      evaluateAgentHarnessPreflightReadiness({ ...baseInput, metadata }),
+    ).toMatchObject({
+      ready: false,
+      reason: "not_passed",
+    });
+  });
+
   it("marks a previously passing preflight stale after the saved config changes", () => {
     const result = {
       adapterType: "codex_local",

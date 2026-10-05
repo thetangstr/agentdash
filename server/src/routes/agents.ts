@@ -2745,7 +2745,15 @@ export function agentRoutes(
       defaultEnvironmentId: agent.defaultEnvironmentId,
       metadata,
     });
-    await logActivity(db, {
+    // AgentDash (c4 trust): the agent page re-checks in the background when
+    // evidence is absent or out of date. Those checks never write an activity
+    // row — a page visit is not something the viewer did, and on agents whose
+    // check keeps failing it spammed the feed as "<viewer> agent harness
+    // preflight failed" once per visit. Only a check a person explicitly
+    // asked for is logged.
+    const isBackgroundCheck =
+      !!req.body && typeof req.body === "object" && (req.body as Record<string, unknown>).background === true;
+    if (!isBackgroundCheck) await logActivity(db, {
       companyId: agent.companyId,
       actorType: "user",
       actorId: req.actor.userId ?? "board",

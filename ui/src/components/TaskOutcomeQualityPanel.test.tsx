@@ -29,13 +29,13 @@ describe("TaskOutcomeQualityPanel", () => {
 
     const html = renderToStaticMarkup(<TaskOutcomeQualityPanel quality={quality} />);
 
-    expect(html).toContain("Task outcome quality");
+    expect(html).toContain("Accepted work");
     expect(html).toContain("50%");
     expect(html).toContain("75%");
     expect(html).toContain("$23.00");
-    expect(html).toContain("Definition of done coverage");
-    expect(html).toContain("successful run left a task open");
-    expect(html).toContain("successful runs pending review");
+    expect(html).toContain("Tasks with acceptance criteria");
+    expect(html).toContain("finished run left a task open");
+    expect(html).toContain("finished runs waiting for review");
     expect(html).not.toContain("DoD");
     expect(html).not.toContain("green run");
     // AgentDash (batch 3): counted tokens headline; cached reads sit beside

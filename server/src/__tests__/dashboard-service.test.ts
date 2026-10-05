@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, costEvents, createDb, heartbeatRuns, issues, verdicts } from "@paperclipai/db";
+import { agents, companies, costEvents, createDb, heartbeatRuns, issues, issueWorkProducts, verdicts } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -49,6 +49,7 @@ describeEmbeddedPostgres("dashboard service", () => {
   afterEach(async () => {
     await db.delete(costEvents);
     await db.delete(verdicts);
+    await db.delete(issueWorkProducts);
     await db.delete(issues);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
@@ -322,18 +323,23 @@ describeEmbeddedPostgres("dashboard service", () => {
       totalRuns: 4,
       failedRuns: 3,
       failureRatePercent: 75,
+      agents: 2,
       affectedAgents: 2,
       topFailureCategory: "rate_limited",
     });
     expect(summary.harness.adapters[0]?.latestFailureAt).toBe(
       new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
     );
+    // AgentDash (c4 trust): an all-green adapter used to report "0 agents"
+    // because only failing agents were counted — runs exist, so the agent
+    // count does too.
     expect(summary.harness.adapters[1]).toMatchObject({
       adapterType: "claude_local",
       status: "ok",
       totalRuns: 1,
       failedRuns: 0,
       failureRatePercent: 0,
+      agents: 1,
       affectedAgents: 0,
       topFailureCategory: null,
     });
@@ -607,5 +613,153 @@ describeEmbeddedPostgres("dashboard service", () => {
     expect(summary.costs.monthSpendCents).toBe(0);
     // Input + output only; the 20k cached input is not counted (scan 3 lane L).
     expect(summary.costs.monthTokens).toBe(107_000);
+  });
+
+  /**
+   * AgentDash (c4 trust): the verdicts table only sees reviewer verdicts.
+   * When the owner accepts a deliverable or sends it back, the decision lands
+   * on issue_work_products.status — Health must agree with Shipped, not claim
+   * "0 accepted" and "successful runs pending review" after the owner signed
+   * off.
+   */
+  it("counts the owner's deliverable decisions as the issue's verdict", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const acceptedIssueId = randomUUID();
+    const sentBackIssueId = randomUUID();
+    const legacyIssueId = randomUUID();
+    const mixedIssueId = randomUUID();
+    const now = new Date();
+    const recent = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    // AgentDash (review #1026): Shipped accepts deliverables recorded before
+    // acceptance tracking (2026-10-02) when their issue is done — Health must
+    // apply the same rule or it calls them unreviewed forever.
+    const legacy = new Date("2026-09-15T12:00:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Operator",
+      role: "general",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values([
+      {
+        id: acceptedIssueId,
+        companyId,
+        title: "Owner accepted",
+        status: "done",
+        completedAt: recent,
+        updatedAt: recent,
+      },
+      {
+        id: sentBackIssueId,
+        companyId,
+        title: "Owner asked for changes",
+        status: "in_progress",
+        updatedAt: recent,
+      },
+      {
+        id: legacyIssueId,
+        companyId,
+        title: "Legacy accepted work",
+        status: "done",
+        completedAt: recent,
+        updatedAt: recent,
+      },
+      {
+        id: mixedIssueId,
+        companyId,
+        title: "One deliverable accepted, another sent back",
+        status: "in_progress",
+        updatedAt: recent,
+      },
+    ]);
+    await db.insert(issueWorkProducts).values([
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: acceptedIssueId,
+        type: "document",
+        provider: "agentdash",
+        title: "Launch plan",
+        status: "approved",
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: sentBackIssueId,
+        type: "document",
+        provider: "agentdash",
+        title: "Draft",
+        status: "changes_requested",
+      },
+      {
+        // Recorded before acceptance tracking existed; the issue being done
+        // stands in for the acceptance — Shipped counts it, so must Health.
+        id: randomUUID(),
+        companyId,
+        issueId: legacyIssueId,
+        type: "document",
+        provider: "agentdash",
+        title: "Old brief",
+        status: "submitted",
+        createdAt: legacy,
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueId: mixedIssueId,
+        type: "document",
+        provider: "agentdash",
+        title: "Accepted doc",
+        status: "approved",
+      },
+      {
+        // A sent-back deliverable alongside an accepted one does not drag the
+        // issue back under review — the acceptance stands.
+        id: randomUUID(),
+        companyId,
+        issueId: mixedIssueId,
+        type: "pull_request",
+        provider: "github",
+        title: "Follow-up PR",
+        status: "changes_requested",
+      },
+    ]);
+    // A green run on the accepted issue — with no reviewer verdict it used to
+    // count as "pending review" forever.
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "succeeded",
+      contextSnapshot: { issueId: acceptedIssueId },
+      createdAt: recent,
+    });
+
+    const summary = await dashboardService(db).summary(companyId);
+
+    expect(summary.taskQuality).toMatchObject({
+      issuesInScope: 4,
+      reviewedIssues: 4,
+      passedIssues: 3,
+      failedIssues: 0,
+      revisionRequestedIssues: 1,
+      acceptanceRatePercent: 75,
+      unreviewedDoneIssues: 0,
+      greenRunsPendingReview: 0,
+    });
   });
 });

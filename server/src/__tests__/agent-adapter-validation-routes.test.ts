@@ -674,6 +674,66 @@ describe("agent routes adapter validation", () => {
     );
   });
 
+  // AgentDash (c4 trust): a page load re-checks preflight in the background —
+  // those silent checks must not write activity rows credited to whoever is
+  // merely looking at the page. An explicit Re-check still logs.
+  it("skips the activity row for background preflight checks but keeps it for manual ones", async () => {
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(externalAdapter);
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Demo Agent",
+      urlKey: "demo-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "external_test",
+      adapterConfig: { model: "demo" },
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const app = await createApp();
+    mockLogActivity.mockClear();
+
+    const backgroundRes = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({ background: true }),
+    );
+    expect(backgroundRes.status, JSON.stringify(backgroundRes.body)).toBe(200);
+    // logActivity(db, entry) — the activity row is the second argument.
+    expect(
+      mockLogActivity.mock.calls.filter(
+        ([, entry]) => typeof entry?.action === "string" && entry.action.startsWith("agent.harness_preflight"),
+      ),
+    ).toHaveLength(0);
+
+    const manualRes = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({}),
+    );
+    expect(manualRes.status, JSON.stringify(manualRes.body)).toBe(200);
+    expect(
+      mockLogActivity.mock.calls.some(
+        ([, entry]) => entry?.action === "agent.harness_preflight_passed",
+      ),
+    ).toBe(true);
+  });
+
   it("passes the saved agent to the adapter's environment test (Hermes managed profiles need its id)", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     const seen: Array<Parameters<ServerAdapterModule["testEnvironment"]>[0]> = [];

@@ -43,8 +43,8 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
     ? "n/a"
     : formatCents(quality.spendPerAcceptedIssueCents);
   const openTaskRunLabel = quality.greenRunsWithOpenTasks === 1
-    ? "1 successful run left a task open"
-    : `${quality.greenRunsWithOpenTasks} successful runs left tasks open`;
+    ? "1 finished run left a task open"
+    : `${quality.greenRunsWithOpenTasks} finished runs left tasks open`;
   const hasSecondarySignals =
     quality.greenRunsWithOpenTasks > 0 ||
     quality.greenRunsPendingReview > 0 ||
@@ -58,10 +58,10 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ClipboardCheck className="h-4 w-4 shrink-0" />
-            <h3 className="text-sm font-medium">Task outcome quality</h3>
+            <h3 className="text-sm font-medium">Accepted work</h3>
           </div>
           <p className="mt-1 text-xs opacity-80">
-            Last {quality.windowDays}d accepted tasks against their definition of done, not just successful agent runs.
+            Tasks accepted in the last {quality.windowDays} days — not just runs that finished.
           </p>
         </div>
         <div className="text-right tabular-nums">
@@ -74,7 +74,7 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
 
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
         <Stat
-          label="Definition of done coverage"
+          label="Tasks with acceptance criteria"
           value={`${quality.dodCoveragePercent}%`}
           detail={`${quality.issuesWithDefinitionOfDone}/${quality.issuesInScope} tasks`}
         />
@@ -92,9 +92,9 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
           }
         />
         <Stat
-          label="Reviewed outcomes"
+          label="Reviewed tasks"
           value={quality.reviewedIssues}
-          detail={`${quality.failedIssues} failed / ${quality.revisionRequestedIssues} revision`}
+          detail={`${quality.failedIssues} failed / ${quality.revisionRequestedIssues} sent back`}
         />
       </div>
 
@@ -109,19 +109,19 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
           {quality.greenRunsPendingReview > 0 ? (
             <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>{quality.greenRunsPendingReview} successful runs pending review</span>
+              <span>{quality.greenRunsPendingReview} finished runs waiting for review</span>
             </div>
           ) : null}
           {quality.unreviewedDoneIssues > 0 ? (
             <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              <span>{quality.unreviewedDoneIssues} done tasks without verdicts</span>
+              <span>{quality.unreviewedDoneIssues} tasks marked done without a review</span>
             </div>
           ) : null}
           {quality.escalatedIssues > 0 ? (
             <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              <span>{quality.escalatedIssues} escalated outcomes</span>
+              <span>{quality.escalatedIssues} tasks need a decision</span>
             </div>
           ) : null}
           {quality.issueLinkedSpendCents > 0 ? (
