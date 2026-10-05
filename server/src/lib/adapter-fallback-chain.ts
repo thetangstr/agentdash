@@ -8,7 +8,7 @@ import { logger } from "../middleware/logger.js";
  * primary adapter fails, written as comma-separated `adapter[:model]`
  * entries, e.g.:
  *
- *   AGENTDASH_FALLBACK_CHAIN=hermes_local:qwen3.8-max-0902,hermes_local:deepseek-v4-flash
+ *   AGENTDASH_FALLBACK_CHAIN=hermes_local:qwen3.8-max,hermes_local:deepseek-v4.1-flash
  *
  * Two hops may name the same adapter with different models — that is the
  * point: "Qwen 3.8 Max via Hermes, then DeepSeek V4.1 Flash via Hermes" is

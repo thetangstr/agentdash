@@ -43,7 +43,7 @@ describe("ProposalCard", () => {
             ...basePayload,
             adapterType: "hermes_local",
             modelTier: "high",
-            model: "qwen3.8-max-0902",
+            model: "qwen3.8-max",
           }}
           onConfirm={vi.fn()}
           onReject={vi.fn()}
@@ -52,7 +52,7 @@ describe("ProposalCard", () => {
     });
     const text = container.textContent ?? "";
     expect(text).toContain("Qwen 3.8 Max · high tier");
-    expect(text).not.toContain("qwen3.8-max-0902");
+    expect(text).not.toContain("qwen3.8-max");
   });
 
   it("renders the stamped ops tier for a non-leadership hire", () => {
@@ -64,7 +64,7 @@ describe("ProposalCard", () => {
             role: "engineer",
             adapterType: "hermes_local",
             modelTier: "low",
-            model: "deepseek-v4-flash",
+            model: "deepseek-v4.1-flash",
           }}
           onConfirm={vi.fn()}
           onReject={vi.fn()}
@@ -97,7 +97,7 @@ describe("ProposalCard", () => {
             ...basePayload,
             adapterType: "claude_local" as never,
             modelTier: "high",
-            model: "qwen3.8-max-0902",
+            model: "qwen3.8-max",
           }}
           onConfirm={vi.fn()}
           onReject={vi.fn()}

@@ -87,12 +87,12 @@ describeEmbeddedPostgres("doctor apply-model-tiers", () => {
     expect(cos.action).toBe("fill");
     expect(cos.tier).toBe("high");
     expect(cos.current).toEqual({ model: null, provider: null });
-    expect(cos.proposed).toEqual({ model: "qwen3.8-max-0902", provider: "alibaba-token-plan-cn" });
+    expect(cos.proposed).toEqual({ model: "qwen3.8-max", provider: "alibaba-token-plan-cn" });
 
     const opsPlan = plan.find((item) => item.agentId === ops.id)!;
     expect(opsPlan.action).toBe("fill");
     expect(opsPlan.tier).toBe("low");
-    expect(opsPlan.proposed.model).toBe("deepseek-v4-flash");
+    expect(opsPlan.proposed.model).toBe("deepseek-v4.1-flash");
 
     const explicitPlan = plan.find((item) => item.agentId === explicit.id)!;
     expect(explicitPlan.action).toBe("explicit_kept");
@@ -116,13 +116,13 @@ describeEmbeddedPostgres("doctor apply-model-tiers", () => {
     const rows = await db.select().from(agents).where(eq(agents.companyId, c.id));
     const leaderRow = rows.find((row) => row.id === leader.id)!;
     expect(leaderRow.adapterConfig).toMatchObject({
-      model: "qwen3.8-max-0902",
+      model: "qwen3.8-max",
       provider: "alibaba-token-plan-cn",
     });
     expect(leaderRow.metadata).toMatchObject({ modelTier: "high" });
 
     const opsRow = rows.find((row) => row.id === ops.id)!;
-    expect(opsRow.adapterConfig).toMatchObject({ model: "deepseek-v4-flash" });
+    expect(opsRow.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
     expect(opsRow.metadata).toMatchObject({ modelTier: "low" });
 
     const explicitRow = rows.find((row) => row.id === explicit.id)!;
@@ -146,7 +146,7 @@ describeEmbeddedPostgres("doctor apply-model-tiers", () => {
     const leaderLog = log.find((row) => row.entityId === leader.id)!;
     expect(leaderLog.details).toMatchObject({
       tier: "high",
-      to: { model: "qwen3.8-max-0902", provider: "alibaba-token-plan-cn" },
+      to: { model: "qwen3.8-max", provider: "alibaba-token-plan-cn" },
     });
   });
 
@@ -156,7 +156,7 @@ describeEmbeddedPostgres("doctor apply-model-tiers", () => {
     const already = await agent(c.id, {
       name: "Already",
       role: "cto",
-      adapterConfig: { model: "qwen3.8-max-0902", provider: "alibaba-token-plan-cn" },
+      adapterConfig: { model: "qwen3.8-max", provider: "alibaba-token-plan-cn" },
     });
 
     const plan = await planModelTiers(db, c.id);

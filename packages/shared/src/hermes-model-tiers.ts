@@ -29,13 +29,13 @@
 export const HERMES_MODEL_TIERS = {
   high: {
     provider: "alibaba-token-plan-cn",
-    model: "qwen3.8-max-0902",
+    model: "qwen3.8-max",
     displayName: "Qwen 3.8 Max",
     tierLabel: "high tier",
   },
   low: {
     provider: "alibaba-token-plan-cn",
-    model: "deepseek-v4-flash",
+    model: "deepseek-v4.1-flash",
     // DeepSeek routes this id to V4.1 Flash.
     displayName: "DeepSeek V4.1 Flash",
     // "ops tier", not "low tier", on people-facing surfaces.

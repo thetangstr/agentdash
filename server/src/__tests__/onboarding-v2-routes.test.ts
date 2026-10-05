@@ -1378,7 +1378,7 @@ describe("POST /api/onboarding/confirm-plan", () => {
         expect.objectContaining({
           payload: expect.objectContaining({
             modelTier: "high",
-            model: "qwen3.8-max-0902",
+            model: "qwen3.8-max",
           }),
         }),
       );
@@ -1388,7 +1388,7 @@ describe("POST /api/onboarding/confirm-plan", () => {
         expect.objectContaining({
           payload: expect.objectContaining({
             modelTier: "low",
-            model: "deepseek-v4-flash",
+            model: "deepseek-v4.1-flash",
           }),
         }),
       );

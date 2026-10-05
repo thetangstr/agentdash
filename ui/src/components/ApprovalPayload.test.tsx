@@ -73,14 +73,14 @@ describe("ApprovalPayloadRenderer", () => {
             role: "chief_of_staff",
             title: "Chief of Staff",
             adapterType: "hermes_local",
-            adapterConfig: { model: "qwen3.8-max-0902", provider: "alibaba-token-plan-cn" },
+            adapterConfig: { model: "qwen3.8-max", provider: "alibaba-token-plan-cn" },
             metadata: { modelTier: "high" },
           }}
         />,
       );
     });
     expect(container.textContent).toContain("Qwen 3.8 Max · high tier");
-    expect(container.textContent).not.toContain("qwen3.8-max-0902");
+    expect(container.textContent).not.toContain("qwen3.8-max");
     act(() => { root.unmount(); });
   });
 
@@ -94,7 +94,7 @@ describe("ApprovalPayloadRenderer", () => {
             role: "engineer",
             adapterType: "hermes_local",
             modelTier: "low",
-            model: "deepseek-v4-flash",
+            model: "deepseek-v4.1-flash",
           }}
         />,
       );

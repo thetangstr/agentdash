@@ -100,11 +100,11 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
       adapterConfig: {},
     });
     expect(created.adapterConfig).toMatchObject({
-      model: "qwen3.8-max-0902",
+      model: "qwen3.8-max",
       provider: "alibaba-token-plan-cn",
     });
     expect(await storedConfig(created.id)).toMatchObject({
-      adapterConfig: { model: "qwen3.8-max-0902", provider: "alibaba-token-plan-cn" },
+      adapterConfig: { model: "qwen3.8-max", provider: "alibaba-token-plan-cn" },
       metadata: { modelTier: "high" },
     });
   });
@@ -120,7 +120,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
       adapterConfig: {},
     });
     expect(created.adapterConfig).toMatchObject({
-      model: "deepseek-v4-flash",
+      model: "deepseek-v4.1-flash",
       provider: "alibaba-token-plan-cn",
     });
     expect(await storedConfig(created.id)).toMatchObject({ metadata: { modelTier: "low" } });
@@ -136,7 +136,7 @@ describeEmbeddedPostgres("agentService.create applies hermes model tiers", () =>
       adapterType: "hermes_local",
       adapterConfig: {},
     });
-    expect(created.adapterConfig).toMatchObject({ model: "qwen3.8-max-0902" });
+    expect(created.adapterConfig).toMatchObject({ model: "qwen3.8-max" });
     expect(await storedConfig(created.id)).toMatchObject({ metadata: { modelTier: "high" } });
   });
 

@@ -94,7 +94,7 @@ describe("applyHermesModelTierIfActive", () => {
     });
     expect(result.appliedTier).toBe("high");
     expect(result.adapterConfig).toEqual({
-      model: "qwen3.8-max-0902",
+      model: "qwen3.8-max",
       provider: "alibaba-token-plan-cn",
     });
   });
@@ -130,10 +130,10 @@ describe("hermesModelTierStamp", () => {
     // title — the stamp resolves the tier exactly like materialization.
     expect(
       hermesModelTierStamp({ adapterType: "hermes_local", role: "CEO", env: onEnv() }),
-    ).toEqual({ modelTier: "high", model: "qwen3.8-max-0902" });
+    ).toEqual({ modelTier: "high", model: "qwen3.8-max" });
     expect(
       hermesModelTierStamp({ adapterType: "hermes_local", role: "reviewer", env: onEnv() }),
-    ).toEqual({ modelTier: "low", model: "deepseek-v4-flash" });
+    ).toEqual({ modelTier: "low", model: "deepseek-v4.1-flash" });
   });
 
   it("stamps env-resolved overrides", () => {
@@ -194,8 +194,8 @@ describe("stampPlanModelTiers", () => {
     Object.assign(process.env, env);
     try {
       const stamped = stampPlanModelTiers(plan);
-      expect(stamped.agents[0]).toMatchObject({ modelTier: "high", model: "qwen3.8-max-0902" });
-      expect(stamped.agents[1]).toMatchObject({ modelTier: "low", model: "deepseek-v4-flash" });
+      expect(stamped.agents[0]).toMatchObject({ modelTier: "high", model: "qwen3.8-max" });
+      expect(stamped.agents[1]).toMatchObject({ modelTier: "low", model: "deepseek-v4.1-flash" });
       expect(stamped.agents[2]).not.toHaveProperty("modelTier");
       expect(stamped).not.toBe(plan);
     } finally {

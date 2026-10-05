@@ -201,7 +201,7 @@ describe("dispatchLLM", () => {
       await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
 
       const args = spawnArgs();
-      expect(args[args.indexOf("-m") + 1]).toBe("qwen3.8-max-0902");
+      expect(args[args.indexOf("-m") + 1]).toBe("qwen3.8-max");
       expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-token-plan-cn");
     });
 
@@ -259,22 +259,22 @@ describe("dispatchLLM", () => {
       await dispatchLLM(
         { system: "s", messages: [{ role: "user", content: "hi" }] },
         undefined,
-        { model: "deepseek-v4-flash", disableFallback: true },
+        { model: "deepseek-v4.1-flash", disableFallback: true },
       );
       const args = spawnArgs();
-      expect(args[args.indexOf("-m") + 1]).toBe("deepseek-v4-flash");
+      expect(args[args.indexOf("-m") + 1]).toBe("deepseek-v4.1-flash");
       expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-token-plan-cn");
     });
 
     it("pairs a hop's tier model with an env-overridden tier provider too", async () => {
       process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
-      process.env.AGENTDASH_HERMES_LOW_MODEL = "deepseek-v4-flash";
+      process.env.AGENTDASH_HERMES_LOW_MODEL = "deepseek-v4.1-flash";
       process.env.AGENTDASH_HERMES_LOW_PROVIDER = "alibaba-custom";
       try {
         await dispatchLLM(
           { system: "s", messages: [{ role: "user", content: "hi" }] },
           undefined,
-          { model: "deepseek-v4-flash", disableFallback: true },
+          { model: "deepseek-v4.1-flash", disableFallback: true },
         );
         const args = spawnArgs();
         expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-custom");

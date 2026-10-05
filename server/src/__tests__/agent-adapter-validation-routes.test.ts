@@ -1037,7 +1037,7 @@ describe("agent routes hermes model tiers", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const [input] = createCallArgs();
     expect(input?.adapterConfig).toMatchObject({
-      model: "qwen3.8-max-0902",
+      model: "qwen3.8-max",
       provider: "alibaba-token-plan-cn",
     });
     expect(input?.metadata).toMatchObject({ modelTier: "high" });
@@ -1052,7 +1052,7 @@ describe("agent routes hermes model tiers", () => {
     );
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const [input] = createCallArgs();
-    expect(input?.adapterConfig).toMatchObject({ model: "deepseek-v4-flash" });
+    expect(input?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
     expect(input?.metadata).toMatchObject({ modelTier: "low" });
   });
 
@@ -1065,7 +1065,7 @@ describe("agent routes hermes model tiers", () => {
     );
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const [input] = createCallArgs();
-    expect(input?.adapterConfig).toMatchObject({ model: "deepseek-v4-flash" });
+    expect(input?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
     expect(input?.metadata).toMatchObject({ modelTier: "low" });
   });
 
@@ -1144,7 +1144,7 @@ describe("agent routes hermes model tiers", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const [input] = createCallArgs();
     expect(input?.adapterConfig).toMatchObject({
-      model: "qwen3.8-max-0902",
+      model: "qwen3.8-max",
       provider: "alibaba-token-plan-cn",
     });
     expect(input?.metadata).toMatchObject({ modelTier: "high" });
@@ -1178,7 +1178,7 @@ describe("agent routes hermes model tiers", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
     expect(patch?.adapterConfig).toMatchObject({
-      model: "deepseek-v4-flash",
+      model: "deepseek-v4.1-flash",
       provider: "alibaba-token-plan-cn",
     });
     expect(patch?.metadata).toMatchObject({ modelTier: "low" });
@@ -1219,14 +1219,14 @@ describe("agent routes hermes model tiers", () => {
     );
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
-    expect(patch?.adapterConfig).toMatchObject({ model: "deepseek-v4-flash" });
+    expect(patch?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
     expect(patch?.metadata).toMatchObject({ modelTier: "low" });
   });
 
   it("PATCH /agents/:id with a custom model removes the recorded tier", async () => {
     mockAgentService.getById.mockResolvedValue({
       ...(await mockAgentService.getById()),
-      adapterConfig: { model: "deepseek-v4-flash", provider: "alibaba-token-plan-cn" },
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
       metadata: { modelTier: "low", other: "kept" },
     });
     const app = await createApp();

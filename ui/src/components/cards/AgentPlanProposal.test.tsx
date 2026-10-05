@@ -126,7 +126,7 @@ describe("AgentPlanProposal", () => {
           payload={{
             ...plan,
             agents: [
-              { ...plan.agents[0], name: "Ava", modelTier: "high" as const, model: "qwen3.8-max-0902" },
+              { ...plan.agents[0], name: "Ava", modelTier: "high" as const, model: "qwen3.8-max" },
             ],
           } as never}
           onConfirm={vi.fn()}
@@ -136,7 +136,7 @@ describe("AgentPlanProposal", () => {
     });
     const text = container.textContent ?? "";
     expect(text).toContain("Qwen 3.8 Max · high tier");
-    expect(text).not.toContain("qwen3.8-max-0902");
+    expect(text).not.toContain("qwen3.8-max");
   });
 
   it("shows no model line when the payload carries no stamp — older cards and tiers-off writes", () => {

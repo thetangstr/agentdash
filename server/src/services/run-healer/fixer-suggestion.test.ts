@@ -51,10 +51,10 @@ describe("suggestHealerFallbackTarget", () => {
     expect(
       suggestHealerFallbackTarget({
         adapterType: "hermes_local",
-        model: "deepseek-v4-flash",
+        model: "deepseek-v4.1-flash",
         provider: "zai",
       }),
-    ).toBe("hermes_local:qwen3.8-max-0902");
+    ).toBe("hermes_local:qwen3.8-max");
     // A modelless hermes agent the same way.
     expect(
       suggestHealerFallbackTarget({
@@ -62,7 +62,7 @@ describe("suggestHealerFallbackTarget", () => {
         model: "",
         provider: "",
       }),
-    ).toBe("hermes_local:qwen3.8-max-0902");
+    ).toBe("hermes_local:qwen3.8-max");
   });
 
   it("never suggests a tier model when tiers are inactive — cross-provider instead", () => {
@@ -81,7 +81,7 @@ describe("suggestHealerFallbackTarget", () => {
     // model on the same provider is the same call again. Whether the agent
     // sits on the high tier, the low tier, or no model at all, the
     // suggestion must cross providers instead.
-    for (const model of ["qwen3.8-max-0902", "deepseek-v4-flash", ""]) {
+    for (const model of ["qwen3.8-max", "deepseek-v4.1-flash", ""]) {
       expect(
         suggestHealerFallbackTarget({
           adapterType: "hermes_local",
@@ -97,7 +97,7 @@ describe("suggestHealerFallbackTarget", () => {
     expect(
       suggestHealerFallbackTarget({
         adapterType: "hermes_local",
-        model: "qwen3.8-max-0902",
+        model: "qwen3.8-max",
         provider: "alibaba-custom",
       }),
     ).toBe("claude_api");
@@ -112,7 +112,7 @@ describe("suggestHealerFallbackTarget", () => {
         model: "glm-5.3-flash",
         provider: "zai",
       }),
-    ).toBe("hermes_local:qwen3.8-max-0902");
+    ).toBe("hermes_local:qwen3.8-max");
   });
 
   it("honours env-resolved tier models in the suggestions", () => {
@@ -121,7 +121,7 @@ describe("suggestHealerFallbackTarget", () => {
     expect(
       suggestHealerFallbackTarget({
         adapterType: "hermes_local",
-        model: "deepseek-v4-flash",
+        model: "deepseek-v4.1-flash",
         provider: "zai",
       }),
     ).toBe("hermes_local:qwen-next");
