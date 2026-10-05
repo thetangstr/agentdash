@@ -21,13 +21,19 @@ export {
   containsSecrets,
 } from "@paperclipai/shared";
 
-export const SECRET_MASK_DISPLAY = "•••• hidden";
+// Parenthesised so the mask is a self-contained unit: a bare "hidden" word
+// gets parsed as an email local part ("•••• hidden@db.internal" autolinks to
+// mailto:) and merges into adjacent punctuation ("KEY = •••• hidden"]").
+// "(hidden)" can neither autolink nor be mistaken for source text.
+export const SECRET_MASK_DISPLAY = "•••• (hidden)";
 
-// The "(?: hidden)?" tail keeps the wrapper idempotent: re-redacting display
-// text redacts the "••••" run as a value, emitting "***REDACTED*** hidden",
-// which must collapse back to one mask.
+// The "(?: ... hidden ...)?" tail keeps the wrapper idempotent: re-redacting
+// display text redacts the "••••" run as a value, emitting
+// "***REDACTED*** (hidden)" (or "***REDACTED*** hidden" from the pre-c4
+// mask spelling), which must collapse back to one mask. The (?!\w) stop
+// keeps "hiddenly"-style words from being eaten.
 const KNOWN_MASK_RE =
-  /\*\*\*(?:REDACTED|SECRET_REF)\*\*\*(?: hidden\b)?|\[(?:REDACTED(?:_[A-Z]+)*|redacted-(?:github-token|key|token))\]/g;
+  /\*\*\*(?:REDACTED|SECRET_REF)\*\*\*(?:\s*\(?hidden(?!\w)\)?)?|\[(?:REDACTED(?:_[A-Z]+)*|redacted-(?:github-token|key|token))\]/g;
 
 /** Rewrite every baked-in mask marker to the one display mask. */
 export function displayMaskedSecrets(text: string): string {

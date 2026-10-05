@@ -202,6 +202,93 @@ describe("cosReplier.reply (legacy single-arg path)", () => {
       { db, companyId: "co1", agentId: "cos1" },
     );
   });
+
+  // AgentDash (c4-hire-ux): a steady-state hire card names the requester so
+  // another viewer reads "Waiting for Dana to confirm" — requesterUserId
+  // stays the authorization field; requesterName is display-only.
+  it("stamps the requester's id and resolved name on a steady-state hire card", async () => {
+    const planPayload = {
+      rationale: "close the books faster",
+      agents: [
+        { role: "close_coordinator", name: "Marcus", adapterType: "hermes_local", responsibilities: [], kpis: [] },
+      ],
+      alignmentToShortTerm: "this quarter",
+      alignmentToLongTerm: "next year",
+    };
+    const conversations = {
+      paginate: vi.fn().mockResolvedValue([
+        { id: "msg-9", role: "user", content: "Can we hire a close coordinator?" },
+      ]),
+      postMessage: vi.fn().mockResolvedValue({ id: "m1" }),
+    };
+    const llm = vi.fn().mockResolvedValue(
+      [
+        "Here's the hire I'd propose — confirm on the card below.",
+        "",
+        "```json",
+        JSON.stringify({ plan: planPayload }),
+        "```",
+      ].join("\n"),
+    );
+    const requesterName = vi.fn().mockResolvedValue("Dana Whitfield");
+    const issueAction = { roster: vi.fn().mockResolvedValue([]) };
+
+    await cosReplier({ conversations, llm, issueAction, requesterName } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+      companyId: "co1",
+      requestedBy: { userId: "u-dana" },
+      triggerMessageId: "msg-9",
+    });
+
+    expect(requesterName).toHaveBeenCalledWith("co1", "u-dana");
+    const cardCall = conversations.postMessage.mock.calls
+      .map(([arg]: [arg: any]) => arg)
+      .find((arg: any) => arg.cardKind === "agent_plan_proposal_v1");
+    expect(cardCall?.cardPayload).toMatchObject({
+      requesterUserId: "u-dana",
+      requesterName: "Dana Whitfield",
+    });
+  });
+
+  // AgentDash (c4-hire-ux): a model-invented requester in the plan trailer
+  // never reaches the card — only the server-side requester id does.
+  it("drops a model-invented requesterUserId from the plan trailer", async () => {
+    const planPayload = {
+      rationale: "close the books faster",
+      requesterUserId: "u-invented",
+      requesterName: "Invented Name",
+      agents: [
+        { role: "close_coordinator", name: "Marcus", adapterType: "hermes_local", responsibilities: [], kpis: [] },
+      ],
+      alignmentToShortTerm: "this quarter",
+      alignmentToLongTerm: "next year",
+    };
+    const conversations = {
+      paginate: vi.fn().mockResolvedValue([
+        { id: "msg-9", role: "user", content: "Hire a close coordinator." },
+      ]),
+      postMessage: vi.fn().mockResolvedValue({ id: "m1" }),
+    };
+    const llm = vi.fn().mockResolvedValue(
+      ["Here is the hire.", "```json", JSON.stringify({ plan: planPayload }), "```"].join("\n"),
+    );
+    const issueAction = { roster: vi.fn().mockResolvedValue([]) };
+
+    await cosReplier({ conversations, llm, issueAction } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+      companyId: "co1",
+      requestedBy: { userId: "u-dana" },
+      triggerMessageId: "msg-9",
+    });
+
+    const cardCall = conversations.postMessage.mock.calls
+      .map(([arg]: [arg: any]) => arg)
+      .find((arg: any) => arg.cardKind === "agent_plan_proposal_v1");
+    expect(cardCall?.cardPayload.requesterUserId).toBe("u-dana");
+    expect(cardCall?.cardPayload.requesterName).toBeUndefined();
+  });
 });
 
 describe("cosReplier.reply (phase-aware path)", () => {

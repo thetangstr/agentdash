@@ -955,7 +955,11 @@ describe("POST /api/onboarding/confirm-plan", () => {
       }),
     );
     expect(mockConversations.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: expect.stringContaining("board approval") }),
+      expect.objectContaining({ body: expect.stringContaining("waiting for a decision") }),
+    );
+    // c4-hire-ux: the reply names the page the owner sees and links there.
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("[Decisions](/decisions)") }),
     );
     expect(mockConversations.postMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.stringContaining("Done — your team has been created") }),
@@ -1033,6 +1037,15 @@ describe("POST /api/onboarding/confirm-plan", () => {
     expect(mockMaterializeOnboardingGoals).not.toHaveBeenCalled();
     expect(mockConversations.postMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.stringContaining("Done — your team has been created") }),
+    );
+    // c4-hire-ux: a steady-state confirm posts a short confirmation naming the
+    // hire — silence read as "nothing happened".
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorId: "cos1",
+        body: "Done — Quinn is on the team.",
+      }),
     );
   });
 
@@ -1171,7 +1184,7 @@ describe("POST /api/onboarding/confirm-plan", () => {
       expect.objectContaining({
         conversationId: "conv1",
         authorId: "cos1",
-        body: expect.stringContaining("waiting on board approval"),
+        body: "Your hire is waiting for a decision — I have sent it to [Decisions](/decisions). It will join the team once it is approved.",
       }),
     );
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "ready");

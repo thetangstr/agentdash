@@ -24,7 +24,7 @@ import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
-import { isAwaitingReview } from "../lib/shipped";
+import { refetchAfterReviewDecision } from "../lib/review-decisions-refresh";
 import {
   hasLegacyIssueDetailQuery,
   createIssueDetailPath,
@@ -60,6 +60,8 @@ import {
   type OptimisticIssueComment,
 } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById, upsertInterruptedRun } from "../lib/optimistic-issue-runs";
+import { latestRunByCreatedAt } from "../lib/issue-stopped";
+import { wasRunStoppedLocally } from "../lib/locallyStoppedRuns";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { ApprovalCard } from "../components/ApprovalCard";
@@ -77,6 +79,7 @@ import { IssueProperties } from "../components/IssueProperties";
 import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueRecoveryBudgetBanner, recoveryBudgetClearedToastBody } from "../components/IssueRecoveryBudgetBanner";
 import { IssueStartBanner } from "../components/IssueStartBanner";
+import { IssueStoppedBanner } from "../components/IssueStoppedBanner";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 // AgentDash: goals-eval-hitl
 import { VerdictTimeline } from "../components/VerdictTimeline";
@@ -1263,6 +1266,19 @@ export function IssueDetail() {
   });
   const resolvedHasActiveRun = issue ? shouldTrackIssueActiveRun(issue) && hasActiveRun : hasActiveRun;
   const hasLiveRuns = liveRunCount > 0 || resolvedHasActiveRun;
+  // AgentDash (c4-stops): the stopped banner needs the newest issue-bound run;
+  // only fetched once nothing is live, and shared with the chat tab's
+  // linkedRuns query (same key).
+  const { data: issueRunHistory } = useQuery({
+    queryKey: queryKeys.issues.runs(issueId!),
+    queryFn: () => activityApi.runsForIssue(issueId!),
+    enabled: !!issueId && !hasLiveRuns,
+    placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId ?? "pending"),
+  });
+  const latestIssueRun = useMemo(
+    () => latestRunByCreatedAt(issueRunHistory ?? []),
+    [issueRunHistory],
+  );
   useEffect(() => {
     if (!hasLiveRuns && locallyQueuedCommentRunIds.size > 0) {
       setLocallyQueuedCommentRunIds(new Map());
@@ -1322,24 +1338,6 @@ export function IssueDetail() {
     selectedCompanyId
     && boardAccess?.companyIds?.includes(selectedCompanyId),
   );
-  // AgentDash (c3-a11y review): the Accept / Request changes actions appear
-  // only under these exact conditions (same as IssueResultBlock). A document's
-  // Helpful / Needs work thumbs are a competing vocabulary ONLY then, and only
-  // on the document that deliverable binds to — so the gate is worked out once
-  // here and handed down, not re-derived loosely in the documents section.
-  const { data: shippedForReview } = useQuery({
-    queryKey: queryKeys.shipped(issue?.companyId ?? "", { issueId: issue?.id ?? "" }),
-    queryFn: () => issuesApi.listShipped(issue!.companyId, { issueId: issue!.id }),
-    enabled: !!issue && canManageTreeControl,
-  });
-  const awaitingReview = isAwaitingReview({
-    canReview: canManageTreeControl && !!issue,
-    issueStatus: issue?.status,
-    issueLive: hasLiveRuns,
-    hasReadyForReview: (shippedForReview?.items ?? []).some(
-      (product) => product.status === "ready_for_review",
-    ),
-  });
   const { data: feedbackVotes } = useQuery({
     queryKey: queryKeys.issues.feedbackVotes(issueId!),
     queryFn: () => issuesApi.listFeedbackVotes(issueId!),
@@ -1710,7 +1708,12 @@ export function IssueDetail() {
       if (acceptedDocumentRevisions === undefined) {
         throw new Error("The issue's documents are shown below — read the latest revision, then accept again.");
       }
-      return updateIssue.mutateAsync({ status: "done", acceptedDocumentRevisions });
+      const updated = await updateIssue.mutateAsync({ status: "done", acceptedDocumentRevisions });
+      // AgentDash (c4-polish): an explicit post-response refetch reads
+      // committed state, so the Result chip and Decisions badge don't stay
+      // stale until reload (the decisions sources were never invalidated).
+      await refetchAfterReviewDecision(queryClient, updated.companyId, updated.id);
+      return updated;
     },
     onRequestChanges: async (note: string) => {
       const current = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issueId!));
@@ -1722,6 +1725,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(result.issue.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(result.issue.companyId) });
       invalidateIssueCollections();
+      await refetchAfterReviewDecision(queryClient, result.issue.companyId, result.issue.id);
     },
   }), [collectSeenDocumentRevisions, invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".
@@ -2354,6 +2358,44 @@ export function IssueDetail() {
       pushToast({
         title: "Interrupt failed",
         body: err instanceof Error ? err.message : "Unable to interrupt the active run",
+        tone: "error",
+      });
+    },
+  });
+
+  // AgentDash (c4-stops): the stopped banner's Resume is an explicit wake of
+  // the assignee — the only way stopped work starts again; a plain comment
+  // does not wake anyone on finished or stopped work.
+  const resumeStoppedWork = useMutation({
+    mutationFn: async () => {
+      const result = await agentsApi.wakeup(
+        issue!.assigneeAgentId!,
+        {
+          source: "on_demand",
+          triggerDetail: "manual",
+          reason: "resume_stopped_work",
+          payload: { issueId: issue!.id, taskId: issue!.id },
+        },
+        issue!.companyId,
+      );
+      if (!("id" in result)) {
+        throw new Error(result.message ?? "Resume request was skipped.");
+      }
+      return result;
+    },
+    onSuccess: () => {
+      invalidateIssueRunState();
+      invalidateIssueDetail();
+      pushToast({
+        title: "Work resumed",
+        body: "The assigned agent was asked to pick this back up.",
+        tone: "success",
+      });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Resume failed",
+        body: err instanceof Error ? err.message : "Unable to resume work",
         tone: "error",
       });
     },
@@ -3179,6 +3221,17 @@ export function IssueDetail() {
         isStarting={updateIssue.isPending}
         onStart={() => updateIssue.mutate({ status: "todo" })}
       />
+      {/* AgentDash (c4-stops): a stopped run leaves an in-progress-looking
+          issue with nothing running — name it and offer the explicit resume. */}
+      <IssueStoppedBanner
+        issue={issue}
+        hasLiveRuns={hasLiveRuns}
+        latestRunStatus={latestIssueRun?.status ?? null}
+        stoppedByYou={latestIssueRun ? wasRunStoppedLocally(latestIssueRun.runId) : false}
+        agentName={issue.assigneeAgentId ? (agents?.find((a) => a.id === issue.assigneeAgentId)?.name ?? null) : null}
+        isResuming={resumeStoppedWork.isPending}
+        onResume={() => resumeStoppedWork.mutate()}
+      />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
           {activePauseHold.isRoot ? (
@@ -3662,7 +3715,6 @@ export function IssueDetail() {
       <IssueDocumentsSection
         issue={issue}
         canDeleteDocuments={Boolean(session?.user?.id)}
-        awaitingReview={awaitingReview}
         feedbackVotes={feedbackVotes}
         feedbackDataSharingPreference={feedbackDataSharingPreference}
         feedbackTermsUrl={FEEDBACK_TERMS_URL}

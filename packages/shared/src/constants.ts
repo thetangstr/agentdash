@@ -80,6 +80,10 @@ export const AGENT_ROLES = [
   "cto",
   "cmo",
   "cfo",
+  // AgentDash (c4-hire-ux): a bookkeeper or staff accountant hired off a CoS
+  // plan is finance staff, not the chief financial officer. `finance` is the
+  // neutral family role; `cfo` stays for executive hires.
+  "finance",
   "security",
   "engineer",
   "designer",
@@ -104,6 +108,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   cto: "CTO",
   cmo: "CMO",
   cfo: "CFO",
+  finance: "Finance",
   security: "Security",
   engineer: "Engineer",
   designer: "Designer",
@@ -130,7 +135,7 @@ export const AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION = 2;
  * (heartbeat.cancelRun). System-initiated cancellations always carry their own
  * reason.
  */
-export const RUN_CANCELLED_BY_OPERATOR_MESSAGE = "Cancelled by control plane";
+export const RUN_CANCELLED_BY_OPERATOR_MESSAGE = "Stopped manually";
 /**
  * The `heartbeat_runs.error_code` written only by the operator-facing cancel
  * route — this code, not the message text, is how the UI tells a manual stop

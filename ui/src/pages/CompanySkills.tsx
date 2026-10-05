@@ -166,6 +166,26 @@ function sourceMeta(sourceBadge: CompanySkillSourceBadge, sourceLabel: string | 
   }
 }
 
+/**
+ * AgentDash (c4-polish): bundled development skills (paperclip-dev,
+ * terminal-bench-loop) ship inside the product for its own dev flow — they
+ * are not the owner's skills and must not crowd this page. Other bundled
+ * skills stay visible: they are part of the product the owner gets. The
+ * badge's other "paperclip" form — "Paperclip workspace" — IS the owner's
+ * own managed skill and stays too.
+ */
+const INTERNAL_DEV_SKILL_SLUGS = new Set(["paperclip-dev", "terminal-bench-loop"]);
+
+export function isInternalCompanySkill(
+  skill: Pick<CompanySkillListItem, "sourceBadge" | "sourceLabel" | "slug">,
+) {
+  return (
+    skill.sourceBadge === "paperclip" &&
+    skill.sourceLabel === "Paperclip bundled" &&
+    INTERNAL_DEV_SKILL_SLUGS.has(skill.slug)
+  );
+}
+
 function shortRef(ref: string | null | undefined) {
   if (!ref) return null;
   return ref.slice(0, 7);
@@ -792,11 +812,15 @@ export function CompanySkills() {
     queryFn: () => companySkillsApi.list(selectedCompanyId!),
     enabled: Boolean(selectedCompanyId),
   });
+  const visibleSkills = useMemo(
+    () => (skillsQuery.data ?? []).filter((skill) => !isInternalCompanySkill(skill)),
+    [skillsQuery.data],
+  );
 
   const selectedSkillId = useMemo(() => {
-    if (!routeSkillId) return skillsQuery.data?.[0]?.id ?? null;
+    if (!routeSkillId) return visibleSkills[0]?.id ?? null;
     return routeSkillId;
-  }, [routeSkillId, skillsQuery.data]);
+  }, [routeSkillId, visibleSkills]);
 
   useEffect(() => {
     if (routeSkillId || !selectedSkillId) return;
@@ -1176,7 +1200,7 @@ export function CompanySkills() {
               <div>
                 <h1 className="text-base font-semibold">Skills</h1>
                 <p className="text-xs text-muted-foreground">
-                  {skillsQuery.data?.length ?? 0} available
+                  {visibleSkills.length} available
                 </p>
               </div>
               <div className="flex items-center gap-1">
@@ -1242,7 +1266,7 @@ export function CompanySkills() {
             <div className="px-4 py-6 text-sm text-destructive">{skillsQuery.error.message}</div>
           ) : (
             <SkillList
-              skills={skillsQuery.data ?? []}
+              skills={visibleSkills}
               selectedSkillId={selectedSkillId}
               skillFilter={skillFilter}
               expandedSkillId={expandedSkillId}

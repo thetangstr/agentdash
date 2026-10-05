@@ -218,7 +218,9 @@ describe("CommentThread", () => {
     });
   });
 
-  it("hides the reopen control and infers reopen for closed agent-assigned issues", async () => {
+  // AgentDash (c4-stops): an FYI comment on finished work must not reopen or
+  // wake the assignee — reopening is an explicit composer choice.
+  it("keeps comments on closed issues inert until the reopen box is checked", async () => {
     const root = createRoot(container);
     const onAdd = vi.fn(async () => {});
 
@@ -235,29 +237,46 @@ describe("CommentThread", () => {
       );
     });
 
-    expect(container.textContent).not.toContain("Re-open");
+    expect(container.textContent).toContain("Reopen this issue");
 
     const editor = container.querySelector('textarea[aria-label="Comment editor"]') as HTMLTextAreaElement | null;
     const submitButton = Array.from(container.querySelectorAll("button")).find(
       (element) => element.textContent === "Comment",
     ) as HTMLButtonElement | undefined;
+    const reopenCheckbox = Array.from(container.querySelectorAll('input[type="checkbox"]')).find(
+      (element) => element.closest("label")?.textContent?.includes("Reopen this issue"),
+    ) as HTMLInputElement | undefined;
     expect(editor).not.toBeNull();
     expect(submitButton).toBeDefined();
+    expect(reopenCheckbox).toBeDefined();
 
-    act(() => {
-      const valueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        "value",
-      )?.set;
-      valueSetter?.call(editor, "Please pick this back up");
-      editor?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    const typeComment = (text: string) => {
+      act(() => {
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          "value",
+        )?.set;
+        valueSetter?.call(editor, text);
+        editor?.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
 
+    typeComment("FYI only");
     await act(async () => {
       submitButton?.click();
     });
 
-    expect(onAdd).toHaveBeenCalledWith("Please pick this back up", true, undefined);
+    expect(onAdd).toHaveBeenCalledWith("FYI only", undefined, undefined);
+
+    act(() => {
+      reopenCheckbox?.click();
+    });
+    typeComment("Please pick this back up");
+    await act(async () => {
+      submitButton?.click();
+    });
+
+    expect(onAdd).toHaveBeenLastCalledWith("Please pick this back up", true, undefined);
 
     act(() => {
       root.unmount();

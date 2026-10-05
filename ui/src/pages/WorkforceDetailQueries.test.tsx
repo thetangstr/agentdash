@@ -62,14 +62,14 @@ it.each([
   await flush(); await flush();
   const button = (text: string) => [...host.querySelectorAll('button')].find(b => b.textContent === text);
   expect(button('Resume first job')?.disabled).toBe(true);
-  expect(button('Replace question for current accountable human')).toBeUndefined();
-  const select = host.querySelector('[aria-label="Accountable human"]')!;
+  expect(button('Replace question for current accountable person')).toBeUndefined();
+  const select = host.querySelector('[aria-label="Accountable person"]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'active-human'); select.dispatchEvent(new Event('change', { bubbles: true })); });
-  await act(async () => button('Assign accountable human')!.click());
+  await act(async () => button('Assign accountable person')!.click());
   await flush(); await flush();
   expect(host.querySelector('#workforce-accountability p')?.textContent).toContain('Nora');
   expect(button('Resume first job')?.disabled).toBe(false);
-  expect(button('Replace question for current accountable human')?.disabled).toBe(false);
+  expect(button('Replace question for current accountable person')?.disabled).toBe(false);
   const mutation = requests.find(request => request.method !== 'GET');
   expect(mutation).toMatchObject(autonomy === 'autonomous'
     ? { url: `/api/agents/${agentId}?companyId=one`, method: 'PATCH', body: { accountableUserId: 'active-human' } }

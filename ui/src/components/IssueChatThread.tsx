@@ -585,9 +585,8 @@ function parseReassignment(target: string): PaperclipIssueRuntimeReassignment | 
   return null;
 }
 
-function shouldImplicitlyReopenComment(issueStatus: string | undefined, assigneeValue: string) {
-  const resumesToTodo = issueStatus === "done" || issueStatus === "cancelled" || issueStatus === "blocked";
-  return resumesToTodo && assigneeValue.startsWith("agent:");
+function issueCommentCanReopenIssue(issueStatus: string | undefined) {
+  return issueStatus === "done" || issueStatus === "cancelled";
 }
 
 function isUnassignedReassignValue(value: string): boolean {
@@ -1924,7 +1923,7 @@ function IssueChatFeedbackButtons({
           <DialogHeader>
             <DialogTitle>Save your feedback sharing preference</DialogTitle>
             <DialogDescription>
-              Choose whether voted AI outputs can be shared with Paperclip Labs. This
+              Choose whether voted AI outputs can be shared with AgentDash Labs. This
               answer becomes the default for future thumbs up and thumbs down votes.
             </DialogDescription>
           </DialogHeader>
@@ -2832,6 +2831,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
   const effectiveSuggestedAssigneeValue = suggestedAssigneeValue ?? currentAssigneeValue;
   const [reassignTarget, setReassignTarget] = useState(effectiveSuggestedAssigneeValue);
   const [unassignedConfirmed, setUnassignedConfirmed] = useState(false);
+  const [reopenRequested, setReopenRequested] = useState(false);
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -2917,10 +2917,10 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 
     const hasReassignment = enableReassign && reassignTarget !== currentAssigneeValue;
     const reassignment = hasReassignment ? parseReassignment(reassignTarget) : undefined;
-    const reopen = shouldImplicitlyReopenComment(
-      issueStatus,
-      hasReassignment ? reassignTarget : currentAssigneeValue,
-    ) ? true : undefined;
+    // AgentDash (c4-stops): a plain comment never reopens finished work; the
+    // composer checkbox (or a reassignment, which the server treats as the
+    // explicit work signal) is the only reopen path.
+    const reopen = issueCommentCanReopenIssue(issueStatus) && reopenRequested ? true : undefined;
     const submittedBody = trimmed;
     const viewportSnapshot = captureComposerViewportSnapshot(composerContainerRef.current);
 
@@ -2945,6 +2945,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
       if (draftKey) clearDraft(draftKey);
       setComposerAttachments([]);
       setReassignTarget(effectiveSuggestedAssigneeValue);
+      setReopenRequested(false);
     } catch {
       setBody((current) =>
         restoreSubmittedCommentDraft({
@@ -3179,6 +3180,23 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
             );
           })}
         </div>
+      ) : null}
+
+      {issueCommentCanReopenIssue(issueStatus) ? (
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={reopenRequested}
+            onChange={(event) => setReopenRequested(event.target.checked)}
+          />
+          <span>
+            <span className="block font-medium">Reopen this issue</span>
+            <span className="text-xs text-muted-foreground">
+              Moves it back to To do and notifies the assignee. Leave unchecked for a comment that does not restart work.
+            </span>
+          </span>
+        </label>
       ) : null}
 
       <div className="flex flex-wrap items-center justify-end gap-3">

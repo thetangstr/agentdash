@@ -184,7 +184,7 @@ describe("RunTranscriptView raw redaction", () => {
   it("redacts tool calls, results, stdout, stderr and assistant text, with a note", () => {
     const html = render(<RunTranscriptView entries={entries} mode="raw" />);
     expect(html).not.toContain(SECRET);
-    expect(html).toContain("•••• hidden");
+    expect(html).toContain("•••• (hidden)");
     expect(html).toContain("Credentials in this log are hidden.");
   });
 

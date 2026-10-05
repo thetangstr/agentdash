@@ -336,14 +336,71 @@ describe("monthCountedTokens + AgentSpendFigure", () => {
     renderNode(<AgentSpendFigure agent={{ spentMonthlyCents: 4200 }} runs={[run(32_000, 2_900)]} now={now} />);
     expect(container!.textContent).toContain("$42.00");
   });
+
+  // Batch 4: the token figure reads the cost-events row — unmetered runs carry
+  // no usageJson, so summing runs showed the bare note while Costs read 132.7k.
+  it("shows the month's tokens from the cost-events row on BYOK", () => {
+    const unmeteredRuns = [
+      { usageJson: { meteringStatus: "unmetered_no_session" }, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" } as never,
+    ];
+    renderNode(
+      <AgentSpendFigure
+        agent={{ spentMonthlyCents: 0 }}
+        runs={unmeteredRuns}
+        now={now}
+        monthCost={{ costCents: 0, inputTokens: 120_000, cachedInputTokens: 50_000, outputTokens: 12_700 }}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    // Counted tokens: input + output; the 50k cached reads are not counted.
+    expect(text).toContain("132.7k");
+    expect(text).toContain("Billed by your model provider");
+    expect(text).not.toContain("$0.00");
+  });
+
+  // Batch 4: a worker whose runs are all unmetered wrote no cost events —
+  // "Spend this month $0.00" reads as "free". The honest figure is "Not measured".
+  it("says Not measured when the month's usage was never recorded", () => {
+    const unmeteredRuns = [
+      { usageJson: { meteringStatus: "unmetered_no_session" }, resultJson: null, createdAt: "2026-10-02T09:00:00.000Z" } as never,
+    ];
+    renderNode(
+      <AgentSpendFigure
+        agent={{ spentMonthlyCents: 0 }}
+        runs={unmeteredRuns}
+        now={now}
+        monthCost={null}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Not measured");
+    expect(text).not.toContain("$0.00");
+  });
+
+  // An agent that did nothing this month has a real zero — "Not measured"
+  // there would claim a measurement gap that does not exist.
+  it("keeps $0.00 for an idle agent with no runs and no chat turns", () => {
+    renderNode(
+      <AgentSpendFigure
+        agent={{ spentMonthlyCents: 0 }}
+        runs={[]}
+        now={now}
+        monthCost={null}
+      />,
+    );
+    expect(container!.textContent).toContain("$0.00");
+    expect(container!.textContent).not.toContain("Not measured");
+  });
 });
 
 // Batch 2 canary: "This agent has never run" + "$0.00" sat on a Chief of Staff
 // that had run the whole chat; chat turns count as activity.
 describe("AgentRunHealthSummary", () => {
-  it("says the agent never ran only when it truly did nothing", () => {
+  // c4-hire-ux: a never-run agent reads as ready, not broken-and-useless.
+  it("reads a never-run agent as ready for its first task", () => {
     renderNode(<AgentRunHealthSummary runHealth={runHealthFixture()} />);
-    expect(container!.textContent).toContain("This agent has never run");
+    expect(container!.textContent).toContain("Ready for its first task.");
+    expect(container!.textContent).not.toContain("never run");
   });
 
   it("names chat activity instead of claiming the agent never ran", () => {
@@ -396,7 +453,7 @@ describe("AgentRunHealthSummary", () => {
     const text = container!.textContent ?? "";
     expect(text).not.toContain("stopped manually");
     expect(text).not.toContain("stopped by you");
-    expect(text).toContain("Last run cancelled: Cancelled due to budget pause");
+    expect(text).toContain("Last run stopped: Cancelled due to budget pause");
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });
 
@@ -423,7 +480,7 @@ describe("AgentRunHealthSummary", () => {
     const text = container!.textContent ?? "";
     expect(text).not.toContain("stopped manually");
     expect(text).toContain(
-      "Last run cancelled: Interrupted: the issue was held by a subtree pause",
+      "Last run stopped: Interrupted: the issue was held by a subtree pause",
     );
     expect(container!.querySelector('[role="alert"]')).toBeNull();
   });

@@ -69,7 +69,7 @@ export const queryKeys = {
   // AgentDash: UX-2 (#783)
   shipped: (
     companyId: string,
-    filters?: { projectId?: string; agentId?: string; issueId?: string; since?: string; accepted?: boolean },
+    filters?: { projectId?: string; agentId?: string; issueId?: string; since?: string; accepted?: boolean; limit?: number },
   ) =>
     [
       "shipped",
@@ -79,6 +79,9 @@ export const queryKeys = {
       filters?.issueId ?? "",
       filters?.since ?? "",
       filters?.accepted ? "accepted" : "",
+      // c4-polish review: callers that need a wider page must not share a
+      // cache entry with the default-page callers.
+      filters?.limit ?? "",
     ] as const,
   routines: {
     list: (companyId: string, filters?: { projectId?: string | null }) =>

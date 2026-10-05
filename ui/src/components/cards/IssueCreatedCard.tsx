@@ -1,7 +1,13 @@
 // AgentDash (scan 3, lane G): a task created from a confirmed CoS suggestion.
 // The card links straight to the new issue so the founder can follow it.
 import { Link } from "@/lib/router";
+import { useQuery } from "@tanstack/react-query";
 import { issueUrl } from "../../lib/utils";
+import { activityApi } from "../../api/activity";
+import { heartbeatsApi } from "../../api/heartbeats";
+import { issuesApi } from "../../api/issues";
+import { queryKeys } from "../../lib/queryKeys";
+import { isIssueWorkStopped, latestRunByCreatedAt } from "../../lib/issue-stopped";
 
 export interface IssueCreatedCardPayload {
   issueId: string;
@@ -21,8 +27,41 @@ export function issueCreatedNextStep(assigneeName: string | null | undefined, st
 
 export function IssueCreatedCard({ payload }: { payload: IssueCreatedCardPayload | null | undefined }) {
   if (!payload || typeof payload.issueId !== "string" || typeof payload.title !== "string") return null;
+  return <IssueCreatedCardBody payload={payload} />;
+}
+
+function IssueCreatedCardBody({ payload }: { payload: IssueCreatedCardPayload }) {
+  // AgentDash (c4-stops): the card outlives the run that created the task —
+  // when its newest run was stopped and nothing is live, the "they'll start
+  // on it now" line is a lie; say so and point at the issue's Resume.
+  const { data: issue } = useQuery({
+    queryKey: queryKeys.issues.detail(payload.issueId),
+    queryFn: () => issuesApi.get(payload.issueId),
+    staleTime: 30_000,
+  });
+  const issueTrackable = issue?.status === "in_progress" || issue?.status === "todo";
+  const { data: issueRuns } = useQuery({
+    queryKey: queryKeys.issues.runs(payload.issueId),
+    queryFn: () => activityApi.runsForIssue(payload.issueId),
+    enabled: issueTrackable,
+    staleTime: 30_000,
+  });
+  const { data: liveRuns } = useQuery({
+    queryKey: queryKeys.issues.liveRuns(payload.issueId),
+    queryFn: () => heartbeatsApi.liveRunsForIssue(payload.issueId),
+    enabled: issueTrackable,
+    staleTime: 30_000,
+  });
+  const stopped = isIssueWorkStopped({
+    status: issue?.status,
+    hasLiveRun: (liveRuns?.length ?? 0) > 0,
+    latestRunStatus: latestRunByCreatedAt(issueRuns ?? [])?.status,
+  });
+
   const label = payload.identifier ? `${payload.identifier} · ${payload.title}` : payload.title;
-  const nextStep = issueCreatedNextStep(payload.assigneeName, payload.status);
+  const nextStep = stopped
+    ? "Work on this was stopped — open the issue to resume it."
+    : issueCreatedNextStep(payload.assigneeName, issue?.status ?? payload.status);
   return (
     <div
       className="w-full min-w-0 break-words rounded-lg border border-border-soft bg-surface-raised p-3 text-sm shadow-sm sm:p-4"

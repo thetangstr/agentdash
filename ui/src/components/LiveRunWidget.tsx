@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
 import { queryKeys } from "../lib/queryKeys";
 import { formatDateTime } from "../lib/utils";
+import { runStatusLabel } from "../lib/run-status-label";
 import { ExternalLink, Square } from "lucide-react";
 import { Identity } from "./Identity";
 import { RunChatSurface } from "./RunChatSurface";
@@ -117,7 +118,7 @@ export function LiveRunWidget({ issueId, companyId }: LiveRunWidgetProps) {
                     >
                       {run.id.slice(0, 8)}
                     </Link>
-                    <StatusBadge status={run.status} />
+                    <StatusBadge status={run.status} label={runStatusLabel(run.status)} />
                     <span>{formatDateTime(run.startedAt ?? run.createdAt)}</span>
                   </div>
                 </div>

@@ -19,6 +19,8 @@ import { ApiError } from "../api/client";
 // AgentDash (GH #786): the CoS page header and suggested first messages.
 // Scan 3, lane G: plain business language, not "what you want built".
 export const COS_HEADER_LINE = "Tell me what you need done. I'll get the right people on it and ask you only when it's your call.";
+/** AgentDash (c4-polish): phone-width header line — the full sentence truncates mid-clause at 390px. */
+export const COS_HEADER_LINE_MOBILE = "Tell me what you need done.";
 // Role-neutral: the first session is not always an engineering company
 // (first-session test, Lane A item 4).
 export const COS_SUGGESTED_MESSAGES = [
@@ -430,6 +432,7 @@ function CoSConversationView({
           padComposerForSafeArea={layout === "fullscreen"}
           headerProps={{
             agentRole: COS_HEADER_LINE,
+            agentRoleMobile: COS_HEADER_LINE_MOBILE,
             action: hasHiredTeam ? (
               <Link
                 to="/workforce"

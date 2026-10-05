@@ -311,6 +311,40 @@ describe("summarizeHeartbeatRunResultJson status lines", () => {
     expect(summary).toEqual({ result: "real output" });
   });
 
+  // AgentDash (c4-stops): the hosted pass showed run summaries that were raw
+  // command output. Leading transport plumbing never survives.
+  it("strips leading stream markers, shell echoes and exit codes", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "--- stderr ---\n$ pnpm test\nexit_code: 0\nAll 42 checks pass and the fix is shipped.",
+      ),
+    ).toEqual({ summary: "All 42 checks pass and the fix is shipped." });
+  });
+
+  it("strips a leading Codex-style exec header block", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "command: pnpm -r typecheck\nstatus: completed\nexit_code: 0\n\nTypecheck is clean.",
+      ),
+    ).toEqual({ summary: "Typecheck is clean." });
+  });
+
+  it("strips leading env-assignment lines — 'Using DATABASE_URL=…' is plumbing", () => {
+    expect(
+      mergeHeartbeatRunResultJson(
+        null,
+        "Reading the task. Using DATABASE_URL=postgres://localhost/db\nMigrated the schema and seeded the demo company.",
+      ),
+    ).toEqual({ summary: "Migrated the schema and seeded the demo company." });
+  });
+
+  it("keeps a first line that merely names an env var without assigning it", () => {
+    const text = "DATABASE_URL now points at the staging database; migration applied.";
+    expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
+  });
+
   it("strips leading ✗/→ lines for hermes_local but keeps them elsewhere", () => {
     const row = { summary: "✗ tool call failed, retrying\n→ resuming\nAll 42 checks pass." };
     expect(summarizeHeartbeatRunResultJson(row, "hermes_local")).toEqual({

@@ -129,3 +129,43 @@ export function agentPickerSubtitleUnderName(agent: {
   const name = (agent.name ?? "").trim();
   return name && line.toLowerCase() === name.toLowerCase() ? "" : line;
 }
+
+/**
+ * AgentDash (c4-hire-ux): who the "Created by" line credits.
+ *
+ * - the Chief of Staff stands up with the workspace — it is not hired;
+ * - a CoS plan/interview hire (the `onboardingMaterialization` marker) credits
+ *   the person who confirmed — `createdByUserId` — and reads "…, via Chief of
+ *   Staff". Rows written before the stamp existed fall through to the
+ *   unattributed wording rather than crediting the accountable person, who
+ *   may not be the one who confirmed (review-1029 finding 3);
+ * - a review-queue hire says so, with its reason;
+ * - anything else keeps the honest "Hired by an agent".
+ */
+export type AgentHireOrigin =
+  | { kind: "cos" }
+  | { kind: "person"; userId: string; viaCos: boolean }
+  | { kind: "cosUnattributed" }
+  | { kind: "reviewQueue"; reason: string | null }
+  | { kind: "agent" };
+
+export function agentHireOrigin(agent: {
+  role?: string | null;
+  createdByUserId?: string | null;
+  metadata?: unknown;
+}): AgentHireOrigin {
+  if (agent.role === "chief_of_staff") return { kind: "cos" };
+  const metadata =
+    agent.metadata && typeof agent.metadata === "object" && !Array.isArray(agent.metadata)
+      ? (agent.metadata as Record<string, unknown>)
+      : null;
+  const viaCos = typeof metadata?.onboardingMaterialization === "string";
+  const userId = agent.createdByUserId ?? null;
+  if (userId) return { kind: "person", userId, viaCos };
+  if (viaCos) return { kind: "cosUnattributed" };
+  if (metadata?.autoHired === true) {
+    const reason = metadata.autoHireReason;
+    return { kind: "reviewQueue", reason: typeof reason === "string" && reason.trim().length > 0 ? reason.trim() : null };
+  }
+  return { kind: "agent" };
+}

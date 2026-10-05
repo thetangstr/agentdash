@@ -4011,18 +4011,30 @@ export function agentRoutes(
       // tiers switched off the inference is skipped too: a model id matching
       // a shipped tier is then a person's explicit choice, not a managed
       // default.
+      const tiersActive = hermesModelTiersActive();
       const persistedModelTier =
-        requestedAdapterType === HERMES_LOCAL_ADAPTER_TYPE && hermesModelTiersActive()
+        requestedAdapterType === HERMES_LOCAL_ADAPTER_TYPE && tiersActive
           ? appliedModelTier
             ?? hermesModelTierForModel(asNonEmptyString(normalizedEffectiveAdapterConfig.model))
           : null;
+      // AgentDash (review-1028 follow-up): on a tiers-off box the stamp is
+      // provenance, not a live flag — a PATCH that leaves the adapter type
+      // and model alone (a timeoutSec edit, say) must not erase it. The
+      // clears that already fire under tiers stay: a custom or cleared
+      // model, and any adapterType switch.
+      const keepRecordedModelTier =
+        !tiersActive
+        && requestedAdapterType === HERMES_LOCAL_ADAPTER_TYPE
+        && !changingAdapterType
+        && asNonEmptyString(normalizedEffectiveAdapterConfig.model)
+          === asNonEmptyString(existingAdapterConfig.model);
       const metadataPatch: Record<string, unknown> = {
         ...(asRecord(existing.metadata) ?? {}),
         ...(asRecord(patchData.metadata) ?? {}),
       };
       if (persistedModelTier) {
         metadataPatch[AGENT_MODEL_TIER_METADATA_KEY] = persistedModelTier;
-      } else {
+      } else if (!keepRecordedModelTier) {
         delete metadataPatch[AGENT_MODEL_TIER_METADATA_KEY];
       }
       patchData.metadata = metadataPatch;

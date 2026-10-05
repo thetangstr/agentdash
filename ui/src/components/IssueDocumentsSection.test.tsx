@@ -719,10 +719,15 @@ describe("IssueDocumentsSection", () => {
     queryClient.clear();
   });
 
-  // AgentDash (c3-a11y review): the Helpful / Needs work thumbs hide only on
-  // the document the awaiting-review deliverable binds to — not on every
-  // document, and not at all when the review actions aren't showing.
-  it("hides the thumbs only on the deliverable's document while it awaits review", async () => {
+  // AgentDash (c4-polish): the Helpful / Needs work thumbs hide on the
+  // document ANY review-lifecycle deliverable binds to — the gate is the
+  // product's reviewState, not the issue-level review actions. A decided
+  // (approved) or deciding deliverable doesn't take votes.
+  it.each([
+    ["needs_board_review", "ready_for_review"],
+    ["approved", "approved"],
+    ["changes_requested", "changes_requested"],
+  ])("hides the thumbs only on the deliverable's document while reviewState is %s", async (reviewState, status) => {
     const issue = createIssue();
     const root = createRoot(container);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -738,7 +743,8 @@ describe("IssueDocumentsSection", () => {
           companyId: "company-1",
           issueId: "issue-1",
           type: "document",
-          status: "ready_for_review",
+          status,
+          reviewState,
           metadata: { documentKey: "proposal" },
         },
       ],
@@ -750,7 +756,7 @@ describe("IssueDocumentsSection", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} awaitingReview onVote={async () => {}} />
+          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} onVote={async () => {}} />
         </QueryClientProvider>,
       );
     });
@@ -769,7 +775,7 @@ describe("IssueDocumentsSection", () => {
     queryClient.clear();
   });
 
-  it("keeps the thumbs when the review actions are not showing", async () => {
+  it("keeps the thumbs on a document whose deliverable has no review lifecycle", async () => {
     const issue = createIssue();
     const root = createRoot(container);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -784,7 +790,8 @@ describe("IssueDocumentsSection", () => {
           companyId: "company-1",
           issueId: "issue-1",
           type: "document",
-          status: "ready_for_review",
+          status: "active",
+          reviewState: "none",
           metadata: { documentKey: "proposal" },
         },
       ],
@@ -796,8 +803,6 @@ describe("IssueDocumentsSection", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          {/* awaitingReview defaults to false — e.g. a member without board
-              access, a live issue, or a done/cancelled one. */}
           <IssueDocumentsSection issue={issue} canDeleteDocuments={false} onVote={async () => {}} />
         </QueryClientProvider>,
       );

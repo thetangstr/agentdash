@@ -203,4 +203,39 @@ describe("stampPlanModelTiers", () => {
       Object.assign(process.env, saved);
     }
   });
+
+  it("strips author-written modelTier/model when the tiers are inactive (review-1028 follow-up)", () => {
+    delete process.env.AGENTDASH_HERMES_MODEL_TIERS;
+    const authored = {
+      ...plan,
+      agents: [
+        { ...plan.agents[0], modelTier: "high" as const, model: "made-up-model" },
+        plan.agents[1],
+      ],
+    };
+    const stamped = stampPlanModelTiers(authored);
+    expect(stamped.agents[0]).not.toHaveProperty("modelTier");
+    expect(stamped.agents[0]).not.toHaveProperty("model");
+    expect(stamped.agents[0]).toMatchObject({ role: "chief_of_staff", name: "Ava" });
+    expect(stamped.agents[1]).toBe(plan.agents[1]);
+  });
+
+  it("strips author-written modelTier/model on agents the instance did not stamp (non-hermes adapter)", () => {
+    const env = makeEnv({ AGENTDASH_HERMES_MODEL_TIERS: "on" });
+    const saved = { ...process.env };
+    Object.assign(process.env, env);
+    try {
+      const authored = {
+        ...plan,
+        agents: [{ ...plan.agents[2], modelTier: "high" as const, model: "qwen3.8-max" }],
+      };
+      const stamped = stampPlanModelTiers(authored);
+      expect(stamped.agents[0]).not.toHaveProperty("modelTier");
+      expect(stamped.agents[0]).not.toHaveProperty("model");
+      expect(stamped.agents[0]).toMatchObject({ adapterType: "claude_local" });
+    } finally {
+      for (const key of Object.keys(env)) delete process.env[key];
+      Object.assign(process.env, saved);
+    }
+  });
 });

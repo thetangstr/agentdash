@@ -1,10 +1,13 @@
 // AgentDash: CoS chat header — identity, context, status
 import type { ReactNode } from "react";
 import { Sparkles } from "lucide-react";
+import { useIsPhone } from "../hooks/useIsPhone";
 
 export interface ChatHeaderProps {
   agentName?: string;
   agentRole?: string;
+  /** AgentDash: phone-width replacement for `agentRole` — a full sentence truncates mid-clause at 390px. */
+  agentRoleMobile?: string;
   stepCurrent?: number;
   stepTotal?: number;
   /** AgentDash: a compact trailing action (e.g. a link), shown at the right edge of the header. */
@@ -14,10 +17,15 @@ export interface ChatHeaderProps {
 export function ChatHeader({
   agentName = "Chief of Staff",
   agentRole = "Setting up your AgentDash workspace",
+  agentRoleMobile,
   stepCurrent,
   stepTotal,
   action,
 }: ChatHeaderProps) {
+  // Render one span, not a hidden pair: two elements containing the same
+  // phrase break getByText strict-mode resolution.
+  const isPhone = useIsPhone();
+  const role = isPhone && agentRoleMobile ? agentRoleMobile : agentRole;
   return (
     <div
       data-testid="chat-header"
@@ -38,7 +46,7 @@ export function ChatHeader({
         <div className="flex min-w-0 flex-col">
           <span className="text-sm font-semibold text-text-primary leading-tight">{agentName}</span>
           {/* Phones keep the header to one line of context. */}
-          <span className="text-xs text-text-tertiary leading-tight mt-0.5 max-sm:truncate">{agentRole}</span>
+          <span className="text-xs text-text-tertiary leading-tight mt-0.5 max-sm:truncate">{role}</span>
         </div>
       </div>
 

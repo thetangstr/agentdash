@@ -94,22 +94,47 @@ export function hermesModelTierStamp(input: {
 }
 
 /**
+ * AgentDash (review-1028 follow-up): apply a resolved stamp when there is
+ * one, strip `modelTier`/`model` when there is not. A card payload carries
+ * untrusted content — an LLM-authored plan or proposal can emit the fields
+ * itself — and passing them through would present them as the instance's
+ * own resolution. Identity is preserved when nothing changed.
+ */
+export function applyModelTierStamp<T extends object>(
+  base: T,
+  stamp: { modelTier: HermesModelTierId; model: string } | null,
+): T {
+  const record = base as Record<string, unknown>;
+  if (stamp) {
+    if (record.modelTier === stamp.modelTier && record.model === stamp.model) return base;
+    return { ...base, ...stamp };
+  }
+  if (record.modelTier === undefined && record.model === undefined) return base;
+  const { modelTier: _tier, model: _model, ...rest } = record;
+  return rest as T;
+}
+
+/**
  * Stamp the resolved model+tier onto each hermes_local agent in a plan-card
- * payload. Returns the payload untouched when tiers are inactive, so a card
- * written on an off-instance looks exactly like a pre-tier card.
+ * payload, and strip the fields from every agent the instance did not
+ * resolve — a plan authored on an off-instance, a BYOK box, or with
+ * hand-written tier fields must not read as server truth. Returns the
+ * payload untouched when there is nothing to stamp and nothing to strip.
  */
 export function stampPlanModelTiers(plan: AgentPlanProposalV1Payload): AgentPlanProposalV1Payload {
-  if (!hermesModelTiersActive()) return plan;
+  const active = hermesModelTiersActive();
   let changed = false;
   const agents = plan.agents.map((agent) => {
-    const stamp = hermesModelTierStamp({
-      adapterType: agent.adapterType,
-      role: agent.role,
-      title: agent.title,
-    });
-    if (!stamp) return agent;
-    changed = true;
-    return { ...agent, ...stamp };
+    const stamp = active
+      ? hermesModelTierStamp({
+          adapterType: agent.adapterType,
+          role: agent.role,
+          title: agent.title,
+        })
+      : null;
+    const next = applyModelTierStamp(agent, stamp);
+    if (next !== agent) changed = true;
+    return next;
   });
   return changed ? { ...plan, agents } : plan;
 }

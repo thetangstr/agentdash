@@ -10,7 +10,14 @@ import { AGENT_ROLES, type AgentRole } from "./constants.js";
 const ROLE_KEYWORD_RULES: ReadonlyArray<{ role: AgentRole; keywords: readonly string[] }> = [
   { role: "cto", keywords: ["cto", "technical_director", "tech_lead", "architect"] },
   { role: "cmo", keywords: ["cmo", "marketing", "content", "growth", "brand", "seo", "social", "copywrit", "communications", "pr_lead", "outreach", "campaign", "newsletter"] },
-  { role: "cfo", keywords: ["cfo", "finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury"] },
+  // AgentDash (c4-hire-ux): only actual C-suite titles map to the executive
+  // `cfo` role. Finance staff (a bookkeeper, accountant, controller) land in
+  // the neutral `finance` role below instead of being labelled CFO.
+  { role: "cfo", keywords: ["cfo", "chief_financial"] },
+  {
+    role: "finance",
+    keywords: ["finance", "financial", "accounting", "accountant", "bookkeep", "controller", "treasury"],
+  },
   // AgentDash (scan 4, lane O2): an accounting firm's plan proposed "Month End
   // Close Coordinator" and "Close Checklist Manager", which fell to pm through
   // "coordinator" or to general. Only phrases that mean bookkeeping work are
@@ -19,7 +26,7 @@ const ROLE_KEYWORD_RULES: ReadonlyArray<{ role: AgentRole; keywords: readonly st
   // Engineer", "Billing Engineer", "Deal Close Specialist"). Kept below the
   // original cfo rule and above security, qa, researcher and pm.
   {
-    role: "cfo",
+    role: "finance",
     keywords: [
       "month_end", "year_end", "close_checklist", "period_close", "books_close",
       "reconcil", "general_ledger", "payable", "receivable", "payroll",

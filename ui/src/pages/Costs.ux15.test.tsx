@@ -212,7 +212,7 @@ describe("Costs page (UX-15)", () => {
     expect(container.textContent).toContain("Finance ledger");
   });
 
-  it("says 'Not metered yet' rather than $0 for unmetered shipped spend", async () => {
+  it("says 'Not measured' rather than $0 for unmetered shipped spend", async () => {
     mockIssuesApi.listShipped.mockResolvedValue(shippedFeed(UNMETERED_MONTH));
     mockCostsApi.byIssue.mockResolvedValue([]);
     mockCostsApi.summary.mockResolvedValue({
@@ -224,8 +224,8 @@ describe("Costs page (UX-15)", () => {
       pricedSpend: false,
     });
     await render();
-    expect(container.querySelector('[data-testid="cost-per-shipped-pr-tile"]')?.textContent).toContain("Not metered yet");
-    expect(container.querySelector('[data-testid="by-issue-card"]')?.textContent).toContain("Not metered yet.");
+    expect(container.querySelector('[data-testid="cost-per-shipped-pr-tile"]')?.textContent).toContain("Not measured");
+    expect(container.querySelector('[data-testid="by-issue-card"]')?.textContent).toContain("Not measured.");
   });
 
   it("shows tokens, not $0.00, when shipped usage recorded no cents", async () => {

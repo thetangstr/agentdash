@@ -4,10 +4,10 @@
  *   - The agent page's daily-ceiling line read "589.4k used today" while Home,
  *     Shipped and the run page agreed on 60.7k / 36.9k. The ceiling counts
  *     cached reads (enforcement), so the line now says so.
- *   - Right after a run, the issue's Result card read "not metered yet",
+ *   - Right after a run, the issue's Result card read "not measured",
  *     which looked like an error. A run-created deliverable without usage now
  *     reads "counting…" for a few minutes; one recorded by hand keeps "not
- *     metered yet".
+ *     measured".
  *
  * The Readable transcript's single-command summaries and redaction are covered
  * by ui/src/lib/readableTranscript.test.ts (a run transcript cannot be seeded
@@ -65,7 +65,7 @@ test.describe("Token figures (scan 4, lane O1)", () => {
   // way). One recorded by hand through the API has no run to meter it, so it
   // must say so plainly rather than "counting…" forever. The run-created case
   // is covered by IssueResultBlock.test.tsx (a run cannot be seeded here).
-  test("a hand-recorded deliverable reads 'not metered yet', never 'counting…'", async ({ page, request }) => {
+  test("a hand-recorded deliverable reads 'not measured', never 'counting…'", async ({ page, request }) => {
     const company = await ensureCompany(request);
     const issue = await post<{ id: string; identifier: string | null }>(
       request,
@@ -83,7 +83,7 @@ test.describe("Token figures (scan 4, lane O1)", () => {
     await page.goto(`${BASE_URL}/${company.issuePrefix}/issues/${issue.identifier ?? issue.id}`);
     const result = page.getByTestId("issue-result-block");
     await expect(result).toBeVisible({ timeout: 20_000 });
-    await expect(result.getByTestId("issue-result-usage")).toHaveText("not metered yet");
+    await expect(result.getByTestId("issue-result-usage")).toHaveText("not measured");
     await expect(result).not.toContainText("counting…");
   });
 });

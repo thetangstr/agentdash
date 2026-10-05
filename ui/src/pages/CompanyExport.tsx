@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type {
-  Agent,
-  CompanyPortabilityFileEntry,
-  CompanyPortabilityExportPreviewResult,
-  CompanyPortabilityExportResult,
-  CompanyPortabilityManifest,
-  Project,
+import {
+  AGENT_ROLE_LABELS,
+  type Agent,
+  type CompanyPortabilityFileEntry,
+  type CompanyPortabilityExportPreviewResult,
+  type CompanyPortabilityExportResult,
+  type CompanyPortabilityManifest,
+  type Project,
 } from "@paperclipai/shared";
 import { useNavigate, useLocation } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
@@ -389,9 +390,14 @@ function FrontmatterCard({
 
 // ── Client-side README generation ────────────────────────────────────
 
+// AgentDash (review-1029): shared labels first (finance, chief_of_staff and
+// the rest), with the legacy export-only roles this page has always known.
 const ROLE_LABELS: Record<string, string> = {
-  ceo: "CEO", cto: "CTO", cmo: "CMO", cfo: "CFO", coo: "COO",
-  vp: "VP", manager: "Manager", engineer: "Engineer", agent: "Agent",
+  ...AGENT_ROLE_LABELS,
+  coo: "COO",
+  vp: "VP",
+  manager: "Manager",
+  agent: "Agent",
 };
 
 /**

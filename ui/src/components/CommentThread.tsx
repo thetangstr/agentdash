@@ -164,9 +164,8 @@ function parseReassignment(target: string): CommentReassignment | null {
   return null;
 }
 
-function shouldImplicitlyReopenComment(issueStatus: string | undefined, assigneeValue: string) {
-  const resumesToTodo = issueStatus === "done" || issueStatus === "cancelled" || issueStatus === "blocked";
-  return resumesToTodo && assigneeValue.startsWith("agent:");
+function issueCommentCanReopenIssue(issueStatus: string | undefined) {
+  return issueStatus === "done" || issueStatus === "cancelled";
 }
 
 // AgentDash (scan 4, lane O2): status changes read "Backlog → To do", not "backlog → todo".
@@ -744,6 +743,7 @@ export function CommentThread({
   const [attaching, setAttaching] = useState(false);
   const effectiveSuggestedAssigneeValue = suggestedAssigneeValue ?? currentAssigneeValue;
   const [reassignTarget, setReassignTarget] = useState(effectiveSuggestedAssigneeValue);
+  const [reopenRequested, setReopenRequested] = useState(false);
   const [highlightCommentId, setHighlightCommentId] = useState<string | null>(null);
   const [votingTargetId, setVotingTargetId] = useState<string | null>(null);
   const editorRef = useRef<MarkdownEditorRef>(null);
@@ -868,10 +868,10 @@ export function CommentThread({
     if (!trimmed) return;
     const hasReassignment = enableReassign && reassignTarget !== currentAssigneeValue;
     const reassignment = hasReassignment ? parseReassignment(reassignTarget) : null;
-    const reopen = shouldImplicitlyReopenComment(
-      issueStatus,
-      hasReassignment ? reassignTarget : currentAssigneeValue,
-    ) ? true : undefined;
+    // AgentDash (c4-stops): a plain comment never reopens finished work; the
+    // composer checkbox (or a reassignment, which the server treats as the
+    // explicit work signal) is the only reopen path.
+    const reopen = issueCommentCanReopenIssue(issueStatus) && reopenRequested ? true : undefined;
     const submittedBody = trimmed;
 
     setSubmitting(true);
@@ -880,6 +880,7 @@ export function CommentThread({
       await onAdd(submittedBody, reopen, reassignment ?? undefined);
       if (draftKey) clearDraft(draftKey);
       setReassignTarget(effectiveSuggestedAssigneeValue);
+      setReopenRequested(false);
     } catch {
       setBody((current) =>
         restoreSubmittedCommentDraft({
@@ -1001,6 +1002,22 @@ export function CommentThread({
             imageUploadHandler={imageUploadHandler}
             contentClassName="min-h-[60px] text-sm"
           />
+          {issueCommentCanReopenIssue(issueStatus) ? (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={reopenRequested}
+                onChange={(event) => setReopenRequested(event.target.checked)}
+              />
+              <span>
+                <span className="block font-medium">Reopen this issue</span>
+                <span className="text-xs text-muted-foreground">
+                  Moves it back to To do and notifies the assignee. Leave unchecked for a comment that does not restart work.
+                </span>
+              </span>
+            </label>
+          ) : null}
           <div className="flex items-center justify-end gap-3">
             {(imageUploadHandler || onAttachImage) && (
               <div className="mr-auto flex items-center gap-3">

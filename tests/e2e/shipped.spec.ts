@@ -79,7 +79,7 @@ test.describe("Shipped (UX-2)", () => {
     const row = page.getByTestId("shipped-row").filter({ hasText: PR_TITLE }).first();
     await expect(row.locator(`a[href="${PR_URL}"]`)).toBeVisible({ timeout: 20_000 });
     await expect(row).toContainText("Ship the health badge");
-    await expect(row.getByTestId("shipped-usage")).toHaveText("not metered yet");
+    await expect(row.getByTestId("shipped-usage")).toHaveText("not measured");
     await expect(page.getByTestId("shipped-month-total")).toContainText("shipped");
   });
 });

@@ -1044,7 +1044,7 @@ export function Costs() {
                 label="Cost per shipped PR"
                 value={
                   !shippedMonth?.usage.metered
-                    ? "Not metered yet"
+                    ? "Not measured"
                     : shippedMonth.usage.costCents > 0
                       ? formatCents(Math.round(shippedMonth.usage.costCents / shippedMonth.pullRequests))
                       // Token-only usage: cents never recorded, so "cost"
@@ -1182,7 +1182,7 @@ export function Costs() {
                   <CardContent className="space-y-2 px-5 pb-5 pt-2">
                     {(spendData?.byIssue.length ?? 0) === 0 ? (
                       <p className="text-sm text-muted-foreground">
-                        {spendMeasured ? "No issue-attributed costs yet." : "Not metered yet."}
+                        {spendMeasured ? "No issue-attributed costs yet." : "Not measured."}
                       </p>
                     ) : (
                       spendData?.byIssue.slice(0, 8).map((row) => (

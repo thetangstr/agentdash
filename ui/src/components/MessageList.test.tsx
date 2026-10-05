@@ -70,13 +70,13 @@ describe("MessageList", () => {
 
   it("shows the one display mask in an agent reply, not a stored redaction marker", () => {
     render([msg("m1", { content: "The key read ***REDACTED*** at rest" })]);
-    expect(container.textContent).toContain("•••• hidden");
+    expect(container.textContent).toContain("•••• (hidden)");
     expect(container.textContent).not.toContain("REDACTED");
   });
 
   it("shows the one display mask in a person's own bubble", () => {
     render([msg("m1", { role: "user", content: "the token came back [REDACTED_API_KEY]" })]);
-    expect(container.textContent).toContain("•••• hidden");
+    expect(container.textContent).toContain("•••• (hidden)");
     expect(container.textContent).not.toContain("REDACTED_API_KEY");
   });
 

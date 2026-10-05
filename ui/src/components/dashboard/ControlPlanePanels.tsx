@@ -22,7 +22,7 @@ import { accessApi } from "../../api/access";
 import { queryKeys } from "../../lib/queryKeys";
 import { buildCompanyUserProfileMap } from "../../lib/company-members";
 import { formatCents, formatTokens } from "../../lib/utils";
-import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE } from "../../lib/token-figures";
+import { BILLED_BY_PROVIDER_NOTE, NOT_MEASURED_TEXT, TOKENS_COUNTED_NOTE, UNMEASURED_USAGE_NOTE } from "../../lib/token-figures";
 import { timeAgo } from "../../lib/timeAgo";
 import { agentIdentityLineUnderName, humanizeAgentRole, isGenericAgentRole } from "../../lib/agent-identity";
 import { ActivityRow } from "../ActivityRow";
@@ -53,18 +53,24 @@ export function fleetRowSubtitle(agent: { name?: string | null; role?: string | 
  * AgentDash: what the month-spend tile shows. A BYOK box meters tokens but not
  * dollars (the customer's model provider bills them), so "$0.00" next to real
  * usage would be wrong. Dollars whenever any were metered; tokens when the
- * agents used tokens and nothing was priced; "$0.00" only when nothing ran.
+ * agents used tokens and nothing was priced; "Not measured" when work
+ * happened but recorded no usage; "$0.00" only when nothing ran. Chat turns
+ * count as work — conversations leave no heartbeat run row.
  */
 export function monthSpendTile(costs: DashboardSummary["costs"]): {
   label: string;
   value: string;
   unmetered: boolean;
+  unmeasured: boolean;
 } {
   const tokens = Number(costs.monthTokens ?? 0);
   if (costs.monthSpendCents <= 0 && tokens > 0) {
-    return { label: "Tokens this month", value: formatTokens(tokens), unmetered: true };
+    return { label: "Tokens this month", value: formatTokens(tokens), unmetered: true, unmeasured: false };
   }
-  return { label: "Spend this month", value: formatCents(costs.monthSpendCents), unmetered: false };
+  if (costs.monthSpendCents <= 0 && ((costs.monthRuns ?? 0) + (costs.monthChatTurns ?? 0)) > 0) {
+    return { label: "Spend this month", value: NOT_MEASURED_TEXT, unmetered: false, unmeasured: true };
+  }
+  return { label: "Spend this month", value: formatCents(costs.monthSpendCents), unmetered: false, unmeasured: false };
 }
 
 export const NO_ACTIVITY_TEXT = "No activity yet. Hires, issues and runs show up here as they happen.";
@@ -254,6 +260,8 @@ function StatsRow({
           detail={
             spend.unmetered
               ? BYOK_SPEND_NOTE
+              : spend.unmeasured
+              ? UNMEASURED_USAGE_NOTE
               : costs.monthBudgetCents > 0
               ? `${costs.monthUtilizationPercent}% of ${formatCents(costs.monthBudgetCents)} budget`
               : "No monthly budget set"

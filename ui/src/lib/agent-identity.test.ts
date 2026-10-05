@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentHireOrigin,
   agentIdentityLine,
   agentIdentityLineUnderName,
   agentPickerSubtitle,
@@ -76,5 +77,55 @@ describe("agent identity copy", () => {
     );
     expect(agentIdentityLineUnderName({ name: "Maya", role: "chief_of_staff", title: null })).toBe("Chief of Staff");
     expect(agentIdentityLineUnderName({ name: null, role: "general", title: null })).toBe("General");
+  });
+});
+
+// AgentDash (c4-hire-ux): who the "Created by" line credits.
+describe("agentHireOrigin", () => {
+  it("reads the Chief of Staff as set up with the workspace, never hired", () => {
+    expect(agentHireOrigin({ role: "chief_of_staff", createdByUserId: "u1" })).toEqual({ kind: "cos" });
+  });
+
+  it("credits the confirming person on a stamped CoS plan hire", () => {
+    expect(
+      agentHireOrigin({
+        role: "finance",
+        createdByUserId: "u-dana",
+        metadata: { onboardingMaterialization: "complete" },
+      }),
+    ).toEqual({ kind: "person", userId: "u-dana", viaCos: true });
+  });
+
+  it("does not credit the accountable person on pre-stamp CoS hires — accountable is not necessarily who confirmed", () => {
+    expect(
+      agentHireOrigin({
+        role: "engineer",
+        createdByUserId: null,
+        accountable: { userId: "u-dana" },
+        metadata: { onboardingMaterialization: "resumed_incomplete" },
+      } as Parameters<typeof agentHireOrigin>[0]),
+    ).toEqual({ kind: "cosUnattributed" });
+  });
+
+  it("says 'hired through the Chief of Staff' when a CoS hire has no person to credit", () => {
+    expect(
+      agentHireOrigin({ role: "engineer", metadata: { onboardingMaterialization: "pending" } }),
+    ).toEqual({ kind: "cosUnattributed" });
+  });
+
+  it("keeps the review-queue label and reason for automatic hires", () => {
+    expect(
+      agentHireOrigin({ role: "engineer", metadata: { autoHired: true, autoHireReason: "neutrality_conflict" } }),
+    ).toEqual({ kind: "reviewQueue", reason: "neutrality_conflict" });
+  });
+
+  it("stays 'Hired by an agent' for an ordinary unattributed hire", () => {
+    expect(agentHireOrigin({ role: "engineer" })).toEqual({ kind: "agent" });
+    // A creator stamp without the CoS marker is a direct (non-CoS) credit.
+    expect(agentHireOrigin({ role: "engineer", createdByUserId: "u1" })).toEqual({
+      kind: "person",
+      userId: "u1",
+      viaCos: false,
+    });
   });
 });
