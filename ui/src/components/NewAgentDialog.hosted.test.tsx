@@ -409,7 +409,7 @@ describe("NewAgentDialog self-hosted", () => {
     const select = container.querySelector('select[aria-label="Workforce role"]') as HTMLSelectElement;
     expect(select).not.toBeNull();
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'marketing-content'); select.dispatchEvent(new Event('change', { bubbles: true })); });
-    expect(container.textContent).toContain('Output standards');
+    expect(container.textContent).toContain('What good work looks like');
     const submit = [...container.querySelectorAll('button')].find(b => b.textContent?.includes('Ask your Chief of Staff'))!;
     await act(async () => submit.click()); await flush();
     expect(mockConversationsApi.post).toHaveBeenCalledWith('conv-1', expect.stringContaining('workforceTemplateId: marketing-content'), 'company-1');

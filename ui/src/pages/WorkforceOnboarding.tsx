@@ -118,13 +118,13 @@ export function WorkforceAccountability({ companyId, agent }: { companyId: strin
   } });
   return <div id="workforce-accountability" className="space-y-2 rounded-lg border p-3 text-sm">
     <p>
-      <strong>Accountable human:</strong> {accountableLabel(agent) ?? 'Unassigned'}{members.data && !activeOwner ? ' — active assignment required' : ''}</p>
+      <strong>Accountable person:</strong> {accountableLabel(agent) ?? 'Unassigned'}{members.data && !activeOwner ? ' — active assignment required' : ''}</p>
     <p className="text-muted-foreground">Open questions wait for a named, active person. Assigning someone here does not answer questions that are already open. {agent.autonomy !== 'autonomous' && 'Stewardship pairs one person with one agent.'}</p>
     <WorkforceError error={members.error || assign.error} />
     <div className="flex flex-wrap gap-2">
-      <select aria-label="Accountable human" className="min-w-0 rounded-md border bg-background p-2" value={person} onChange={e => setPerson(e.target.value)}>
+      <select aria-label="Accountable person" className="min-w-0 rounded-md border bg-background p-2" value={person} onChange={e => setPerson(e.target.value)}>
         <option value="">Choose a person explicitly</option>{choices.map(m => <option key={m.principalId} value={m.principalId}>{m.user?.name || m.user?.email || m.principalId}</option>)}</select>
-      <Button variant="outline" disabled={!person || assign.isPending} onClick={() => assign.mutate()}>Assign accountable human</Button>
+      <Button variant="outline" disabled={!person || assign.isPending} onClick={() => assign.mutate()}>Assign accountable person</Button>
     </div>
   </div>;
 }
@@ -138,10 +138,10 @@ export function WorkforceAgentPanel({ companyId, agent }: { companyId: string; a
   const ownerActive = !!agent.accountable && members.data?.members.some(m => m.status === 'active' && m.principalId === agent.accountable!.userId);
   const e = enrollment.data;
   const r = readiness.data;
-  const phaseLabels = { learning: 'Learning company context', needs_input: 'Needs human input', working: 'Working on first job', awaiting_review: 'Awaiting review', ready: 'Ready for work', refresh_needed: 'Company context needs refresh' };
+  const phaseLabels = { learning: 'Learning company context', needs_input: 'Needs input', working: 'Working on first job', awaiting_review: 'Awaiting review', ready: 'Ready for work', refresh_needed: 'Company context needs refresh' };
   return <section className="space-y-4 rounded-xl border p-5">
     <div>
-      <h2 className="text-lg font-semibold">{agent.name} · role readiness</h2>
+      <h2 className="text-lg font-semibold">{agent.name} · readiness</h2>
       <p className="text-sm text-muted-foreground">Being connected to a model is not the same as being ready to deliver — this checks real, accepted work.</p>
     </div>
     <WorkforceError error={enrollment.error || readiness.error || action.error} />
@@ -157,7 +157,7 @@ export function WorkforceAgentPanel({ companyId, agent }: { companyId: string; a
         <p className="text-sm">{r.reason}</p>{r.missingFactKeys.length > 0 && <p className="text-sm">Missing facts: {r.missingFactKeys.join(', ')}</p>}<p className="text-sm">{r.acceptedVerdictId ? 'Neutral review accepted' : 'First-job acceptance not yet established'}</p>{r.firstJobIssueId && <Link disableIssueQuicklook to={`/issues/${r.firstJobIssueId}`} className="text-sm underline">Open first job, artifacts and review</Link>}</div>}{e.skillInstallError && <WorkforceError error={e.skillInstallError} />}<div className="flex flex-wrap gap-2">
         {r?.phase !== 'ready' && <Button disabled={action.isPending || !ownerActive} onClick={() => action.mutate('start')}>{e.firstJobIssueId ? 'Resume first job' : 'Start first job'}</Button>}
         <Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('retry')}>Retry skill installation</Button>
-      </div>{!ownerActive && <a className="text-sm underline" href="#workforce-accountability">Assign an active human before starting a job that needs input</a>}{r?.firstJobIssueId && <WorkforceQuestions companyId={companyId} issueId={r.firstJobIssueId} agent={agent} requiredIds={r.pendingQuestionIds} />}</>}
+      </div>{!ownerActive && <a className="text-sm underline" href="#workforce-accountability">Assign an active person before starting a job that needs input</a>}{r?.firstJobIssueId && <WorkforceQuestions companyId={companyId} issueId={r.firstJobIssueId} agent={agent} requiredIds={r.pendingQuestionIds} />}</>}
   </section>;
 }
 export function WorkforceWorkspace({ companyId }: { companyId: string }) {

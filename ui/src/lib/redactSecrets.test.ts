@@ -45,4 +45,23 @@ describe("displayMaskedSecrets", () => {
     const text = "redacted credentials are hidden; nothing masked here";
     expect(displayMaskedSecrets(text)).toBe(text);
   });
+
+  // Canary c4: "postgres://admin:•••• hidden@db.internal" rendered
+  // "hidden@db.internal" as a mailto link. The parenthesised mask cannot form
+  // an email local part, so GFM autolinking never fires on it.
+  it("keeps the mask non-linkable next to an @host", () => {
+    const out = displayMaskedSecrets("postgres://admin:***REDACTED***@db.internal:5432/app");
+    expect(out).toBe("postgres://admin:•••• (hidden)@db.internal:5432/app");
+  });
+
+  it("keeps stray punctuation outside the mask", () => {
+    expect(displayMaskedSecrets('KEY = "***REDACTED***"]')).toBe(`KEY = "${SECRET_MASK_DISPLAY}"]`);
+  });
+
+  it("collapses a re-redacted display mask back to one mask", () => {
+    // Double-redaction turns "•••• (hidden)" into "***REDACTED*** (hidden)";
+    // the tail must consume the new parenthesised spelling too.
+    expect(displayMaskedSecrets("***REDACTED*** (hidden) done")).toBe(`${SECRET_MASK_DISPLAY} done`);
+    expect(redactSecrets(`API_KEY=${SECRET_MASK_DISPLAY}`)).toBe(`API_KEY=${SECRET_MASK_DISPLAY}`);
+  });
 });

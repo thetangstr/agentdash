@@ -3,6 +3,7 @@ import { Link } from "@/lib/router";
 import { StatusBadge } from "./StatusBadge";
 import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/utils";
+import { goalLevelLabel } from "../lib/goal-level-label";
 import { useState } from "react";
 
 interface GoalTreeProps {
@@ -49,7 +50,7 @@ function GoalNode({ goal, children, allGoals, depth, goalLink, onSelect }: GoalN
       {/* AgentDash: mobile redesign — on phones the title wraps under the
           level label instead of truncating; the status badge stays right. */}
       <span className="flex min-w-0 flex-1 items-center gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
-        <span className="shrink-0 text-xs text-muted-foreground capitalize">{goal.level}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{goalLevelLabel(goal.level)}</span>
         <span className="min-w-0 flex-1 truncate max-sm:whitespace-normal max-sm:break-words">{goal.title}</span>
       </span>
       <span className="shrink-0">

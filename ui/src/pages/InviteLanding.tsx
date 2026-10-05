@@ -148,7 +148,10 @@ function InviteCompanyLogo({
       logoUrl={companyLogoUrl}
       brandColor={companyBrandColor}
       logoFit="contain"
-      className={className}
+      // AgentDash (c4-polish): inside the invite header's flex row a long
+      // company name squeezed this to a narrow pill on phones; keep the
+      // avatar square.
+      className={className ? `shrink-0 ${className}` : "shrink-0"}
     />
   );
 }
@@ -308,7 +311,11 @@ export function InviteLandingPage() {
     );
     if (!isMember) return;
     clearPendingInviteToken(token);
-    if (arrivedSignedInRef.current) return;
+    // AgentDash (c4-polish): an approved (consumed) invite has nothing left
+    // to show — proceed into the app even when the visitor arrived signed
+    // in, or the page sits on "Opening company..." forever. The
+    // arrived-signed-in preview only applies to a live invite.
+    if (arrivedSignedInRef.current && inviteQuery.data.joinRequestStatus !== "approved") return;
     navigate("/", { replace: true });
   }, [companiesQuery.data, inviteQuery.data, token, navigate]);
 
@@ -538,7 +545,7 @@ export function InviteLandingPage() {
           <h1 className="text-lg font-semibold">Bootstrap complete</h1>
           <div className="mt-4">
             <Button asChild className="rounded-xl">
-              <Link to="/">Open board</Link>
+              <Link to="/">Go to your workspace</Link>
             </Button>
           </div>
         </div>
@@ -572,7 +579,7 @@ export function InviteLandingPage() {
             </div>
             <div className="mt-4">
               <Button asChild className="w-full rounded-xl">
-                <Link to="/">Open board</Link>
+                <Link to="/">Go to your workspace</Link>
               </Button>
             </div>
           </div>
@@ -712,7 +719,7 @@ export function InviteLandingPage() {
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {authMode === "sign_up"
-                      ? `Start with a AgentDash account. After that, you'll come right back here to accept the invite for ${companyDisplayName}.`
+                      ? `Start with an AgentDash account. After that, you'll come right back here to accept the invite for ${companyDisplayName}.`
                       : "Use the AgentDash account that already matches this invite. If you do not have one yet, switch back to create account."}
                   </p>
                 </div>

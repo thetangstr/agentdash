@@ -165,7 +165,7 @@ describe("IssueResultBlock", () => {
   it("shows the PR link, its state, the agent and the issue's usage", async () => {
     mockIssuesApi.listShipped.mockResolvedValue({ items: [shippedItem()], total: 1, nextCursor: null, monthTotal: null });
     await render();
-    expect(mockIssuesApi.listShipped).toHaveBeenCalledWith("company-1", { issueId: "issue-1" });
+    expect(mockIssuesApi.listShipped).toHaveBeenCalledWith("company-1", { issueId: "issue-1", limit: 200 });
     const block = container.querySelector('[data-testid="issue-result-block"]');
     expect(block?.textContent).toContain("Result");
     const link = container.querySelector('a[href="https://github.com/acme/web/pull/12"]');
@@ -175,7 +175,7 @@ describe("IssueResultBlock", () => {
     expect(block?.textContent).toContain("12.4k tokens");
   });
 
-  // Scan 4 lane O1: right after a run, "not metered yet" read as an error.
+  // Scan 4 lane O1: right after a run, "not measured" read as an error.
   it("says 'counting…' while a just-saved deliverable's usage is still being recorded", async () => {
     mockIssuesApi.listShipped.mockResolvedValueOnce({
       items: [
@@ -193,7 +193,7 @@ describe("IssueResultBlock", () => {
     await render();
     const usage = () => container.querySelector('[data-testid="issue-result-usage"]')?.textContent;
     expect(usage()).toBe("counting…");
-    expect(container.textContent).not.toContain("not metered yet");
+    expect(container.textContent).not.toContain("not measured");
   });
 
   it("never says 'counting…' for a deliverable no run created, or one created long ago and edited since", () => {
@@ -221,7 +221,7 @@ describe("IssueResultBlock", () => {
     expect(isIssueShippedQueryForRun(["shipped", "company-2", "", "", "issue-1", "", ""], data, "company-1", "run-1")).toBe(false);
   });
 
-  it("says 'not metered yet' rather than 0 when the issue has no metering", async () => {
+  it("says 'not measured' rather than 0 when the issue has no metering", async () => {
     const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     mockIssuesApi.listShipped.mockResolvedValue({
       items: [
@@ -237,7 +237,7 @@ describe("IssueResultBlock", () => {
       monthTotal: null,
     });
     await render();
-    expect(container.textContent).toContain("not metered yet");
+    expect(container.textContent).toContain("not measured");
     expect(container.textContent).not.toMatch(/\b0 tokens|\$0\.00/);
     expect(container.querySelector('[data-testid="work-product-state"]')?.textContent).toBe("open");
   });

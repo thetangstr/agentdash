@@ -359,8 +359,8 @@ describe("redaction (scan 4 lane O1, PR #990 review probes)", () => {
   });
 
   it("stops an unquoted assignment value at a parenthesis", () => {
-    expect(redactSecrets(`c=Client(api_key=${SECRET})`)).toBe("c=Client(api_key=•••• hidden)");
-    expect(redactSecrets(`c=Client(api_key="${SECRET}")`)).toBe('c=Client(api_key="•••• hidden")');
+    expect(redactSecrets(`c=Client(api_key=${SECRET})`)).toBe("c=Client(api_key=•••• (hidden))");
+    expect(redactSecrets(`c=Client(api_key="${SECRET}")`)).toBe('c=Client(api_key="•••• (hidden)")');
   });
 
   it.each(COMMANDS)("%s", (_label, command) => {
@@ -414,9 +414,9 @@ describe("redaction (scan 4 lane O1, PR #990 review probes)", () => {
   });
 
   it("keeps the header name and auth scheme, and is idempotent", () => {
-    expect(redactSecrets('-H "Authorization: Bearer abc.def"')).toBe('-H "Authorization: Bearer •••• hidden"');
-    expect(redactSecrets("--token s3cr3t-value")).toBe("--token •••• hidden");
-    expect(redactSecrets("API_KEY=s3cr3t pnpm x")).toBe("API_KEY=•••• hidden pnpm x");
+    expect(redactSecrets('-H "Authorization: Bearer abc.def"')).toBe('-H "Authorization: Bearer •••• (hidden)"');
+    expect(redactSecrets("--token s3cr3t-value")).toBe("--token •••• (hidden)");
+    expect(redactSecrets("API_KEY=s3cr3t pnpm x")).toBe("API_KEY=•••• (hidden) pnpm x");
     const once = redactSecrets(`curl -u a:${SECRET} -H "X-Api-Key: ${SECRET}" "https://x.test?token=${SECRET}"`);
     expect(redactSecrets(once)).toBe(once);
   });

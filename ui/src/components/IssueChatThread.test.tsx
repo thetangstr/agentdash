@@ -2744,7 +2744,7 @@ describe("IssueChatThread", () => {
     expect(container.querySelector('div[data-transcript-mode="raw"]')).not.toBeNull();
     expect(container.textContent).toContain("Credentials in this log are hidden.");
     // The tool's result is on screen, redacted.
-    expect(container.textContent).toContain('"token":"•••• hidden"');
+    expect(container.textContent).toContain('"token":"•••• (hidden)"');
     expect(container.innerHTML).not.toContain(SECRET);
 
     act(() => {

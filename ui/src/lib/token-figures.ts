@@ -27,6 +27,15 @@ export const TOKEN_CEILING_COUNT_NOTE =
 /** Shown where usage is real but this workspace is not charged for it. */
 export const BILLED_BY_PROVIDER_NOTE = "Billed by your model provider";
 
+/**
+ * The spend figure where work ran but usage was never recorded — unmetered
+ * runs write no cost events. Honest where "$0.00" would read as "free".
+ */
+export const NOT_MEASURED_TEXT = "Not measured";
+
+/** The line under `NOT_MEASURED_TEXT`: why there is no number. */
+export const UNMEASURED_USAGE_NOTE = "Runs didn't record usage";
+
 export function countedTokens(usage: { inputTokens?: number | null; outputTokens?: number | null }): number {
   return Number(usage.inputTokens ?? 0) + Number(usage.outputTokens ?? 0);
 }

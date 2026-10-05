@@ -8,10 +8,10 @@ export function WorkforceTemplatePreview({ templateId }: { templateId: string | 
     <p>
       <strong>Skills:</strong> {template.skills.map(s => s.name).join(', ')}</p>
     <details>
-      <summary className="cursor-pointer max-sm:py-3">Output standards</summary>
+      <summary className="cursor-pointer max-sm:py-3">What good work looks like</summary>
       <ul className="list-disc space-y-1 pl-5 pt-2">{template.qualityChecks.map(q => <li key={q}>{q}</li>)}</ul>
     </details>
-    <p className="text-xs text-muted-foreground">Role selection defines the work. Model access, budgets and approvals remain separately configured.</p>
+    <p className="text-xs text-muted-foreground">The role sets the work. You set the model, budget and approvals separately.</p>
   </div>;
 }
 export function WorkforceRoleSelect({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {

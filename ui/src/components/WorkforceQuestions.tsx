@@ -49,13 +49,13 @@ export function WorkforceQuestions({ companyId, issueId, agent, requiredIds }: {
   const replace = useMutation({
     mutationFn: async (q: AskUserQuestionsInteraction) => {
       // Preserve question IDs, prompts, required keys and origin. The server resolves
-      // the current accountable human and verifies every ownership boundary.
+      // the current accountable person and verifies every ownership boundary.
       await issuesApi.createInteraction(issueId, { kind: 'ask_user_questions', payload: { ...q.payload, answerOwnerUserId: undefined, replacesInteractionId: q.id }, idempotencyKey: `workforce-replace:${q.id}` });
       await refresh();
     }
   });
   return <div className="space-y-3">
     <h3 className="font-medium">Questions holding this job</h3>
-    <p className="text-sm text-muted-foreground">Cancelling a required question does not release work. Replace it explicitly after assigning an active accountable human.</p>{(interactions.error || members.error || replace.error) && <p role="alert" className="text-sm text-destructive">{(interactions.error || members.error || replace.error)?.message}</p>}{interactions.data?.filter(q => requiredIds.includes(q.id) && q.kind === 'ask_user_questions').map(q => q.kind === 'ask_user_questions' && <div key={q.id} className="space-y-2">
-      <QuestionCard companyId={companyId} question={q} />{q.payload.answerOwnerUserId && members.data && !activeIds.has(q.payload.answerOwnerUserId) && <p role="alert" className="text-sm">This question's original owner is no longer active. Cancel it, then replace it for the current accountable human.</p>}{q.status === 'cancelled' && (agent.accountable && activeIds.has(agent.accountable.userId) ? <Button variant="outline" disabled={replace.isPending} onClick={() => replace.mutate(q)}>Replace question for current accountable human</Button> : <a className="text-sm underline" href="#workforce-accountability">Assign an active accountable human to replace this question</a>)}</div>)}</div>;
+    <p className="text-sm text-muted-foreground">Cancelling a required question does not release work. Replace it explicitly after assigning an active accountable person.</p>{(interactions.error || members.error || replace.error) && <p role="alert" className="text-sm text-destructive">{(interactions.error || members.error || replace.error)?.message}</p>}{interactions.data?.filter(q => requiredIds.includes(q.id) && q.kind === 'ask_user_questions').map(q => q.kind === 'ask_user_questions' && <div key={q.id} className="space-y-2">
+      <QuestionCard companyId={companyId} question={q} />{q.payload.answerOwnerUserId && members.data && !activeIds.has(q.payload.answerOwnerUserId) && <p role="alert" className="text-sm">This question's original owner is no longer active. Cancel it, then replace it for the current accountable person.</p>}{q.status === 'cancelled' && (agent.accountable && activeIds.has(agent.accountable.userId) ? <Button variant="outline" disabled={replace.isPending} onClick={() => replace.mutate(q)}>Replace question for current accountable person</Button> : <a className="text-sm underline" href="#workforce-accountability">Assign an active accountable person to replace this question</a>)}</div>)}</div>;
 }

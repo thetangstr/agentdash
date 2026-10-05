@@ -104,7 +104,7 @@ describe("run summaries show the one display mask", () => {
       );
     });
 
-    expect(container.textContent).toContain("•••• hidden");
+    expect(container.textContent).toContain("•••• (hidden)");
     expect(container.textContent).not.toContain("REDACTED");
   });
 
@@ -114,7 +114,7 @@ describe("run summaries show the one display mask", () => {
       root.render(<RunListItem run={runWithSummary("run-2", summary)} isSelected={false} agentId="agent-1" />);
     });
 
-    expect(container.textContent).toContain("•••• hidden");
+    expect(container.textContent).toContain("•••• (hidden)");
     expect(container.textContent).not.toContain("REDACTED");
   });
 });

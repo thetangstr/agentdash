@@ -5,14 +5,14 @@ import { countedTokens, formatCountedTokens } from "./token-figures";
 
 export { TOKENS_COUNTED_NOTE } from "./token-figures";
 
-export const NOT_METERED_LABEL = "not metered yet";
+export const NOT_MEASURED_LABEL = "not measured";
 
 /**
  * Usage for the runs on one issue, or a month. Never renders "0" for an issue
  * that has no metering at all: that reads as "free", which is a lie.
  */
 export function formatShippedUsage(usage: ShippedIssueUsage | null | undefined): string {
-  if (!usage || !usage.metered) return NOT_METERED_LABEL;
+  if (!usage || !usage.metered) return NOT_MEASURED_LABEL;
   // One definition with Home and the run page: input + output, no cache reads.
   const parts = [formatCountedTokens(countedTokens(usage))];
   if (usage.costCents > 0) parts.push(formatCents(usage.costCents));
@@ -22,15 +22,15 @@ export function formatShippedUsage(usage: ShippedIssueUsage | null | undefined):
 /** AgentDash (scan 4 lane O1): shown while a just-finished run's usage is still being recorded. */
 export const USAGE_COUNTING_LABEL = "counting…";
 
-/** How long after a deliverable is saved its missing usage reads "counting…" rather than "not metered yet". */
+/** How long after a deliverable is saved its missing usage reads "counting…" rather than "not measured". */
 export const USAGE_COUNTING_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * AgentDash (scan 4 lane O1): right after a run, the Result card read "not
- * metered yet", which looks like an error. Usage is written as the run
+ * measured", which looks like an error. Usage is written as the run
  * finishes, so for a deliverable saved in the last few minutes with no usage
  * yet the honest word is "counting…". Older unmetered work keeps the
- * NOT_METERED_LABEL.
+ * NOT_MEASURED_LABEL.
  */
 export function isUsageCounting(
   usage: ShippedIssueUsage | null | undefined,
@@ -52,7 +52,7 @@ type CountingProduct = {
  * Keyed on creation, not on later edits, and only for deliverables a run
  * created: one recorded by hand has no run to meter, so it never counts.
  * A run that finished unmetered (`unmetered_*`) will never report usage, so
- * its deliverables settle to "not metered yet" at once instead of holding
+ * its deliverables settle to "not measured" at once instead of holding
  * the window open for the full ten minutes.
  */
 export function usageCountingEndsAt(products: ReadonlyArray<CountingProduct>, now: number = Date.now()): number | null {
