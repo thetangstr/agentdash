@@ -246,6 +246,11 @@ export function approvalRoutes(
       return null;
     }
     assertCompanyAccess(req, approval.companyId);
+    // Agent visibility (GH #916): a request raised by an agent the actor
+    // cannot see is not theirs to decide — 404, exactly as GET /approvals/:id.
+    if (approval.requestedByAgentId) {
+      await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
+    }
     // AgentDash (GH #902): a budget override for a hidden project does not exist.
     await assertApprovalProjectVisible(db, req, approval);
     return approval;

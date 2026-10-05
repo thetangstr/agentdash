@@ -304,6 +304,38 @@ describeEmbeddedPostgres("agent visibility routes", () => {
       expect((await request(admin()).get(`/api/approvals/${APPROVAL_OTHER}`)).status).toBe(200);
     });
 
+    it("GH #916: every decision route is 404 on an invisible agent's approval — and decides nothing", async () => {
+      const app = titus();
+      for (const path of [
+        `/api/approvals/${APPROVAL_OTHER}/approve`,
+        `/api/approvals/${APPROVAL_OTHER}/reject`,
+        `/api/approvals/${APPROVAL_OTHER}/request-revision`,
+      ]) {
+        const res = await request(app).post(path).send({});
+        expect(res.status, path).toBe(404);
+      }
+      const override = await request(app)
+        .post(`/api/approvals/${APPROVAL_OTHER}/override`)
+        .send({ decision: "approved", overrideReason: "guessing ids" });
+      expect(override.status).toBe(404);
+      const [row] = await db
+        .select({ status: approvals.status })
+        .from(approvals)
+        .where(eq(approvals.id, APPROVAL_OTHER));
+      expect(row.status).toBe("pending");
+    });
+
+    it("GH #916: a member can still decide a VISIBLE agent's approval", async () => {
+      const res = await request(titus()).post(`/api/approvals/${APPROVAL_CASPER}/approve`).send({});
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("approved");
+      const [row] = await db
+        .select({ status: approvals.status })
+        .from(approvals)
+        .where(eq(approvals.id, APPROVAL_CASPER));
+      expect(row.status).toBe("approved");
+    });
+
     it("the activity feed omits rows about an invisible agent", async () => {
       const feed = (await request(titus()).get(`/api/companies/${COMPANY}/activity`)).body as Array<{ agentId: string | null; action: string }>;
       expect(feed.some((row) => row.agentId === OTHER)).toBe(false);
