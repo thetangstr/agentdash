@@ -1,5 +1,5 @@
-import { Router } from "express";
-import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { Router, type Request } from "express";
+import { and, desc, eq, gte, isNull, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -21,6 +21,32 @@ import { assertCompanyAccess } from "./authz.js";
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { accessService } from "../services/access.js";
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
+// AgentDash (GH #933): profile activity rows follow the feed's visibility rules.
+import {
+  activityVisibilityCondition,
+  agentVisibilityCondition,
+  redactHiddenIssuesInActivityRows,
+  resolveAgentVisibility,
+} from "./visibility.js";
+
+// AgentDash (GH #933): the company feed's issue join — the visibility
+// condition's issue conjunct reads `issues.projectId`, NULL without it.
+const ACTIVITY_ISSUE_JOIN = and(
+  eq(activityLog.entityType, sql`'issue'`),
+  eq(activityLog.entityId, sql<string>`${issues.id}::text`),
+);
+
+/**
+ * Rows in a user's profile feed follow the same project and agent rules as
+ * the company feed: a member reading a colleague's profile must not see what
+ * the feed would hide.
+ */
+function profileActivityVisibility(req: Request, companyId: string): SQL | undefined {
+  return and(
+    activityVisibilityCondition(req, companyId),
+    agentVisibilityCondition(req, companyId, activityLog.agentId),
+  );
+}
 
 type CompanyUserRow = {
   id: string;
@@ -160,6 +186,7 @@ function sumNumber(column: typeof costEvents.costCents | typeof costEvents.input
 
 async function loadWindowStats(
   db: Db,
+  req: Request,
   companyId: string,
   userId: string,
   key: UserProfileWindowStats["key"],
@@ -190,15 +217,17 @@ async function loadWindowStats(
     .from(issueComments)
     .where(and(...commentConditions));
 
-  const activityConditions = [
+  const activityConditions: (SQL | undefined)[] = [
     eq(activityLog.companyId, companyId),
     eq(activityLog.actorType, "user"),
     eq(activityLog.actorId, userId),
+    profileActivityVisibility(req, companyId),
   ];
   if (from) activityConditions.push(gte(activityLog.createdAt, from));
   const [activityStats] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(activityLog)
+    .leftJoin(issues, ACTIVITY_ISSUE_JOIN)
     .where(and(...activityConditions));
 
   const costConditions = [
@@ -235,7 +264,7 @@ async function loadWindowStats(
   };
 }
 
-async function loadDailyStats(db: Db, companyId: string, userId: string): Promise<UserProfileDailyPoint[]> {
+async function loadDailyStats(db: Db, req: Request, companyId: string, userId: string): Promise<UserProfileDailyPoint[]> {
   const firstDay = startOfUtcDay(new Date(Date.now() - 13 * 24 * 60 * 60 * 1000));
   const points = new Map<string, UserProfileDailyPoint>();
   for (let index = 0; index < 14; index += 1) {
@@ -258,12 +287,14 @@ async function loadDailyStats(db: Db, companyId: string, userId: string): Promis
       count: sql<number>`count(*)::int`,
     })
     .from(activityLog)
+    .leftJoin(issues, ACTIVITY_ISSUE_JOIN)
     .where(
       and(
         eq(activityLog.companyId, companyId),
         eq(activityLog.actorType, "user"),
         eq(activityLog.actorId, userId),
         gte(activityLog.createdAt, firstDay),
+        profileActivityVisibility(req, companyId),
       ),
     )
     .groupBy(activityDay);
@@ -348,6 +379,10 @@ export function userProfileRoutes(db: Db) {
       userSlugCandidates(row, emailVisibleFor(row, canViewEmails, viewerUserId))[0] ?? row.principalId;
     const userId = row.userId ?? row.principalId;
 
+    // AgentDash (GH #933): the conditions below read the actor's resolved
+    // agent scope; resolve it once up front, as the feed route does.
+    await resolveAgentVisibility(db, req, companyId);
+
     const [everMeasured, stats, daily, recentIssues, recentActivity, topAgents, topProviders] = await Promise.all([
       // Company-wide and unbounded, matching `CostSummary.measured`. Scoping it
       // to this user's issues would make "never metered" indistinguishable from
@@ -359,10 +394,10 @@ export function userProfileRoutes(db: Db) {
         .then((rows) => Number(rows[0]?.count ?? 0) > 0),
       Promise.all(
         PROFILE_WINDOWS.map((entry) =>
-          loadWindowStats(db, companyId, userId, entry.key, entry.label, windowStart(entry.days)),
+          loadWindowStats(db, req, companyId, userId, entry.key, entry.label, windowStart(entry.days)),
         ),
       ),
-      loadDailyStats(db, companyId, userId),
+      loadDailyStats(db, req, companyId, userId),
       db
         .select({
           id: issues.id,
@@ -395,11 +430,13 @@ export function userProfileRoutes(db: Db) {
           createdAt: activityLog.createdAt,
         })
         .from(activityLog)
+        .leftJoin(issues, ACTIVITY_ISSUE_JOIN)
         .where(
           and(
             eq(activityLog.companyId, companyId),
             eq(activityLog.actorType, "user"),
             eq(activityLog.actorId, userId),
+            profileActivityVisibility(req, companyId),
           ),
         )
         .orderBy(desc(activityLog.createdAt))
@@ -460,7 +497,8 @@ export function userProfileRoutes(db: Db) {
         status: issue.status as UserProfileResponse["recentIssues"][number]["status"],
         priority: issue.priority as UserProfileResponse["recentIssues"][number]["priority"],
       })),
-      recentActivity,
+      // AgentDash (GH #933): issue references inside details follow visibility.
+      recentActivity: await redactHiddenIssuesInActivityRows(db, req, companyId, recentActivity),
       topAgents: topAgents.map((entry) => ({
         ...entry,
         costCents: Number(entry.costCents),

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   activityLog,
   agents,
+  approvals,
   authUsers,
   companies,
   companyMemberships,
@@ -12,6 +13,8 @@ import {
   createDb,
   issueComments,
   issues,
+  projectAccess,
+  projects,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -95,7 +98,10 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
     await db.delete(costEvents);
     await db.delete(issueComments);
     await db.delete(activityLog);
+    await db.delete(approvals);
+    await db.delete(projectAccess);
     await db.delete(issues);
+    await db.delete(projects);
     await db.delete(agents);
     await db.delete(companyMemberships);
     await db.delete(authUsers);
@@ -348,6 +354,165 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
       });
 
       expect((await fetchProfile()).measured).toBe(true);
+    });
+  });
+
+  /**
+   * AgentDash (GH #933): a profile's activity reads are the same shape as the
+   * company feed — `activity_log` rows about a restricted project must follow
+   * the project rule here too. A member viewing a colleague's profile must
+   * not learn the restricted project's name, budget amounts or approval ids.
+   */
+  describe("restricted-project visibility (GH #933)", () => {
+    const memberId = "member-viewer";
+    const listedMemberId = "listed-viewer";
+    const memberActor = (id: string) => ({
+      type: "board",
+      source: "session",
+      userId: id,
+      companyIds: [companyId],
+      memberships: [{ companyId, membershipRole: "member", status: "active" }],
+    });
+
+    it("hides restricted-project budget rows and approval rows from a member's profile view", async () => {
+      const secretProjectId = randomUUID();
+      const secretName = "Quiet acquisition project";
+      const secretPolicyId = randomUUID();
+      const companyPolicyId = randomUUID();
+      const secretApprovalId = randomUUID();
+      const openApprovalId = randomUUID();
+      const now = new Date();
+
+      await db.insert(companyMemberships).values([
+        {
+          companyId,
+          principalType: "user",
+          principalId: memberId,
+          status: "active",
+          membershipRole: "member",
+        },
+        {
+          companyId,
+          principalType: "user",
+          principalId: listedMemberId,
+          status: "active",
+          membershipRole: "member",
+        },
+      ]);
+      await db.insert(projects).values({
+        id: secretProjectId,
+        companyId,
+        name: secretName,
+        createdByUserId: "someone-else",
+        visibility: "restricted",
+      });
+      await db.insert(projectAccess).values({
+        projectId: secretProjectId,
+        principalType: "user",
+        principalId: listedMemberId,
+        grantedByUserId: "someone-else",
+      });
+      await db.insert(approvals).values([
+        {
+          id: secretApprovalId,
+          companyId,
+          type: "budget_override_required",
+          status: "approved",
+          payload: {
+            scopeType: "project",
+            scopeId: secretProjectId,
+            scopeName: secretName,
+            budgetAmount: 1_000,
+            observedAmount: 1_500,
+          },
+        },
+        {
+          id: openApprovalId,
+          companyId,
+          type: "budget_override_required",
+          status: "pending",
+          payload: {
+            scopeType: "company",
+            scopeId: companyId,
+            budgetAmount: 10_000,
+          },
+        },
+      ]);
+      await db.insert(activityLog).values([
+        {
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "budget.policy_upserted",
+          entityType: "budget_policy",
+          entityId: secretPolicyId,
+          details: { scopeType: "project", scopeId: secretProjectId, scopeName: secretName, amount: 1_000 },
+          createdAt: now,
+        },
+        {
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "budget.policy_upserted",
+          entityType: "budget_policy",
+          entityId: companyPolicyId,
+          details: { scopeType: "company", scopeId: companyId, amount: 10_000 },
+          createdAt: now,
+        },
+        {
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "approval.approved",
+          entityType: "approval",
+          entityId: secretApprovalId,
+          details: { type: "budget_override_required" },
+          createdAt: now,
+        },
+        {
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "approval.created",
+          entityType: "approval",
+          entityId: openApprovalId,
+          details: { type: "budget_override_required" },
+          createdAt: now,
+        },
+      ]);
+
+      // An off-list member sees none of it — not the name, the ids, the
+      // amounts, and not the counts derived from the hidden rows.
+      const memberRes = await request(createApp(memberActor(memberId))).get(
+        `/api/companies/${companyId}/users/dotta/profile`,
+      );
+      expect(memberRes.status).toBe(200);
+      const memberBody = JSON.stringify(memberRes.body);
+      for (const leaked of [secretName, secretProjectId, secretPolicyId, secretApprovalId]) {
+        expect(memberBody).not.toContain(leaked);
+      }
+      expect(
+        memberRes.body.recentActivity.map((row: { entityId: string }) => row.entityId).sort(),
+      ).toEqual([companyPolicyId, openApprovalId].sort());
+      expect(
+        memberRes.body.stats.find((entry: { key: string }) => entry.key === "all").activityCount,
+      ).toBe(2);
+
+      // A member on the project's access list sees the restricted rows.
+      const listedRes = await request(createApp(memberActor(listedMemberId))).get(
+        `/api/companies/${companyId}/users/dotta/profile`,
+      );
+      expect(listedRes.status).toBe(200);
+      expect(listedRes.body.recentActivity.map((row: { entityId: string }) => row.entityId)).toEqual(
+        expect.arrayContaining([secretPolicyId, secretApprovalId, companyPolicyId, openApprovalId]),
+      );
+
+      // The subject (an owner) sees everything on their own profile.
+      const ownerRes = await request(createApp()).get(
+        `/api/companies/${companyId}/users/dotta/profile`,
+      );
+      expect(ownerRes.status).toBe(200);
+      expect(ownerRes.body.recentActivity).toHaveLength(4);
     });
   });
 });

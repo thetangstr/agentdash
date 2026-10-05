@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agentApiKeys,
   agents,
+  approvals,
   companies,
   companyMemberships,
   createDb,
@@ -48,7 +49,7 @@ describe("liveEventRefs", () => {
       type: "activity.logged",
       payload: { entityType: "issue", entityId: issueId, runId, details: { projectId } },
     });
-    expect(refs).toEqual({ issueIds: [issueId], runIds: [runId], projectIds: [projectId], agentIds: [], malformed: false });
+    expect(refs).toEqual({ issueIds: [issueId], runIds: [runId], projectIds: [projectId], agentIds: [], approvalIds: [], malformed: false });
   });
 
   it("reads the run from heartbeat events, and the agent from agent events (agent visibility, 2026-09-30)", () => {
@@ -61,6 +62,7 @@ describe("liveEventRefs", () => {
       runIds: [],
       projectIds: [],
       agentIds: [agentId],
+      approvalIds: [],
       malformed: false,
     });
     // A malformed agent id is simply not a reference; it never fails closed.
@@ -73,7 +75,7 @@ describe("liveEventRefs", () => {
       type: "activity.logged",
       payload: { action: "issue.deleted", entityType: "issue", entityId: issueId, details: { projectId } },
     });
-    expect(refs).toEqual({ issueIds: [], runIds: [], projectIds: [projectId], agentIds: [], malformed: false });
+    expect(refs).toEqual({ issueIds: [], runIds: [], projectIds: [projectId], agentIds: [], approvalIds: [], malformed: false });
     // No project: nothing to resolve, company-visible like any project-less issue.
     expect(
       liveEventRefs({
@@ -111,7 +113,7 @@ describe("liveEventRefs", () => {
         details: { scopeType: "project", scopeId: projectId, amountObserved: 1500 },
       },
     });
-    expect(refs).toEqual({ issueIds: [], runIds: [], projectIds: [projectId], agentIds: [], malformed: false });
+    expect(refs).toEqual({ issueIds: [], runIds: [], projectIds: [projectId], agentIds: [], approvalIds: [], malformed: false });
     // Same for a budget_policy row.
     expect(
       liveEventRefs({
@@ -151,6 +153,26 @@ describe("liveEventRefs", () => {
         }).projectIds,
       ).toEqual([]);
     }
+  });
+
+  it("reads an approval activity event's entity for budget-scope resolution (GH #933)", () => {
+    const approvalId = randomUUID();
+    const refs = liveEventRefs({
+      ...base,
+      type: "activity.logged",
+      payload: { entityType: "approval", entityId: approvalId },
+    });
+    // The approval row carries the scope in its payload, so the event only
+    // names an approval; resolution to a project happens against the table.
+    expect(refs.approvalIds).toEqual([approvalId]);
+    // A non-canonical approval id fails closed like the other strict entities.
+    expect(
+      liveEventRefs({
+        ...base,
+        type: "activity.logged",
+        payload: { entityType: "approval", entityId: "not-a-uuid" },
+      }).malformed,
+    ).toBe(true);
   });
 });
 
@@ -394,6 +416,80 @@ describeEmbeddedPostgres("live events respect restricted project visibility", ()
     for (const c of [outsider, outsideAgent]) {
       expect(saw(c, secretPolicy)).toBe(false);
       expect(saw(c, secretIncident)).toBe(false);
+      expect(JSON.stringify(c.events)).not.toContain("Sam's restricted project");
+    }
+  });
+
+  // GH #933 (follow-up to #970): an `approval.*` activity row names only the
+  // approval; the feed resolves a budget_override_required approval's payload
+  // scope to its project. The socket must apply the same rule — otherwise the
+  // row is hidden from the feed but still broadcast live.
+  it("delivers approval activity events for a restricted project's budget override only to subscribers who can see it", async () => {
+    const admin = await asUser("admin-user");
+    const creator = await asUser("sam");
+    const listed = await asUser("listed-member");
+    const outsider = await asUser("outsider");
+    const leadAgent = await asAgent(LEAD_TOKEN);
+    const outsideAgent = await asAgent(OUTSIDE_TOKEN);
+    const all = [admin, creator, listed, outsider, leadAgent, outsideAgent];
+
+    const secretApproval = randomUUID();
+    const openApproval = randomUUID();
+    await db.insert(approvals).values([
+      {
+        id: secretApproval,
+        companyId: COMPANY,
+        type: "budget_override_required",
+        status: "approved",
+        payload: {
+          scopeType: "project",
+          scopeId: SECRET_PROJECT,
+          scopeName: "Sam's restricted project",
+          budgetAmount: 1_000,
+          observedAmount: 1_500,
+        },
+      },
+      {
+        id: openApproval,
+        companyId: COMPANY,
+        type: "budget_override_required",
+        status: "pending",
+        payload: {
+          scopeType: "project",
+          scopeId: OPEN_PROJECT,
+          scopeName: "Open project",
+          budgetAmount: 500,
+        },
+      },
+    ]);
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "approval.approved",
+      entityType: "approval",
+      entityId: secretApproval,
+      details: { type: "budget_override_required", linkedIssueIds: [] },
+    });
+    await logActivity(db, {
+      companyId: COMPANY,
+      actorType: "user",
+      actorId: "sam",
+      action: "approval.approved",
+      entityType: "approval",
+      entityId: openApproval,
+      details: { type: "budget_override_required", linkedIssueIds: [] },
+    });
+    await settle(all);
+
+    const saw = (c: Client, entityId: string) =>
+      c.events.some((e) => e.type === "activity.logged" && e.payload.entityId === entityId);
+    for (const c of all) expect(saw(c, openApproval)).toBe(true);
+    for (const c of [admin, creator, listed, leadAgent]) {
+      expect(saw(c, secretApproval)).toBe(true);
+    }
+    for (const c of [outsider, outsideAgent]) {
+      expect(saw(c, secretApproval)).toBe(false);
       expect(JSON.stringify(c.events)).not.toContain("Sam's restricted project");
     }
   });
