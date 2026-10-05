@@ -18,6 +18,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { runStatusLabel } from "../lib/run-status-label";
+import { cancelledRunLabel } from "../lib/cancelledRunLabel";
 import {
   AgentRunFailureGuidance,
   failureClassificationBadgeTone,
@@ -383,7 +384,13 @@ function stopReasonLabel(run: RunForIssue) {
     return timeoutText ? `timeout (${timeoutText})` : "timeout";
   }
   if (stopReason === "budget_paused") return "budget paused";
-  if (stopReason === "cancelled") return "cancelled";
+  // AgentDash (c4-stops review): "cancelled" covers operator stops and system
+  // cancellations alike — reuse the shared neutral label so an operator stop
+  // reads "stopped manually" and an interrupt keeps its recorded reason.
+  if (stopReason === "cancelled") {
+    const label = cancelledRunLabel(run);
+    return label.charAt(0).toLowerCase() + label.slice(1);
+  }
   if (stopReason === "paused") return "paused by a person";
   if (stopReason === "process_lost") return "process lost";
   if (stopReason === "adapter_failed") return "adapter failed";

@@ -383,25 +383,30 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
       }
     }
 
-    for (const mentionedId of mentionedIds) {
-      if (wakeups.has(mentionedId)) continue;
-      if (actorIsAgent && actor.actorId === mentionedId) continue;
-      wakeups.set(mentionedId, {
-        source: "automation",
-        triggerDetail: "system",
-        reason: "issue_comment_mentioned",
-        payload: { issueId: id, commentId: comment.id },
-        requestedByActorType: actor.actorType,
-        requestedByActorId: actor.actorId,
-        contextSnapshot: {
-          issueId: id,
-          taskId: id,
-          commentId: comment.id,
-          wakeCommentId: comment.id,
-          wakeReason: "issue_comment_mentioned",
-          source: "comment.mention",
-        },
-      });
+    // AgentDash (c4-stops review): an @-mention on a closed issue is FYI —
+    // it must not start a run. Mentions wake only while the issue is open or
+    // when this same comment is the explicit reopen that makes it live again.
+    if (!isClosed || reopened) {
+      for (const mentionedId of mentionedIds) {
+        if (wakeups.has(mentionedId)) continue;
+        if (actorIsAgent && actor.actorId === mentionedId) continue;
+        wakeups.set(mentionedId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_comment_mentioned",
+          payload: { issueId: id, commentId: comment.id },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: id,
+            taskId: id,
+            commentId: comment.id,
+            wakeCommentId: comment.id,
+            wakeReason: "issue_comment_mentioned",
+            source: "comment.mention",
+          },
+        });
+      }
     }
 
     for (const [agentId, wakeup] of wakeups) {

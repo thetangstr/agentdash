@@ -316,14 +316,38 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
     expect(effects.wake).toHaveBeenCalledTimes(1);
   });
 
-  it('worker closed-work comments stay inert except mentions of other workers', async () => {
+  it('worker closed-work comments stay inert, including mentions of other workers', async () => {
     const f = await fixture(), token = await workerToken(f);
     await db.update(agents).set({ name: 'Worker' }).where(eq(agents.id, f.agent.id));
-    const [other] = await db.insert(agents).values({ companyId: f.company.id, name: 'Other' }).returning();
+    await db.insert(agents).values({ companyId: f.company.id, name: 'Other' }).returning();
     await db.update(issues).set({ status: 'done' }).where(eq(issues.id, f.issue.id));
     expect((await post(f, { body: '@Worker @Other evidence' }, token)).status).toBe(201);
     expect((await snapshot(f)).issue.status).toBe('done');
-    expect(effects.wake).toHaveBeenCalledTimes(1);
+    // AgentDash (c4-stops review): an @-mention on a closed issue is FYI —
+    // neither the assignee nor the mentioned agent may be woken.
+    expect(effects.wake).not.toHaveBeenCalled();
+  });
+
+  it('a board @-mention on a cancelled issue does not wake the mentioned agent', async () => {
+    const f = await fixture();
+    const [other] = await db.insert(agents).values({ companyId: f.company.id, name: 'Other' }).returning();
+    await db.update(issues).set({ status: 'cancelled' }).where(eq(issues.id, f.issue.id));
+    const response = await post(f, { body: '@Other FYI all done' });
+    expect(response.status).toBe(201);
+    expect((await snapshot(f)).issue.status).toBe('cancelled');
+    expect(effects.wake).not.toHaveBeenCalled();
+  });
+
+  it('an @-mention on the explicit reopen comment still wakes the mentioned agent', async () => {
+    const f = await fixture();
+    await db.update(agents).set({ name: 'Worker' }).where(eq(agents.id, f.agent.id));
+    const [other] = await db.insert(agents).values({ companyId: f.company.id, name: 'Other' }).returning();
+    await db.update(issues).set({ status: 'done' }).where(eq(issues.id, f.issue.id));
+    const response = await post(f, { body: '@Other back online', reopen: true });
+    expect(response.status).toBe(201);
+    expect((await snapshot(f)).issue.status).toBe('todo');
+    expect(effects.wake).toHaveBeenCalledTimes(2);
+    expect(effects.wake).toHaveBeenCalledWith(f.agent.id, expect.objectContaining({ reason: 'issue_reopened_via_comment' }));
     expect(effects.wake).toHaveBeenCalledWith(other.id, expect.objectContaining({ reason: 'issue_comment_mentioned' }));
   });
 

@@ -1301,24 +1301,29 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         });
       }
 
-      for (const mentionedId of mentionedIds) {
-        if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
-        addWakeup(mentionedId, {
-          source: "automation",
-          triggerDetail: "system",
-          reason: "issue_comment_mentioned",
-          payload: { issueId: id, commentId: comment.id },
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: {
-            issueId: id,
-            taskId: id,
-            commentId: comment.id,
-            wakeCommentId: comment.id,
-            wakeReason: "issue_comment_mentioned",
-            source: "comment.mention",
-          },
-        });
+      // AgentDash (c4-stops review): same closed-issue rule as the comment
+      // path — an @-mention on a done/cancelled issue is FYI and must not
+      // wake; only an explicit reopen makes the issue live again.
+      if (!isClosed || reopened) {
+        for (const mentionedId of mentionedIds) {
+          if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
+          addWakeup(mentionedId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "issue_comment_mentioned",
+            payload: { issueId: id, commentId: comment.id },
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
+            contextSnapshot: {
+              issueId: id,
+              taskId: id,
+              commentId: comment.id,
+              wakeCommentId: comment.id,
+              wakeReason: "issue_comment_mentioned",
+              source: "comment.mention",
+            },
+          });
+        }
       }
     }
 
