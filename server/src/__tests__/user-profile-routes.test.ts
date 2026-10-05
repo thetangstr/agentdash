@@ -412,6 +412,21 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
         principalId: listedMemberId,
         grantedByUserId: "someone-else",
       });
+      // A soft-deleted issue's activity row is dropped by the feed for every
+      // viewer; the profile must drop it too rather than outliving the row.
+      const hiddenIssueId = randomUUID();
+      await db.insert(issues).values({
+        id: hiddenIssueId,
+        companyId,
+        title: "Deleted draft",
+        status: "done",
+        priority: "medium",
+        createdByUserId: userId,
+        identifier: "USR-DEL",
+        hiddenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
       await db.insert(approvals).values([
         {
           id: secretApprovalId,
@@ -479,6 +494,16 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
           details: { type: "budget_override_required" },
           createdAt: now,
         },
+        {
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "issue.updated",
+          entityType: "issue",
+          entityId: hiddenIssueId,
+          details: { title: "Deleted draft" },
+          createdAt: now,
+        },
       ]);
 
       // An off-list member sees none of it — not the name, the ids, the
@@ -488,7 +513,7 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
       );
       expect(memberRes.status).toBe(200);
       const memberBody = JSON.stringify(memberRes.body);
-      for (const leaked of [secretName, secretProjectId, secretPolicyId, secretApprovalId]) {
+      for (const leaked of [secretName, secretProjectId, secretPolicyId, secretApprovalId, hiddenIssueId, "Deleted draft"]) {
         expect(memberBody).not.toContain(leaked);
       }
       expect(

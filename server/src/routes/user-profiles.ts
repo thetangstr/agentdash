@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, desc, eq, gte, isNull, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -39,12 +39,14 @@ const ACTIVITY_ISSUE_JOIN = and(
 /**
  * Rows in a user's profile feed follow the same project and agent rules as
  * the company feed: a member reading a colleague's profile must not see what
- * the feed would hide.
+ * the feed would hide. The feed also drops rows about a soft-deleted issue
+ * (`isNull(issues.hiddenAt)`); profile reads do the same.
  */
 function profileActivityVisibility(req: Request, companyId: string): SQL | undefined {
   return and(
     activityVisibilityCondition(req, companyId),
     agentVisibilityCondition(req, companyId, activityLog.agentId),
+    or(sql`${activityLog.entityType} != 'issue'`, isNull(issues.hiddenAt)),
   );
 }
 
