@@ -19,7 +19,7 @@
 // reason. Smoke + route-wired tests always run; full roundtrip skips
 // gracefully when fixtures are absent.
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { resolveE2eServerPort } from "./e2e-port";
+import { assertSafeE2eBaseUrl, resolveE2eServerPort } from "./e2e-port";
 
 // Closes #278: this suite runs under the default `pnpm test:e2e` config,
 // which boots its own server on PAPERCLIP_E2E_PORT (default 3399). The old
@@ -27,7 +27,7 @@ import { resolveE2eServerPort } from "./e2e-port";
 // suite even started. Honor PAPERCLIP_E2E_PORT so we talk to the same
 // server playwright.config.ts just brought up.
 const E2E_PORT = String(resolveE2eServerPort(3399));
-const BASE = process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${E2E_PORT}`;
+const BASE = assertSafeE2eBaseUrl(process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${E2E_PORT}`);
 
 interface BootstrapInfo {
   ready: boolean;

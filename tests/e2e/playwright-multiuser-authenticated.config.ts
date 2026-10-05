@@ -1,8 +1,8 @@
 import { defineConfig } from "@playwright/test";
-import { resolveE2eServerPort } from "./e2e-port";
+import { assertSafeE2eBaseUrl, resolveE2eServerPort } from "./e2e-port";
 
 const PORT = resolveE2eServerPort(3105);
-const BASE_URL = process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`;
+const BASE_URL = assertSafeE2eBaseUrl(process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`);
 
 export default defineConfig({
   testDir: ".",

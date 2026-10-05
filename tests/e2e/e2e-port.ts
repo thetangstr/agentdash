@@ -34,3 +34,46 @@ export function resolveE2eServerPort(defaultPort: number): number {
   }
   return port;
 }
+
+/**
+ * AgentDash (review of GH #1035): PAPERCLIP_E2E_BASE_URL lets a spec or a
+ * no-webServer config point at any URL — including a live local instance that
+ * the mutating suites would then write into. Validate the resolved target:
+ * loopback only, and never a reserved live-instance port. Returns the URL
+ * unchanged when safe.
+ *
+ * The escape hatch is `PAPERCLIP_E2E_ALLOW_LIVE_TARGET=1`, for deliberately
+ * driving a disposable non-throwaway instance — the same role as
+ * E2E_I_KNOW_THIS_IS_NOT_PRODUCTION in scripts/e2e/full-pass.mjs. UAT and
+ * claim-link keep their own explicitly-external targets (UAT_BASE_URL /
+ * CLAIM_E2E_BASE_URL) and do not go through this guard.
+ */
+export function assertSafeE2eBaseUrl(raw: string): string {
+  const trimmed = raw.trim();
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(
+      `Invalid e2e base URL ${JSON.stringify(raw)} — expected an absolute http(s) URL ` +
+        `(PAPERCLIP_E2E_BASE_URL).`,
+    );
+  }
+  if (process.env.PAPERCLIP_E2E_ALLOW_LIVE_TARGET === "1") return trimmed;
+  const loopback = ["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname);
+  const port = url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port);
+  const reasons: string[] = [];
+  if (!loopback) reasons.push(`host ${url.hostname} is not loopback`);
+  if (RESERVED_E2E_SERVER_PORTS.includes(port)) {
+    reasons.push(`port ${port} belongs to a live local instance`);
+  }
+  if (reasons.length > 0) {
+    throw new Error(
+      `Refusing to run Playwright e2e against ${trimmed}: ${reasons.join(" and ")}. ` +
+        `These suites mutate the target. Point PAPERCLIP_E2E_BASE_URL at a throwaway ` +
+        `instance on a free loopback port, or set PAPERCLIP_E2E_ALLOW_LIVE_TARGET=1 ` +
+        `if this really is a disposable target.`,
+    );
+  }
+  return trimmed;
+}
