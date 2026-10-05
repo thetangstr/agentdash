@@ -141,6 +141,36 @@ describe("AgentPlanProposal", () => {
     return buttons().find((b) => b.textContent === label) ?? null;
   }
 
+  // AgentDash (review-1028, item 6): the card renders the tier+model the
+  // SERVER stamped on the payload — never a locally recomputed guess.
+  it("renders the server-stamped model tier in plain words", () => {
+    act(() => {
+      root.render(
+        <AgentPlanProposal
+          payload={{
+            ...plan,
+            agents: [
+              { ...plan.agents[0], name: "Ava", modelTier: "high" as const, model: "qwen3.8-max" },
+            ],
+          } as never}
+          onConfirm={vi.fn()}
+          onRevise={() => {}}
+        />,
+      );
+    });
+    const text = container.textContent ?? "";
+    expect(text).toContain("Qwen 3.8 Max · high tier");
+    expect(text).not.toContain("qwen3.8-max");
+  });
+
+  it("shows no model line when the payload carries no stamp — older cards and tiers-off writes", () => {
+    act(() => {
+      root.render(<AgentPlanProposal payload={plan as never} onConfirm={vi.fn()} onRevise={() => {}} />);
+    });
+    expect(container.textContent ?? "").not.toContain("Model:");
+    expect(container.textContent ?? "").not.toContain("tier");
+  });
+
   // Scan 4, lane N: after the hire the card stops offering "Set it up".
   // c4-hire-ux: a one-agent plan reads "Hired ✓" — "Team" is wrong for it.
   it("shows Hired with every button disabled once a single-hire plan is confirmed", () => {

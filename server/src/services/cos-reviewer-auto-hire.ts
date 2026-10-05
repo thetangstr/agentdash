@@ -13,6 +13,7 @@ import { agentInstructionsService } from "./agent-instructions.js";
 import { approvalService } from "./approvals.js";
 import { companyService } from "./companies.js";
 import { defaultAgentPlanAdapterType } from "./cos-replier.js";
+import { hermesModelTierStamp } from "./hermes-model-tiers.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { RUNNABLE_REVIEWER_STATUSES } from "./review-queue-assignments.js";
 import {
@@ -391,6 +392,13 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
           adapterConfig: {},
           runtimeConfig,
           budgetMonthlyCents: 0,
+          // AgentDash (review-1028): the resolved tier+model ride in the
+          // payload so the approval card shows what the server applied.
+          ...hermesModelTierStamp({
+            adapterType,
+            role: "reviewer",
+            title: "CoS Reviewer",
+          }),
           metadata: reviewerMetadata,
           agentId: reviewerAgentId,
           autoHireReason: reason,
