@@ -14,7 +14,6 @@ import {
   companyMemberships,
   createDb,
 } from "@paperclipai/db";
-import { mapProposedAgentRole, proposedRoleTitle } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -44,7 +43,20 @@ const MIGRATION = fs.readFileSync(
   "utf8",
 );
 const ACTOR = "migration:0144_upgrade_agent_accountability_backfill";
-const EXECUTIVE_ROLES = new Set(["ceo", "chief_of_staff", "cto", "cmo", "cfo"]);
+
+// Migration 0146 carries the finance-role mapping that an in-place 0144 edit
+// would have shipped: it replaces the backfill function's CASE and remaps the
+// rows 0144 demoted to 'general' via the 'cfo' branch.
+const MIGRATION_0146 = fs.readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../packages/db/src/migrations/0146_finance_role_backfill.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+const ACTOR_0146 = "migration:0146_finance_role_backfill";
 
 async function createCompany(db: TestDb, name = `Backfill ${randomUUID()}`) {
   return db
@@ -322,27 +334,157 @@ describeEmbeddedPostgres("migration 0144: upgrade backfill for agent accountabil
     expect(rows[0]?.owner_execute).toBe(true);
   });
 
-  it("maps underscore slugs exactly as the shared helpers do, minus executive roles", async () => {
+  // AgentDash (review-1029): the migration file is frozen — it already ran on
+  // deployed databases, so its CASE is pinned here to what it encoded at ship
+  // time rather than derived from the live mapProposedAgentRole/proposedRoleTitle
+  // helpers. Changes to the mapping land as new migrations (0146 onwards).
+  it("maps underscore slugs exactly as the frozen migration encoded them at ship time", async () => {
     const company = await createCompany(db);
     await createHuman(db, company.id, "admin");
-    const slugs = [
-      "deployment_lead", "content_lead", "research_analyst", "sales_support", "marketing_manager",
-      "chief_executive_officer", "ceo_assistant", "chief_of_staff_aide", "tech_lead", "finance_ops",
-      "security_engineer", "qa_lead", "test_automation", "contest_judge", "ux_researcher", "ui_designer",
-      "guide_writer", "product_manager", "dev_advocate", "development_lead", "backend_dev",
-      "sre_oncall", "platform_engineer", "data_scientist", "seo_specialist", "growth_hacker",
-      "project_coordinator", "customer_success", "ai_trainer", "privacy_officer", "release_manager",
-      "mobile_dev", "brand_designer", "infra_on_call", "copy_writer", "3d_artist", "full_stack_engineer",
+    const expectations: Array<[slug: string, role: string, title: string]> = [
+      ["deployment_lead", "devops", "Deployment Lead"],
+      ["content_lead", "general", "Content Lead"],
+      ["research_analyst", "researcher", "Research Analyst"],
+      ["sales_support", "general", "Sales Support"],
+      ["marketing_manager", "general", "Marketing Manager"],
+      ["chief_executive_officer", "general", "Chief Executive Officer"],
+      ["ceo_assistant", "general", "CEO Assistant"],
+      ["chief_of_staff_aide", "general", "Chief Of Staff Aide"],
+      ["tech_lead", "general", "Tech Lead"],
+      ["finance_ops", "general", "Finance Ops"],
+      ["security_engineer", "security", "Security Engineer"],
+      ["qa_lead", "qa", "QA Lead"],
+      ["test_automation", "qa", "Test Automation"],
+      ["contest_judge", "qa", "Contest Judge"],
+      ["ux_researcher", "designer", "UX Researcher"],
+      ["ui_designer", "designer", "UI Designer"],
+      ["guide_writer", "general", "Guide Writer"],
+      ["product_manager", "pm", "Product Manager"],
+      ["dev_advocate", "engineer", "Dev Advocate"],
+      ["development_lead", "general", "Development Lead"],
+      ["backend_dev", "engineer", "Backend Dev"],
+      ["sre_oncall", "devops", "SRE Oncall"],
+      ["platform_engineer", "devops", "Platform Engineer"],
+      ["data_scientist", "researcher", "Data Scientist"],
+      ["seo_specialist", "general", "SEO Specialist"],
+      ["growth_hacker", "general", "Growth Hacker"],
+      ["project_coordinator", "pm", "Project Coordinator"],
+      ["customer_success", "general", "Customer Success"],
+      ["ai_trainer", "general", "AI Trainer"],
+      ["privacy_officer", "security", "Privacy Officer"],
+      ["release_manager", "devops", "Release Manager"],
+      ["mobile_dev", "engineer", "Mobile Dev"],
+      ["brand_designer", "general", "Brand Designer"],
+      ["infra_on_call", "devops", "Infra On Call"],
+      ["copy_writer", "general", "Copy Writer"],
+      ["3d_artist", "general", "3d Artist"],
+      ["full_stack_engineer", "engineer", "Full Stack Engineer"],
     ];
-    const created = await Promise.all(slugs.map((slug) => createAgent(db, company.id, { title: slug })));
+    const created = await Promise.all(
+      expectations.map(([slug]) => createAgent(db, company.id, { title: slug })),
+    );
 
     await runMigration();
 
-    for (const [i, slug] of slugs.entries()) {
+    for (const [i, [slug, expectedRole, expectedTitle]] of expectations.entries()) {
       const row = await agentRow(created[i]!.id);
-      const helperRole = mapProposedAgentRole(slug);
-      const expectedRole = EXECUTIVE_ROLES.has(helperRole) ? "general" : helperRole;
-      expect({ slug, role: row.role, title: row.title }).toEqual({ slug, role: expectedRole, title: proposedRoleTitle(slug) });
+      expect({ slug, role: row.role, title: row.title }).toEqual({ slug, role: expectedRole, title: expectedTitle });
     }
+  });
+});
+
+describeEmbeddedPostgres("migration 0146: finance role backfill on top of a 0144-migrated database", () => {
+  let db!: TestDb;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-migration-0146-");
+    db = createDb(tempDb.connectionString);
+  }, 30_000);
+
+  afterEach(async () => {
+    await truncateWithRetry(db, sql`${companies}, ${authUsers}`);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function runSqlFile(contents: string): Promise<void> {
+    for (const statement of contents.split("--> statement-breakpoint").map((s) => s.trim()).filter(Boolean)) {
+      await db.execute(sql.raw(statement));
+    }
+  }
+
+  async function agentRow(id: string) {
+    return db.select().from(agents).where(eq(agents.id, id)).then((rows) => rows[0]!);
+  }
+
+  it("remaps 0144-demoted finance agents to 'finance', keeps executives and chosen roles, and is idempotent", async () => {
+    const company = await createCompany(db);
+    const admin = await createHuman(db, company.id, "admin");
+    const bookkeeper = await createAgent(db, company.id, { title: "bookkeeper" });
+    const payroll = await createAgent(db, company.id, { title: "payroll_specialist" });
+    const monthEnd = await createAgent(db, company.id, { title: "month_end_close" });
+    const engineer = await createAgent(db, company.id, { title: "backend_dev" });
+    const cfoTitled = await createAgent(db, company.id, { title: "chief_financial_officer" });
+    const chosenRole = await createAgent(db, company.id, { role: "engineer", title: "bookkeeper" });
+    const terminated = await createAgent(db, company.id, { title: "bookkeeper", status: "terminated" });
+
+    // State as a deployed database has it: original 0144 ran first. Single-word
+    // titles were never retitled (0144's slug regex needs an underscore), but
+    // step 3 still made the agent autonomous with the admin accountable.
+    await runSqlFile(MIGRATION);
+    expect(await agentRow(bookkeeper.id)).toMatchObject({ role: "general", title: "bookkeeper", autonomy: "autonomous", accountableUserId: admin });
+    expect(await agentRow(cfoTitled.id)).toMatchObject({ role: "general", title: "Chief Financial Officer" });
+
+    await runSqlFile(MIGRATION_0146);
+
+    // The remap fixes the role only — the title 0144 left alone stays as is.
+    expect(await agentRow(bookkeeper.id)).toMatchObject({ role: "finance", title: "bookkeeper", autonomy: "autonomous", accountableUserId: admin });
+    expect(await agentRow(payroll.id)).toMatchObject({ role: "finance", title: "Payroll Specialist" });
+    expect(await agentRow(monthEnd.id)).toMatchObject({ role: "finance", title: "Month End Close" });
+    // Executives the new CASE still maps to 'cfo' stay demoted to 'general'.
+    expect(await agentRow(cfoTitled.id)).toMatchObject({ role: "general", title: "Chief Financial Officer" });
+    // A role someone chose and a terminated agent are left alone.
+    expect(await agentRow(engineer.id)).toMatchObject({ role: "engineer", title: "Backend Dev" });
+    expect(await agentRow(chosenRole.id)).toMatchObject({ role: "engineer" });
+    expect(await agentRow(terminated.id)).toMatchObject({ role: "general", title: "bookkeeper" });
+
+    const activity = await db.select().from(activityLog).where(eq(activityLog.actorId, ACTOR_0146));
+    expect(activity).toHaveLength(3);
+    expect(activity.find((row) => row.agentId === bookkeeper.id)?.details).toMatchObject({
+      fromRole: "general",
+      toRole: "finance",
+      reason: "upgrade_backfill",
+    });
+
+    await runSqlFile(MIGRATION_0146);
+    expect(await db.select().from(activityLog).where(eq(activityLog.actorId, ACTOR_0146))).toHaveLength(3);
+  });
+
+  it("the replaced backfill function maps finance slugs to 'finance' on later repair runs", async () => {
+    const company = await createCompany(db);
+    const admin = await createHuman(db, company.id, "admin");
+
+    // 0144 first, then 0146 replaces the function — the order a deployed
+    // database sees them.
+    await runSqlFile(MIGRATION);
+    await runSqlFile(MIGRATION_0146);
+
+    // An agent still in the pre-#975 state (e.g. a company 0144 skipped and a
+    // later `repair-founder-owner` run reaches) — multi-word slug, so step 2's
+    // retitle+remap applies.
+    const monthEnd = await createAgent(db, company.id, { title: "month_end_close" });
+    await db.execute(
+      sql`select agentdash_backfill_agent_accountability(${company.id}::uuid, ${admin}, 'test')`,
+    );
+
+    expect(await agentRow(monthEnd.id)).toMatchObject({
+      role: "finance",
+      title: "Month End Close",
+      autonomy: "autonomous",
+      accountableUserId: admin,
+    });
   });
 });

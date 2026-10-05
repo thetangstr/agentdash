@@ -96,15 +96,15 @@ describe("agentHireOrigin", () => {
     ).toEqual({ kind: "person", userId: "u-dana", viaCos: true });
   });
 
-  it("falls back to the accountable person on pre-stamp CoS hires", () => {
+  it("does not credit the accountable person on pre-stamp CoS hires — accountable is not necessarily who confirmed", () => {
     expect(
       agentHireOrigin({
         role: "engineer",
         createdByUserId: null,
         accountable: { userId: "u-dana" },
         metadata: { onboardingMaterialization: "resumed_incomplete" },
-      }),
-    ).toEqual({ kind: "person", userId: "u-dana", viaCos: true });
+      } as Parameters<typeof agentHireOrigin>[0]),
+    ).toEqual({ kind: "cosUnattributed" });
   });
 
   it("says 'hired through the Chief of Staff' when a CoS hire has no person to credit", () => {

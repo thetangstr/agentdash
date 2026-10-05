@@ -135,8 +135,10 @@ export function agentPickerSubtitleUnderName(agent: {
  *
  * - the Chief of Staff stands up with the workspace — it is not hired;
  * - a CoS plan/interview hire (the `onboardingMaterialization` marker) credits
- *   the person who confirmed — `createdByUserId`, or the accountable person on
- *   rows written before the stamp existed — and reads "…, via Chief of Staff";
+ *   the person who confirmed — `createdByUserId` — and reads "…, via Chief of
+ *   Staff". Rows written before the stamp existed fall through to the
+ *   unattributed wording rather than crediting the accountable person, who
+ *   may not be the one who confirmed (review-1029 finding 3);
  * - a review-queue hire says so, with its reason;
  * - anything else keeps the honest "Hired by an agent".
  */
@@ -150,7 +152,6 @@ export type AgentHireOrigin =
 export function agentHireOrigin(agent: {
   role?: string | null;
   createdByUserId?: string | null;
-  accountable?: { userId?: string | null } | null;
   metadata?: unknown;
 }): AgentHireOrigin {
   if (agent.role === "chief_of_staff") return { kind: "cos" };
@@ -159,7 +160,7 @@ export function agentHireOrigin(agent: {
       ? (agent.metadata as Record<string, unknown>)
       : null;
   const viaCos = typeof metadata?.onboardingMaterialization === "string";
-  const userId = agent.createdByUserId ?? (viaCos ? agent.accountable?.userId ?? null : null);
+  const userId = agent.createdByUserId ?? null;
   if (userId) return { kind: "person", userId, viaCos };
   if (viaCos) return { kind: "cosUnattributed" };
   if (metadata?.autoHired === true) {

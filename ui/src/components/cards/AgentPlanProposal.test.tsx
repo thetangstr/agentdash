@@ -145,7 +145,7 @@ describe("AgentPlanProposal", () => {
   // SERVER stamped on the payload — never a locally recomputed guess.
   it("renders the server-stamped model tier in plain words", () => {
     act(() => {
-      root.render(
+      renderCard(
         <AgentPlanProposal
           payload={{
             ...plan,
@@ -165,7 +165,7 @@ describe("AgentPlanProposal", () => {
 
   it("shows no model line when the payload carries no stamp — older cards and tiers-off writes", () => {
     act(() => {
-      root.render(<AgentPlanProposal payload={plan as never} onConfirm={vi.fn()} onRevise={() => {}} />);
+      renderCard(<AgentPlanProposal payload={plan as never} onConfirm={vi.fn()} onRevise={() => {}} />);
     });
     expect(container.textContent ?? "").not.toContain("Model:");
     expect(container.textContent ?? "").not.toContain("tier");

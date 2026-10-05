@@ -198,13 +198,25 @@ export function waitingOnYouService(db: Db) {
             .filter((id): id is string => typeof id === "string" && id.length > 0),
         ),
       ];
+      // AgentDash (review-1029): scope names to this company's active human
+      // members — a requester removed from the company must not still be
+      // named in Decisions. Same rule companyMemberName applies on the CoS
+      // reply path.
       const requesterNameById = new Map<string, string>(
         requesterUserIds.length === 0
           ? []
           : (await db
               .select({ id: authUsers.id, name: authUsers.name })
-              .from(authUsers)
-              .where(inArray(authUsers.id, requesterUserIds)))
+              .from(companyMemberships)
+              .innerJoin(authUsers, eq(authUsers.id, companyMemberships.principalId))
+              .where(
+                and(
+                  eq(companyMemberships.companyId, companyId),
+                  eq(companyMemberships.principalType, "user"),
+                  eq(companyMemberships.status, "active"),
+                  inArray(companyMemberships.principalId, requesterUserIds),
+                ),
+              ))
               .map((row) => [row.id, row.name] as const),
       );
 
