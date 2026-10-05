@@ -51,7 +51,7 @@ import { dispatchLLM } from "../services/dispatch-llm.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
 import { listCompanyMemberNames, PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "../services/cos-plan-naming.js";
-import { hermesModelTierStamp, stampPlanModelTiers } from "../services/hermes-model-tiers.js";
+import { applyModelTierStamp, hermesModelTierStamp, stampPlanModelTiers } from "../services/hermes-model-tiers.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
 import {
   applyAdapterPreset,
@@ -704,16 +704,20 @@ export function onboardingV2Routes(db: Db) {
         // AgentDash (c4-model-tiers + review-1028): the adapter AND the
         // resolved tier/model are stamped so the echoed card can label the
         // hire's model in plain words — as this instance resolved them,
-        // never recomputed from shipped defaults in the UI.
+        // never recomputed from shipped defaults in the UI. Unstamped
+        // modelTier/model fields are stripped: the proposal is LLM-authored,
+        // and passing its own fields through would read as server truth.
         cardKind: 'proposal_card_v1',
-        cardPayload: {
-          ...proposal,
-          adapterType: accepted[0]?.created.adapterType,
-          ...hermesModelTierStamp({
+        cardPayload: applyModelTierStamp(
+          {
+            ...proposal,
+            adapterType: accepted[0]?.created.adapterType,
+          },
+          hermesModelTierStamp({
             adapterType: accepted[0]?.created.adapterType,
             role: proposal.role,
           }),
-        } as unknown as Record<string, unknown>,
+        ) as unknown as Record<string, unknown>,
       });
     } catch (error) { throw acceptedHireNeedsRepair(accepted.map(item => item.created.id), error); }
     res.status(201).json({
