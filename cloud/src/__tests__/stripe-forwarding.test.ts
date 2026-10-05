@@ -557,6 +557,46 @@ describe("POST /api/cloud/stripe/webhook (through the app)", () => {
       await new Promise((r) => server.close(r));
     }
   });
+
+  // GH #923: a GET must not write. The status page used to run
+  // promoteDeployedBillingRevs, updating stripe_config_rev and inserting
+  // billing_variables_live box events on a read any monitoring caller can
+  // trigger. Promotion belongs to the 15-second background pass; status only
+  // reports the pending count.
+  it("GET /internal/stripe/status reports a pending rev without promoting it — the background pass does", async () => {
+    const box = await makeBox("active");
+    const store = fleetSecretStore(db, KEYS);
+    await store.set(BOX_STRIPE_KEY, SHARED_KEY, "test", null);
+    await db
+      .update(boxes)
+      .set({ stripeConfigRev: null, stripeConfigPendingRev: "k1.price_TestPro29.14", stripeConfigPendingSince: new Date() })
+      .where(eq(boxes.id, box.id));
+    // The deploy after the send succeeded — promotion is due.
+    deployed(box.slug);
+    const { fake } = fakeRailwayForVars();
+    const app = createApp({ db, config: appConfig(), log, stripe: { forwarder: forwarder(), railway: fake.client({ log }), endpoints: null } });
+    const server = await listening(app);
+    try {
+      const port = (server.address() as AddressInfo).port;
+      const out: string[] = [];
+      const io = { out: (l: string) => out.push(l), err: () => {}, fetch };
+      const env = { CLOUD_ADMIN_TOKEN: ADMIN, CLOUD_CONTROL_URL: `http://127.0.0.1:${port}` };
+      expect(await runAdmin(["stripe", "status"], env, io)).toBe(0);
+      const status = JSON.parse(out.join("\n"));
+      expect(status).toMatchObject({ targetRev: "k1.price_TestPro29.14", boxesPendingDeploy: 1 });
+      // The read changed nothing: the box still waits for the background pass.
+      expect(await boxRow(box.id)).toMatchObject({ stripeConfigRev: null, stripeConfigPendingRev: "k1.price_TestPro29.14" });
+      const rows = await db.select().from(boxEvents).where(eq(boxEvents.boxId, box.id));
+      expect(rows.filter((r) => r.kind === "billing_variables_live")).toHaveLength(0);
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+    // The promotion the status used to do is the background pass's job now.
+    expect(await promoteDeployedBillingRevs({ db, client: fake.client({ log }), log })).toBe(1);
+    expect(await boxRow(box.id)).toMatchObject({ stripeConfigRev: "k1.price_TestPro29.14", stripeConfigPendingRev: null });
+    const rows = await db.select().from(boxEvents).where(eq(boxEvents.boxId, box.id));
+    expect(rows.filter((r) => r.kind === "billing_variables_live")).toHaveLength(1);
+  });
 });
 
 // ---- shared key rotation ------------------------------------------------
@@ -783,6 +823,9 @@ describe("rotate-box-key", () => {
       expect(before.boxesPendingDeploy).toBeGreaterThanOrEqual(1);
       expect(before.boxesBehind).toBeGreaterThanOrEqual(before.boxesPendingDeploy);
       deployed(box.slug);
+      // GH #923: status is read-only now — the 15-second background pass is
+      // what turns a succeeded deploy into a running rev.
+      expect(await promoteDeployedBillingRevs({ db, client: fake.client({ log }), log })).toBeGreaterThanOrEqual(1);
       out.length = 0;
       await runAdmin(["stripe", "status"], env, io);
       const after = JSON.parse(out.join("\n")) as { boxesBehind: number; boxesPendingDeploy: number };

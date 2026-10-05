@@ -22,6 +22,7 @@ import { setupBackups, startBackupScheduler } from "./backups/setup.js";
 import { billingAndMailExtras } from "./railway/box-extras.js";
 import { resendKeysClient } from "./email/resend-keys.js";
 import { loadBillingConfig } from "./stripe/config.js";
+import { promoteDeployedBillingRevs } from "./stripe/box-billing.js";
 import { fleetSecretStore } from "./stripe/fleet-secrets.js";
 import { stripeForwarder } from "./stripe/forwarder.js";
 
@@ -66,6 +67,8 @@ async function main() {
   const billing = config.billing ?? loadBillingConfig({});
   const fleetStore = fleetSecretStore(db, config.dataKeys);
   const forwarder = stripeForwarder({ db, log, keys: config.dataKeys, billing, store: fleetStore, alerter });
+  // The Stripe routes and the billing-rev promotion pass share one client.
+  const stripeRailway = config.railwayToken ? new RailwayClient({ token: config.railwayToken, log }) : null;
   const resendKeys = billing.resendAdminKey ? resendKeysClient({ apiKey: billing.resendAdminKey }) : null;
   if (!billing.stripeWebhookSecrets.length) log.warn("CLOUD_STRIPE_WEBHOOK_SECRET is not set: the Stripe webhook answers 503 unless the endpoint secret is stored (admin stripe endpoint ensure)");
   if (!billing.stripeProPriceId) log.warn("CLOUD_STRIPE_PRO_PRICE_ID is not set: new boxes get no Stripe variables");
@@ -156,6 +159,11 @@ async function main() {
     setInterval(() => void pruneRateEvents(db).catch((err: unknown) => log.error("rate_events prune failed", { err })), PRUNE_MS),
     // AgentDash (SC-8, GH #769): retries and parked Stripe events.
     setInterval(() => void forwarder.deliverDue().catch((err: unknown) => log.error("Stripe delivery pass failed", { err })), STRIPE_DELIVERY_MS),
+    // AgentDash (GH #923): a box adopts the billing config it was sent once a
+    // deploy after the send succeeds. This used to run inside GET
+    // /internal/stripe/status — a read that wrote — so it is a background
+    // pass now; the status endpoint stays read-only and reports the count.
+    setInterval(() => void promoteDeployedBillingRevs({ db, client: stripeRailway, log }).catch((err: unknown) => log.error("billing rev promotion pass failed", { err })), STRIPE_DELIVERY_MS),
   ];
   for (const t of passes) t.unref();
 
@@ -170,7 +178,7 @@ async function main() {
     config: loadMonitorConfig(process.env, config),
   });
 
-  const server = createApp({ db, config, log, frontDoor, alertTransports: transports, alerter, stripe: { forwarder }, ...(backups ? { backups: backups.routeDeps } : {}) }).listen(config.port, () => {
+  const server = createApp({ db, config, log, frontDoor, alertTransports: transports, alerter, stripe: { forwarder, railway: stripeRailway }, ...(backups ? { backups: backups.routeDeps } : {}) }).listen(config.port, () => {
     log.info("listening", { port: config.port, release: config.release, railwayApi: config.railwayToken ? "configured" : "not configured" });
   });
   const shutdown = () => {
