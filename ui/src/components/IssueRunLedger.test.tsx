@@ -333,6 +333,18 @@ describe("IssueRunLedger", () => {
           createdAt: "2026-04-18T19:57:00.000Z",
         }),
         createRun({
+          runId: "run-operator",
+          resultJson: { stopReason: "cancelled" },
+          errorCode: "cancelled_by_operator",
+          createdAt: "2026-04-18T19:56:30.000Z",
+        }),
+        createRun({
+          runId: "run-interrupt",
+          resultJson: { stopReason: "cancelled" },
+          error: "Interrupted by a new comment",
+          createdAt: "2026-04-18T19:56:15.000Z",
+        }),
+        createRun({
           runId: "run-budget",
           resultJson: { stopReason: "budget_paused" },
           createdAt: "2026-04-18T19:56:00.000Z",
@@ -346,7 +358,12 @@ describe("IssueRunLedger", () => {
     });
 
     expect(container.textContent).toContain("timeout (30s timeout)");
-    expect(container.textContent).toContain("cancelled");
+    // AgentDash (c4-stops review): the retired "cancelled" wording must not
+    // reappear — operator stops read "stopped manually", a bare cancel "stopped",
+    // and a system cancel keeps its recorded reason.
+    expect(container.textContent).not.toContain("cancelled");
+    expect(container.textContent).toContain("stopped manually");
+    expect(container.textContent).toContain("interrupted by a new comment");
     expect(container.textContent).toContain("budget paused");
     expect(container.textContent).toContain("paused by a person");
     expect(container.textContent).not.toContain("paused by board");

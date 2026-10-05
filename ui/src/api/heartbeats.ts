@@ -5,6 +5,7 @@ import type {
   WorkspaceOperation,
 } from "@paperclipai/shared";
 import { api } from "./client";
+import { markRunStoppedLocally } from "../lib/locallyStoppedRuns";
 
 export interface RunLivenessFields {
   livenessState: HeartbeatRun["livenessState"];
@@ -102,7 +103,10 @@ export const heartbeatsApi = {
     api.get<{ operationId: string; store: string; logRef: string; content: string; nextOffset?: number }>(
       `/workspace-operations/${operationId}/log?offset=${encodeURIComponent(String(offset))}&limitBytes=${encodeURIComponent(String(limitBytes))}`,
     ),
-  cancel: (runId: string) => api.post<void>(`/heartbeat-runs/${runId}/cancel`, {}),
+  cancel: (runId: string) =>
+    // AgentDash (c4-stops review): mark only after the cancel is accepted — a
+    // failed request must not pin "Stopped by you" on a later system stop.
+    api.post<void>(`/heartbeat-runs/${runId}/cancel`, {}).then(() => markRunStoppedLocally(runId)),
   recordWatchdogDecision: (input: WatchdogDecisionInput) =>
     api.post(`/heartbeat-runs/${input.runId}/watchdog-decisions`, {
       decision: input.decision,

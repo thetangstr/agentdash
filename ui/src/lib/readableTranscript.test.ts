@@ -509,6 +509,32 @@ describe("summarizeToolOutcome", () => {
     expect(summarizeToolOutcome(undefined, "error")).toBe("Failed");
     expect(summarizeToolOutcome(undefined, "running")).toBe("Running…");
   });
+
+  // AgentDash (c4-stops): the collapsed row is owner-facing — wire plumbing
+  // never becomes its quoted outcome.
+  it("skips section banners and HTTP echoes to the first real line", () => {
+    expect(
+      summarizeToolOutcome("=== SINGLE COMMENT ===\nHTTP: 201\nComment posted on ACM-9.", "completed"),
+    ).toBe("Comment posted on ACM-9.");
+  });
+
+  it("folds a bare key header ahead of a JSON body", () => {
+    expect(
+      summarizeToolOutcome('workProducts:\n{"id":"wp-1","identifier":"ACM-9"}', "completed"),
+    ).toBe("Got issue ACM-9");
+  });
+
+  it("folds a generic 'Response: N fields' phrase to a plain verdict", () => {
+    expect(summarizeToolOutcome('{"a":1,"b":2,"c":3}', "completed")).toBe("Done");
+    expect(summarizeToolOutcome('{"a":1,"b":2,"c":3}', "error")).toBe("Failed");
+  });
+
+  it("keeps a specific response phrase and a real error", () => {
+    expect(summarizeToolOutcome('{"identifier":"ACM-9"}', "completed")).toBe("Got issue ACM-9");
+    expect(
+      summarizeToolOutcome('=== RAW DOC PUT ===\n{"error":"Document update requires baseRevisionId"}', "completed"),
+    ).toBe("Error: Document update requires baseRevisionId");
+  });
 });
 
 describe("isErrorLikeText", () => {
@@ -864,7 +890,10 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
   it("summarises JSON bodies surrounded by script noise instead of showing raw JSON", () => {
     const company =
       '{"id":"9862d76d-aa9f-4fb4-a344-a13d61d0945e","name":"Acme Robotics","description":"Robots","issuePrefix":"ACM"}';
-    expect(summarizeJsonOutput(`${company}\nexit code 1`)).toBe("Got company Acme Robotics · exit code 1");
+    // AgentDash (c4-stops): an `exit code N` tail is plumbing — the row's
+    // status icon already carries the verdict, and the full output is one
+    // click away.
+    expect(summarizeJsonOutput(`${company}\nexit code 1`)).toBe("Got company Acme Robotics");
     expect(
       summarizeJsonOutput(`KEY_SET\n${company}`),
     ).toBe("KEY_SET · Got company Acme Robotics");
@@ -877,7 +906,7 @@ describe("script-local API variables and Hermes rows (batch 2)", () => {
       summarizeJsonOutput(
         `KEY_SET\n{"identifier":"ACM-6","title":"x"}\n=== COMMENTS ===\n{"items":[1,2]}`,
       ),
-    ).toBe("KEY_SET · Got issue ACM-6 · === COMMENTS === · Response: 2 items");
+    ).toBe("KEY_SET · Got issue ACM-6 · Response: 2 items");
     // Text with no JSON body is still not JSON output.
     expect(summarizeJsonOutput("plain text")).toBeNull();
     expect(summarizeJsonOutput("not json {")).toBeNull();

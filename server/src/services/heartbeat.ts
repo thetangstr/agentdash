@@ -7719,7 +7719,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             stream: "system",
             // AgentDash (c3): a cancelled run is a stop, not a failure — warn at
             // most, and name it "stopped" so the timeline never reads as an error.
-            level: outcome === "succeeded" ? "info" : outcome === "cancelled" ? "warn" : "error",
+            // AgentDash (c4-stops): a stop is a deliberate end, not a warning —
+            // the event stays neutral info; the recorded reason still shows on
+            // the run detail.
+            level: outcome === "succeeded" || outcome === "cancelled" ? "info" : "error",
             message: outcome === "cancelled" ? "run stopped" : `run ${outcome}`,
             payload: {
               status,
@@ -9643,7 +9646,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await appendRunEvent(cancelled, 1, {
         eventType: "lifecycle",
         stream: "system",
-        level: "warn",
+        // AgentDash (c4-stops): a stop is a deliberate end, not a warning —
+        // the "run stopped" event stays neutral info for operator and system
+        // cancels alike; the reason is on the run record.
+        level: "info",
         message: "run stopped",
         payload: { reason },
       });

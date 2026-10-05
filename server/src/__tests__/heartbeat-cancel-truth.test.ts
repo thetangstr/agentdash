@@ -240,6 +240,9 @@ describe("heartbeat cancel truth (c3)", () => {
       .where(eq(heartbeatRunEvents.runId, runId))
       .orderBy(asc(heartbeatRunEvents.id));
     expect(events.some((event) => event.message === "run stopped")).toBe(true);
+    // AgentDash (c4-stops): a stop is not a warning — the lifecycle event is
+    // neutral info even for a system cancel; the reason lives on the run.
+    expect(events.filter((event) => event.message === "run stopped").every((event) => event.level === "info")).toBe(true);
     expect(events.some((event) => event.message === "run failed")).toBe(false);
     expect(events.every((event) => event.level !== "error")).toBe(true);
 
@@ -583,6 +586,8 @@ describe("heartbeat cancel truth (c3)", () => {
       .orderBy(asc(heartbeatRunEvents.id));
     // The cancel path and the adopted executor path must not double-report.
     expect(events.filter((event) => event.message === "run stopped")).toHaveLength(1);
+    // AgentDash (c4-stops): an operator stop renders neutral — info, not warn.
+    expect(events.filter((event) => event.message === "run stopped").every((event) => event.level === "info")).toBe(true);
     expect(events.some((event) => event.message === "run failed")).toBe(false);
     expect(events.every((event) => event.level !== "error")).toBe(true);
   }, 90_000);
