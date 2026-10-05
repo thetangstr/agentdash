@@ -25,10 +25,11 @@ function readCommentText(value: unknown) {
 // summary — and the same line reached `result` and `message`, which the run
 // card falls back to. Strip the leading chatter from every summary-shaped
 // input; a value that was only noise disappears instead of landing on the
-// run card.
-function readSummaryText(value: unknown) {
+// run card. The run's adapter decides how much counts as chatter — Hermes
+// writes whole leading glyph runs, other adapters only ⚠/ℹ diagnostics.
+function readSummaryText(value: unknown, adapterType?: string | null) {
   if (typeof value !== "string") return null;
-  const cleaned = stripStatusLines(value);
+  const cleaned = stripStatusLines(value, { adapterType });
   return cleaned.length > 0 ? cleaned : null;
 }
 
@@ -36,11 +37,11 @@ function readSummaryText(value: unknown) {
 // on purpose: a real error is served verbatim.
 const RESULT_TEXT_KEYS = ["summary", "result", "message"] as const;
 
-function cleanResultTextFields(base: Record<string, unknown>): Record<string, unknown> {
+function cleanResultTextFields(base: Record<string, unknown>, adapterType?: string | null): Record<string, unknown> {
   let cleaned: Record<string, unknown> | null = null;
   for (const key of RESULT_TEXT_KEYS) {
     if (typeof base[key] !== "string") continue;
-    const value = readSummaryText(base[key]);
+    const value = readSummaryText(base[key], adapterType);
     if (value === base[key]) continue;
     cleaned ??= { ...base };
     if (value === null) delete cleaned[key];
@@ -52,11 +53,12 @@ function cleanResultTextFields(base: Record<string, unknown>): Record<string, un
 export function mergeHeartbeatRunResultJson(
   resultJson: Record<string, unknown> | null | undefined,
   summary: string | null | undefined,
+  adapterType?: string | null,
 ): Record<string, unknown> | null {
-  const normalizedSummary = readSummaryText(summary);
+  const normalizedSummary = readSummaryText(summary, adapterType);
   let baseResult =
     resultJson && typeof resultJson === "object" && !Array.isArray(resultJson)
-      ? cleanResultTextFields(resultJson)
+      ? cleanResultTextFields(resultJson, adapterType)
       : null;
 
   if (!baseResult) {
@@ -79,6 +81,7 @@ export function mergeHeartbeatRunResultJson(
 
 export function summarizeHeartbeatRunResultJson(
   resultJson: Record<string, unknown> | null | undefined,
+  adapterType?: string | null,
 ): Record<string, unknown> | null {
   if (!resultJson || typeof resultJson !== "object" || Array.isArray(resultJson)) {
     return null;
@@ -92,7 +95,7 @@ export function summarizeHeartbeatRunResultJson(
     // status line as their summary — or their result, which the card falls
     // back to. `error` stays verbatim.
     if (key !== "error" && value !== null) {
-      value = readSummaryText(value);
+      value = readSummaryText(value, adapterType);
     }
     if (value !== null) {
       summary[key] = value;
@@ -132,15 +135,16 @@ export function summarizeHeartbeatRunResultJson(
 
 export function buildHeartbeatRunIssueComment(
   resultJson: Record<string, unknown> | null | undefined,
+  adapterType?: string | null,
 ): string | null {
   if (!resultJson || typeof resultJson !== "object" || Array.isArray(resultJson)) {
     return null;
   }
 
   return (
-    readSummaryText(resultJson.summary)
-    ?? readSummaryText(resultJson.result)
-    ?? readSummaryText(resultJson.message)
+    readSummaryText(resultJson.summary, adapterType)
+    ?? readSummaryText(resultJson.result, adapterType)
+    ?? readSummaryText(resultJson.message, adapterType)
     ?? null
   );
 }

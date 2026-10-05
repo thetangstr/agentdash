@@ -814,16 +814,28 @@ describe("dispatchLLM names the reason Hermes printed for a failed turn", () => 
     const out = describeAdapterFailure(
       "HTTP 401: Incorrect API key provided: sk-abcdef1234567890abcd. Bearer abcdefgh12345678\n",
       "\nsession_id: 1\n",
+      "hermes_local",
     );
     expect(out).toContain("HTTP 401");
     expect(out).not.toMatch(/sk-abcdef|abcdefgh12345678/);
   });
 
   it("describeAdapterFailure keeps real stderr, drops the session line, and caps the length", () => {
-    expect(describeAdapterFailure(HERMES_STDOUT, HERMES_STDERR)).toMatch(/^Billing or credits exhausted: HTTP 429/);
-    expect(describeAdapterFailure("", "Traceback: boom\nsession_id: x\n")).toBe("Traceback: boom");
-    expect(describeAdapterFailure("", "\nsession_id: 20261002_1\n")).toBe("no output (session 20261002_1)");
-    expect(describeAdapterFailure("x".repeat(2000), "").length).toBeLessThanOrEqual(600);
+    expect(describeAdapterFailure(HERMES_STDOUT, HERMES_STDERR, "hermes_local")).toMatch(/^Billing or credits exhausted: HTTP 429/);
+    expect(describeAdapterFailure("", "Traceback: boom\nsession_id: x\n", undefined)).toBe("Traceback: boom");
+    expect(describeAdapterFailure("", "\nsession_id: 20261002_1\n", undefined)).toBe("no output (session 20261002_1)");
+    expect(describeAdapterFailure("x".repeat(2000), "", undefined).length).toBeLessThanOrEqual(600);
+  });
+
+  it("describeAdapterFailure scopes the glyph strip to hermes_local", () => {
+    // A failing adapter's stdout can carry leading ✗/→ chatter. On Hermes
+    // that is machine output; for any other adapter the same line is the
+    // agent's own error text and must reach the error description.
+    const stdout = "✗ tool call failed, retrying\n→ resuming\nthe real failure";
+    expect(describeAdapterFailure(stdout, "", "hermes_local")).toBe("the real failure");
+    for (const adapterType of [undefined, null, "claude_local", "codex_local", "process"]) {
+      expect(describeAdapterFailure(stdout, "", adapterType)).toContain("✗ tool call failed");
+    }
   });
 });
 
@@ -852,6 +864,21 @@ describe("stripHermesChatter", () => {
   it("strips several leading status lines but stops at the answer", () => {
     const out = "✓ loaded config\r\n  ⚠ scanner unavailable\r\nThe answer.\n⚠ not chatter";
     expect(stripHermesChatter(out)).toBe("The answer.\n⚠ not chatter");
+  });
+
+  it("strips the whole leading glyph run, including indented and mixed glyphs", () => {
+    // Hermes writes its boot/status chatter with ✓/✗/→/⚠/ℹ at any indent —
+    // on this adapter all of it is machine output.
+    const out = "  ✓ loaded config\n✗ tool call failed, retrying\n→ resuming\nThe answer.";
+    expect(stripHermesChatter(out)).toBe("The answer.");
+  });
+
+  it("keeps a Hermes answer that opens with its own ✓ checklist", () => {
+    // Hermes is still an LLM — "✓ Fixed X" is exactly how its checklist
+    // answers open, so only the observed status words ("✓ loading …")
+    // count as chatter, never a bare ✓ (review-1022).
+    const reply = "✓ Fixed the deploy script\n✓ Ran the tests\nHere's what shipped: the fix.";
+    expect(stripHermesChatter(reply)).toBe(reply);
   });
 
   it("returns empty when Hermes emitted only chatter, so the caller can fail loudly", () => {
