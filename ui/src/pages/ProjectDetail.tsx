@@ -253,6 +253,22 @@ export function ProjectDetail() {
     queryKey: [...queryKeys.projects.detail(routeProjectRef), lookupCompanyId ?? null],
     queryFn: () => projectsApi.get(routeProjectRef, lookupCompanyId),
     enabled: canFetchProject,
+    // The company id is only a lookup hint, and the route ref itself is
+    // canonicalized (uuid → urlKey) by the effect below right after the first
+    // resolve. Both key changes still target the same project; without
+    // placeholder data the query drops to a cold pending state →
+    // PageSkeleton → every controlled form on the page remounts empty
+    // mid-edit (this flaked github-connect.spec on a loaded runner).
+    placeholderData: (previousData, previousQuery) => {
+      const prevKey = previousQuery?.queryKey;
+      if (!previousData || !Array.isArray(prevKey) || prevKey[0] !== "projects" || prevKey[1] !== "detail") {
+        return undefined;
+      }
+      const sameRouteRef = prevKey[2] === routeProjectRef;
+      const sameProject =
+        previousData.id === routeProjectRef || projectRouteRef(previousData) === routeProjectRef;
+      return sameRouteRef || sameProject ? previousData : undefined;
+    },
   });
   const canonicalProjectRef = project ? projectRouteRef(project) : routeProjectRef;
   const projectLookupRef = project?.id ?? routeProjectRef;
