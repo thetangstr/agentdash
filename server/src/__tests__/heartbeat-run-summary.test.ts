@@ -130,6 +130,7 @@ describe("mergeHeartbeatRunResultJson", () => {
       mergeHeartbeatRunResultJson(
         { summary: "✓ loading tools\r\nAll 42 checks pass.", stdout: "raw" },
         "ignored fallback",
+        "hermes_local",
       ),
     ).toEqual({ summary: "All 42 checks pass.", stdout: "raw" });
   });
@@ -268,6 +269,36 @@ describe("mergeHeartbeatRunResultJson", () => {
       ),
     ).toEqual({ message: "real message" });
   });
+
+  // AgentDash (review-1019 + review-1022): the ✗/→ glyph rule is scoped to
+  // Hermes — its runtime writes those step diagnostics to stdout on plain LF
+  // lines — while every other adapter keeps leading pointer prose. A "✓
+  // <status word>" line is machine noise on every adapter, and a bare "✓
+  // Fixed X" is agent prose even on Hermes.
+  it("strips the leading ✗/→ glyph run for a hermes_local run", () => {
+    const noisy = "✓ loaded config\n  ✗ tool call failed, retrying\n→ resuming\nDone — deployed.";
+    expect(mergeHeartbeatRunResultJson(null, noisy, "hermes_local")).toEqual({
+      summary: "Done — deployed.",
+    });
+  });
+
+  it("keeps the same leading ✗/→ lines as prose on every other adapter", () => {
+    const text = "✗ tool call failed, retrying\n→ resuming\nDone — deployed.";
+    for (const adapterType of [undefined, null, "claude_local", "process"]) {
+      expect(mergeHeartbeatRunResultJson(null, text, adapterType)).toEqual({
+        summary: text,
+      });
+    }
+  });
+
+  it("keeps a ✓ checklist summary even for a hermes_local run", () => {
+    // Finding review-1022 #2: Hermes is an LLM too — a "✓ Fixed X" checklist
+    // is its answer, not runtime chatter. Only status-word ✓ lines strip.
+    const text = "✓ Fixed the deploy script\n✓ Added tests\nHere's what shipped.";
+    expect(mergeHeartbeatRunResultJson(null, text, "hermes_local")).toEqual({
+      summary: text,
+    });
+  });
 });
 
 describe("summarizeHeartbeatRunResultJson status lines", () => {
@@ -313,15 +344,26 @@ describe("summarizeHeartbeatRunResultJson status lines", () => {
     const text = "DATABASE_URL now points at the staging database; migration applied.";
     expect(mergeHeartbeatRunResultJson(null, text)).toEqual({ summary: text });
   });
+
+  it("strips leading ✗/→ lines for hermes_local but keeps them elsewhere", () => {
+    const row = { summary: "✗ tool call failed, retrying\n→ resuming\nAll 42 checks pass." };
+    expect(summarizeHeartbeatRunResultJson(row, "hermes_local")).toEqual({
+      summary: "All 42 checks pass.",
+    });
+    expect(summarizeHeartbeatRunResultJson(row)).toEqual(row);
+  });
 });
 
 describe("buildHeartbeatRunIssueComment status lines", () => {
   it("skips a chatter-only summary and falls back to the result", () => {
     expect(
-      buildHeartbeatRunIssueComment({
-        summary: "✓ session resumed\r\n",
-        result: "Shipped the fix.",
-      }),
+      buildHeartbeatRunIssueComment(
+        {
+          summary: "✓ session resumed\r\n",
+          result: "Shipped the fix.",
+        },
+        "hermes_local",
+      ),
     ).toBe("Shipped the fix.");
   });
 });
