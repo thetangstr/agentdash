@@ -27,6 +27,13 @@ function isInvalidUuidInput(err: unknown): boolean {
   );
 }
 
+/** SQLSTATE foreign_key_violation — the write named a row that does not exist. */
+const PG_FOREIGN_KEY_VIOLATION = "23503";
+
+function isForeignKeyViolation(err: unknown): boolean {
+  return unwrapPgError(err).code === PG_FOREIGN_KEY_VIOLATION;
+}
+
 const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -135,6 +142,36 @@ export function errorHandler(
       "invalid uuid reached the database; answered 400 (caller error, or a server bug if no listed parameter explains it)",
     );
     res.status(400).json({ error: "Invalid identifier" });
+    return;
+  }
+
+  // AgentDash (GH #921): a foreign-key violation means the write referenced a
+  // row that does not exist or cannot hold the reference — a client error on
+  // any public route, never a recorded 500. Warn-logged for the same reason
+  // as the uuid case: an FK failure the route did not expect is often a server
+  // bug and should leave a trail.
+  if (isForeignKeyViolation(err)) {
+    logger.warn(
+      invalidUuidLogFields(req),
+      "foreign-key violation reached the error handler; answered 422 (caller referenced a missing row, or a server bug)",
+    );
+    res.status(422).json({ error: "Request references a resource that does not exist" });
+    return;
+  }
+
+  // AgentDash (GH #921): express's body parsers (and other upstream
+  // middleware) reject bad requests with an error that already carries a 4xx
+  // status — `entity.parse.failed` for malformed JSON, `entity.too.large` for
+  // an over-limit body. These used to fall through to a recorded 500. Any
+  // error that arrives pre-tagged with a 4xx status is a client error and
+  // answers that status; `expose` (body-parser's own marker for
+  // client-safe text) decides whether the message goes out.
+  const upstreamStatus = (err as { status?: unknown }).status ?? (err as { statusCode?: unknown }).statusCode;
+  if (typeof upstreamStatus === "number" && upstreamStatus >= 400 && upstreamStatus < 500) {
+    const expose = (err as { expose?: unknown }).expose;
+    res.status(upstreamStatus).json({
+      error: expose === true && err instanceof Error ? err.message : "Request failed",
+    });
     return;
   }
 

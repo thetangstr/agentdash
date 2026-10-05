@@ -1,8 +1,8 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { companies, goals } from "@paperclipai/db";
+import { agents, companies, goals } from "@paperclipai/db";
 
-import { conflict } from "../errors.js";
+import { conflict, notFound } from "../errors.js";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 
 type GoalReader = Pick<Db, "select">;
@@ -63,6 +63,29 @@ export function goalService(db: Db) {
     if (current.companyId !== before.companyId) throw conflict("Goal company changed before acceptance");
     return current;
   }
+  // AgentDash (GH #921): parentId and ownerAgentId are foreign keys the schema
+  // enforces at the database, not the company boundary. Writing a reference to
+  // another company's row used to succeed, and an id matching nothing surfaced
+  // the raw 23503 as a 500. Validate inside the locked transaction and answer
+  // 404 on a miss, the visibility rule's convention.
+  async function assertReferences(tx: Db, companyId: string, data: { parentId?: string | null; ownerAgentId?: string | null }) {
+    if (data.parentId) {
+      const parent = await tx
+        .select({ id: goals.id })
+        .from(goals)
+        .where(and(eq(goals.id, data.parentId), eq(goals.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!parent) throw notFound("Parent goal not found");
+    }
+    if (data.ownerAgentId) {
+      const owner = await tx
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.id, data.ownerAgentId), eq(agents.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!owner) throw notFound("Owner agent not found");
+    }
+  }
   return {
     list: (companyId: string) => db.select().from(goals).where(eq(goals.companyId, companyId)),
 
@@ -79,6 +102,7 @@ export function goalService(db: Db) {
     create: (companyId: string, data: Omit<typeof goals.$inferInsert, "companyId">, acceptance?: ActivityAcceptance) =>
       accept(acceptance, async tx => {
         await lockCompanies(tx, [companyId]);
+        await assertReferences(tx, companyId, data);
         return (await tx.insert(goals).values({ ...data, companyId }).returning())[0];
       }),
 
@@ -86,6 +110,8 @@ export function goalService(db: Db) {
       accept(acceptance, async tx => {
         const current = await lockGoalCompanies(tx, id, data.companyId);
         if (!current) return null;
+        if (data.parentId && data.parentId === id) throw conflict("A goal cannot be its own parent");
+        await assertReferences(tx, data.companyId ?? current.companyId, data);
         return (await tx.update(goals).set({ ...data, updatedAt: new Date() }).where(eq(goals.id, id)).returning())[0] ?? null;
       }),
 

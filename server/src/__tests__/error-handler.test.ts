@@ -131,6 +131,87 @@ describe("errorHandler", () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(recordServerError).toHaveBeenCalledTimes(1);
   });
+
+  // AgentDash (GH #921): a foreign-key violation means the caller referenced a
+  // row that does not exist (or cannot hold the reference) — a 4xx, not a 500.
+  // Warn-logged like the uuid case: an unexpected FK failure is often a server
+  // bug and should leave a trail.
+  it("maps a 23503 foreign-key violation to 422 with a warn log, not a recorded 500", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+    vi.mocked(logger.warn).mockClear();
+
+    errorHandler(
+      drizzleWrapped("23503", 'insert or update on table "goals" violates foreign key constraint "goals_parent_id_goals_id_fk"'),
+      req,
+      res,
+      vi.fn() as unknown as NextFunction,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({ error: "Request references a resource that does not exist" });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  // AgentDash (GH #921): express.json() rejects malformed bodies with an error
+  // carrying `status: 400`/`type: 'entity.parse.failed'`. It fell through to a
+  // recorded 500. Any upstream error that already carries a 4xx status is a
+  // client error and answers that status.
+  it("answers a malformed JSON body with 400 instead of a recorded 500", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+    const parseError = Object.assign(
+      new SyntaxError("Unexpected token } in JSON at position 12"),
+      { status: 400, statusCode: 400, type: "entity.parse.failed", expose: true },
+    );
+
+    errorHandler(parseError, req, res, vi.fn() as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("honours a 413 from the body-size limit the same way", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+    const tooLarge = Object.assign(new Error("request entity too large"), {
+      status: 413,
+      statusCode: 413,
+      type: "entity.too.large",
+      expose: true,
+    });
+
+    errorHandler(tooLarge, req, res, vi.fn() as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("answers a real malformed JSON POST with 400 through an express app", async () => {
+    vi.mocked(recordServerError).mockClear();
+    const app = express();
+    app.use(express.json());
+    app.post("/api/goals", (_req, res) => res.json({ ok: true }));
+    app.use(errorHandler);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const response = await fetch(`http://127.0.0.1:${port}/api/goals`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"title": ',
+      });
+      expect(response.status).toBe(400);
+      expect(vi.mocked(recordServerError)).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 describe('private human failure diagnostics', () => {
