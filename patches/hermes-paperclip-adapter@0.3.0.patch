@@ -150,6 +150,18 @@ index d440427d7df7703dfd469675a2cadfca413e2df1..38f8b39aa4c2511dc82267cb3d0efdf8
      if (pythonCheck)
          checks.push(pythonCheck);
      // 4. Model config
+diff --git a/dist/shared/constants.d.ts b/dist/shared/constants.d.ts
+--- a/dist/shared/constants.d.ts
++++ b/dist/shared/constants.d.ts
+@@ -17,7 +17,7 @@
+  * Valid --provider choices for the hermes CLI.
+  * Must stay in sync with `hermes chat --help`.
+  */
+-export declare const VALID_PROVIDERS: readonly ["auto", "openrouter", "nous", "openai-codex", "copilot", "copilot-acp", "anthropic", "huggingface", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode"];
++export declare const VALID_PROVIDERS: readonly ["auto", "openrouter", "nous", "openai-codex", "copilot", "copilot-acp", "anthropic", "huggingface", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "alibaba-token-plan-cn"];
+ /**
+  * Model-name prefix → provider hint mapping.
+  * Used when no explicit provider is configured and we need to infer
 diff --git a/dist/shared/constants.js b/dist/shared/constants.js
 index c8be1d158bee16f0f383d8300ae806f2d5d00e53..4f4deaecc670044e852fe4f60bef84ad348b7c3d 100644
 --- a/dist/shared/constants.js
@@ -163,11 +175,20 @@ index c8be1d158bee16f0f383d8300ae806f2d5d00e53..4f4deaecc670044e852fe4f60bef84ad
  /**
   * Valid --provider choices for the hermes CLI.
   * Must stay in sync with `hermes chat --help`.
-@@ -59,6 +59,7 @@ export const MODEL_PREFIX_PROVIDER_HINTS = [
+@@ -31,4 +31,5 @@
+     "minimax",
+     "minimax-cn",
+     "kilocode",
++    "alibaba-token-plan-cn",
+ ];
+@@ -59,6 +59,10 @@ export const MODEL_PREFIX_PROVIDER_HINTS = [
      ["moonshot", "kimi-coding"],
      ["kimi", "kimi-coding"],
      // MiniMax
 +    ["minimax-cn", "minimax-cn"],
      ["minimax", "minimax"],
      // DeepSeek
++    // AgentDash model tiers (batch 4): Alibaba Token Plan China
++    ["qwen3.8-max", "alibaba-token-plan-cn"],
++    ["deepseek-v4", "alibaba-token-plan-cn"],
      ["deepseek", "auto"],

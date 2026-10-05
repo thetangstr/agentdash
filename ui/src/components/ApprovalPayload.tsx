@@ -1,5 +1,10 @@
 import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
 import { formatCents } from "../lib/utils";
+import {
+  AGENT_MODEL_TIER_METADATA_KEY,
+  describeHermesModel,
+  HERMES_LOCAL_ADAPTER_TYPE,
+} from "@paperclipai/shared";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
@@ -82,7 +87,46 @@ function SkillList({ values }: { values: unknown }) {
   );
 }
 
+/**
+ * AgentDash (c4-model-tiers / review-1028): the hire card's plain-words
+ * model line — "Qwen 3.8 Max · high tier". Order of truth:
+ *   1. the tier+model the server stamped on the payload (`modelTier` +
+ *      `model`) — exact, env-override- and gate-aware;
+ *   2. an explicit `adapterConfig.model` on the payload;
+ *   3. nothing — when no model is stamped or configured, hermes' own
+ *      config decides and guessing a tier would lie.
+ * Returns null for non-hermes adapters and for custom models with no
+ * plain-words name.
+ */
+function hermesModelLine(payload: Record<string, unknown>): string | null {
+  if (payload.adapterType !== HERMES_LOCAL_ADAPTER_TYPE) return null;
+  const stampedModel = typeof payload.model === "string" ? payload.model : null;
+  const stampedTier =
+    payload.modelTier === "high" || payload.modelTier === "low" ? payload.modelTier : null;
+  if (stampedModel) {
+    return describeHermesModel({ model: stampedModel, modelTier: stampedTier })?.text ?? stampedModel;
+  }
+  const adapterConfig =
+    payload.adapterConfig && typeof payload.adapterConfig === "object"
+      ? (payload.adapterConfig as Record<string, unknown>)
+      : null;
+  const configuredModel = typeof adapterConfig?.model === "string" ? adapterConfig.model : null;
+  const metadata =
+    payload.metadata && typeof payload.metadata === "object"
+      ? (payload.metadata as Record<string, unknown>)
+      : null;
+  const recordedTier =
+    typeof metadata?.[AGENT_MODEL_TIER_METADATA_KEY] === "string"
+      ? (metadata[AGENT_MODEL_TIER_METADATA_KEY] as string)
+      : null;
+  if (configuredModel) {
+    return describeHermesModel({ model: configuredModel, modelTier: recordedTier })?.text ?? configuredModel;
+  }
+  return null;
+}
+
 export function HireAgentPayload({ payload }: { payload: Record<string, unknown> }) {
+  const modelLine = hermesModelLine(payload);
   return (
     <div className="mt-3 space-y-1.5 text-sm">
       <div className="flex items-center gap-2">
@@ -104,6 +148,12 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
           <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
             {String(payload.adapterType)}
           </span>
+        </div>
+      )}
+      {modelLine && (
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs">Model</span>
+          <span>{modelLine}</span>
         </div>
       )}
       <SkillList values={payload.desiredSkills} />

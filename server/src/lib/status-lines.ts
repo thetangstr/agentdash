@@ -28,9 +28,10 @@
  *   CRLF document "mixed" (that would eat every line but the last). When
  *   the mix cannot be proven — a lone CRLF status line ahead of an
  *   unterminated answer, or a uniform-CRLF document — a CRLF line still
- *   counts as chatter if it carries a machine shape: a leading ✗⚠ℹ✓ glyph
- *   or a trailing "…" progress mark. A uniformly CRLF document of ordinary
- *   prose is just normalised, never treated as chatter.
+ *   counts as chatter if it carries a machine shape: a leading ✗⚠ glyph, an
+ *   ℹ diagnostic that is not a "Note:", or a progress line ending in "…". A
+ *   uniformly CRLF document of ordinary prose is just normalised, never
+ *   treated as chatter.
  * - A lone in-place redraw. A `\r` that is not part of a line ending is a
  *   carriage return: the runtime redrew over the line, so only the fragment
  *   after the last `\r` is visible. A line whose visible fragment is empty
@@ -40,7 +41,7 @@
  *   "✓ Fixed X" checklist or a "→ Next:" pointer is prose and is kept. An
  *   info glyph is ambiguous — "ℹ Note: …" is a common way to open real
  *   prose — so ℹ only counts as chatter when the line already carries a
- *   machine signature above.
+ *   machine signature above, and then not when it opens a note.
  *
  * Stripping stops at the first ordinary line, so a real answer that happens
  * to contain a warning further down is left alone.
@@ -55,11 +56,18 @@ const DIAGNOSTIC_GLYPH_LINE = /^\s*⚠/u;
 const HERMES_STATUS_LINE = /^\s*✓\s+(session resumed|resuming|loading|loaded)\b/iu;
 
 // A CRLF line whose mix with LF lines cannot be proven is still chatter when
-// it is shaped like machine output: a status-glyph opener (✗⚠ℹ✓) or a
-// trailing "…" progress mark. ℹ belongs here — "ℹ Note: …" is prose on its
-// own, but prose does not arrive CRLF-terminated next to an LF answer.
-const CRLF_MACHINE_GLYPH = /^\s*[✗⚠ℹ✓]/u;
-const CRLF_PROGRESS_MARK = /…\s*$/u;
+// it is unmistakably machine-shaped:
+// - a diagnostic glyph opener (✗⚠). ✓ is deliberately absent —
+//   HERMES_STATUS_LINE already covers the observed Hermes "✓ <status>" noise,
+//   and an agent's own checklist opens "✓ Fixed X" too often.
+// - an ℹ diagnostic — but not "ℹ Note: …", a normal way to open prose.
+// - a progress line: a gerund opener ("Loading MCP servers…") with a trailing
+//   ellipsis. A prose line that ends in "…" ("Let me check…") does not start
+//   with a progress verb and is kept.
+const CRLF_DIAGNOSTIC_GLYPH = /^\s*[✗⚠]/u;
+const CRLF_INFO_DIAGNOSTIC = /^\s*ℹ(?!\s*note\b)/iu;
+const CRLF_PROGRESS_MARK =
+  /^\s*(?:loading|starting|initiali[sz]ing|connecting|waiting|resuming|downloading|installing|preparing|building|compiling|scanning|fetching|indexing|syncing|booting|spawning|launching|authenticating|registering|mounting|parsing|reading|writing|checking|probing|detecting|discovering)\b[^\n]*…\s*$/iu;
 
 export function stripStatusLines(text: string): string {
   // Split on \n first so a "\r\n" line ending survives as a trailing "\r" —
@@ -102,7 +110,8 @@ export function stripStatusLines(text: string): string {
       (line.redrawn && line.visible === "") ||
       (line.crlfEnded &&
         (mixedEndings ||
-          CRLF_MACHINE_GLYPH.test(line.visible) ||
+          CRLF_DIAGNOSTIC_GLYPH.test(line.visible) ||
+          CRLF_INFO_DIAGNOSTIC.test(line.visible) ||
           CRLF_PROGRESS_MARK.test(line.visible))) ||
       DIAGNOSTIC_GLYPH_LINE.test(line.visible) ||
       HERMES_STATUS_LINE.test(line.visible);

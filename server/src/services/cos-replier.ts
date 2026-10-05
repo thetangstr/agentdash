@@ -23,6 +23,7 @@ import { DISPATCH_ERROR_CARD_KIND, postDispatchFailure } from "./cos-dispatch-fa
 // this module must not load (first-run and onboarding import it).
 import type { CosIssueRequester, CosIssueRosterEntry, CosTurnContext } from "./cos-issue-action.js";
 import { PLAN_INTRO_GUIDANCE, PLAN_KPI_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "./cos-plan-naming.js";
+import { stampPlanModelTiers } from "./hermes-model-tiers.js";
 
 // AgentDash (scan 3, lane G): mirrors ISSUE_PROPOSAL_CARD_KIND in cos-issue-action.ts.
 const ISSUE_PROPOSAL_CARD_KIND = "issue_proposal_v1";
@@ -798,7 +799,10 @@ export function cosReplier(deps: Deps) {
           body: "",
           cardKind: PLAN_CARD_KIND,
           cardPayload: {
-            ...plan,
+            // AgentDash (review-1028): stamp the resolved tier+model per
+            // hermes_local agent so the card shows what this instance
+            // applies, not the shipped defaults recomputed in the UI.
+            ...stampPlanModelTiers(plan),
             // Review-1019: only the person who asked may confirm a
             // steady-state hire card, like the task cards (item 11).
             ...(opts.requesterUserId ? { requesterUserId: opts.requesterUserId } : {}),

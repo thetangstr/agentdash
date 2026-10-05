@@ -19,6 +19,7 @@ import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
 import { agentService } from "./agents.js";
 import { approvalService } from "./approvals.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
+import { hermesModelTierStamp } from "./hermes-model-tiers.js";
 import { DECIDABLE_STATUSES } from "./steward-inbox.js";
 import { effectsFor, hireApprovalCreatesAgent } from "./waiting-on-you-rules.js";
 import type { AssistantDecision } from "./waiting-on-you-rules.js";
@@ -1035,6 +1036,13 @@ export function assistantGatedActionsService(
           capabilities: payload.reason,
           adapterType: payload.adapterType,
           adapterConfig: {},
+          // AgentDash (review-1028): the resolved tier+model ride in the
+          // payload so the approval card shows what the server applied.
+          ...hermesModelTierStamp({
+            adapterType: payload.adapterType ?? null,
+            role: configuredAgent.role,
+            title: typeof payload.title === "string" ? payload.title : null,
+          }),
           runtimeConfig: configuredAgent.runtimeConfig ?? {},
           budgetMonthlyCents: 0,
           desiredSkills: [],

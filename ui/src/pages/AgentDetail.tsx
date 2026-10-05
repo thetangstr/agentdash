@@ -129,6 +129,8 @@ import {
   type AgentTokenCeilingStatus,
   type CostByAgent,
   RUN_CANCELLED_BY_OPERATOR_CODE,
+  AGENT_MODEL_TIER_METADATA_KEY,
+  describeHermesModel,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
@@ -3840,7 +3842,14 @@ export function AgentSkillsTab({
                   confidently wrong answer would be worse than "unknown". */}
               <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2">
                 <span className="text-muted-foreground">Model (next run)</span>
-                <ResolvedRuntimeLabel resolved={agent.resolvedRuntime ?? null} />
+                <ResolvedRuntimeLabel
+                  resolved={agent.resolvedRuntime ?? null}
+                  modelTier={
+                    typeof (agent.metadata as Record<string, unknown> | null)?.[AGENT_MODEL_TIER_METADATA_KEY] === "string"
+                      ? (agent.metadata as Record<string, unknown>)[AGENT_MODEL_TIER_METADATA_KEY] as string
+                      : null
+                  }
+                />
               </div>
               <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2">
                 <span className="text-muted-foreground">Skills applied</span>
@@ -4355,15 +4364,31 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
               const modelName = displayModel?.startsWith("auto/")
                 ? displayModel.slice("auto/".length)
                 : displayModel;
+              const rawModelText = modelName && modelName !== "auto"
+                ? (displayProvider && displayProvider !== "auto" && !modelName.includes("/") && !displayModel?.startsWith("auto/")
+                  ? `${displayProvider}/${modelName}`
+                  : modelName)
+                : null;
               // AgentDash (c4-polish): opaque provider aliases ("k3") resolve
               // to a readable name; a mapped name already says what it is, so
               // the raw provider prefix is dropped.
               const readableModel = modelDisplayName(modelName);
-              const modelText = readableModel && readableModel !== "auto"
-                ? (readableModel === modelName && displayProvider && displayProvider !== "auto" && !modelName!.includes("/") && !displayModel?.startsWith("auto/")
-                  ? `${displayProvider}/${modelName}`
-                  : readableModel)
+              const readableModelText = readableModel && readableModel !== "auto"
+                ? (readableModel === modelName ? rawModelText : readableModel)
                 : null;
+              // AgentDash (c4-model-tiers): a tier model reads "Qwen 3.8 Max ·
+              // high tier" here too; the raw provider/model stays on hover.
+              const described = modelName && modelName !== "auto"
+                ? describeHermesModel({
+                    model: modelName,
+                    provider:
+                      displayProvider && displayProvider !== "auto" && !modelName.includes("/")
+                        ? displayProvider
+                        : null,
+                  })
+                : null;
+              const modelText = described?.text ?? readableModelText;
+              const modelTitle = described ? rawModelText : displayModel;
               return (
                 <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap" data-testid="run-runtime-summary">
                   {adapterType && (
@@ -4372,7 +4397,7 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
                     </span>
                   )}
                   {modelText && (
-                    <span title={displayModel ?? undefined}>Model: {modelText}</span>
+                    <span title={modelTitle ?? undefined}>Model: {modelText}</span>
                   )}
                 </div>
               );
@@ -5407,7 +5432,7 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
 // states which layer the value came from (explicit config, the agent's hermes
 // profile, or the hermes host default), and shows "unknown" when nothing is
 // readable rather than pretending a default exists.
-function ResolvedRuntimeLabel({ resolved }: { resolved: AgentResolvedRuntime | null }) {
+function ResolvedRuntimeLabel({ resolved, modelTier }: { resolved: AgentResolvedRuntime | null; modelTier?: string | null }) {
   if (!resolved || !resolved.model) {
     return (
       <span className="font-medium text-muted-foreground" title="No explicit model and no readable hermes default">
@@ -5423,10 +5448,21 @@ function ResolvedRuntimeLabel({ resolved }: { resolved: AgentResolvedRuntime | n
         : resolved.source === "hermes_host_default"
           ? "host default (hermes config)"
           : null;
+  // AgentDash (c4-model-tiers): tier models get their plain-words name —
+  // "Qwen 3.8 Max · high tier" — and a non-tier model with no plain-words
+  // name shows its raw "provider/model" label rather than a bare id.
+  const described = describeHermesModel({
+    model: resolved.model,
+    provider: resolved.provider,
+    modelTier,
+  });
+  const rawLabel = resolved.provider && resolved.provider !== "auto"
+    ? `${resolved.provider}/${resolved.model}`
+    : resolved.model;
+  const title = [rawLabel, sourceLabel].filter(Boolean).join(" — ") || undefined;
   return (
-    <span className="font-medium text-right" title={sourceLabel ?? undefined}>
-      {resolved.provider && resolved.provider !== "auto" ? `${resolved.provider}/` : ""}
-      {resolved.model}
+    <span className="font-medium text-right" title={title}>
+      {described?.text ?? resolved.model}
       {sourceLabel ? <span className="ml-1.5 text-xs font-normal text-muted-foreground">({sourceLabel})</span> : null}
     </span>
   );
