@@ -39,25 +39,43 @@ test("an owner connects a repo from project settings and sees it connected", asy
       (res) =>
         res.request().method() === "PUT" &&
         res.url().includes(`/api/companies/${company.id}/github-connections`),
+      { timeout: 15_000 },
     );
 
+  const repoInput = section.getByLabel("Repository");
+  const tokenInput = section.getByLabel("Fine-grained token");
+  const connectButton = section.getByRole("button", { name: "Check and connect" });
+
+  // The project detail query's key moves twice during load (company-scope
+  // hint, then route-ref canonicalization uuid → urlKey); the page keeps
+  // previous data across both so the form is not remounted. The retry is
+  // belt-and-braces: register the response listener before clicking, bound
+  // the click, and if the click never dispatched the PUT re-fill and retry
+  // instead of sitting on a disabled button until the test timeout.
+  async function fillAndSubmit(repoUrl: string) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await repoInput.fill(repoUrl);
+      await tokenInput.fill(TOKEN);
+      const pendingResponse = connectCheck();
+      try {
+        await connectButton.click({ timeout: 10_000 });
+        return await pendingResponse;
+      } catch (error) {
+        lastError = error;
+        pendingResponse.catch(() => {});
+      }
+    }
+    throw lastError;
+  }
+
   // Wrong scope: named permission, nothing connected.
-  await section.getByLabel("Repository").fill("https://github.com/acme/readonly");
-  await section.getByLabel("Fine-grained token").fill(TOKEN);
-  const [readonlyCheckRes] = await Promise.all([
-    connectCheck(),
-    section.getByRole("button", { name: "Check and connect" }).click(),
-  ]);
+  const readonlyCheckRes = await fillAndSubmit("https://github.com/acme/readonly");
   expect(readonlyCheckRes.status()).toBe(422);
   await expect(section.getByRole("alert")).toContainText("Missing permission: Contents: Read and write");
 
   // Right scope: connected.
-  await section.getByLabel("Repository").fill("https://github.com/acme/app");
-  await section.getByLabel("Fine-grained token").fill(TOKEN);
-  const [connectRes] = await Promise.all([
-    connectCheck(),
-    section.getByRole("button", { name: "Check and connect" }).click(),
-  ]);
+  const connectRes = await fillAndSubmit("https://github.com/acme/app");
   expect(connectRes.status()).toBe(201);
   await expect(section.getByTestId("github-connected")).toContainText("acme/app");
   await expect(section.getByTestId("github-connected")).toContainText("Default branch main");

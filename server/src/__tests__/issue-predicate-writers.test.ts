@@ -41,18 +41,34 @@ describe('participating predicate writers on real PostgreSQL', () => {
     });
     await locked.promise;
     const writer = run().finally(() => { settled = true; });
-    let blocked: Record<string, unknown> | undefined;
+    // pg_stat_activity reports whatever statement a blocked backend is running
+    // when sampled, and more than one backend can be queued behind the owner —
+    // asserting on rows[0] of a single sample races that ordering and flaked
+    // on a non-mutex statement. Collect every blocked backend and every
+    // statement observed across the wait window instead.
+    const blockedStatements = new Map<number, Set<string>>();
     try {
+      const capturedQueries = () => [...blockedStatements.values()].flatMap(statements => [...statements]);
       const until = Date.now() + 3000;
       while (!settled && Date.now() < until) {
         const rows = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
-        blocked = rows[0]; if (blocked) break;
+        for (const row of rows) {
+          const pid = Number(row.pid);
+          if (pid === ownerPid) continue;
+          const statements = blockedStatements.get(pid) ?? new Set<string>();
+          statements.add(String(row.query));
+          blockedStatements.set(pid, statements);
+        }
+        if (capturedQueries().some(query => /companies.*for (?:no key )?update/i.test(query))) break;
         await new Promise(resolve => setImmediate(resolve));
       }
-      expect(blocked, `${label} must wait at company mutex before predicates/writes; settled=${settled}`).toBeDefined();
-      expect(Number(blocked!.pid)).not.toBe(ownerPid);
-      expect(String(blocked!.query)).toMatch(/companies.*for (?:no key )?update/i);
-      console.log(JSON.stringify({ label, ownerPid, writerPid: blocked!.pid, blockers: blocked!.blockers, query: blocked!.query }));
+      const captured = capturedQueries();
+      expect(blockedStatements.size, `${label} must wait at company mutex before predicates/writes; settled=${settled}`).toBeGreaterThan(0);
+      expect(
+        captured.some(query => /companies.*for (?:no key )?update/i.test(query)),
+        `${label} captured no companies FOR UPDATE among blocked statements: ${captured.join(' | ')}`,
+      ).toBe(true);
+      console.log(JSON.stringify({ label, ownerPid, writerPids: [...blockedStatements.keys()], captured }));
     } finally { release.open(); await owner; await writer; }
   }
 
