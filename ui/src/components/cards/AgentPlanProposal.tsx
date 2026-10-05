@@ -2,7 +2,12 @@ import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — CoS plan proposal (Phase C + #210 revision).
 // See docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
 import { useState } from "react";
-import { AGENT_ROLE_LABELS, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import {
+  AGENT_ROLE_LABELS,
+  HERMES_LOCAL_ADAPTER_TYPE,
+  describeHermesModel,
+  type AgentPlanProposalV1Payload,
+} from "@paperclipai/shared";
 import { ApiError } from "../../api/client";
 
 // AgentDash (scan 4, lane N): shown once the plan's team is hired.
@@ -170,6 +175,15 @@ export function AgentPlanProposal({
                 {role ? <span className="text-text-secondary font-normal"> — {role}</span> : null}
               </div>
               <WorkforceTemplatePreview templateId={agent.workforceTemplateId}/>
+              {agent.adapterType === HERMES_LOCAL_ADAPTER_TYPE && agent.modelTier && agent.model && (
+                // AgentDash (review-1028): render the tier+model the SERVER
+                // stamped on the plan — never recompute here, so env
+                // overrides and the opt-in/BYOK gate are honored. Absent on
+                // older payloads and whenever tiers are off or BYOK-protected.
+                <p className="mt-1 text-xs text-text-tertiary" data-testid="plan-agent-model">
+                  Model: {describeHermesModel({ model: agent.model, modelTier: agent.modelTier })?.text}
+                </p>
+              )}
               {responsibilities.length > 0 && (
                 // AgentDash (c3-a11y): an agent can carry several
                 // responsibilities — show them all; a tight bullet list stays

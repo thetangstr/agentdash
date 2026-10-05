@@ -33,6 +33,10 @@ import {
   isBlockingPreflightResult,
   RUN_CANCELLED_BY_OPERATOR_MESSAGE,
   RUN_CANCELLED_BY_OPERATOR_CODE,
+  AGENT_MODEL_TIER_METADATA_KEY,
+  HERMES_LOCAL_ADAPTER_TYPE,
+  hermesModelTierForModel,
+  type HermesModelTierId,
 } from "@paperclipai/shared";
 import {
   readPaperclipSkillSyncPreference,
@@ -77,6 +81,7 @@ import {
   runtimeConfigHostExecutionInputs,
 } from "../services/adapter-host-execution-policy.js";
 import { hostExecutionContextForCompany } from "../services/host-execution-context.js";
+import { applyHermesModelTierIfActive, hermesModelTiersActive } from "../services/hermes-model-tiers.js";
 import {
   checkCompanyInstructionsPath,
   findProtectedHostDirectoryOverlap,
@@ -1556,8 +1561,29 @@ export function agentRoutes(
   function applyCreateDefaultsByAdapterType(
     adapterType: string | null | undefined,
     adapterConfig: Record<string, unknown>,
-  ): Record<string, unknown> {
+    context?: { role?: string | null; title?: string | null; applyModelTier?: boolean },
+  ): { adapterConfig: Record<string, unknown>; appliedModelTier: HermesModelTierId | null } {
     const next = { ...adapterConfig };
+    // AgentDash (batch 4, c4-model-tiers): hermes_local agents with no
+    // explicit model get the role's high/low tier (Qwen 3.8 Max for
+    // leadership, DeepSeek V4.1 Flash for everyone else). An explicit
+    // `model` a person set always wins — the tier never overwrites it.
+    // AgentDash (review-1028): only when the instance opted in
+    // (AGENTDASH_HERMES_MODEL_TIERS=on, no BYOK key) AND the caller allows
+    // it — a PATCH that leaves the model alone must not move an existing
+    // agent onto a tier.
+    const finish = () => {
+      const config = ensureGatewayDeviceKey(adapterType, next);
+      const tiered = context?.applyModelTier === false
+        ? { adapterConfig: config, appliedTier: null }
+        : applyHermesModelTierIfActive({
+            adapterType,
+            adapterConfig: config,
+            role: context?.role,
+            title: context?.title,
+          });
+      return { adapterConfig: tiered.adapterConfig, appliedModelTier: tiered.appliedTier };
+    };
     if (adapterType === "acpx_local") {
       if (!asNonEmptyString(next.agent)) {
         next.agent = DEFAULT_ACPX_LOCAL_AGENT;
@@ -1571,7 +1597,7 @@ export function agentRoutes(
       if (!asNonEmptyString(next.nonInteractivePermissions)) {
         next.nonInteractivePermissions = DEFAULT_ACPX_LOCAL_NON_INTERACTIVE_PERMISSIONS;
       }
-      return ensureGatewayDeviceKey(adapterType, next);
+      return finish();
     }
     if (adapterType === "codex_local") {
       if (!asNonEmptyString(next.model)) {
@@ -1583,17 +1609,17 @@ export function agentRoutes(
       if (!hasBypassFlag) {
         next.dangerouslyBypassApprovalsAndSandbox = DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
       }
-      return ensureGatewayDeviceKey(adapterType, next);
+      return finish();
     }
     if (adapterType === "gemini_local" && !asNonEmptyString(next.model)) {
       next.model = DEFAULT_GEMINI_LOCAL_MODEL;
-      return ensureGatewayDeviceKey(adapterType, next);
+      return finish();
     }
     // OpenCode requires explicit model selection — no default
     if (adapterType === "cursor" && !asNonEmptyString(next.model)) {
       next.model = DEFAULT_CURSOR_LOCAL_MODEL;
     }
-    return ensureGatewayDeviceKey(adapterType, next);
+    return finish();
   }
 
   async function assertAdapterConfigConstraints(
@@ -2778,9 +2804,13 @@ export function agentRoutes(
       { adapterType: hireInput.adapterType, adapterConfig: rawHireAdapterConfig },
       ...runtimeConfigHostExecutionInputs(hireInput.adapterType, hireInput.runtimeConfig),
     ], hostExecutionContextForCompany(companyId));
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const {
+      adapterConfig: requestedAdapterConfig,
+      appliedModelTier,
+    } = applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       rawHireAdapterConfig,
+      { role: hireInput.role, title: hireInput.title },
     );
     const desiredSkillAssignment = await resolveDesiredSkillAssignment(
       companyId,
@@ -2803,6 +2833,12 @@ export function agentRoutes(
       ...hireInput,
       adapterConfig: normalizedAdapterConfig,
       runtimeConfig: normalizedRuntimeConfig,
+      // AgentDash (c4-model-tiers): the tier applied to an unmodelled
+      // hermes_local agent is recorded so the UI can label the model in
+      // plain words and the doctor command can see provenance.
+      metadata: appliedModelTier
+        ? { ...(hireInput.metadata ?? {}), [AGENT_MODEL_TIER_METADATA_KEY]: appliedModelTier }
+        : hireInput.metadata,
       // A hire is a proposal for a personal agent: the whole flow exists so a
       // person ends up with an agent of their own, and the approval payload has
       // nowhere to carry an accountable human.
@@ -3017,9 +3053,13 @@ export function agentRoutes(
       { adapterType: createInput.adapterType, adapterConfig: rawCreateAdapterConfig },
       ...runtimeConfigHostExecutionInputs(createInput.adapterType, createInput.runtimeConfig),
     ], hostExecutionContextForCompany(companyId));
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const {
+      adapterConfig: requestedAdapterConfig,
+      appliedModelTier,
+    } = applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       rawCreateAdapterConfig,
+      { role: createInput.role, title: createInput.title },
     );
     const desiredSkillAssignment = await resolveDesiredSkillAssignment(
       companyId,
@@ -3095,12 +3135,17 @@ export function agentRoutes(
         ...createInput,
         adapterConfig: normalizedAdapterConfig,
         runtimeConfig: normalizedRuntimeConfig,
-        metadata: withHarnessPreflightMetadata(createInput.metadata, {
-          adapterType: createInput.adapterType,
-          adapterConfig: normalizedAdapterConfig,
-          defaultEnvironmentId: createInput.defaultEnvironmentId,
-          result: harnessPreflightResult,
-        }),
+        metadata: withHarnessPreflightMetadata(
+          appliedModelTier
+            ? { ...(createInput.metadata ?? {}), [AGENT_MODEL_TIER_METADATA_KEY]: appliedModelTier }
+            : createInput.metadata,
+          {
+            adapterType: createInput.adapterType,
+            adapterConfig: normalizedAdapterConfig,
+            defaultEnvironmentId: createInput.defaultEnvironmentId,
+            result: harnessPreflightResult,
+          },
+        ),
         status: "idle",
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
@@ -3921,9 +3966,29 @@ export function agentRoutes(
           rawEffectiveAdapterConfig,
         );
       }
-      const effectiveAdapterConfig = applyCreateDefaultsByAdapterType(
+      // AgentDash (review-1028, item 5): a PATCH that leaves the model alone
+      // must not move an existing model-less agent onto a tier — an empty
+      // model there means "Hermes' own configured default", not a gap to
+      // fill. The tier default only applies when the adapter type changes
+      // TO hermes_local or the request explicitly clears the model.
+      const modelExplicitlyCleared =
+        requestedAdapterConfig !== null
+        && Object.prototype.hasOwnProperty.call(requestedAdapterConfig, "model")
+        && !asNonEmptyString(requestedAdapterConfig.model);
+      const applyModelTier =
+        (changingAdapterType && requestedAdapterType === HERMES_LOCAL_ADAPTER_TYPE)
+        || modelExplicitlyCleared;
+      const {
+        adapterConfig: effectiveAdapterConfig,
+        appliedModelTier,
+      } = applyCreateDefaultsByAdapterType(
         requestedAdapterType,
         rawEffectiveAdapterConfig,
+        {
+          role: typeof patchData.role === "string" ? patchData.role : existing.role,
+          title: typeof patchData.title === "string" ? patchData.title : existing.title,
+          applyModelTier,
+        },
       );
       const normalizedEffectiveAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
         companyId: existing.companyId,
@@ -3931,6 +3996,28 @@ export function agentRoutes(
         adapterConfig: effectiveAdapterConfig,
       });
       patchData.adapterConfig = syncInstructionsBundleConfigFromFilePath(existing, normalizedEffectiveAdapterConfig);
+      // AgentDash (c4-model-tiers): keep the recorded tier truthful on every
+      // adapter-config touch — set on a materialized tier default, refreshed
+      // when the model still is a tier model, and cleared when the operator
+      // picks a custom model or switches away from hermes_local. With the
+      // tiers switched off the inference is skipped too: a model id matching
+      // a shipped tier is then a person's explicit choice, not a managed
+      // default.
+      const persistedModelTier =
+        requestedAdapterType === HERMES_LOCAL_ADAPTER_TYPE && hermesModelTiersActive()
+          ? appliedModelTier
+            ?? hermesModelTierForModel(asNonEmptyString(normalizedEffectiveAdapterConfig.model))
+          : null;
+      const metadataPatch: Record<string, unknown> = {
+        ...(asRecord(existing.metadata) ?? {}),
+        ...(asRecord(patchData.metadata) ?? {}),
+      };
+      if (persistedModelTier) {
+        metadataPatch[AGENT_MODEL_TIER_METADATA_KEY] = persistedModelTier;
+      } else {
+        delete metadataPatch[AGENT_MODEL_TIER_METADATA_KEY];
+      }
+      patchData.metadata = metadataPatch;
     }
     if (requestedRuntimeConfig) {
       const baseAdapterConfig = asRecord(patchData.adapterConfig) ?? asRecord(existing.adapterConfig) ?? {};

@@ -45,6 +45,8 @@ import { loadExternalAdapterPackage, getUiParserSource, getOrExtractUiParserSour
 import { logger } from "../middleware/logger.js";
 import { assertBoardOrgAccess, assertInstanceAdmin } from "./authz.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
+import { HERMES_LOCAL_ADAPTER_TYPE, resolveHermesModelTier, type HermesModelTierSpec } from "@paperclipai/shared";
+import { hermesModelTiersActive } from "../services/hermes-model-tiers.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,6 +79,14 @@ interface AdapterInfo {
   loaded: boolean;
   disabled: boolean;
   capabilities: AdapterCapabilities;
+  /**
+   * hermes_local only: the high/low model tiers AS RESOLVED ON THIS
+   * INSTANCE — env overrides applied and the opt-in + BYOK gate evaluated —
+   * so the UI can describe a hire's default model the way the server will
+   * actually apply it. `enabled: false` means hermes_local keeps Hermes'
+   * own configured provider/model.
+   */
+  modelTiers?: { enabled: boolean; high: HermesModelTierSpec; low: HermesModelTierSpec };
   /** True when an external plugin has replaced a built-in adapter of the same type. */
   overriddenBuiltin?: boolean;
   /** True when the external override for a builtin type is currently paused. */
@@ -134,6 +144,13 @@ function buildAdapterInfo(adapter: ServerAdapterModule, externalRecord: AdapterP
     loaded: true, // If it's in the registry, it's loaded
     disabled: disabledSet.has(adapter.type),
     capabilities: buildAdapterCapabilities(adapter),
+    modelTiers: adapter.type === HERMES_LOCAL_ADAPTER_TYPE
+      ? {
+          enabled: hermesModelTiersActive(),
+          high: resolveHermesModelTier("high"),
+          low: resolveHermesModelTier("low"),
+        }
+      : undefined,
     overriddenBuiltin: externalRecord ? BUILTIN_ADAPTER_TYPES.has(adapter.type) : undefined,
     overridePaused: BUILTIN_ADAPTER_TYPES.has(adapter.type) ? isOverridePaused(adapter.type) : undefined,
     // Prefer on-disk package.json so the UI reflects bumps without relying on store-only fields.

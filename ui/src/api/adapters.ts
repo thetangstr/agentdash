@@ -20,6 +20,17 @@ export interface AdapterInfo {
   loaded: boolean;
   disabled: boolean;
   capabilities: AdapterCapabilities;
+  /**
+   * AgentDash (review-1028): hermes_local only — the high/low model tiers
+   * as the SERVER resolves them on this instance (env overrides applied,
+   * opt-in + BYOK gate evaluated). `enabled: false` means hermes_local
+   * keeps Hermes' own configured provider/model.
+   */
+  modelTiers?: {
+    enabled: boolean;
+    high: { provider: string; model: string; displayName: string; tierLabel: string };
+    low: { provider: string; model: string; displayName: string; tierLabel: string };
+  };
   /** Installed version (for external npm adapters) */
   version?: string;
   /** Package name (for external adapters) */

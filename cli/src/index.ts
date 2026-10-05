@@ -3,6 +3,7 @@ import { onboard } from "./commands/onboard.js";
 import { setup, setupServer, setupBootstrap, setupAdapter } from "./commands/setup.js";
 import { doctor } from "./commands/doctor.js";
 import { repairFounderOwner } from "./commands/repair-founder-owner.js";
+import { applyModelTiersCommand } from "./commands/apply-model-tiers.js";
 import { envCommand } from "./commands/env.js";
 import { configure } from "./commands/configure.js";
 import { addAllowedHostname } from "./commands/allowed-hostname.js";
@@ -127,6 +128,19 @@ doctorCommand
   .option("--force", "With --apply: promote even without creator evidence", false)
   .action(async (opts) => {
     await repairFounderOwner(opts);
+  });
+
+// AgentDash (batch 4, c4-model-tiers): backfill pre-tier hermes_local agents
+// onto the role high/low model tiers. Explicit models always win.
+doctorCommand
+  .command("apply-model-tiers")
+  .description("List each hermes_local agent's current → proposed provider/model by role; --apply writes the tier")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--db-url <url>", "Database connection string (defaults to DATABASE_URL or the config)")
+  .option("--company <id>", "The company to plan/apply against (required)")
+  .option("--apply", "Update adapterConfig for agents without an explicit model; without it this is a dry run", false)
+  .action(async (opts) => {
+    await applyModelTiersCommand(opts);
   });
 
 program

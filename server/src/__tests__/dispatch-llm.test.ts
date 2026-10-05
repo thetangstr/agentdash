@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { HttpError } from "../errors.js";
 
 const anthropicLLM = vi.hoisted(() => vi.fn(async () => "anthropic fallback"));
@@ -83,6 +86,9 @@ describe("dispatchLLM", () => {
     });
     delete process.env.PAPERCLIP_E2E_SKIP_LLM;
     delete process.env.AGENTDASH_HERMES_COMMAND;
+    // The model-tier switch stays off unless a case opts in — a caller-env
+    // `on` would add `-m`/`--provider` to every hermes dispatch below.
+    delete process.env.AGENTDASH_HERMES_MODEL_TIERS;
   });
 
   afterEach(() => {
@@ -147,6 +153,148 @@ describe("dispatchLLM", () => {
     const args = spawnMock.mock.calls[0][1] as string[];
     expect(args[0]).toBe("chat");
     expect(args).not.toContain("-p");
+  });
+
+  /**
+   * AgentDash (batch 4, c4-model-tiers + review-1028): a modelless
+   * hermes_local CoS chat runs the HIGH tier — the Chief of Staff is a
+   * leadership role — but only while the instance opted in
+   * (AGENTDASH_HERMES_MODEL_TIERS=on) and no company provider key sits on
+   * the box. The BYOK marker path is redirected to a temp dir so a dev
+   * box's real ~/.hermes cannot leak into the test.
+   */
+  describe("hermes_local model tiers", () => {
+    let profilesDir: string;
+    const savedEnvKeys = [
+      "AGENTDASH_HERMES_MODEL_TIERS",
+      "AGENTDASH_HERMES_ROOT",
+      "HERMES_PROFILES_DIR",
+      "AGENTDASH_HERMES_PROFILE_TEMPLATE",
+    ] as const;
+    let savedEnv: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      savedEnv = Object.fromEntries(
+        savedEnvKeys.map((key) => [key, process.env[key]]),
+      );
+      profilesDir = mkdtempSync(join(tmpdir(), "hermes-tiers-dispatch-"));
+      process.env.HERMES_PROFILES_DIR = profilesDir;
+      delete process.env.AGENTDASH_HERMES_ROOT;
+      delete process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+      process.env.AGENTDASH_HERMES_MODEL_TIERS = "on";
+    });
+
+    afterEach(() => {
+      for (const key of savedEnvKeys) {
+        if (savedEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = savedEnv[key];
+      }
+      rmSync(profilesDir, { recursive: true, force: true });
+    });
+
+    function spawnArgs(): string[] {
+      return spawnMock.mock.calls[0][1] as string[];
+    }
+
+    it("routes a modelless hermes_local dispatch through the high tier", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      const args = spawnArgs();
+      expect(args[args.indexOf("-m") + 1]).toBe("qwen3.8-max");
+      expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-token-plan-cn");
+    });
+
+    it("forces nothing with the switch OFF — Hermes' own config answers (item 1)", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+      const args = spawnArgs();
+      expect(args).not.toContain("-m");
+      expect(args).not.toContain("--provider");
+    });
+
+    it("forces nothing on a BYOK box even with the switch on (item 1)", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      mkdirSync(join(profilesDir, "agentdash"), { recursive: true });
+      writeFileSync(
+        join(profilesDir, "agentdash", "agentdash-provider.json"),
+        JSON.stringify({ provider: "zai", model: "glm-5.3-flash" }),
+      );
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+      const args = spawnArgs();
+      expect(args).not.toContain("-m");
+      expect(args).not.toContain("--provider");
+    });
+
+    it("honours the high-tier env overrides", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      process.env.AGENTDASH_HERMES_HIGH_MODEL = "qwen-next";
+      process.env.AGENTDASH_HERMES_HIGH_PROVIDER = "alibaba-custom";
+      try {
+        await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+        const args = spawnArgs();
+        expect(args[args.indexOf("-m") + 1]).toBe("qwen-next");
+        expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-custom");
+      } finally {
+        delete process.env.AGENTDASH_HERMES_HIGH_MODEL;
+        delete process.env.AGENTDASH_HERMES_HIGH_PROVIDER;
+      }
+    });
+
+    it("lets an explicit non-tier model win and never invents a provider for it", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM(
+        { system: "s", messages: [{ role: "user", content: "hi" }] },
+        undefined,
+        { model: "glm-5.3-flash" },
+      );
+      const args = spawnArgs();
+      expect(args[args.indexOf("-m") + 1]).toBe("glm-5.3-flash");
+      expect(args).not.toContain("--provider");
+    });
+
+    it("pairs a hop naming a tier model with that tier's provider (item 2)", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM(
+        { system: "s", messages: [{ role: "user", content: "hi" }] },
+        undefined,
+        { model: "deepseek-v4.1-flash", disableFallback: true },
+      );
+      const args = spawnArgs();
+      expect(args[args.indexOf("-m") + 1]).toBe("deepseek-v4.1-flash");
+      expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-token-plan-cn");
+    });
+
+    it("pairs a hop's tier model with an env-overridden tier provider too", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      process.env.AGENTDASH_HERMES_LOW_MODEL = "deepseek-v4.1-flash";
+      process.env.AGENTDASH_HERMES_LOW_PROVIDER = "alibaba-custom";
+      try {
+        await dispatchLLM(
+          { system: "s", messages: [{ role: "user", content: "hi" }] },
+          undefined,
+          { model: "deepseek-v4.1-flash", disableFallback: true },
+        );
+        const args = spawnArgs();
+        expect(args[args.indexOf("--provider") + 1]).toBe("alibaba-custom");
+      } finally {
+        delete process.env.AGENTDASH_HERMES_LOW_MODEL;
+        delete process.env.AGENTDASH_HERMES_LOW_PROVIDER;
+      }
+    });
+
+    it("never gives a modelless fallback hop the primary's high-tier default (item 2)", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM(
+        { system: "s", messages: [{ role: "user", content: "hi" }] },
+        undefined,
+        { disableFallback: true },
+      );
+      const args = spawnArgs();
+      expect(args).not.toContain("-m");
+      expect(args).not.toContain("--provider");
+    });
   });
 
   /**

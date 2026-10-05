@@ -15,6 +15,8 @@ import { logSafeError } from "./run-log-redaction.js";
 import { stripStatusLines } from "../lib/status-lines.js";
 import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
+import { hermesModelTierForModel, resolveHermesModelTier } from "@paperclipai/shared";
+import { hermesModelTiersActive } from "./hermes-model-tiers.js";
 
 // Default to PATH so every Mac mini install can use its own Hermes location.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
@@ -609,7 +611,27 @@ export async function dispatchLLM(
       // with glm" are distinct hops; without one, Hermes uses its own
       // configured default.
       const hermesModel = (options?.model ?? "").trim();
-      if (hermesModel) hermesArgs.push("-m", hermesModel);
+      if (hermesModel) {
+        hermesArgs.push("-m", hermesModel);
+        // AgentDash (review-1028, item 2): a hop naming a tier model needs
+        // that tier's provider too — `-m` alone routes to Hermes' own
+        // configured default provider, which is not where the tier model
+        // lives. Pairing is env-resolved so overrides travel together.
+        const hopTier = hermesModelTierForModel(hermesModel);
+        if (hopTier) {
+          hermesArgs.push("--provider", resolveHermesModelTier(hopTier).provider);
+        }
+      } else if (!options?.disableFallback && hermesModelTiersActive()) {
+        // AgentDash (batch 4, c4-model-tiers + review-1028): on the PRIMARY
+        // call with no explicit model the CoS runs the HIGH tier — the
+        // Chief of Staff is a leadership role. Never on a fallback hop: a
+        // modelless hop keeps Hermes' own configured default rather than
+        // repeating the failing high-tier call. And never without the
+        // opt-in: with tiers off, or a company key on the box, the model
+        // stays exactly what Hermes has configured.
+        const highTier = resolveHermesModelTier("high");
+        hermesArgs.push("-m", highTier.model, "--provider", highTier.provider);
+      }
       const reply = stripStatusLines(await spawnWithTimeout(hermesCmd, hermesArgs));
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
