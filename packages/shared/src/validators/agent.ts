@@ -237,6 +237,17 @@ export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, crea
      */
     steward: z.unknown().optional(),
     stewardUserId: z.unknown().optional(),
+    /*
+     * Same refusal-on-sight as `steward` above (GH #734). Skill assignment is
+     * not a column: it lives inside adapterConfig and is written, validated
+     * against the company catalogue and pushed to the agent's runtime by
+     * `POST /agents/:id/skills/sync`. The generic update used to accept the
+     * field and silently drop it — a 200 that changed nothing. Declared as
+     * `unknown` so it survives parsing and the route can name the real
+     * endpoint, and so a peer-agent PATCH is still refused by the peer
+     * allowlist before reaching that message.
+     */
+    desiredSkills: z.unknown().optional(),
     replaceAdapterConfig: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),

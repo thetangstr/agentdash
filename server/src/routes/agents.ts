@@ -962,7 +962,7 @@ export function agentRoutes(
     if (!allowedByGrant && !canCreateAgents(actorAgent)) {
       throw forbidden(
         `Agent ${actorAgent.name} lacks the agents:create capability. ` +
-          "A Chief of Staff agent must enable this via PATCH /api/agents/:id/permissions { canCreateAgents: true }.",
+          "Ask an owner or administrator to enable it via PATCH /api/agents/:id/permissions { canCreateAgents: true }.",
       );
     }
     return actorAgent;
@@ -1177,14 +1177,16 @@ export function agentRoutes(
   // `spentMonthlyCents` (reset its spend), `reportsTo` and `runtimeConfig`.
   // Authority-bearing fields — role, status, spend, budget, reporting line,
   // runtime and adapter configuration, autonomy, environment, metadata — need
-  // a board actor. What an agent may change on a peer is presentation plus the
-  // skill assignment that `POST /agents/:id/skills/sync` already allows.
+  // a board actor. What an agent may change on a peer is presentation only.
+  // `desiredSkills` was removed (#734): the handler never applied it (skill
+  // assignment lives in adapterConfig and is written by
+  // `POST /agents/:id/skills/sync`, which has its own allowlist), so the field
+  // answered 200 having changed nothing.
   const AGENT_PEER_PATCHABLE_FIELDS: ReadonlySet<string> = new Set([
     "name",
     "title",
     "icon",
     "capabilities",
-    "desiredSkills",
   ]);
 
   async function assertCanUpdateAgent(
@@ -3311,28 +3313,33 @@ export function agentRoutes(
     assertCompanyAccess(req, existing.companyId);
 
     if (req.actor.type === "agent") {
-      const actorAgent = req.actor.agentId ? await svc.getById(req.actor.agentId) : null;
-      if (!actorAgent || actorAgent.companyId !== existing.companyId) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
-      if (actorAgent.role !== "ceo") {
-        res.status(403).json({ error: "Only CEO can manage permissions" });
-        return;
-      }
-    } else {
-      const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
-      // `agents:create` is company-wide agent administration by another name:
-      // an agent holding it can modify every agent in the company via its own
-      // key. A steward must not be able to grant it to their own agent, and the
-      // ceiling cannot be relied on to stop them because the default ceiling is
-      // deliberately unrestricted.
-      if (permissionAuthority === "steward" && req.body.canCreateAgents) {
-        throw forbidden(
-          "Stewardship does not permit granting agent-creation authority; " +
-            "an administrator with agents:create must make this change",
-        );
-      }
+      // AgentDash (security, #734): granting `canCreateAgents` mints a
+      // company-wide agent administrator and `canAssignTasks` extends task
+      // authority — both are authority-bearing in the sense of #727, where the
+      // rule is that everything outside the presentation allowlist needs a
+      // board actor. The old exception let a CEO agent pass, which made one
+      // compromised agent key enough to spread agent administration to every
+      // other agent in the company. There is no narrower safe grant on this
+      // route — the schema offers only these two fields — so agent actors are
+      // refused outright, matching `POST /agents/:id/pause` and friends.
+      res.status(403).json({
+        error:
+          "Only a human with agent-configuration authority may change agent permissions; " +
+          "ask an owner, admin or operator",
+      });
+      return;
+    }
+    const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
+    // `agents:create` is company-wide agent administration by another name:
+    // an agent holding it can modify every agent in the company via its own
+    // key. A steward must not be able to grant it to their own agent, and the
+    // ceiling cannot be relied on to stop them because the default ceiling is
+    // deliberately unrestricted.
+    if (permissionAuthority === "steward" && req.body.canCreateAgents) {
+      throw forbidden(
+        "Stewardship does not permit granting agent-creation authority; " +
+          "an administrator with agents:create must make this change",
+      );
     }
 
     // AgentDash-MK: the owner ceiling binds at the service boundary, so a
@@ -3778,6 +3785,14 @@ export function agentRoutes(
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
+      return;
+    }
+    // GH #734: `desiredSkills` is not a column — the update silently dropped it.
+    // Refuse it and name the route that actually applies a skill assignment.
+    if (hasOwn(req.body as object, "desiredSkills")) {
+      res.status(422).json({
+        error: "Skill assignment is not set here. Use POST /api/agents/:id/skills/sync to change an agent's desired skills.",
+      });
       return;
     }
     // Agent visibility (2026-09-30): who may see an agent is a company
