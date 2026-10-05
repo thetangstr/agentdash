@@ -97,4 +97,11 @@ export interface AgentPlanProposalV1Payload {
    * Absent on onboarding cards, which stay confirmable by any member.
    */
   requesterUserId?: string;
+  /**
+   * AgentDash (c4-hire-ux): the requester's display name, stamped next to
+   * requesterUserId so other viewers read "Waiting for Dana to confirm"
+   * instead of a bare id. Server-owned like requesterUserId — display only,
+   * never checked for authorization.
+   */
+  requesterName?: string;
 }

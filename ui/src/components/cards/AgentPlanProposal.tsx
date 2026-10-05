@@ -2,16 +2,21 @@ import { WorkforceTemplatePreview } from "../WorkforceTemplatePreview";
 // AgentDash: chat substrate card — CoS plan proposal (Phase C + #210 revision).
 // See docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   AGENT_ROLE_LABELS,
   HERMES_LOCAL_ADAPTER_TYPE,
   describeHermesModel,
   type AgentPlanProposalV1Payload,
 } from "@paperclipai/shared";
+import { authApi } from "../../api/auth";
 import { ApiError } from "../../api/client";
+import { queryKeys } from "../../lib/queryKeys";
 
 // AgentDash (scan 4, lane N): shown once the plan's team is hired.
 export const PLAN_HIRED_LABEL = "Team hired ✓";
+// AgentDash (c4-hire-ux): a one-agent plan reads "Hired ✓" — "Team" is wrong.
+export const PLAN_SINGLE_HIRED_LABEL = "Hired ✓";
 // AgentDash (cos-followups review): when the company gates hires on board
 // approval, "Team hired" would claim a team that cannot work yet — the
 // response's pendingApproval switches the label to the honest state.
@@ -106,6 +111,22 @@ export function AgentPlanProposal({
   // A rejection landed on a decided card; while approvals still wait the
   // "Sent for approval" label is the honest one.
   const notApproved = payload?.approvalRejected === true;
+  // AgentDash (c4-hire-ux): a steady-state card names who asked for the team
+  // (requesterUserId) and only that person may confirm — the server already
+  // refuses anyone else; the card now says so up front instead of letting a
+  // teammate click "Set it up" into a 403. Unknown session stays permissive:
+  // the server is still the authority (IssueProposalCard does the same).
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    retry: false,
+  });
+  const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const isRequester = !currentUserId || !payload?.requesterUserId || currentUserId === payload.requesterUserId;
+  const requesterLabel =
+    typeof payload?.requesterName === "string" && payload.requesterName.trim().length > 0
+      ? payload.requesterName.trim()
+      : "the person who asked";
 
   async function confirm() {
     if (hired || confirming) return;
@@ -235,7 +256,9 @@ export function AgentPlanProposal({
               ? PLAN_SENT_FOR_APPROVAL_LABEL
               : notApproved
                 ? PLAN_NOT_APPROVED_LABEL
-                : PLAN_HIRED_LABEL}
+                : agents.length === 1
+                  ? PLAN_SINGLE_HIRED_LABEL
+                  : PLAN_HIRED_LABEL}
           </button>
           <button
             type="button"
@@ -246,6 +269,10 @@ export function AgentPlanProposal({
             Let me revise
           </button>
         </div>
+      ) : !isRequester ? (
+        <p className="mt-5 text-sm text-text-tertiary" data-testid="plan-waiting-requester">
+          Waiting for {requesterLabel} to confirm.
+        </p>
       ) : !reviseOpen ? (
         <div className="mt-5 flex flex-wrap gap-2">
           <button

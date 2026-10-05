@@ -13,7 +13,7 @@ import { shortenInstancePaths } from "./instancePaths";
 import { containsSecrets, isSecretName, redactSecrets } from "./redactSecrets";
 
 export { redactSecrets };
-import { shouldHideNiceModeStderr, summarizeToolResult } from "./transcriptPresentation";
+import { shouldHideNiceModeStderr, summarizeToolResult, isPlumbingOutputLine } from "./transcriptPresentation";
 
 // ---------------------------------------------------------------------------
 // Tool-call one-line summaries
@@ -836,9 +836,20 @@ export function summarizeToolOutcome(
   // the same header transcriptPresentation's parseStructuredToolResult reads.
   // Stripped here so the JSON scan sees the body, not the command echo.
   const json = summarizeJsonOutput(stripExecResultHeader(result));
-  if (json) return quietCredentialError(redactSecrets(json), status);
+  if (json) {
+    // AgentDash (c4-stops): "Response: 3 fields" is wire detail — on a
+    // collapsed row it reads as plumbing. A purely generic phrase folds to a
+    // plain verdict; a specific one ("Got issue ACM-9", "Error: …") stays.
+    const kept = json.split(" · ").filter((part) => !GENERIC_RESPONSE_PHRASE.test(part.trim()));
+    if (kept.length === 0) return status === "error" ? "Failed" : "Done";
+    return quietCredentialError(redactSecrets(kept.join(" · ")), status);
+  }
   return quietCredentialError(summarizeToolResult(result, status === "error", "compact"), status);
 }
+
+// Generic field-count phrasing carries no information an owner can act on;
+// item counts ("Response: 3 items") still name what came back, so they stay.
+const GENERIC_RESPONSE_PHRASE = /^Response: (?:\d+ fields?|empty)$|^Response \(JSON\)$/;
 
 /** The leading `command:`/`status:`/`exit_code:` block a structured exec
  *  result prepends to its output (Codex's command_execution shape): a
@@ -1017,14 +1028,14 @@ function truncatedJsonPhrase(raw: string): string {
   return "Response (JSON)";
 }
 
-/** Stream-section markers a script output may carry around a body. */
-const TEXT_GAP_NOISE_LINE = /^-{2,}\s*(?:stdout|stderr|traceback|console|output)\s*-{2,}$/i;
-
 /** The first real line of text between JSON bodies; null for pure noise. */
 function textGapLine(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
     const compact = compactWhitespace(line);
-    if (!compact || TEXT_GAP_NOISE_LINE.test(compact)) continue;
+    // AgentDash (c4-stops): `=== SINGLE COMMENT ===` banners, `HTTP: 201`
+    // echoes, `exit code` tails and `workProducts:`-style key headers are
+    // transport plumbing — they fold under the row's details, not its label.
+    if (!compact || isPlumbingOutputLine(compact)) continue;
     return truncate(shortenInstancePaths(compact), 48);
   }
   return null;

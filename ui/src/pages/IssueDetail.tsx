@@ -60,6 +60,8 @@ import {
   type OptimisticIssueComment,
 } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById, upsertInterruptedRun } from "../lib/optimistic-issue-runs";
+import { latestRunByCreatedAt } from "../lib/issue-stopped";
+import { wasRunStoppedLocally } from "../lib/locallyStoppedRuns";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { ApprovalCard } from "../components/ApprovalCard";
@@ -77,6 +79,7 @@ import { IssueProperties } from "../components/IssueProperties";
 import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueRecoveryBudgetBanner, recoveryBudgetClearedToastBody } from "../components/IssueRecoveryBudgetBanner";
 import { IssueStartBanner } from "../components/IssueStartBanner";
+import { IssueStoppedBanner } from "../components/IssueStoppedBanner";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 // AgentDash: goals-eval-hitl
 import { VerdictTimeline } from "../components/VerdictTimeline";
@@ -1263,6 +1266,19 @@ export function IssueDetail() {
   });
   const resolvedHasActiveRun = issue ? shouldTrackIssueActiveRun(issue) && hasActiveRun : hasActiveRun;
   const hasLiveRuns = liveRunCount > 0 || resolvedHasActiveRun;
+  // AgentDash (c4-stops): the stopped banner needs the newest issue-bound run;
+  // only fetched once nothing is live, and shared with the chat tab's
+  // linkedRuns query (same key).
+  const { data: issueRunHistory } = useQuery({
+    queryKey: queryKeys.issues.runs(issueId!),
+    queryFn: () => activityApi.runsForIssue(issueId!),
+    enabled: !!issueId && !hasLiveRuns,
+    placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId ?? "pending"),
+  });
+  const latestIssueRun = useMemo(
+    () => latestRunByCreatedAt(issueRunHistory ?? []),
+    [issueRunHistory],
+  );
   useEffect(() => {
     if (!hasLiveRuns && locallyQueuedCommentRunIds.size > 0) {
       setLocallyQueuedCommentRunIds(new Map());
@@ -2359,6 +2375,44 @@ export function IssueDetail() {
     },
   });
 
+  // AgentDash (c4-stops): the stopped banner's Resume is an explicit wake of
+  // the assignee — the only way stopped work starts again; a plain comment
+  // does not wake anyone on finished or stopped work.
+  const resumeStoppedWork = useMutation({
+    mutationFn: async () => {
+      const result = await agentsApi.wakeup(
+        issue!.assigneeAgentId!,
+        {
+          source: "on_demand",
+          triggerDetail: "manual",
+          reason: "resume_stopped_work",
+          payload: { issueId: issue!.id, taskId: issue!.id },
+        },
+        issue!.companyId,
+      );
+      if (!("id" in result)) {
+        throw new Error(result.message ?? "Resume request was skipped.");
+      }
+      return result;
+    },
+    onSuccess: () => {
+      invalidateIssueRunState();
+      invalidateIssueDetail();
+      pushToast({
+        title: "Work resumed",
+        body: "The assigned agent was asked to pick this back up.",
+        tone: "success",
+      });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Resume failed",
+        body: err instanceof Error ? err.message : "Unable to resume work",
+        tone: "error",
+      });
+    },
+  });
+
   const cancelQueuedComment = useMutation({
     mutationFn: async ({ commentId }: { commentId: string }) => issuesApi.cancelComment(issueId!, commentId),
     onSuccess: (comment) => {
@@ -3178,6 +3232,17 @@ export function IssueDetail() {
         agentName={issue.assigneeAgentId ? (agents?.find((a) => a.id === issue.assigneeAgentId)?.name ?? null) : null}
         isStarting={updateIssue.isPending}
         onStart={() => updateIssue.mutate({ status: "todo" })}
+      />
+      {/* AgentDash (c4-stops): a stopped run leaves an in-progress-looking
+          issue with nothing running — name it and offer the explicit resume. */}
+      <IssueStoppedBanner
+        issue={issue}
+        hasLiveRuns={hasLiveRuns}
+        latestRunStatus={latestIssueRun?.status ?? null}
+        stoppedByYou={latestIssueRun ? wasRunStoppedLocally(latestIssueRun.runId) : false}
+        agentName={issue.assigneeAgentId ? (agents?.find((a) => a.id === issue.assigneeAgentId)?.name ?? null) : null}
+        isResuming={resumeStoppedWork.isPending}
+        onResume={() => resumeStoppedWork.mutate()}
       />
       {activePauseHold && (
         <div className="rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">

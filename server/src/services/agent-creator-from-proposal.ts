@@ -75,6 +75,9 @@ export function agentCreatorFromProposal(deps: Deps) {
       name: proposal.name, role: mapProposedAgentRole(proposal.role), title: proposedRoleTitle(proposal.role),
       adapterType: leader.adapterType, workforceTemplateId: proposal.workforceTemplateId,
       adapterConfig: {}, reportsTo: reportsToAgentId,
+      // AgentDash (c4-hire-ux): the person who confirmed the interview hire is
+      // the creator — AgentDetail credits them instead of "Hired by an agent".
+      createdByUserId: input.accountableUserId ?? null,
       ...accountability,
       ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
     };

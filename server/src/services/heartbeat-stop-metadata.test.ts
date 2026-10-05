@@ -66,7 +66,7 @@ describe("heartbeat stop metadata", () => {
         adapterConfig: {},
         outcome: "cancelled",
         errorCode: "cancelled",
-        errorMessage: "Cancelled by control plane",
+        errorMessage: "Stopped manually",
       }).stopReason,
     ).toBe("cancelled");
   });

@@ -14,6 +14,7 @@ vi.mock("../api/issues", () => ({
 import { describe, expect, it, vi } from "vitest";
 import { __liveUpdatesTestUtils } from "./LiveUpdatesProvider";
 import { queryKeys } from "../lib/queryKeys";
+import { clearLocallyStoppedRuns, markRunStoppedLocally } from "../lib/locallyStoppedRuns";
 
 describe("LiveUpdatesProvider issue invalidation", () => {
   it("refreshes touched inbox queries and only the changed issue data for issue updates", () => {
@@ -679,6 +680,64 @@ describe("LiveUpdatesProvider run lifecycle toasts", () => {
       body: "boom",
       tone: "error",
     });
+  });
+
+  // AgentDash (c4-stops): stops read "stopped", never "cancelled"; the
+  // viewer's own stop is told apart from another operator's or a system's.
+  it("words stopped runs neutrally and distinguishes the viewer's own stop", () => {
+    clearLocallyStoppedRuns();
+
+    expect(
+      __liveUpdatesTestUtils.buildRunStatusToast(
+        {
+          runId: "run-sys",
+          agentId: "agent-1",
+          status: "cancelled",
+          error: "Cancelled because the issue was marked done",
+        },
+        () => "CodexCoder",
+      ),
+    ).toMatchObject({
+      title: "CodexCoder run stopped",
+      body: "Cancelled because the issue was marked done",
+      tone: "warn",
+    });
+
+    expect(
+      __liveUpdatesTestUtils.buildRunStatusToast(
+        {
+          runId: "run-other-operator",
+          agentId: "agent-1",
+          status: "cancelled",
+          error: "Stopped manually",
+          errorCode: "cancelled_by_operator",
+        },
+        () => "CodexCoder",
+      ),
+    ).toMatchObject({
+      title: "CodexCoder run stopped",
+      body: "Stopped manually.",
+      tone: "info",
+    });
+
+    markRunStoppedLocally("run-mine");
+    expect(
+      __liveUpdatesTestUtils.buildRunStatusToast(
+        {
+          runId: "run-mine",
+          agentId: "agent-1",
+          status: "cancelled",
+          error: "Stopped manually",
+          errorCode: "cancelled_by_operator",
+        },
+        () => "CodexCoder",
+      ),
+    ).toMatchObject({
+      title: "CodexCoder run stopped",
+      body: "Stopped by you.",
+      tone: "info",
+    });
+    clearLocallyStoppedRuns();
   });
 });
 

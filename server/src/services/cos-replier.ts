@@ -244,7 +244,7 @@ export function steadyStatePrompt(
 
 ${WORKFORCE_PROPOSAL_CORE}
 
-${STEADY_HIRE_GUIDANCE}${requiresApproval ? " This company requires board approval for new hires — say the hires join the team once the board approves them, never that they start on confirm." : ""}
+${STEADY_HIRE_GUIDANCE}${requiresApproval ? " This company requires a person's decision on new hires — say the hires join the team once they are approved, never that they start on confirm." : ""}
 
 For adapterType, choose from: ${AGENT_PLAN_ADAPTER_TYPES}. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the person explicitly asks for another adapter. ${planNamingGuidance(memberNames)}`;
   if (!roster || roster.length === 0) {
@@ -252,7 +252,7 @@ For adapterType, choose from: ${AGENT_PLAN_ADAPTER_TYPES}. Prefer "${defaultAgen
   }
   const team = roster
     .map((a) =>
-      `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}${a.canTakeWork ? "" : a.awaitingApproval ? " — awaiting board approval, cannot take new work yet" : " — unavailable right now, cannot take new work"}`,
+      `- ${promptFactText(a.name, 80)} (${promptFactText(a.role, 60)}): ${a.id}${a.canTakeWork ? "" : a.awaitingApproval ? " — awaiting a hiring decision, cannot take new work yet" : " — unavailable right now, cannot take new work"}`,
     )
     .join("\n");
   // The message being answered is the last user turn; it is referenced, not
@@ -782,6 +782,19 @@ export function cosReplier(deps: Deps) {
       ) => {
         // Never an agent named after a person in the company; titles verbatim.
         const { plan, body: planBody } = preparePlanForPosting(proposedPlan, proposedBody, memberNames);
+        // AgentDash (c4-hire-ux): the card carries the requester's display
+        // name so another viewer reads "Waiting for Dana to confirm" — the
+        // prompt-scope requesterName is block-local, so resolve here.
+        const requesterId = opts.requesterUserId ?? null;
+        const requesterCompanyId = input.companyId ?? null;
+        let requesterDisplayName: string | null = null;
+        if (requesterId && requesterCompanyId && deps.requesterName) {
+          try {
+            requesterDisplayName = await deps.requesterName(requesterCompanyId, requesterId);
+          } catch (err) {
+            logger.warn({ err, companyId: requesterCompanyId }, "cos-replier: could not load the plan requester's name");
+          }
+        }
         let introMsg: unknown = null;
         try {
           introMsg = await post(planBody);
@@ -792,6 +805,18 @@ export function cosReplier(deps: Deps) {
             "cos-replier: could not post the plan intro; posting the card anyway",
           );
         }
+        // AgentDash (c4-hire-ux): requester identity and card state are
+        // server-owned. The plan comes from model output — strip any
+        // requester/confirmation/approval fields it invented before spreading,
+        // so a hire card can never gate itself to a made-up user id.
+        const {
+          requesterUserId: _planRequesterUserId,
+          requesterName: _planRequesterName,
+          confirmedAt: _planConfirmedAt,
+          confirmedAgentIds: _planConfirmedAgentIds,
+          pendingApproval: _planPendingApproval,
+          ...cardPlan
+        } = plan as unknown as Record<string, unknown>;
         const cardMsg = await deps.conversations.postMessage({
           conversationId: input.conversationId,
           authorKind: "agent",
@@ -801,11 +826,14 @@ export function cosReplier(deps: Deps) {
           cardPayload: {
             // AgentDash (review-1028): stamp the resolved tier+model per
             // hermes_local agent so the card shows what this instance
-            // applies, not the shipped defaults recomputed in the UI.
-            ...stampPlanModelTiers(plan),
+            // applies, not the shipped defaults recomputed in the UI. Stamps
+            // the stripped plan — requester/confirmation fields the model
+            // invented stay out either way.
+            ...stampPlanModelTiers(cardPlan as unknown as AgentPlanProposalV1Payload),
             // Review-1019: only the person who asked may confirm a
             // steady-state hire card, like the task cards (item 11).
-            ...(opts.requesterUserId ? { requesterUserId: opts.requesterUserId } : {}),
+            ...(requesterId ? { requesterUserId: requesterId } : {}),
+            ...(requesterDisplayName ? { requesterName: requesterDisplayName } : {}),
           } as unknown as Record<string, unknown>,
           companyId: input.companyId,
         });

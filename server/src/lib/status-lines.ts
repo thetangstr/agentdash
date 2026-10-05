@@ -82,6 +82,23 @@ const CRLF_INFO_DIAGNOSTIC = /^\s*ℹ(?!\s*note\b)/iu;
 const CRLF_PROGRESS_MARK =
   /^\s*(?:loading|starting|initiali[sz]ing|connecting|waiting|resuming|downloading|installing|preparing|building|compiling|scanning|fetching|indexing|syncing|booting|spawning|launching|authenticating|registering|mounting|parsing|reading|writing|checking|probing|detecting|discovering)\b[^\n]*…\s*$/iu;
 
+// AgentDash (c4-stops): transport plumbing, not prose. A leading `--- stderr
+// ---` marker, a shell-echo prompt (`$ pnpm test`, `> npm run build`), or a
+// bare `exit_code: 0` is command output that leaked into a summary — an owner
+// reads it as noise, not as the answer.
+const STREAM_MARKER_LINE = /^\s*-{2,}\s*(?:stdout|stderr|traceback|console|output)\s*-{2,}\s*$/i;
+const SHELL_ECHO_LINE = /^\s*[$>]\s+\S/;
+const EXIT_CODE_LINE = /^\s*exit[_ ]code\s*:/i;
+// A `command:`-led header is Codex's exec-result shape: `command:` opens the
+// block, `status:`/`exit_code:` continue it. `status:` alone is ordinary prose
+// ("Status: all green"), so it only strips while a header block is open.
+const EXEC_HEADER_START = /^\s*command\s*:/i;
+const EXEC_HEADER_LINE = /^\s*(?:command|status|exit_code)\s*:/i;
+// A `NAME=value` env binding is config plumbing ("DATABASE_URL=postgres://…",
+// or a line narrating one — "Using DATABASE_URL=…"). A SCREAMING name with
+// `=` is never the first line of an agent's own answer.
+const ENV_ASSIGNMENT_LINE = /\b[A-Z][A-Z0-9_]{2,}=\S/;
+
 export function stripStatusLines(text: string, opts?: { adapterType?: string | null }): string {
   // Split on \n first so a "\r\n" line ending survives as a trailing "\r" —
   // the evidence the mixed-ending rule below reads.
@@ -118,6 +135,7 @@ export function stripStatusLines(text: string, opts?: { adapterType?: string | n
   });
   const hermesGlyphs = opts?.adapterType === "hermes_local";
   let start = 0;
+  let inExecHeader = false;
   while (start < lines.length) {
     const line = lines[start] ?? { crlfEnded: false, redrawn: false, visible: "" };
     const isStatusLine =
@@ -129,8 +147,14 @@ export function stripStatusLines(text: string, opts?: { adapterType?: string | n
           CRLF_PROGRESS_MARK.test(line.visible))) ||
       DIAGNOSTIC_GLYPH_LINE.test(line.visible) ||
       HERMES_STATUS_LINE.test(line.visible) ||
+      STREAM_MARKER_LINE.test(line.visible) ||
+      SHELL_ECHO_LINE.test(line.visible) ||
+      EXIT_CODE_LINE.test(line.visible) ||
+      (inExecHeader ? EXEC_HEADER_LINE.test(line.visible) : EXEC_HEADER_START.test(line.visible)) ||
+      ENV_ASSIGNMENT_LINE.test(line.visible) ||
       (hermesGlyphs && HERMES_GLYPH_LINE.test(line.visible));
     if (!isStatusLine) break;
+    if (EXEC_HEADER_START.test(line.visible)) inExecHeader = true;
     start += 1;
   }
   return lines
