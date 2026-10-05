@@ -51,6 +51,7 @@ import { dispatchLLM } from "../services/dispatch-llm.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
 import { listCompanyMemberNames, PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "../services/cos-plan-naming.js";
+import { hermesModelTierStamp, stampPlanModelTiers } from "../services/hermes-model-tiers.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
 import {
   applyAdapterPreset,
@@ -700,7 +701,19 @@ export function onboardingV2Routes(db: Db) {
       await conversations.postMessage({
         conversationId, authorKind: 'agent', authorId: reportsToAgentId,
         body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
-        cardKind: 'proposal_card_v1', cardPayload: proposal as unknown as Record<string, unknown>,
+        // AgentDash (c4-model-tiers + review-1028): the adapter AND the
+        // resolved tier/model are stamped so the echoed card can label the
+        // hire's model in plain words — as this instance resolved them,
+        // never recomputed from shipped defaults in the UI.
+        cardKind: 'proposal_card_v1',
+        cardPayload: {
+          ...proposal,
+          adapterType: accepted[0]?.created.adapterType,
+          ...hermesModelTierStamp({
+            adapterType: accepted[0]?.created.adapterType,
+            role: proposal.role,
+          }),
+        } as unknown as Record<string, unknown>,
       });
     } catch (error) { throw acceptedHireNeedsRepair(accepted.map(item => item.created.id), error); }
     res.status(201).json({
@@ -809,6 +822,13 @@ export function onboardingV2Routes(db: Db) {
           title: hired.title ?? null,
           reportsTo: hired.reportsTo ?? null,
           adapterType: hired.adapterType ?? fallbackAdapterType ?? null,
+          // AgentDash (review-1028): the resolved tier+model ride in the
+          // payload so the approval card shows what the server applied.
+          ...hermesModelTierStamp({
+            adapterType: hired.adapterType ?? fallbackAdapterType ?? null,
+            role: hired.role,
+            title: hired.title,
+          }),
           agentId: hired.id,
           source: "cos_plan",
         },
@@ -1338,7 +1358,9 @@ No greetings. No markdown headings outside the JSON block.`;
         authorId: cos.id,
         body: "",
         cardKind: "agent_plan_proposal_v1",
-        cardPayload: newPlan as unknown as Record<string, unknown>,
+        // AgentDash (review-1028): stamp the resolved tier+model per
+        // hermes_local agent so the card shows what this instance applies.
+        cardPayload: stampPlanModelTiers(newPlan) as unknown as Record<string, unknown>,
       });
     });
 
@@ -2011,7 +2033,7 @@ async function generateInitialTeamPlan(
     authorId: cos.id,
     body: "",
     cardKind: "agent_plan_proposal_v1",
-    cardPayload: plan as unknown as Record<string, unknown>,
+    cardPayload: stampPlanModelTiers(plan) as unknown as Record<string, unknown>,
   });
   return { plan, ok: true };
 }
