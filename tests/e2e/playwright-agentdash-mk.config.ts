@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3106);
+const PORT = resolveE2eServerPort(3106);
 const BASE_URL = process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`;
 
 /**

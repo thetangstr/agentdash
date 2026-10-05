@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 import { E2E_GITHUB_TOKEN } from "./github-stub.global-setup";
 
 /**
@@ -18,7 +19,7 @@ import { E2E_GITHUB_TOKEN } from "./github-stub.global-setup";
  * line and suggestions; the in-app assistant instructions open directly.
  */
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = resolveE2eServerPort(3399);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const TOKEN = E2E_GITHUB_TOKEN;
 

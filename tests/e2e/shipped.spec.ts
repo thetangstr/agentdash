@@ -9,8 +9,9 @@
  */
 
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = resolveE2eServerPort(3399);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const PR_URL = `https://github.com/acme/web/pull/${Date.now() % 100_000}`;
 const PR_TITLE = "Add a /health badge to the README";
