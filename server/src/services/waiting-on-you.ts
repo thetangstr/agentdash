@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { agents, agentStewardships, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
 import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview } from '@paperclipai/shared';
 import { agentVisibilityCondition, approvalVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything } from '../routes/visibility.js';
@@ -9,6 +9,7 @@ import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalService, issueApprovalService } from "./index.js";
 import {
   APPROVAL_KIND_PHRASES,
+  approvalAskPhrase,
   decisionConsequences,
   scopeAndRankOpenApprovals,
   type WaitingApprovalLike as ApprovalLike,
@@ -186,6 +187,39 @@ export function waitingOnYouService(db: Db) {
       const nameById = new Map(audience.map((agent) => [agent.id, agent.name]));
       const ranked = scopeAndRankOpenApprovals(rows as ApprovalLike[], new Set(nameById.keys()));
 
+      // AgentDash (c4-hire-ux): a person who asked (e.g. clicked "Set it up" on
+      // a plan card) is named, not lumped under "The board". Names resolve in
+      // one query for the whole ranked page.
+      const requesterUserIds = [
+        ...new Set(
+          ranked
+            .slice(0, opts.decisionLimit ?? 50)
+            .map(({ approval }) => approval.requestedByUserId)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+      ];
+      // AgentDash (review-1029): scope names to this company's active human
+      // members — a requester removed from the company must not still be
+      // named in Decisions. Same rule companyMemberName applies on the CoS
+      // reply path.
+      const requesterNameById = new Map<string, string>(
+        requesterUserIds.length === 0
+          ? []
+          : (await db
+              .select({ id: authUsers.id, name: authUsers.name })
+              .from(companyMemberships)
+              .innerJoin(authUsers, eq(authUsers.id, companyMemberships.principalId))
+              .where(
+                and(
+                  eq(companyMemberships.companyId, companyId),
+                  eq(companyMemberships.principalType, "user"),
+                  eq(companyMemberships.status, "active"),
+                  inArray(companyMemberships.principalId, requesterUserIds),
+                ),
+              ))
+              .map((row) => [row.id, row.name] as const),
+      );
+
       const decisions = await Promise.all(
         ranked.slice(0, opts.decisionLimit ?? 50).map(async ({ approval, risk }) => {
           let canDecide = false;
@@ -201,15 +235,34 @@ export function waitingOnYouService(db: Db) {
           }
           const linked = await issueApprovals.listIssuesForApproval(approval.id).catch(() => []);
           const first = Array.isArray(linked) ? linked[0] : null;
-          const phrase = APPROVAL_KIND_PHRASES[approval.type] ?? `act on "${approval.type}"`;
-          const asker = approval.requestedByAgentId
-            ? nameById.get(approval.requestedByAgentId) ?? "An agent"
-            : "The board";
+          const payload =
+            typeof approval.payload === "object" && approval.payload !== null
+              ? (approval.payload as Record<string, unknown>)
+              : {};
+          const phrase = approvalAskPhrase(approval);
+          // A CoS-plan hire was asked for by the person who confirmed the plan;
+          // credit them, with the CoS named as the channel they asked through.
+          const viaCoS = payload.source === "cos_plan" || payload.source === "cos_proposal";
+          const agentAsker = approval.requestedByAgentId
+            ? nameById.get(approval.requestedByAgentId) ?? null
+            : null;
+          const userAsker = approval.requestedByUserId
+            ? requesterNameById.get(approval.requestedByUserId) ?? null
+            : null;
+          const asker = agentAsker !== null || approval.requestedByAgentId
+            ? agentAsker ?? "An agent"
+            : approval.requestedByUserId
+              ? viaCoS
+                ? userAsker
+                  ? `${userAsker} (via Chief of Staff)`
+                  : "The Chief of Staff"
+                : userAsker ?? "A board user"
+              : "The board";
           return {
             approvalId: approval.id,
             kind: approval.type,
             revision: (approval as ApprovalLike & { revision?: number }).revision,
-            askedBy: approval.requestedByAgentId ? nameById.get(approval.requestedByAgentId) ?? null : null,
+            askedBy: agentAsker ?? userAsker,
             summary: `${asker} asks to ${phrase}.`,
             relatedItem: first
               ? { id: first.id, identifier: first.identifier ?? null, title: first.title ?? null }

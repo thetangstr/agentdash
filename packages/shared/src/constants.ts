@@ -80,6 +80,10 @@ export const AGENT_ROLES = [
   "cto",
   "cmo",
   "cfo",
+  // AgentDash (c4-hire-ux): a bookkeeper or staff accountant hired off a CoS
+  // plan is finance staff, not the chief financial officer. `finance` is the
+  // neutral family role; `cfo` stays for executive hires.
+  "finance",
   "security",
   "engineer",
   "designer",
@@ -104,6 +108,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   cto: "CTO",
   cmo: "CMO",
   cfo: "CFO",
+  finance: "Finance",
   security: "Security",
   engineer: "Engineer",
   designer: "Designer",

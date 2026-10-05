@@ -62,12 +62,32 @@ export const APPROVAL_KIND_PHRASES: Record<string, string> = {
   budget_override_required: "approve spending past a budget limit",
 };
 
+/**
+ * AgentDash (c4-hire-ux): the ask clause for a Decisions row. A hire whose
+ * payload names the hire reads "hire Bea as Bookkeeper" — the human title,
+ * never the role slug — instead of the generic "hire a new agent". Every
+ * other kind keeps the one-clause phrase above.
+ */
+export function approvalAskPhrase(approval: { type: string; payload: unknown }): string {
+  const payload =
+    typeof approval.payload === "object" && approval.payload !== null
+      ? (approval.payload as Record<string, unknown>)
+      : {};
+  if (approval.type === "hire_agent") {
+    const name = typeof payload.name === "string" ? payload.name.trim() : "";
+    const title = typeof payload.title === "string" ? payload.title.trim() : "";
+    if (name) return title ? `hire ${name} as ${title}` : `hire ${name}`;
+  }
+  return APPROVAL_KIND_PHRASES[approval.type] ?? `act on "${approval.type}"`;
+}
+
 export type WaitingApprovalLike = {
   id: string;
   type: string;
   status: string;
   payload: unknown;
   requestedByAgentId: string | null;
+  requestedByUserId: string | null;
   createdAt: Date;
 };
 

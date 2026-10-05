@@ -152,6 +152,29 @@ function readString(source: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// AgentDash (c4-hire-ux): the CoS names the page the owner reads — "Decisions",
+// linked — and gets singular/plural right. No "board" or bare "Approvals";
+// the nav label is what the owner clicks.
+function hiresAwaitingDecisionMessage(count: number, opts: { afterOnboarding: boolean }): string {
+  const subject = opts.afterOnboarding
+    ? count === 1 ? "That hire" : "Those hires"
+    : count === 1 ? "Your hire" : "Your hires";
+  const sent = count === 1
+    ? "I have sent it to [Decisions](/decisions)."
+    : "I have sent each one to [Decisions](/decisions).";
+  if (opts.afterOnboarding) return `${subject} ${count === 1 ? "is" : "are"} waiting for a decision — ${sent}`;
+  return `${subject} ${count === 1 ? "is" : "are"} waiting for a decision — ${sent} ${count === 1 ? "It will join the team once it is approved." : "They will join the team as they are approved."}`;
+}
+
+// AgentDash (c4-hire-ux): a steady-state plan confirm (onboarding already
+// done) posts a short confirmation instead of silence — named hires, "is/are".
+function hiresOnboardedMessage(names: string[]): string {
+  const clean = names.map((name) => name.trim()).filter((name) => name.length > 0);
+  if (clean.length === 0) return "Done — the hire is on the team.";
+  if (clean.length === 1) return `Done — ${clean[0]} is on the team.`;
+  return `Done — ${clean.slice(0, -1).join(", ")} and ${clean[clean.length - 1]} are on the team.`;
+}
+
 function readStringArray(source: Record<string, unknown>, key: string): string[] {
   const value = source[key];
   if (!Array.isArray(value)) return [];
@@ -945,13 +968,9 @@ export function onboardingV2Routes(db: Db) {
         // not repost the CoS message or rematerialize goals a second time.
         if (filedCount > 0 || !alreadyReady) {
           const cos = (await retryAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
-          if (cos && !alreadyReady) await conversations.postMessage({
+          if (cos) await conversations.postMessage({
             conversationId, authorKind: 'agent', authorId: cos.id,
-            body: 'Your hires are waiting on board approval — I have sent each one to Approvals. They will join the team as they are approved.',
-          });
-          else if (cos) await conversations.postMessage({
-            conversationId, authorKind: 'agent', authorId: cos.id,
-            body: 'Those hires are waiting on board approval — I have sent each one to Approvals.',
+            body: hiresAwaitingDecisionMessage(awaitingApproval.length, { afterOnboarding: alreadyReady }),
           });
           await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
           if (cos && !alreadyReady) {
@@ -1000,6 +1019,10 @@ export function onboardingV2Routes(db: Db) {
         // AgentDash (scan 4, lane N): the CoS-written title, verbatim (trimmed).
         name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.title?.trim() || planAgent.role), adapterType: planAgent.adapterType,
         workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
+        // AgentDash (c4-hire-ux): the person who confirmed the plan is the
+        // creator — AgentDetail reads this for "Dana Whitfield, via Chief of
+        // Staff" instead of the wrong "Hired by an agent".
+        createdByUserId: req.actor.userId ?? null,
         ...hireAccountability,
         ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
       }, acceptance);
@@ -1070,12 +1093,18 @@ ${kpis || "- (none captured)"}
       if (materialized.cosAgentId && !alreadyReady) await conversations.postMessage({
         conversationId, authorKind: 'agent', authorId: materialized.cosAgentId,
         body: requiresApproval
-          ? 'Your hires are waiting on board approval — I have sent each one to Approvals. They will join the team as they are approved.'
+          ? hiresAwaitingDecisionMessage(accepted.length, { afterOnboarding: false })
           : 'Done — your team has been created. You can talk to any of them via @mention, or stay here and route through me.',
       });
-      else if (materialized.cosAgentId && requiresApproval) await conversations.postMessage({
+      else if (materialized.cosAgentId) await conversations.postMessage({
         conversationId, authorKind: 'agent', authorId: materialized.cosAgentId,
-        body: 'Those hires are waiting on board approval — I have sent each one to Approvals.',
+        // AgentDash (c4-hire-ux): a steady-state confirm always says something —
+        // approval-gated hires are "waiting for a decision", direct hires are
+        // named as on the team. Before this, an ungated post-onboarding
+        // confirm posted nothing.
+        body: requiresApproval
+          ? hiresAwaitingDecisionMessage(accepted.length, { afterOnboarding: true })
+          : hiresOnboardedMessage(accepted.map(({ planAgent }) => planAgent.name)),
       });
       await cosOnboardingStateService(db).advancePhase(conversationId, 'ready');
     } catch (error) {
@@ -1253,7 +1282,7 @@ ${kpis || "- (none captured)"}
     // agents[]) can't masquerade as part of the operator's instructions.
     // Trust boundary: only the static text below is "system"; everything
     // user-controlled is a user turn.
-    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, pendingApproval: _pendingApproval, approvalRejected: _approvalRejected, requesterUserId: priorRequesterUserId, ...priorPlan } = priorPayload;
+    const { confirmedAt: _confirmedAt, confirmedAgentIds: _confirmedAgentIds, pendingApproval: _pendingApproval, approvalRejected: _approvalRejected, requesterUserId: priorRequesterUserId, requesterName: priorRequesterName, ...priorPlan } = priorPayload;
     const priorPlanJson = JSON.stringify(priorPlan, null, 2);
     const userRevision = revisionText.trim();
     // AgentDash (scan 4, lane N): never name an agent after a member.
@@ -1317,9 +1346,13 @@ No greetings. No markdown headings outside the JSON block.`;
     // model never saw the prior card's value (stripped above) and any it
     // invents is dropped — the revised card belongs to whoever asked for the
     // original team.
-    const { requesterUserId: _modelRequester, pendingApproval: _modelPendingApproval, approvalRejected: _modelApprovalRejected, ...planSansRequester } = modelPlan;
+    const { requesterUserId: _modelRequester, requesterName: _modelRequesterName, pendingApproval: _modelPendingApproval, approvalRejected: _modelApprovalRejected, ...planSansRequester } = modelPlan;
     const newPlan: AgentPlanProposalV1Payload = priorRequesterUserId
-      ? { ...planSansRequester, requesterUserId: priorRequesterUserId }
+      ? {
+          ...planSansRequester,
+          requesterUserId: priorRequesterUserId,
+          ...(priorRequesterName ? { requesterName: priorRequesterName } : {}),
+        }
       : planSansRequester;
 
     // AgentDash (canary, lane chat): the LLM call above takes seconds — long

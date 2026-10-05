@@ -1,5 +1,6 @@
 import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
 import { formatCents } from "../lib/utils";
+import { humanizeAgentRole } from "../lib/agent-identity";
 import {
   AGENT_MODEL_TIER_METADATA_KEY,
   describeHermesModel,
@@ -32,14 +33,27 @@ export function approvalSubject(payload?: Record<string, unknown> | null): strin
   );
 }
 
-/** Build a contextual label for an approval, e.g. "Hire Agent: Designer" */
+/** Build a contextual label for an approval, e.g. "Hire Bea as Bookkeeper" */
 export function approvalLabel(type: string, payload?: Record<string, unknown> | null): string {
+  // AgentDash (c4-hire-ux): a hire reads the way the owner would say it —
+  // the human title, never the internal role slug ("Role cfo" for a
+  // Bookkeeper).
+  if (type === "hire_agent") {
+    const name = firstNonEmptyString(payload?.name);
+    const title = firstNonEmptyString(payload?.title, humanizeAgentRole(stringValue(payload?.role)));
+    if (name && title) return `Hire ${name} as ${title}`;
+    if (name) return `Hire ${name}`;
+  }
   const base = typeLabel[type] ?? type;
   const subject = approvalSubject(payload);
   if (subject) {
     return `${base}: ${subject}`;
   }
   return base;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 export const typeIcon: Record<string, typeof UserPlus> = {
@@ -126,6 +140,10 @@ function hermesModelLine(payload: Record<string, unknown>): string | null {
 }
 
 export function HireAgentPayload({ payload }: { payload: Record<string, unknown> }) {
+  // AgentDash (c4-hire-ux): the human title carries the job ("Bookkeeper");
+  // the role slug and adapter are internal detail and render under Technical
+  // details on the page, not here.
+  const title = firstNonEmptyString(payload.title, humanizeAgentRole(stringValue(payload.role)));
   const modelLine = hermesModelLine(payload);
   return (
     <div className="mt-3 space-y-1.5 text-sm">
@@ -133,21 +151,12 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
         <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs">Name</span>
         <span className="font-medium">{String(payload.name ?? "—")}</span>
       </div>
-      <PayloadField label="Role" value={payload.role} />
-      <PayloadField label="Title" value={payload.title} />
+      <PayloadField label="Title" value={title} />
       <PayloadField label="Icon" value={payload.icon} />
       {!!payload.capabilities && (
         <div className="flex items-start gap-2">
           <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs pt-0.5">Capabilities</span>
           <span className="text-muted-foreground">{String(payload.capabilities)}</span>
-        </div>
-      )}
-      {!!payload.adapterType && (
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs">Adapter</span>
-          <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-            {String(payload.adapterType)}
-          </span>
         </div>
       )}
       {modelLine && (

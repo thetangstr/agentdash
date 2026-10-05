@@ -631,22 +631,24 @@ describe("steady-state hire proposals", () => {
     expect((card!.cardPayload as any).requesterUserId).toBe("user-a");
   });
 
-  it("tells the CoS a gated hire lands only after board approval", async () => {
+  it("tells the CoS a gated hire lands only after a person's decision", async () => {
     const roster = [{ id: agentId, name: "Ellie", role: "Proposal Drafter", canTakeWork: true, awaitingApproval: false }];
     const gated = steadyStatePrompt(roster, null, [], true);
-    expect(gated).toContain("board approval");
+    // c4-hire-ux: the prompt speaks owner-language — a person's "decision",
+    // not "board approval" — so replies the model echoes drop "board" too.
+    expect(gated).toContain("a person's decision");
     expect(gated).toContain("never that they start on confirm");
-    // The gating clause itself is conditional — the ungated prompt mentions
-    // board approval only in the roster label explainer.
+    // The gating clause itself is conditional — the ungated prompt never
+    // mentions the decision requirement.
     const ungated = steadyStatePrompt(roster, null, [], false);
     expect(ungated).not.toContain("never that they start on confirm");
-    // A hire awaiting approval is named "awaiting board approval", never
+    // A hire awaiting approval is named "awaiting a hiring decision", never
     // "unavailable right now" (review-1019 item 10).
     const pending = steadyStatePrompt(
       [{ id: agentId, name: "Quinn", role: "Operations", canTakeWork: false, awaitingApproval: true }],
       null,
     );
-    expect(pending).toContain("awaiting board approval");
+    expect(pending).toContain("awaiting a hiring decision");
     expect(pending).not.toContain("Quinn (Operations): " + agentId + " — unavailable right now");
     // The plain-language clause travels exactly once (review-1019 item 14).
     expect(gated.split(COS_PLAIN_LANGUAGE_GUIDANCE).length - 1).toBe(1);
