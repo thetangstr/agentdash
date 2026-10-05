@@ -42,6 +42,13 @@
  *   info glyph is ambiguous — "ℹ Note: …" is a common way to open real
  *   prose — so ℹ only counts as chatter when the line already carries a
  *   machine signature above, and then not when it opens a note.
+ * - On `hermes_local` only, a leading ✗ or → line is machine output too.
+ *   Hermes writes step diagnostics ("✗ tool call failed, retrying",
+ *   "→ resuming") to stdout on LF lines with no other signature, so the
+ *   adapter itself is the evidence. ✓ stays out of that rule even on
+ *   Hermes — the adapter is an LLM and "✓ Fixed X" is exactly how its own
+ *   checklist answers open (review-1022). On every other adapter a leading
+ *   ✗/→ line is ordinary prose and is kept.
  *
  * Stripping stops at the first ordinary line, so a real answer that happens
  * to contain a warning further down is left alone.
@@ -54,6 +61,12 @@ const DIAGNOSTIC_GLYPH_LINE = /^\s*⚠/u;
 // Hermes prints boot/status chatter with a check glyph. Only the observed
 // status words are matched — a "✓ Fixed X" checklist line stays.
 const HERMES_STATUS_LINE = /^\s*✓\s+(session resumed|resuming|loading|loaded)\b/iu;
+
+// On the Hermes path a leading ✗/→ line is runtime chatter — Hermes writes
+// step diagnostics like that on plain LF lines, and neither glyph ever opens
+// agent prose. ✓ is deliberately absent: HERMES_STATUS_LINE already covers
+// the observed "✓ <status>" noise, and a bare ✓ eats real checklists.
+const HERMES_GLYPH_LINE = /^\s*[✗→]/u;
 
 // A CRLF line whose mix with LF lines cannot be proven is still chatter when
 // it is unmistakably machine-shaped:
@@ -69,7 +82,7 @@ const CRLF_INFO_DIAGNOSTIC = /^\s*ℹ(?!\s*note\b)/iu;
 const CRLF_PROGRESS_MARK =
   /^\s*(?:loading|starting|initiali[sz]ing|connecting|waiting|resuming|downloading|installing|preparing|building|compiling|scanning|fetching|indexing|syncing|booting|spawning|launching|authenticating|registering|mounting|parsing|reading|writing|checking|probing|detecting|discovering)\b[^\n]*…\s*$/iu;
 
-export function stripStatusLines(text: string): string {
+export function stripStatusLines(text: string, opts?: { adapterType?: string | null }): string {
   // Split on \n first so a "\r\n" line ending survives as a trailing "\r" —
   // the evidence the mixed-ending rule below reads.
   const rawLines = text.split("\n");
@@ -103,6 +116,7 @@ export function stripStatusLines(text: string): string {
       visible: redrawn ? body.slice(body.lastIndexOf("\r") + 1) : body,
     };
   });
+  const hermesGlyphs = opts?.adapterType === "hermes_local";
   let start = 0;
   while (start < lines.length) {
     const line = lines[start] ?? { crlfEnded: false, redrawn: false, visible: "" };
@@ -114,7 +128,8 @@ export function stripStatusLines(text: string): string {
           CRLF_INFO_DIAGNOSTIC.test(line.visible) ||
           CRLF_PROGRESS_MARK.test(line.visible))) ||
       DIAGNOSTIC_GLYPH_LINE.test(line.visible) ||
-      HERMES_STATUS_LINE.test(line.visible);
+      HERMES_STATUS_LINE.test(line.visible) ||
+      (hermesGlyphs && HERMES_GLYPH_LINE.test(line.visible));
     if (!isStatusLine) break;
     start += 1;
   }

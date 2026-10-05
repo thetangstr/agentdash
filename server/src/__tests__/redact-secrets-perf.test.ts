@@ -90,7 +90,7 @@ describe("redactForDisplay structural performance", () => {
     // a bounded tail, so a 8MB hostile stderr is not scanned end to end.
     const hostile = `xxxx ${"a.".repeat(4 * 1024 * 1024)}`;
     const start = performance.now();
-    const detail = describeAdapterFailure(hostile, hostile);
+    const detail = describeAdapterFailure(hostile, hostile, "hermes_local");
     const elapsed = performance.now() - start;
     expect(detail.length).toBeLessThanOrEqual(600);
     expect(elapsed).toBeLessThan(2000);

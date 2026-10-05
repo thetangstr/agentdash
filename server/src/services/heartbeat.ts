@@ -1250,6 +1250,14 @@ export function summarizeHeartbeatRunListResultJson(input: {
     // a leading runtime status line (e.g. a scanner warning) as their summary
     // or their result — the run card falls back summary ?? result, so every
     // displayable text field is stripped. A real error stays verbatim.
+    //
+    // AgentDash (review-1022): the read path deliberately stays on the
+    // conservative strip. These rows are historical — the adapter that
+    // produced them is not recorded — so the agent's CURRENT adapterType
+    // cannot be trusted here; the Hermes-scoped rule would eat a "✓"-style
+    // line the old run legitimately wrote. Rows written after the merge-time
+    // strip are already clean (that path knows the producing adapter), and
+    // Hermes noise on pre-fix rows survives rather than eats real content.
     if (key !== "error" && normalized) {
       const cleaned = stripStatusLines(normalized);
       normalized = cleaned.length > 0 ? cleaned : null;
@@ -7563,6 +7571,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           errorMessage: runErrorMessage,
         }),
         adapterResult.summary ?? null,
+        agent.adapterType,
       );
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
@@ -7737,7 +7746,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           try {
             const existingRunComment = await findRunIssueComment(livenessRun.id, livenessRun.companyId, issueId);
             if (!existingRunComment) {
-              const issueComment = buildHeartbeatRunIssueComment(persistedResultJson);
+              const issueComment = buildHeartbeatRunIssueComment(persistedResultJson, agent.adapterType);
               if (issueComment) {
                 await issuesSvc.addComment(issueId, issueComment, { agentId: agent.id, runId: livenessRun.id });
               }
