@@ -313,11 +313,12 @@ test.describe("Multi-user: authenticated mode", () => {
       const invitedMember = await waitForMember(page, company.id, invitedUser.email);
       invitedMemberId = invitedMember.id;
 
-      // The joined confirmation offers "Open board"; the member-onboarding
-      // gate then holds the member until both onboarding steps are done. Its
-      // welcome names the workspace — steward and terminal wording are for
-      // members who actually steward an agent (PR #1017 review).
-      await invited.page.getByRole("link", { name: "Open board" }).click();
+      // The joined confirmation offers "Go to your workspace"; the member-
+      // onboarding gate then holds the member until both onboarding steps
+      // are done. Its welcome names the workspace — steward and terminal
+      // wording are for members who actually steward an agent (PR #1017
+      // review).
+      await invited.page.getByRole("link", { name: "Go to your workspace" }).click();
       await expect(
         invited.page.getByRole("heading", { name: `You joined ${companyName}` })
       ).toBeVisible({ timeout: 60_000 });

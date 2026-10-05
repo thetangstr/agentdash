@@ -82,7 +82,7 @@ export function EvaluationOverviewPage() {
                   <li key={`${m.ref.kind}:${m.ref.id}`}>
                     {/* A milestone name is a full sentence — the badge must
                         wrap or it pushes the page sideways on a phone. */}
-                    <Badge variant="ghost" className="whitespace-normal text-left">{m.ref.kind} · {m.name}{m.status ? ` · ${m.status.replace(/_/g, " ")}` : ""}</Badge>
+                    <Badge variant="ghost" className="whitespace-normal break-words text-left">{m.ref.kind} · {m.name}{m.status ? ` · ${m.status.replace(/_/g, " ")}` : ""}</Badge>
                   </li>
                 ))}
               </ul>
@@ -105,7 +105,7 @@ function MilestoneCard({ milestone: m }: { milestone: EvaluationMilestoneSummary
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2">
           <Link to={`/evaluation/${m.ref.kind}/${m.ref.id}`} className="min-w-0 break-words hover:underline">{m.name}</Link>
-          <Badge variant="ghost" className="whitespace-normal text-left">{m.ref.kind}{m.status ? ` · ${m.status.replace(/_/g, " ")}` : ""}</Badge>
+          <Badge variant="ghost" className="whitespace-normal break-words text-left">{m.ref.kind}{m.status ? ` · ${m.status.replace(/_/g, " ")}` : ""}</Badge>
         </CardTitle>
         <CardDescription>Card v{latest.version} stored {fmtDate(latest.storedAt)}</CardDescription>
       </CardHeader>

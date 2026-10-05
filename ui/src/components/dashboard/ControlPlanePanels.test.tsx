@@ -38,7 +38,7 @@ function makeSummary(overrides: Record<string, unknown> = {}) {
     companyId: "company-1",
     agents: { active: 0, running: 0, paused: 0, error: 0 },
     tasks: { open: 2, inProgress: 1, blocked: 0, done: 4 },
-    costs: { monthSpendCents: 1250, monthTokens: 40_000, monthRuns: 12, monthBudgetCents: 10000, monthUtilizationPercent: 13 },
+    costs: { monthSpendCents: 1250, monthTokens: 40_000, monthRuns: 12, monthChatTurns: 3, monthBudgetCents: 10000, monthUtilizationPercent: 13 },
     pendingApprovals: 0,
     budgets: { activeIncidents: 0, pendingApprovals: 0, pausedAgents: 0, pausedProjects: 0 },
     ...overrides,
@@ -163,7 +163,7 @@ describe("ControlPlanePanels", () => {
   // AgentDash: BYOK boxes meter tokens, not dollars.
   it("shows tokens this month and who bills them when no cost was metered", async () => {
     mockDashboardApi.summary.mockResolvedValue(
-      makeSummary({ costs: { monthSpendCents: 0, monthTokens: 127_000, monthRuns: 9, monthBudgetCents: 0, monthUtilizationPercent: 0 } }),
+      makeSummary({ costs: { monthSpendCents: 0, monthTokens: 127_000, monthRuns: 9, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 } }),
     );
     await render();
     const tile = q("dashboard-stat-spend");
@@ -175,13 +175,13 @@ describe("ControlPlanePanels", () => {
   });
 
   it("keeps dollars whenever cost is known, and $0.00 when nothing ran", () => {
-    expect(monthSpendTile({ monthSpendCents: 1250, monthTokens: 9000, monthRuns: 9, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
+    expect(monthSpendTile({ monthSpendCents: 1250, monthTokens: 9000, monthRuns: 9, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
       label: "Spend this month",
       value: "$12.50",
       unmetered: false,
       unmeasured: false,
     });
-    expect(monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthRuns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
+    expect(monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthRuns: 0, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
       label: "Spend this month",
       value: "$0.00",
       unmetered: false,
@@ -192,7 +192,20 @@ describe("ControlPlanePanels", () => {
   // AgentDash (batch 4): unmetered runs write no cost events — spend and
   // tokens both read zero, so "$0.00" would read as "free" next to real work.
   it("says Not measured when runs happened but no usage was recorded", () => {
-    const tile = monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthRuns: 4, monthBudgetCents: 0, monthUtilizationPercent: 0 });
+    const tile = monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthRuns: 4, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 });
+    expect(tile).toEqual({
+      label: "Spend this month",
+      value: "Not measured",
+      unmetered: false,
+      unmeasured: true,
+    });
+    expect(tile.value).not.toBe("$0.00");
+  });
+
+  // Chat replies leave no heartbeat run row — a company that only talked to
+  // its agents this month still did unmetered work.
+  it("says Not measured when only chat turns happened, with no runs", () => {
+    const tile = monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthRuns: 0, monthChatTurns: 7, monthBudgetCents: 0, monthUtilizationPercent: 0 });
     expect(tile).toEqual({
       label: "Spend this month",
       value: "Not measured",

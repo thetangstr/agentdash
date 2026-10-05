@@ -169,14 +169,21 @@ function sourceMeta(sourceBadge: CompanySkillSourceBadge, sourceLabel: string | 
 /**
  * AgentDash (c4-polish): bundled development skills (paperclip-dev,
  * terminal-bench-loop) ship inside the product for its own dev flow — they
- * are not the owner's skills and must not crowd this page. The badge's other
- * "paperclip" form — "Paperclip workspace" — IS the owner's own managed
- * skill and stays.
+ * are not the owner's skills and must not crowd this page. Other bundled
+ * skills stay visible: they are part of the product the owner gets. The
+ * badge's other "paperclip" form — "Paperclip workspace" — IS the owner's
+ * own managed skill and stays too.
  */
+const INTERNAL_DEV_SKILL_SLUGS = new Set(["paperclip-dev", "terminal-bench-loop"]);
+
 export function isInternalCompanySkill(
-  skill: Pick<CompanySkillListItem, "sourceBadge" | "sourceLabel">,
+  skill: Pick<CompanySkillListItem, "sourceBadge" | "sourceLabel" | "slug">,
 ) {
-  return skill.sourceBadge === "paperclip" && skill.sourceLabel === "Paperclip bundled";
+  return (
+    skill.sourceBadge === "paperclip" &&
+    skill.sourceLabel === "Paperclip bundled" &&
+    INTERNAL_DEV_SKILL_SLUGS.has(skill.slug)
+  );
 }
 
 function shortRef(ref: string | null | undefined) {

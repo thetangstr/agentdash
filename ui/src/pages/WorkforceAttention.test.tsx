@@ -24,7 +24,7 @@ beforeEach(() => {
     else if (url.endsWith('/pending-decisions')) data = url.includes('/one/') && status === 'pending' ? { ...empty, pendingQuestions: [item], pendingQuestionsTotal: 1 } : empty;
     else if (url.endsWith('/interactions')) data = [{ id: 'q', issueId: 'job', companyId: 'one', kind: 'ask_user_questions', status, createdAt: '2026-09-29T00:00:00Z', createdByAgentId: 'a', payload: { version: 1, answerOwnerUserId: 'dana', title: 'Audience', questions: [{ id: 'audience', prompt: 'Who is the audience?', selectionMode: 'text', required: true, options: [] }] }, result: null }];
     else if (url.endsWith('/cancel')) { status = 'cancelled'; data = {}; }
-    else if (url.endsWith('/dashboard')) data = { companyId: 'one', agents: { active: 1, running: 0, paused: 0, error: 0 }, tasks: { open: 1, inProgress: 0, blocked: 0, done: 0 }, costs: { monthSpendCents: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 }, pendingApprovals: 0, budgets: { activeIncidents: 0, pendingApprovals: 0, pausedAgents: 0, pausedProjects: 0 } };
+    else if (url.endsWith('/dashboard')) data = { companyId: 'one', agents: { active: 1, running: 0, paused: 0, error: 0 }, tasks: { open: 1, inProgress: 0, blocked: 0, done: 0 }, costs: { monthSpendCents: 0, monthTokens: 0, monthRuns: 0, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 }, pendingApprovals: 0, budgets: { activeIncidents: 0, pendingApprovals: 0, pausedAgents: 0, pausedProjects: 0 } };
     else if (url.includes('/working-now') || url.includes('/shipped')) data = { items: [], total: 0 };
     else if (url.includes('/first-run')) data = { applies: false, showHomeNudge: false };
     else if (url.includes('/auth/')) data = null;

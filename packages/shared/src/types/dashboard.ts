@@ -80,6 +80,12 @@ export interface DashboardSummary {
      * never "$0.00".
      */
     monthRuns: number;
+    /**
+     * This month's agent chat replies (same definition as the agent page's
+     * chatTurnsThisMonth). CoS/teammate conversations leave no heartbeat run,
+     * so a chat-only company would otherwise still read "$0.00".
+     */
+    monthChatTurns: number;
     monthBudgetCents: number;
     monthUtilizationPercent: number;
   };

@@ -74,7 +74,7 @@ const summary = {
   companyId: "company-1",
   agents: { active: 4, running: 2, paused: 0, error: 0 },
   tasks: { open: 92, inProgress: 2, blocked: 1, done: 2 },
-  costs: { monthSpendCents: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 },
+  costs: { monthSpendCents: 0, monthTokens: 0, monthRuns: 0, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 },
   pendingApprovals: 1,
   budgets: { activeIncidents: 0, pendingApprovals: 0, pausedAgents: 0, pausedProjects: 0 },
 };

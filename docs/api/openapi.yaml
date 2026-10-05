@@ -4595,6 +4595,8 @@ components:
               type: number
             monthRuns:
               type: number
+            monthChatTurns:
+              type: number
             monthBudgetCents:
               type: number
             monthUtilizationPercent:
@@ -4603,6 +4605,7 @@ components:
             - monthSpendCents
             - monthTokens
             - monthRuns
+            - monthChatTurns
             - monthBudgetCents
             - monthUtilizationPercent
         pendingApprovals:

@@ -165,7 +165,7 @@ describe("IssueResultBlock", () => {
   it("shows the PR link, its state, the agent and the issue's usage", async () => {
     mockIssuesApi.listShipped.mockResolvedValue({ items: [shippedItem()], total: 1, nextCursor: null, monthTotal: null });
     await render();
-    expect(mockIssuesApi.listShipped).toHaveBeenCalledWith("company-1", { issueId: "issue-1" });
+    expect(mockIssuesApi.listShipped).toHaveBeenCalledWith("company-1", { issueId: "issue-1", limit: 200 });
     const block = container.querySelector('[data-testid="issue-result-block"]');
     expect(block?.textContent).toContain("Result");
     const link = container.querySelector('a[href="https://github.com/acme/web/pull/12"]');

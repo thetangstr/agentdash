@@ -202,10 +202,12 @@ export function IssueDocumentsSection({
   // "none") — not just while status is ready_for_review. An approved or
   // sent-back deliverable already had its say; re-showing Helpful/Needs work
   // on its document after Accept invites votes nobody acts on. Same query the
-  // Result block runs, so this adds no request.
+  // Result block runs, so this adds no request. The page is capped at 200 —
+  // past that a reviewed deliverable's document could fall off the first page
+  // and show thumbs again; an issue with >200 shipped products is rare.
   const { data: shipped } = useQuery({
-    queryKey: queryKeys.shipped(issue.companyId, { issueId: issue.id }),
-    queryFn: () => issuesApi.listShipped(issue.companyId, { issueId: issue.id }),
+    queryKey: queryKeys.shipped(issue.companyId, { issueId: issue.id, limit: 200 }),
+    queryFn: () => issuesApi.listShipped(issue.companyId, { issueId: issue.id, limit: 200 }),
   });
   const documentKeysWithReview = new Set(
     (shipped?.items ?? [])

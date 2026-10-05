@@ -53,8 +53,9 @@ export function fleetRowSubtitle(agent: { name?: string | null; role?: string | 
  * AgentDash: what the month-spend tile shows. A BYOK box meters tokens but not
  * dollars (the customer's model provider bills them), so "$0.00" next to real
  * usage would be wrong. Dollars whenever any were metered; tokens when the
- * agents used tokens and nothing was priced; "Not measured" when runs happened
- * but recorded no usage; "$0.00" only when nothing ran.
+ * agents used tokens and nothing was priced; "Not measured" when work
+ * happened but recorded no usage; "$0.00" only when nothing ran. Chat turns
+ * count as work — conversations leave no heartbeat run row.
  */
 export function monthSpendTile(costs: DashboardSummary["costs"]): {
   label: string;
@@ -66,7 +67,7 @@ export function monthSpendTile(costs: DashboardSummary["costs"]): {
   if (costs.monthSpendCents <= 0 && tokens > 0) {
     return { label: "Tokens this month", value: formatTokens(tokens), unmetered: true, unmeasured: false };
   }
-  if (costs.monthSpendCents <= 0 && (costs.monthRuns ?? 0) > 0) {
+  if (costs.monthSpendCents <= 0 && ((costs.monthRuns ?? 0) + (costs.monthChatTurns ?? 0)) > 0) {
     return { label: "Spend this month", value: NOT_MEASURED_TEXT, unmetered: false, unmeasured: true };
   }
   return { label: "Spend this month", value: formatCents(costs.monthSpendCents), unmetered: false, unmeasured: false };
