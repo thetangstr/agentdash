@@ -1,8 +1,10 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
   approvals,
+  assistantConversations,
+  assistantMessages,
   companies,
   costEvents,
   heartbeatRunEvents,
@@ -288,6 +290,42 @@ export function dashboardService(db: Db) {
         );
 
       const monthSpendCents = Number(monthSpend);
+      // AgentDash (batch 4): unmetered runs leave no cost events, so spend and
+      // tokens both read zero. The month's run count lets Home tell "nothing
+      // ran" ($0.00) from "runs recorded no usage" (Not measured). Chat replies
+      // count too — a company that only talked to its agents still did
+      // unmetered work.
+      const [{ monthRuns }] = await db
+        .select({ monthRuns: sql<number>`count(*)::double precision` })
+        .from(heartbeatRuns)
+        .where(and(eq(heartbeatRuns.companyId, companyId), gte(heartbeatRuns.createdAt, monthStart)));
+      // Same turn definition as the agent page's chatTurnsThisMonth: agent-role
+      // replies in company conversations, minus dispatch-failure cards and
+      // system/billing notices — none of those called a model.
+      const [{ monthChatTurns }] = await db
+        .select({ monthChatTurns: sql<number>`count(*)::double precision` })
+        .from(assistantMessages)
+        .innerJoin(
+          assistantConversations,
+          and(
+            eq(assistantMessages.conversationId, assistantConversations.id),
+            eq(assistantConversations.companyId, companyId),
+          ),
+        )
+        .where(and(
+          eq(assistantMessages.role, "agent"),
+          gte(assistantMessages.createdAt, monthStart),
+          or(
+            isNull(assistantMessages.cardKind),
+            ne(assistantMessages.cardKind, "cos_dispatch_error_v1"),
+          ),
+          isNull(sql`${assistantMessages.cardPayload}->>'systemNotice'`),
+          sql`not (
+            ${assistantMessages.content} like ${"Heads up: Stripe couldn't charge your card%"}
+            or ${assistantMessages.content} like ${"Your Pro subscription ended%"}
+            or ${assistantMessages.content} like ${"Heads up: your Pro trial ends in%"}
+          )`,
+        ));
       const runActivityDayExpr = sql<string>`to_char(${heartbeatRuns.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`;
       const runActivityRows = await db
         .select({
@@ -618,6 +656,8 @@ export function dashboardService(db: Db) {
         costs: {
           monthSpendCents,
           monthTokens: Number(monthTokens),
+          monthRuns: Number(monthRuns),
+          monthChatTurns: Number(monthChatTurns),
           monthBudgetCents: company.budgetMonthlyCents,
           monthUtilizationPercent: Number(utilization.toFixed(2)),
         },

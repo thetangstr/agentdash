@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, costEvents, createDb, heartbeatRuns, issues, issueWorkProducts, verdicts } from "@paperclipai/db";
+import { agents, assistantConversations, assistantMessages, companies, costEvents, createDb, heartbeatRuns, issues, issueWorkProducts, verdicts } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -613,6 +613,105 @@ describeEmbeddedPostgres("dashboard service", () => {
     expect(summary.costs.monthSpendCents).toBe(0);
     // Input + output only; the 20k cached input is not counted (scan 3 lane L).
     expect(summary.costs.monthTokens).toBe(107_000);
+  });
+
+  // AgentDash (batch 4): Home shows "Not measured" for unmetered usage — it
+  // needs the month's run count to tell that from "nothing ran".
+  it("counts this month's runs in costs.monthRuns, scoped to the company and the month", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const agentId = randomUUID();
+    const now = new Date();
+    const lastMonth = new Date(getUtcMonthStart(now).getTime() - 60_000);
+
+    await db.insert(companies).values([
+      {
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      },
+      {
+        id: otherCompanyId,
+        name: "Other",
+        issuePrefix: `T${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      },
+    ]);
+
+    await db.insert(agents).values([
+      {
+        id: agentId,
+        companyId,
+        name: "CodexCoder",
+        role: "engineer",
+        status: "running",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+
+    await db.insert(heartbeatRuns).values([
+      { id: randomUUID(), companyId, agentId, invocationSource: "assignment", status: "succeeded", createdAt: now },
+      { id: randomUUID(), companyId, agentId, invocationSource: "assignment", status: "failed", createdAt: now },
+      // Last month and another company's run this month must not be counted.
+      { id: randomUUID(), companyId, agentId, invocationSource: "assignment", status: "succeeded", createdAt: lastMonth },
+      { id: randomUUID(), companyId: otherCompanyId, agentId, invocationSource: "assignment", status: "succeeded", createdAt: now },
+    ]);
+
+    const summary = await dashboardService(db).summary(companyId);
+
+    expect(summary.costs.monthRuns).toBe(2);
+    expect(summary.costs.monthChatTurns).toBe(0);
+  });
+
+  it("counts this month's agent chat replies in costs.monthChatTurns, scoped to the company and the month", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const now = new Date();
+    const lastMonth = new Date(getUtcMonthStart(now).getTime() - 60_000);
+
+    await db.insert(companies).values([
+      {
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      },
+      {
+        id: otherCompanyId,
+        name: "Other",
+        issuePrefix: `T${otherCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      },
+    ]);
+
+    const conversationId = randomUUID();
+    const otherConversationId = randomUUID();
+    await db.insert(assistantConversations).values([
+      { id: conversationId, companyId, userId: "user-1" },
+      { id: otherConversationId, companyId: otherCompanyId, userId: "user-1" },
+    ]);
+
+    await db.insert(assistantMessages).values([
+      // Two real agent replies this month.
+      { id: randomUUID(), conversationId, role: "agent", content: "Done — I shipped it.", createdAt: now },
+      { id: randomUUID(), conversationId, role: "agent", content: "Working on it.", createdAt: now },
+      // User messages are not agent turns.
+      { id: randomUUID(), conversationId, role: "user", content: "Please ship it", createdAt: now },
+      // Dispatch-failure cards and system notices never called a model.
+      { id: randomUUID(), conversationId, role: "agent", content: "Dispatch failed", cardKind: "cos_dispatch_error_v1", createdAt: now },
+      { id: randomUUID(), conversationId, role: "agent", content: "Heads up: your Pro trial ends in 3 days", createdAt: now },
+      // Last month and another company's turn must not be counted.
+      { id: randomUUID(), conversationId, role: "agent", content: "Old reply", createdAt: lastMonth },
+      { id: randomUUID(), conversationId: otherConversationId, role: "agent", content: "Other company's reply", createdAt: now },
+    ]);
+
+    const summary = await dashboardService(db).summary(companyId);
+
+    expect(summary.costs.monthChatTurns).toBe(2);
   });
 
   /**

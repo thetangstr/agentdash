@@ -47,10 +47,12 @@ export function IssueResultBlock({
    */
   review?: IssueResultReviewActions | null;
 }) {
-  // Same block for every company (one UX).
+  // Same block for every company (one UX). limit 200 matches the Documents
+  // section's copy of this query so both share one cache entry and the
+  // review-lifecycle lookups see the full page.
   const { data } = useQuery({
-    queryKey: queryKeys.shipped(companyId, { issueId }),
-    queryFn: () => issuesApi.listShipped(companyId, { issueId }),
+    queryKey: queryKeys.shipped(companyId, { issueId, limit: 200 }),
+    queryFn: () => issuesApi.listShipped(companyId, { issueId, limit: 200 }),
     // AgentDash (scan 4 lane O1): while a fresh deliverable's usage is still
     // being recorded, check again shortly (the run-finished live event also
     // refetches this); stops once usage lands or the window passes.
@@ -64,7 +66,7 @@ export function IssueResultBlock({
   const [busy, setBusy] = useState<"accept" | "changes" | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Re-render when the "counting…" window closes, so a run that never
-  // reported usage falls back to "not metered yet" without a refetch.
+  // reported usage falls back to "not measured" without a refetch.
   const [, setWindowClosedAt] = useState(0);
   const countingEndsAt =
     data && data.items.length > 0 && !data.items[0]!.usage?.metered ? usageCountingEndsAt(data.items) : null;

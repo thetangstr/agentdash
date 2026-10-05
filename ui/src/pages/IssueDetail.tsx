@@ -24,7 +24,7 @@ import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
-import { isAwaitingReview } from "../lib/shipped";
+import { refetchAfterReviewDecision } from "../lib/review-decisions-refresh";
 import {
   hasLegacyIssueDetailQuery,
   createIssueDetailPath,
@@ -1338,24 +1338,6 @@ export function IssueDetail() {
     selectedCompanyId
     && boardAccess?.companyIds?.includes(selectedCompanyId),
   );
-  // AgentDash (c3-a11y review): the Accept / Request changes actions appear
-  // only under these exact conditions (same as IssueResultBlock). A document's
-  // Helpful / Needs work thumbs are a competing vocabulary ONLY then, and only
-  // on the document that deliverable binds to — so the gate is worked out once
-  // here and handed down, not re-derived loosely in the documents section.
-  const { data: shippedForReview } = useQuery({
-    queryKey: queryKeys.shipped(issue?.companyId ?? "", { issueId: issue?.id ?? "" }),
-    queryFn: () => issuesApi.listShipped(issue!.companyId, { issueId: issue!.id }),
-    enabled: !!issue && canManageTreeControl,
-  });
-  const awaitingReview = isAwaitingReview({
-    canReview: canManageTreeControl && !!issue,
-    issueStatus: issue?.status,
-    issueLive: hasLiveRuns,
-    hasReadyForReview: (shippedForReview?.items ?? []).some(
-      (product) => product.status === "ready_for_review",
-    ),
-  });
   const { data: feedbackVotes } = useQuery({
     queryKey: queryKeys.issues.feedbackVotes(issueId!),
     queryFn: () => issuesApi.listFeedbackVotes(issueId!),
@@ -1726,7 +1708,12 @@ export function IssueDetail() {
       if (acceptedDocumentRevisions === undefined) {
         throw new Error("The issue's documents are shown below — read the latest revision, then accept again.");
       }
-      return updateIssue.mutateAsync({ status: "done", acceptedDocumentRevisions });
+      const updated = await updateIssue.mutateAsync({ status: "done", acceptedDocumentRevisions });
+      // AgentDash (c4-polish): an explicit post-response refetch reads
+      // committed state, so the Result chip and Decisions badge don't stay
+      // stale until reload (the decisions sources were never invalidated).
+      await refetchAfterReviewDecision(queryClient, updated.companyId, updated.id);
+      return updated;
     },
     onRequestChanges: async (note: string) => {
       const current = queryClient.getQueryData<Issue>(queryKeys.issues.detail(issueId!));
@@ -1738,6 +1725,7 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(result.issue.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(result.issue.companyId) });
       invalidateIssueCollections();
+      await refetchAfterReviewDecision(queryClient, result.issue.companyId, result.issue.id);
     },
   }), [collectSeenDocumentRevisions, invalidateIssueCollections, issueId, queryClient, updateIssue.mutateAsync]);
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".
@@ -3727,7 +3715,6 @@ export function IssueDetail() {
       <IssueDocumentsSection
         issue={issue}
         canDeleteDocuments={Boolean(session?.user?.id)}
-        awaitingReview={awaitingReview}
         feedbackVotes={feedbackVotes}
         feedbackDataSharingPreference={feedbackDataSharingPreference}
         feedbackTermsUrl={FEEDBACK_TERMS_URL}

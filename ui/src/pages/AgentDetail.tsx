@@ -56,13 +56,14 @@ import { MandatesTab } from "../components/agent/MandatesTab";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
-import { BILLED_BY_PROVIDER_NOTE, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens, formatCountedTokens } from "../lib/token-figures";
+import { BILLED_BY_PROVIDER_NOTE, NOT_MEASURED_TEXT, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens, formatCountedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { cancelledRunLabel, normalizeStoppedRunEventMessage } from "../lib/cancelledRunLabel";
 import { runStatusLabel } from "../lib/run-status-label";
 import { latestRunByCreatedAt } from "../lib/issue-stopped";
 import { shortenInstancePaths } from "../lib/instancePaths";
+import { modelDisplayName } from "../lib/model-display";
 import {
   AgentRunFailureGuidance,
   readAgentRunFailureClassification,
@@ -1745,9 +1746,32 @@ export function AgentSpendFigure({
   monthCost?: Pick<CostByAgent, "costCents" | "inputTokens" | "cachedInputTokens" | "outputTokens"> | null;
 }) {
   if (!agentBilledByProvider(agent, runs as HeartbeatRun[], now, monthCost)) {
-    return <span className="font-medium">{formatCents(monthCost?.costCents ?? agent.spentMonthlyCents ?? 0)}</span>;
+    const cents = monthCost === undefined
+      ? agent.spentMonthlyCents ?? 0
+      : monthCost?.costCents ?? 0;
+    if (cents > 0) {
+      return <span className="font-medium">{formatCents(cents)}</span>;
+    }
+    // AgentDash (batch 4): unmetered runs write no cost events, so a worker
+    // that ran all month can read "$0.00" — technically true, substantively
+    // false. "Not measured" is the honest figure when work happened; an idle
+    // agent keeps the real $0.00.
+    const at = now ?? new Date();
+    const monthStart = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1);
+    const hadActivity =
+      runs.some((run) => new Date(run.createdAt).getTime() >= monthStart) ||
+      (agent.runHealth?.chatTurnsThisMonth ?? 0) > 0;
+    if (hadActivity) {
+      return <span className="text-muted-foreground" data-testid="agent-spend-unmeasured">{NOT_MEASURED_TEXT}</span>;
+    }
+    return <span className="font-medium">{formatCents(0)}</span>;
   }
-  const tokens = monthCountedTokens(runs, now);
+  // AgentDash (batch 4): the token figure reads the cost-events row like the
+  // Costs page does; run usageJson is empty on unmetered runs, so summing
+  // runs undercounted to the bare provider note next to a real Costs figure.
+  const tokens = monthCost === undefined
+    ? monthCountedTokens(runs, now)
+    : countedTokens(monthCost ?? {});
   if (tokens > 0) {
     return (
       <span data-testid="agent-spend-byok">
@@ -4377,6 +4401,13 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
                   ? `${displayProvider}/${modelName}`
                   : modelName)
                 : null;
+              // AgentDash (c4-polish): opaque provider aliases ("k3") resolve
+              // to a readable name; a mapped name already says what it is, so
+              // the raw provider prefix is dropped.
+              const readableModel = modelDisplayName(modelName);
+              const readableModelText = readableModel && readableModel !== "auto"
+                ? (readableModel === modelName ? rawModelText : readableModel)
+                : null;
               // AgentDash (c4-model-tiers): a tier model reads "Qwen 3.8 Max ·
               // high tier" here too; the raw provider/model stays on hover.
               const described = modelName && modelName !== "auto"
@@ -4388,8 +4419,8 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
                         : null,
                   })
                 : null;
-              const modelText = described?.text ?? rawModelText;
-              const modelTitle = described ? rawModelText : modelText;
+              const modelText = described?.text ?? readableModelText;
+              const modelTitle = described ? rawModelText : displayModel;
               return (
                 <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap" data-testid="run-runtime-summary">
                   {adapterType && (

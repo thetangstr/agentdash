@@ -189,11 +189,11 @@ describe("Shipped page", () => {
     expect(empty?.querySelector('a[href="/dashboard"]')?.textContent).toBe("See what's running");
   });
 
-  it("says 'not metered yet' instead of $0 or 0 tokens for unmetered issues and months", async () => {
+  it("says 'not measured' instead of $0 or 0 tokens for unmetered issues and months", async () => {
     mockIssuesApi.listShipped.mockResolvedValue(feed([item("3", { usage: UNMETERED })]));
     await render();
-    expect(container.querySelector('[data-testid="shipped-usage"]')?.textContent).toBe("not metered yet");
-    expect(container.querySelector('[data-testid="shipped-month-total"]')?.textContent).toContain("not metered yet");
+    expect(container.querySelector('[data-testid="shipped-usage"]')?.textContent).toBe("not measured");
+    expect(container.querySelector('[data-testid="shipped-month-total"]')?.textContent).toContain("not measured");
     expect(container.textContent).not.toMatch(/\$0\.00|\b0 tokens/);
   });
 

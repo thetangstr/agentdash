@@ -104,12 +104,12 @@ describe("ReadableToolGroup redaction", () => {
     act(() => root.render(<ReadableToolGroup items={[item("a", "Bash", { command }, "completed", output)]} />));
     // Collapsed: label and the first output line.
     expect(container.querySelector("[data-readable-tool] [role=button]")?.getAttribute("title")).toBe("Ran curl");
-    expect(container.textContent).toContain("OPENAI_API_KEY=•••• hidden");
+    expect(container.textContent).toContain("OPENAI_API_KEY=•••• (hidden)");
     expect(container.innerHTML).not.toContain(SECRET);
 
     act(() => container.querySelector<HTMLElement>("[data-readable-tool] [role=button]")!.click());
-    expect(container.textContent).toContain("Authorization: Bearer •••• hidden");
-    expect(container.textContent).toContain('"apiKey":"•••• hidden"');
+    expect(container.textContent).toContain("Authorization: Bearer •••• (hidden)");
+    expect(container.textContent).toContain('"apiKey":"•••• (hidden)"');
     expect(container.innerHTML).not.toContain(SECRET);
   });
 
@@ -162,7 +162,7 @@ describe("readable transcript secrets behind instance paths", () => {
       ),
     );
     expect(container.textContent).not.toContain("plainsecretvalue123456");
-    expect(container.textContent).toContain("API_KEY=•••• hidden");
+    expect(container.textContent).toContain("API_KEY=•••• (hidden)");
   });
 
   it("a message block never shows a secret that is a path basename", () => {
@@ -176,6 +176,6 @@ describe("readable transcript secrets behind instance paths", () => {
       ),
     );
     expect(container.textContent).not.toContain("plainsecretvalue123456");
-    expect(container.textContent).toContain("API_KEY=•••• hidden");
+    expect(container.textContent).toContain("API_KEY=•••• (hidden)");
   });
 });

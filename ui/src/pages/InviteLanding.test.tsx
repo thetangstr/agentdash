@@ -160,9 +160,13 @@ describe("InviteLandingPage", () => {
     expect(container.textContent).toContain("Message from inviter");
     expect(container.querySelector('[data-testid="invite-inline-auth"]')).not.toBeNull();
     expect(localStorage.getItem("paperclip:pending-invite-token")).toBe("pcp_invite_test");
+    // AgentDash (c4-polish): "an" before AgentDash, and the avatar holds its
+    // square inside the flex row instead of shrinking into a pill.
+    expect(container.textContent).toContain("Start with an AgentDash account");
     const inviteLogo = container.querySelector('img[alt="Acme Robotics logo"]');
     expect(inviteLogo).not.toBeNull();
     expect(inviteLogo?.className).toContain("object-contain");
+    expect(inviteLogo?.parentElement?.className).toContain("shrink-0");
     expect(container.querySelector('input[name="name"]')).not.toBeNull();
 
     const nameInput = container.querySelector('input[name="name"]') as HTMLInputElement | null;
@@ -370,6 +374,7 @@ describe("InviteLandingPage", () => {
     // onboarding — the access gate walks the invitee into that next.
     // PR #1017 review: it names the workspace, not a generic "the company".
     expect(container.textContent).toContain("You joined Acme Robotics");
+    expect(container.textContent).toContain("Go to your workspace");
     expect(container.textContent).not.toContain("Member onboarding destination");
 
     await act(async () => {
@@ -730,6 +735,65 @@ describe("InviteLandingPage", () => {
     expect(container.textContent).not.toContain("DASHBOARD");
     expect(container.textContent).toContain("already belongs to");
     expect(container.textContent).toContain("copy it and send it to them");
+  });
+
+  it("sends a member who revisits a used invite link into the app", async () => {
+    // Canary c4: reopening a consumed invite while signed in rendered
+    // "Opening company..." forever — the member redirect skipped anyone who
+    // arrived signed in. A consumed invite has nothing left to show.
+    getInviteMock.mockResolvedValue({
+      id: "invite-1",
+      companyId: "company-1",
+      companyName: "Acme Robotics",
+      companyLogoUrl: null,
+      companyBrandColor: "#114488",
+      inviteType: "company_join",
+      allowedJoinTypes: "both",
+      humanRole: "operator",
+      expiresAt: "2027-03-07T00:10:00.000Z",
+      inviteMessage: null,
+      joinRequestStatus: "approved",
+      joinRequestType: "human",
+    });
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: {
+        id: "user-1",
+        name: "Jane Example",
+        email: "jane@example.com",
+        image: null,
+      },
+    });
+    listCompaniesMock.mockResolvedValue([{ id: "company-1", name: "Acme Robotics" }]);
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+              <Route path="/" element={<div>DASHBOARD</div>} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("DASHBOARD");
+    expect(container.textContent).not.toContain("Opening company...");
+    expect(localStorage.getItem("paperclip:pending-invite-token")).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
   });
 
   it("falls back to the generated company icon when the invite logo fails to load", async () => {

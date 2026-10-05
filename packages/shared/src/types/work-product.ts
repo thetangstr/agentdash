@@ -57,7 +57,7 @@ export interface IssueWorkProduct {
 // AgentDash: UX-2 (#783) — the company-wide "Shipped" feed. A work product
 // joined to the issue it belongs to, the agent that produced it, and the
 // metered usage of every run on that issue. `usage.metered === false` means no
-// cost event was ever recorded for the issue: show "not metered yet", never 0.
+// cost event was ever recorded for the issue: show "not measured", never 0.
 export interface ShippedIssueUsage {
   metered: boolean;
   inputTokens: number;
