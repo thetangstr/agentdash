@@ -10,6 +10,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
+  issueWorkProducts,
   verdicts,
 } from "@paperclipai/db";
 import { notFound } from "../errors.js";
@@ -22,6 +23,7 @@ import type {
 } from "@paperclipai/shared";
 import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { redactRunLogText } from "./run-log-redaction.js";
+import { acceptedWorkProductCondition } from "./work-products.js";
 
 const DASHBOARD_RUN_ACTIVITY_DAYS = 14;
 const HARNESS_HEALTH_WINDOW_HOURS = 24;
@@ -380,6 +382,7 @@ export function dashboardService(db: Db) {
         {
           totalRuns: number;
           failedRuns: number;
+          agentIds: Set<string>;
           affectedAgents: Set<string>;
           latestFailureAt: Date | null;
           categories: Map<string, number>;
@@ -393,11 +396,13 @@ export function dashboardService(db: Db) {
         const adapter = harnessByAdapter.get(row.adapterType) ?? {
           totalRuns: 0,
           failedRuns: 0,
+          agentIds: new Set<string>(),
           affectedAgents: new Set<string>(),
           latestFailureAt: null,
           categories: new Map<string, number>(),
         };
         adapter.totalRuns += 1;
+        adapter.agentIds.add(row.agentId);
         const failed = row.status === "failed" || row.status === "timed_out";
         if (failed) {
           harnessFailedRuns += 1;
@@ -423,6 +428,10 @@ export function dashboardService(db: Db) {
             totalRuns: adapter.totalRuns,
             failedRuns: adapter.failedRuns,
             failureRatePercent,
+            // AgentDash (c4 trust): the hosted panel read "0 agents" beside a
+            // non-zero run count because only failing agents were counted.
+            // `agents` is every agent that ran in the window.
+            agents: adapter.agentIds.size,
             affectedAgents: adapter.affectedAgents.size,
             latestFailureAt: adapter.latestFailureAt?.toISOString() ?? null,
             topFailureCategory: topCategory(adapter.categories),
@@ -493,11 +502,51 @@ export function dashboardService(db: Db) {
         }
       }
 
+      // AgentDash (c4 trust): the verdicts table only records REVIEWER
+      // verdicts. When the owner accepts a deliverable or sends it back, that
+      // decision lands on issue_work_products.status — so Health showed
+      // "0/0 accepted", "successful runs pending review", and "done tasks
+      // without verdicts" for work the owner already signed off. Fold the
+      // owner decision per issue into the same map, using the SAME
+      // acceptance rule Shipped uses (acceptedWorkProductCondition, which
+      // also counts pre-2026-10-02 deliverables on a done issue): accepted
+      // wins, otherwise a deliverable still sent back counts as a revision.
+      // A live reviewer verdict stays authoritative when no owner decision
+      // exists.
+      const taskQualityIssueIdList = Array.from(taskQualityIssueIds);
+      const taskQualityProductRows = taskQualityIssueIdList.length > 0
+        ? await db
+            .select({
+              issueId: issueWorkProducts.issueId,
+              accepted: sql<boolean>`bool_or(${acceptedWorkProductCondition()})`,
+              sentBack: sql<boolean>`bool_or(${issueWorkProducts.status} = 'changes_requested')`,
+              latestAt: sql<Date>`max(${issueWorkProducts.updatedAt})`,
+            })
+            .from(issueWorkProducts)
+            .innerJoin(issues, eq(issueWorkProducts.issueId, issues.id))
+            .where(
+              and(
+                eq(issueWorkProducts.companyId, companyId),
+                inArray(issueWorkProducts.issueId, taskQualityIssueIdList),
+              ),
+            )
+            .groupBy(issueWorkProducts.issueId)
+        : [];
+
+      const latestDecisionByIssueId = new Map(latestVerdictByIssueId);
+      for (const row of taskQualityProductRows) {
+        if (row.accepted) {
+          latestDecisionByIssueId.set(row.issueId, { outcome: "passed", createdAt: row.latestAt });
+        } else if (row.sentBack) {
+          latestDecisionByIssueId.set(row.issueId, { outcome: "revision_requested", createdAt: row.latestAt });
+        }
+      }
+
       let passedIssues = 0;
       let failedIssues = 0;
       let revisionRequestedIssues = 0;
       let escalatedIssues = 0;
-      for (const verdict of latestVerdictByIssueId.values()) {
+      for (const verdict of latestDecisionByIssueId.values()) {
         if (verdict.outcome === "passed") passedIssues += 1;
         else if (verdict.outcome === "failed") failedIssues += 1;
         else if (verdict.outcome === "revision_requested") revisionRequestedIssues += 1;
@@ -508,7 +557,7 @@ export function dashboardService(db: Db) {
         definitionOfDoneSchema.safeParse(row.definitionOfDone).success
       ).length;
       const unreviewedDoneIssues = taskQualityIssueRows.filter(
-        (row) => row.status === "done" && !latestVerdictByIssueId.has(row.id),
+        (row) => row.status === "done" && !latestDecisionByIssueId.has(row.id),
       ).length;
 
       const taskQualityCostRows = await db
@@ -553,7 +602,7 @@ export function dashboardService(db: Db) {
         );
       const greenRunsPendingReview = taskQualityRunRows.filter((row) => {
         const issueId = readIssueIdFromRunContext(row.contextSnapshot);
-        return Boolean(issueId && taskQualityIssueIds.has(issueId) && !latestVerdictByIssueId.has(issueId));
+        return Boolean(issueId && taskQualityIssueIds.has(issueId) && !latestDecisionByIssueId.has(issueId));
       }).length;
       const greenRunsWithOpenTasks = taskQualityRunRows.filter((row) => {
         const issueId = readIssueIdFromRunContext(row.contextSnapshot);

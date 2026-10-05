@@ -394,8 +394,10 @@ export function workflowRecommendationService(db: Db) {
 
     await logActivity(db, {
       companyId: candidate.companyId,
-      actorType: "user",
-      actorId: "review_agent",
+      // AgentDash (c4 trust, review #1026): the service raises the suggestion —
+      // nobody clicked anything, so it must not read as a person's doing.
+      actorType: "system",
+      actorId: "workflow_recommendations",
       action: "workflow_recommendation.raised",
       entityType: "workflow_recommendation",
       entityId: created.id,
@@ -531,8 +533,10 @@ export function workflowRecommendationService(db: Db) {
 
     await logActivity(db, {
       companyId: settled.companyId,
-      actorType: "user",
-      actorId: "approval",
+      // AgentDash (c4 trust, review #1026): the settle hook records the
+      // approval's outcome; the decision itself is already on the approval row.
+      actorType: "system",
+      actorId: "workflow_recommendations",
       action: `workflow_recommendation.${status}`,
       entityType: "workflow_recommendation",
       entityId: settled.id,

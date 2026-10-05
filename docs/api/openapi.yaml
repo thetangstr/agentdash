@@ -4481,6 +4481,8 @@ components:
           type: number
         failureRatePercent:
           type: number
+        agents:
+          type: number
         affectedAgents:
           type: number
         latestFailureAt:
@@ -4497,6 +4499,7 @@ components:
         - totalRuns
         - failedRuns
         - failureRatePercent
+        - agents
         - affectedAgents
         - latestFailureAt
         - topFailureCategory

@@ -674,6 +674,66 @@ describe("agent routes adapter validation", () => {
     );
   });
 
+  // AgentDash (c4 trust): a page load re-checks preflight in the background —
+  // those silent checks must not write activity rows credited to whoever is
+  // merely looking at the page. An explicit Re-check still logs.
+  it("skips the activity row for background preflight checks but keeps it for manual ones", async () => {
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(externalAdapter);
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Demo Agent",
+      urlKey: "demo-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "external_test",
+      adapterConfig: { model: "demo" },
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const app = await createApp();
+    mockLogActivity.mockClear();
+
+    const backgroundRes = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({ background: true }),
+    );
+    expect(backgroundRes.status, JSON.stringify(backgroundRes.body)).toBe(200);
+    // logActivity(db, entry) — the activity row is the second argument.
+    expect(
+      mockLogActivity.mock.calls.filter(
+        ([, entry]) => typeof entry?.action === "string" && entry.action.startsWith("agent.harness_preflight"),
+      ),
+    ).toHaveLength(0);
+
+    const manualRes = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/agents/11111111-1111-4111-8111-111111111111/harness-preflight")
+        .send({}),
+    );
+    expect(manualRes.status, JSON.stringify(manualRes.body)).toBe(200);
+    expect(
+      mockLogActivity.mock.calls.some(
+        ([, entry]) => entry?.action === "agent.harness_preflight_passed",
+      ),
+    ).toBe(true);
+  });
+
   it("passes the saved agent to the adapter's environment test (Hermes managed profiles need its id)", async () => {
     const { registerServerAdapter } = await import("../adapters/index.js");
     const seen: Array<Parameters<ServerAdapterModule["testEnvironment"]>[0]> = [];
@@ -1238,6 +1298,83 @@ describe("agent routes hermes model tiers", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
     expect(patch?.adapterConfig).toMatchObject({ model: "glm-5.3-flash", provider: "zai" });
+    expect(patch?.metadata).toMatchObject({ other: "kept" });
+    expect(patch?.metadata).not.toHaveProperty("modelTier");
+  });
+
+  it("PATCH /agents/:id on an unrelated adapterConfig field preserves the recorded tier with the switch off (review-1028 follow-up)", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { timeoutSec: 600 } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toMatchObject({ timeoutSec: 600, model: "deepseek-v4.1-flash" });
+    expect(patch?.metadata).toMatchObject({ modelTier: "low", other: "kept" });
+  });
+
+  it("PATCH /agents/:id resending the same model value preserves the recorded tier with the switch off", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.metadata).toMatchObject({ modelTier: "low" });
+  });
+
+  it("PATCH /agents/:id picking a custom model still clears the recorded tier with the switch off", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "glm-5.3-flash", provider: "zai" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.metadata).toMatchObject({ other: "kept" });
+    expect(patch?.metadata).not.toHaveProperty("modelTier");
+  });
+
+  it("PATCH /agents/:id switching away from hermes_local clears the recorded tier with the switch off", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(externalAdapter);
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterType: "external_test", adapterConfig: {} }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
     expect(patch?.metadata).toMatchObject({ other: "kept" });
     expect(patch?.metadata).not.toHaveProperty("modelTier");
   });

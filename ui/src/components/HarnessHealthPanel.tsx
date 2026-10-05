@@ -1,13 +1,42 @@
 import type { DashboardHarnessAdapterHealth, DashboardHarnessHealth, DashboardHarnessStatus } from "@paperclipai/shared";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { cn } from "../lib/utils";
 
-function formatAdapterType(value: string) {
-  return value.replace(/[_-]+/g, " ");
-}
+/**
+ * AgentDash (c4 trust): adapter keys are internal identifiers — "hermes
+ * local" in the hosted feed meant nothing to an owner. The registry names the
+ * harness the person actually picked at hire time.
+ */
+const formatAdapterType = getAdapterLabel;
+
+/**
+ * AgentDash (c4 trust, review #1026): failure categories are issue-linked
+ * tokens — "rate_limited" is not how an owner talks about a stopped run.
+ */
+const FAILURE_CATEGORY_LABELS: Record<string, string> = {
+  adapter_unavailable: "the agent tool wasn't running",
+  auth: "sign-in failed",
+  auth_expired: "the sign-in expired",
+  auth_failure: "sign-in failed",
+  cancelled: "stopped",
+  missing_credential: "a credential is missing",
+  model_unavailable: "the model wasn't available",
+  network_unreachable: "the network was unreachable",
+  permission_denied: "permission was denied",
+  process_crashed: "the agent process crashed",
+  protocol: "a protocol error",
+  quota_limit: "a usage limit was reached",
+  rate_limited: "a rate limit was reached",
+  runtime: "a runtime error",
+  timeout: "timed out",
+  unknown: "unknown",
+  workspace_unavailable: "the workspace was unavailable",
+};
 
 function formatCategory(value: string | null) {
-  return value ? value.replace(/[_-]+/g, " ") : "none";
+  if (!value) return "none";
+  return FAILURE_CATEGORY_LABELS[value] ?? value.replace(/[_-]+/g, " ");
 }
 
 function statusTone(status: DashboardHarnessStatus) {
@@ -36,8 +65,10 @@ function HarnessAdapterRow({ adapter }: { adapter: DashboardHarnessAdapterHealth
             {statusLabel(adapter.status)}
           </span>
         </div>
+        {/* AgentDash (c4 trust): "Top category: quota_limit" read as internal
+            jargon to a non-technical owner. */}
         <p className="mt-1 min-w-0 break-words text-[11px]">
-          Top category: <span className="font-mono">{formatCategory(adapter.topFailureCategory)}</span>
+          Most common failure: <span>{formatCategory(adapter.topFailureCategory)}</span>
           {adapter.latestFailureAt ? ` · Latest failure ${new Date(adapter.latestFailureAt).toLocaleString()}` : ""}
         </p>
       </div>
@@ -48,8 +79,8 @@ function HarnessAdapterRow({ adapter }: { adapter: DashboardHarnessAdapterHealth
         <span className="font-medium text-foreground">{adapter.failedRuns}</span>/{adapter.totalRuns} runs
       </div>
       <div className="tabular-nums">
-        <span className="font-medium text-foreground">{adapter.affectedAgents}</span>{" "}
-        {adapter.affectedAgents === 1 ? "agent" : "agents"}
+        <span className="font-medium text-foreground">{adapter.agents}</span>{" "}
+        {adapter.agents === 1 ? "agent" : "agents"}
       </div>
     </div>
   );
@@ -63,10 +94,10 @@ export function HarnessHealthPanel({ health }: { health: DashboardHarnessHealth 
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 shrink-0" />
-            <h3 className="text-sm font-medium">Harness health</h3>
+            <h3 className="text-sm font-medium">Run reliability</h3>
           </div>
           <p className="mt-1 text-xs opacity-80">
-            Last {health.windowHours}h agent-run failure rate by adapter.
+            How often agent runs failed in the last {health.windowHours} hours, by agent type.
           </p>
         </div>
         <div className="text-right tabular-nums">
@@ -79,7 +110,7 @@ export function HarnessHealthPanel({ health }: { health: DashboardHarnessHealth 
 
       {health.adapters.length === 0 ? (
         <p className="mt-3 rounded-md border border-current/15 bg-background/50 px-2 py-2 text-xs">
-          No completed harness runs in the last {health.windowHours}h.
+          No agent runs finished in the last {health.windowHours} hours.
         </p>
       ) : (
         <div className="mt-3">

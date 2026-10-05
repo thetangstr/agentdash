@@ -15,7 +15,11 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
-import { ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS, HIDDEN_FEED_ACTIVITY_ACTIONS } from "@paperclipai/shared";
+import {
+  ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
+  HIDDEN_FEED_ACTIVITY_ACTIONS,
+  IMPORTANT_SYSTEM_ACTIVITY_ACTIONS,
+} from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
 import { redactRunLogValue } from "./run-log-redaction.js";
@@ -387,7 +391,14 @@ export function activityService(db: Db) {
         conditions.push(filters.visibleWhere);
       }
       if (filters.includeSystem === false) {
-        conditions.push(ne(activityLog.actorType, "system"));
+        // AgentDash (c4 trust, review #1026): "hide system events" must not
+        // bury a budget hard-stop, a failed hire, or a system-opened approval —
+        // the same keep-list Home already applies to system actors.
+        const keepCriticalSystem = or(
+          ne(activityLog.actorType, "system"),
+          inArray(activityLog.action, [...IMPORTANT_SYSTEM_ACTIVITY_ACTIONS]),
+        );
+        if (keepCriticalSystem) conditions.push(keepCriticalSystem);
         conditions.push(notInArray(activityLog.action, COMPANY_FEED_HIDDEN_ACTIONS));
       }
 

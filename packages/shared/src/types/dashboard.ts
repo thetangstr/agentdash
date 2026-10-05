@@ -14,6 +14,12 @@ export interface DashboardHarnessAdapterHealth {
   totalRuns: number;
   failedRuns: number;
   failureRatePercent: number;
+  /**
+   * AgentDash (c4 trust): distinct agents with terminal runs in the window.
+   * `affectedAgents` counts only agents with failures, so an all-green adapter
+   * used to render "0 agents" beside a non-zero run count.
+   */
+  agents: number;
   affectedAgents: number;
   latestFailureAt: string | null;
   topFailureCategory: string | null;

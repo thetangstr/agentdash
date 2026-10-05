@@ -135,6 +135,23 @@ export function readAgentHarnessPreflightStatus(
   // before the `pass` branch: `status` records how the test went at the time,
   // not whether the agent still matches what was tested.
   if (verdict && !verdict.ready) {
+    // AgentDash (c4 trust): `not_passed` is a check of the CURRENT config that
+    // did not pass — a failure, not stale evidence. Mapping it to "stale" hid
+    // it entirely and made the page re-check in the background on every visit,
+    // which logged an activity row each time. Show the verdict's message and
+    // the failing checks. A non-blocking warn can never reach this branch
+    // (the evaluator only returns not_passed for fail, unknown status, or a
+    // blocking warn), so the state is always "fail".
+    if (verdict.reason === "not_passed") {
+      return {
+        state: "fail",
+        title: "Harness preflight failed",
+        message: verdict.message,
+        adapterType,
+        testedAt,
+        checks,
+      };
+    }
     return {
       state: "stale",
       title: "Harness preflight evidence is out of date",

@@ -211,13 +211,17 @@ function adapterChildEnv(): NodeJS.ProcessEnv {
  * resource package"). Hermes' own session line is dropped and its stdout is
  * included, trimmed and capped.
  */
-export function describeAdapterFailure(stdout: string, stderr: string): string {
+export function describeAdapterFailure(
+  stdout: string,
+  stderr: string,
+  adapterType: string | null | undefined,
+): string {
   const err = stderr
     .split("\n")
     .filter((line) => !/^\s*session_id:\s*\S+\s*$/.test(line))
     .join("\n")
     .trim();
-  const out = stripStatusLines(stdout).replace(/\s+/g, " ").trim();
+  const out = stripStatusLines(stdout, { adapterType }).replace(/\s+/g, " ").trim();
   const parts = [err.replace(/\s+/g, " "), out].filter((part) => part.length > 0);
   const sessionId = /session_id:\s*(\S+)/.exec(stderr)?.[1];
   if (parts.length === 0) return sessionId ? `no output (session ${sessionId})` : "no output";
@@ -232,6 +236,9 @@ function spawnWithTimeout(
   args: string[],
   stdinData?: string,
   timeoutMs = ADAPTER_TIMEOUT_MS,
+  // No Hermes default: a forgotten adapter falls back to the conservative
+  // strip rather than silently turning the aggressive rule on (review-1022).
+  adapterType?: string | null,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -268,7 +275,7 @@ function spawnWithTimeout(
         settled = true;
         clearTimeout(timer);
         if (code !== 0) {
-          reject(new Error(`[dispatch-llm] ${command} exited ${code}: ${describeAdapterFailure(stdout, stderr)}`));
+          reject(new Error(`[dispatch-llm] ${command} exited ${code}: ${describeAdapterFailure(stdout, stderr, adapterType)}`));
         } else {
           resolve(stdout.trim());
         }
@@ -294,9 +301,12 @@ function spawnWithTimeout(
  * conversation history.
  */
 // Leading status-line stripping lives in lib/status-lines.ts so the run-summary
-// merge path can apply the same rule without importing this module. Re-exported
-// under the old name for existing callers/tests.
-export { stripStatusLines as stripHermesChatter } from "../lib/status-lines.js";
+// merge path can apply the same rule without importing this module. The Hermes
+// binding adds the adapter-scoped ✗/→ glyph rule on top of the machine-signature
+// rules every adapter gets.
+export function stripHermesChatter(stdout: string): string {
+  return stripStatusLines(stdout, { adapterType: "hermes_local" });
+}
 
 // Message content is user-authored; a line that opens with a role header
 // would read as a new turn in the flattened prompt. A leading backslash
@@ -632,7 +642,10 @@ export async function dispatchLLM(
         const highTier = resolveHermesModelTier("high");
         hermesArgs.push("-m", highTier.model, "--provider", highTier.provider);
       }
-      const reply = stripStatusLines(await spawnWithTimeout(hermesCmd, hermesArgs));
+      const reply = stripStatusLines(
+        await spawnWithTimeout(hermesCmd, hermesArgs, undefined, ADAPTER_TIMEOUT_MS, "hermes_local"),
+        { adapterType: "hermes_local" },
+      );
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
         return runFallbackAdapter(input, adapter, "empty reply", options);
@@ -661,16 +674,13 @@ export async function dispatchLLM(
       // execution on the AgentDash host, one prompt injection away. Codex's own
       // agent runs pass `--dangerously-bypass-approvals-and-sandbox`; a chat
       // reply must not.
-      const raw = await spawnWithTimeout(codexCmd, [
-        "exec",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "--model",
-        model,
-        prompt,
-      ]);
+      const raw = await spawnWithTimeout(
+        codexCmd,
+        ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", model, prompt],
+        undefined,
+        ADAPTER_TIMEOUT_MS,
+        "codex_local",
+      );
       const parsed = parseCodexJsonl(raw);
       const reply = (parsed.summary ?? "").trim();
       if (!reply) {
@@ -691,7 +701,7 @@ export async function dispatchLLM(
     const prompt = buildFlatPrompt(input);
     logger.info({ adapter }, "[dispatch-llm] routing CoS reply through claude_local");
     try {
-      const reply = await spawnWithTimeout("claude", ["--print", "-"], prompt);
+      const reply = await spawnWithTimeout("claude", ["--print", "-"], prompt, ADAPTER_TIMEOUT_MS, "claude_local");
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] claude_local returned empty reply, using fallback");
         return runFallbackAdapter(input, adapter, "empty reply", options);

@@ -20,6 +20,7 @@ describe("HarnessHealthPanel", () => {
           totalRuns: 4,
           failedRuns: 3,
           failureRatePercent: 75,
+          agents: 2,
           affectedAgents: 2,
           latestFailureAt: "2026-05-29T16:00:00.000Z",
           topFailureCategory: "rate_limited",
@@ -29,11 +30,11 @@ describe("HarnessHealthPanel", () => {
 
     const html = renderToStaticMarkup(<HarnessHealthPanel health={health} />);
 
-    expect(html).toContain("Harness health");
+    expect(html).toContain("Run reliability");
     expect(html).toContain("60%");
-    expect(html).toContain("codex local");
+    expect(html).toContain("Codex (local)");
     expect(html).toContain("75%");
-    expect(html).toContain("rate limited");
+    expect(html).toContain("a rate limit was reached");
     expect(html).toContain(">2</span> agents");
   });
 
@@ -49,7 +50,7 @@ describe("HarnessHealthPanel", () => {
 
     const html = renderToStaticMarkup(<HarnessHealthPanel health={health} />);
 
-    expect(html).toContain("No completed harness runs");
-    expect(html).toContain("last 24h");
+    expect(html).toContain("No agent runs finished");
+    expect(html).toContain("last 24 hours");
   });
 });

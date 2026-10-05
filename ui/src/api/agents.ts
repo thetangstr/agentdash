@@ -234,8 +234,11 @@ export const agentsApi = {
       `/companies/${companyId}/adapters/${type}/test-environment`,
       data,
     ),
-  runHarnessPreflight: (id: string, companyId?: string) =>
-    api.post<AgentHarnessPreflightResponse>(agentPath(id, companyId, "/harness-preflight"), {}),
+  runHarnessPreflight: (id: string, companyId?: string, opts?: { background?: boolean }) =>
+    api.post<AgentHarnessPreflightResponse>(
+      agentPath(id, companyId, "/harness-preflight"),
+      opts?.background === true ? { background: true } : {},
+    ),
   invoke: (id: string, companyId?: string) => api.post<HeartbeatRun>(agentPath(id, companyId, "/heartbeat/invoke"), {}),
   wakeup: (
     id: string,
