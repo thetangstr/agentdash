@@ -4469,6 +4469,28 @@ components:
       required:
         - name
         - value
+    DashboardCosts:
+      type: object
+      properties:
+        monthSpendCents:
+          type: number
+        monthTokens:
+          type: number
+        monthRuns:
+          type: number
+        monthChatTurns:
+          type: number
+        monthBudgetCents:
+          type: number
+        monthUtilizationPercent:
+          type: number
+      required:
+        - monthSpendCents
+        - monthTokens
+        - monthRuns
+        - monthChatTurns
+        - monthBudgetCents
+        - monthUtilizationPercent
     DashboardHarnessAdapterHealth:
       type: object
       properties:
@@ -4591,27 +4613,9 @@ components:
             - blocked
             - done
         costs:
-          type: object
-          properties:
-            monthSpendCents:
-              type: number
-            monthTokens:
-              type: number
-            monthRuns:
-              type: number
-            monthChatTurns:
-              type: number
-            monthBudgetCents:
-              type: number
-            monthUtilizationPercent:
-              type: number
-          required:
-            - monthSpendCents
-            - monthTokens
-            - monthRuns
-            - monthChatTurns
-            - monthBudgetCents
-            - monthUtilizationPercent
+          anyOf:
+            - $ref: "#/components/schemas/DashboardCosts"
+            - type: "null"
         pendingApprovals:
           type: number
         budgets:
@@ -4678,11 +4682,17 @@ components:
         greenRunsWithOpenTasks:
           type: number
         issueLinkedSpendCents:
-          type: number
+          type:
+            - number
+            - "null"
         issueLinkedTokens:
-          type: number
+          type:
+            - number
+            - "null"
         issueLinkedCachedTokens:
-          type: number
+          type:
+            - number
+            - "null"
         spendPerAcceptedIssueCents:
           type:
             - number

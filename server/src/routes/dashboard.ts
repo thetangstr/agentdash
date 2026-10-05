@@ -8,6 +8,7 @@ import {
   agentVisibilityCondition,
   approvalVisibilityCondition,
   budgetPolicyVisibilityCondition,
+  canReadCompanySpend,
   issueVisibilityCondition,
   projectScopedVisibilityCondition,
   resolveAgentVisibility,
@@ -40,7 +41,25 @@ export function dashboardRoutes(db: Db) {
         ),
       ),
     });
-    res.json(summary);
+    // GH #918: month spend/tokens/utilization and the taskQuality spend
+    // figures are the same numbers the /costs routes gate on agents:create.
+    // A member who fails that check gets them OMITTED (null), not zeroed —
+    // "$0.00" would lie where "unknown" is the truth. Everything else stays.
+    res.json(
+      (await canReadCompanySpend(db, req, companyId))
+        ? summary
+        : {
+            ...summary,
+            costs: null,
+            taskQuality: {
+              ...summary.taskQuality,
+              issueLinkedSpendCents: null,
+              issueLinkedTokens: null,
+              issueLinkedCachedTokens: null,
+              spendPerAcceptedIssueCents: null,
+            },
+          },
+    );
   });
 
   // AgentDash: UX-3 (#784) — Home's "Working now": live runs with the issue
