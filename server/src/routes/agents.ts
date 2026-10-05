@@ -1051,8 +1051,25 @@ export function agentRoutes(
     }
   }
 
+  /**
+   * GH #886: configuration reads are the `agents:create` grant — the same
+   * question the list/detail routes ask (`actorCanReadConfigurationsForCompany`)
+   * before deciding to redact adapterConfig/runtimeConfig. These routes once
+   * delegated to `assertCanCreateAgentsForCompany`, whose every-member
+   * exception is for CREATION only (2026-08-16: "they can create their own
+   * agents"); credentials' home was readable one route over from the redacted
+   * list. Creation stays role-given; configuration reads stay a grant.
+   */
   async function assertCanReadConfigurations(req: Request, companyId: string) {
-    return assertCanCreateAgentsForCompany(req, companyId);
+    assertCompanyAccess(req, companyId);
+    if (await actorCanReadConfigurationsForCompany(req, companyId)) return;
+    if (req.actor.type === "board") {
+      throw forbidden(
+        "Missing permission: agents:create. Ask a company owner or instance admin to grant this " +
+          `permission via PATCH /api/companies/${companyId}/members/:memberId/permissions.`,
+      );
+    }
+    throw forbidden("Missing permission: agents:create");
   }
 
   async function getAccessibleAgent(req: Request, res: Response, id: string) {

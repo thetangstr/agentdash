@@ -227,7 +227,9 @@ describe("adapter test-environment host-execution authz", () => {
     delete process.env.AGENTDASH_ADAPTER_ENV_BYPASS;
     mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([]);
     mockCompanySkillService.resolveRequestedSkillKeys.mockResolvedValue([]);
-    // Members hold no agents:create grant; agents do.
+    // Members hold no agents:create grant by default; agents do. Cases that
+    // exercise the host-execution guard (not the GH #886 configuration-read
+    // gate in front of it) opt the member into the grant explicitly.
     mockAccessService.canUser.mockResolvedValue(false);
     mockAccessService.hasPermission.mockResolvedValue(true);
     mockLogActivity.mockResolvedValue(undefined);
@@ -290,6 +292,10 @@ describe("adapter test-environment host-execution authz", () => {
     ["agentCommand", { agent: "custom", agentCommand: "sh -c id" }],
     ["stateDir", { stateDir: "/var/tmp/evil" }],
   ])("403s a non-admin member who supplies %s, before secrets resolve or anything spawns", async (_label, adapterConfig) => {
+    // GH #886: the member holds agents:create so the case reaches the
+    // host-execution guard it is written to prove, not the earlier
+    // configuration-read gate.
+    mockAccessService.canUser.mockResolvedValue(true);
     const res = await probe(MEMBER, { model: "m", ...adapterConfig });
     expect(res.status, JSON.stringify(res.body)).toBe(403);
     expect(res.body.error).toMatch(/Instance admin/);
@@ -303,7 +309,18 @@ describe("adapter test-environment host-execution authz", () => {
     expect(testEnvironment).not.toHaveBeenCalled();
   });
 
-  it("lets a member probe the server-default binary (no host-execution overrides)", async () => {
+  it("403s a member without the agents:create grant before anything spawns", async () => {
+    // GH #886: the probe is a configuration surface — the every-member agent
+    // creation exception does not admit a member here.
+    const res = await probe(MEMBER, { model: "claude-sonnet" });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toMatch(/agents:create/);
+    expect(testEnvironment).not.toHaveBeenCalled();
+    expect(mockSecretService.resolveAdapterConfigForRuntime).not.toHaveBeenCalled();
+  });
+
+  it("lets a member holding agents:create probe the server-default binary (no host-execution overrides)", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
     const res = await probe(MEMBER, { model: "claude-sonnet", command: "", env: {}, extraArgs: [] });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(testEnvironment).toHaveBeenCalledTimes(1);
@@ -347,7 +364,10 @@ describe("hermes_local test-environment and the stored-config comparison", () =>
     // The gate runs BEFORE the bypass, so the bypass isolates the gate from
     // the real hermes binary.
     process.env.AGENTDASH_ADAPTER_ENV_BYPASS = "true";
-    mockAccessService.canUser.mockResolvedValue(false);
+    // GH #886: every caller in this block (owner or member) holds the
+    // agents:create grant — the cases exercise the stored-config comparison
+    // and host-execution rules, not the configuration-read gate in front.
+    mockAccessService.canUser.mockResolvedValue(true);
     mockAgentSvc.getById.mockImplementation(async (id: string) =>
       id === STORED_AGENT_ID
         ? { id, companyId: "company-1", adapterType: "hermes_local", adapterConfig: structuredClone(STORED_HERMES_CONFIG) }
