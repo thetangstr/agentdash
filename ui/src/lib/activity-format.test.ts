@@ -197,6 +197,8 @@ describe("deliverable review reasons", () => {
  * Regenerate with:
  *   grep -rhoE 'action: `?"[a-z][a-zA-Z0-9_.]+"' server/src --include="*.ts" | sort -u
  * (plus the template families below, expanded to their literal values).
+ * The scan below covers the same writes plus ternary, multi-line, and
+ * interpolated `action:` expressions.
  */
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   // agent lifecycle and configuration
@@ -401,6 +403,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.comment_cancelled",
   "issue.created",
   "issue.deleted",
+  "issue.document_created",
   "issue.document_deleted",
   "issue.document_restored",
   "issue.document_updated",
@@ -507,7 +510,8 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
  * Anything else the scan finds must land in SERVER_WRITTEN_ACTIVITY_ACTIONS.
  */
 const NON_ACTIVITY_ACTION_FIELDS = new Set([
-  "ask_next", // deep-interview step kind
+  "ask_next", // deep-interview step kinds (inside a prompt-doc string)
+  "force_crystallize",
   "skipped_cost_limit", // run-healer skip reasons
   "skipped_daily_limit",
   "skipped_low_confidence",
@@ -515,10 +519,78 @@ const NON_ACTIVITY_ACTION_FIELDS = new Set([
 ]);
 
 /**
- * Scan every `action: 'literal'` in production server code (tests excluded).
- * Quoted literals only — template actions stay in the curated list by hand.
+ * `action:` writes whose value is a named constant. The scan flags the
+ * identifier; each entry records the value it resolves to (null when the
+ * constant is not an activity action, e.g. an attestation scope).
  */
-function scanServerActionLiterals(): string[] {
+const CONSTANT_ACTION_WRITES = new Map<string, string | null>([
+  ["AUTHZ_REFUSED_ACTION", "authz.refused"], // services/activity-log.ts
+  ["ISSUE_RECOVERY_BUDGET_CLEARED_ACTION", "issue.recovery_budget_cleared"], // services/issue-recovery-budget.ts
+  ["DEMO_SCOPE", null], // services/handshake-demo.ts — attestation scope, not an activity action
+]);
+
+/**
+ * Interpolated action writes — `action: `foo.${x}`` — keyed by the static
+ * prefix before the first `${}`, valued by every action string the template
+ * can produce (verified at the write site, not inferred).
+ */
+const TEMPLATE_ACTION_FAMILIES = new Map<string, readonly string[]>([
+  // routes/execution-workspaces.ts and routes/projects.ts — the `action`
+  // route param is validated to start|stop|restart|run.
+  ["execution_workspace.runtime_", [
+    "execution_workspace.runtime_start",
+    "execution_workspace.runtime_stop",
+    "execution_workspace.runtime_restart",
+    "execution_workspace.runtime_run",
+  ]],
+  ["project.workspace_runtime_", [
+    "project.workspace_runtime_start",
+    "project.workspace_runtime_stop",
+    "project.workspace_runtime_restart",
+    "project.workspace_runtime_run",
+  ]],
+  // services/connector-send-execution.ts — result.outcome is
+  // succeeded|failed|outcome_unknown.
+  ["connector_send.", [
+    "connector_send.succeeded",
+    "connector_send.failed",
+    "connector_send.outcome_unknown",
+  ]],
+  // services/workflow-recommendations.ts — status is accepted|declined.
+  ["workflow_recommendation.", [
+    "workflow_recommendation.accepted",
+    "workflow_recommendation.declined",
+  ]],
+  // services/human-control/questions.ts — respond→answered,
+  // cancel→cancelled, anything else→created.
+  ["issue.thread_interaction_", [
+    "issue.thread_interaction_answered",
+    "issue.thread_interaction_cancelled",
+    "issue.thread_interaction_created",
+  ]],
+]);
+
+type ServerActionScan = {
+  literals: string[];
+  templatePrefixes: string[];
+  constantWrites: string[];
+};
+
+/**
+ * Scan every `action:` expression in production server code (tests excluded).
+ *
+ * The value is read until the next sibling property key (`name:` after a
+ * `,`, `{`, newline, or `;`) or a closing `}`/`]`/`;`, so multi-line
+ * ternaries contribute every quoted literal. Quoted literals that are
+ * comparison operands (`x === "lit"`, `"lit" === x`) and anything inside a
+ * template literal are scrubbed first — they are conditions or suffix arms,
+ * not actions. Interpolated templates contribute their static prefix (for
+ * TEMPLATE_ACTION_FAMILIES), found by looking forward from `action:` since
+ * `${}` braces can close the window mid-template. Member-expression values
+ * (`r.action`, `input.action`) forward already-written actions and are
+ * skipped; a SHOUTED identifier must resolve in CONSTANT_ACTION_WRITES.
+ */
+function scanServerActions(): ServerActionScan {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../server/src");
   const files: string[] = [];
   const walk = (dir: string) => {
@@ -532,14 +604,62 @@ function scanServerActionLiterals(): string[] {
     }
   };
   walk(root);
-  const found = new Set<string>();
-  const literal = /\baction:\s*['"`]([a-z][a-zA-Z0-9]*(?:[._][a-zA-Z0-9]+)+)['"`]/g;
+
+  const ACTION_KEY = /\baction\s*:/g;
+  const VALUE_END = /[,\n{;]\s*[\w$]+\s*:|[{}\];]|\]/g;
+  const HAS_BOUNDARY = /[,\n{;]\s*[\w$]+\s*:|[{}\];]|\]/;
+  const QUOTED_LITERAL = /['"`]([a-z][a-zA-Z0-9]*(?:[._][a-zA-Z0-9]+)+)['"`]/g;
+  const COMPARISON_OPERAND =
+    /(["'`])([^"'`\n]*)\1\s*(?:!==?|===?)|(?:!==?|===?)\s*(["'`])([^"'`\n]*)\3/g;
+  const ACTION_PREFIX = /^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*[._]$/;
+  const ACTION_LITERAL = /^[a-z][a-zA-Z0-9]*(?:[._][a-zA-Z0-9]+)+$/;
+  const SHOUTED_CONST = /^\s*([A-Z][A-Z0-9_]+)\b/;
+
+  const literals = new Set<string>();
+  const templatePrefixes = new Set<string>();
+  const constantWrites = new Set<string>();
+
   for (const file of files) {
-    for (const match of readFileSync(file, "utf8").matchAll(literal)) {
-      if (!NON_ACTIVITY_ACTION_FIELDS.has(match[1])) found.add(match[1]);
+    const content = readFileSync(file, "utf8");
+    for (const key of content.matchAll(ACTION_KEY)) {
+      const start = key.index + key[0].length;
+      VALUE_END.lastIndex = start;
+      const end = VALUE_END.exec(content)?.index;
+      const value = content.slice(start, end ?? content.length);
+
+      // Interpolated write: the first template on the value (or in a ternary
+      // arm) — any boundary before the backtick means it belongs to a later
+      // property, not this action.
+      const tail = content.slice(start, start + 800);
+      const backtick = tail.indexOf("`");
+      if (backtick !== -1 && !HAS_BOUNDARY.test(tail.slice(0, backtick))) {
+        const close = tail.indexOf("`", backtick + 1);
+        const body = tail.slice(backtick + 1, close === -1 ? undefined : close);
+        if (body.includes("${")) {
+          const prefix = body.slice(0, body.indexOf("${"));
+          if (ACTION_PREFIX.test(prefix)) templatePrefixes.add(prefix);
+        } else if (ACTION_LITERAL.test(body) && !NON_ACTIVITY_ACTION_FIELDS.has(body)) {
+          literals.add(body); // `action: `pure literal``
+        }
+      }
+
+      const scrubbed = value
+        .replace(COMPARISON_OPERAND, " ")
+        .replace(/`[^`]*`/g, " ")
+        .replace(/`[^`]*$/g, " "); // window may end mid-template
+      for (const literal of scrubbed.matchAll(QUOTED_LITERAL)) {
+        if (!NON_ACTIVITY_ACTION_FIELDS.has(literal[1])) literals.add(literal[1]);
+      }
+      const constant = value.match(SHOUTED_CONST);
+      if (constant) constantWrites.add(constant[1]);
     }
   }
-  return [...found].sort();
+
+  return {
+    literals: [...literals].sort(),
+    templatePrefixes: [...templatePrefixes].sort(),
+    constantWrites: [...constantWrites].sort(),
+  };
 }
 
 describe("every server-written action has a plain verb", () => {
@@ -552,9 +672,52 @@ describe("every server-written action has a plain verb", () => {
     expect(verb).not.toMatch(/_/);
   });
 
-  it("the catalogue covers every action literal in server code", () => {
+  it("the catalogue covers every action the server writes — literal, ternary, or interpolated", () => {
     const known = new Set<string>(SERVER_WRITTEN_ACTIVITY_ACTIONS);
-    expect(scanServerActionLiterals().filter((action) => !known.has(action))).toEqual([]);
+    const scan = scanServerActions();
+
+    // Quoted literals — direct writes and every arm of a ternary.
+    expect(scan.literals.filter((action) => !known.has(action))).toEqual([]);
+
+    // Interpolated writes surface as their static prefix; every value the
+    // template can produce must be catalogued.
+    expect(scan.templatePrefixes.filter((prefix) => !TEMPLATE_ACTION_FAMILIES.has(prefix))).toEqual([]);
+    for (const [prefix, actions] of TEMPLATE_ACTION_FAMILIES) {
+      expect(
+        actions.filter((action) => !known.has(action)),
+        `${prefix}… expansions must all be catalogued`,
+      ).toEqual([]);
+    }
+
+    // Named-constant writes resolve to an action (or a verified non-activity
+    // value) — the identifier itself is what the scan can see.
+    expect(scan.constantWrites.filter((name) => !CONSTANT_ACTION_WRITES.has(name))).toEqual([]);
+    for (const [name, action] of CONSTANT_ACTION_WRITES) {
+      if (action !== null) expect(known.has(action), `${name} → ${action}`).toBe(true);
+    }
+  });
+
+  it("sees the write shapes a literal-only regex misses", () => {
+    const scan = scanServerActions();
+    // Ternary arms — including multi-line ternaries and a call in the
+    // condition — all resolve to literal action strings.
+    for (const action of [
+      "issue.document_created", // issues.ts: result.created ? created : updated
+      "agent.governance_ceiling_updated", // agent-governance.ts: multi-line ternary
+      "agent.harness_preflight_failed", // agents.ts: isBlockingPreflightResult() ? … : …
+      "issue.thread_interaction_rejected", // issues.ts: ternary across lines
+    ]) {
+      expect(scan.literals).toContain(action);
+    }
+    // Interpolated writes surface as the template's static prefix.
+    for (const prefix of TEMPLATE_ACTION_FAMILIES.keys()) {
+      expect(scan.templatePrefixes).toContain(prefix);
+    }
+    // Condition operands are not actions — "owner_ceiling" compares the
+    // governance target, "expired" the interaction status.
+    expect(scan.literals).not.toContain("owner_ceiling");
+    expect(scan.literals).not.toContain("expired");
+    expect(scan.constantWrites).toContain("AUTHZ_REFUSED_ACTION");
   });
 });
 

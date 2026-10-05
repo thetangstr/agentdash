@@ -146,7 +146,7 @@ describe("ActivityRow", () => {
     expect(container.textContent).not.toContain("AgentDash");
   });
 
-  it("renders reference chips only on issue.updated rows", () => {
+  it("renders reference chips on issue.updated and issue.comment_added rows only", () => {
     const details = {
       removedReferencedIssues: [{ id: "i2", identifier: "ACM-2", title: "Other" }],
     };
@@ -157,7 +157,20 @@ describe("ActivityRow", () => {
     expect(container.textContent).toContain("Removed references");
     expect(container.textContent).toContain("updated references");
 
-    const other = rowEvent("issue.comment_added", details);
+    // A comment that adds or removes issue references carries the same diff —
+    // the chips stay, but no stray "Removed references …" summary line returns.
+    const commented = rowEvent("issue.comment_added", {
+      ...details,
+      bodySnippet: "Picking this up",
+    });
+    act(() =>
+      root.render(<ActivityRow event={commented} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("Removed references");
+    expect(container.textContent).toContain("ACM-2");
+    expect(container.textContent).not.toContain("Removed references ACM-2");
+
+    const other = rowEvent("agent.updated", details);
     act(() =>
       root.render(<ActivityRow event={other} agentMap={AGENTS} entityNameMap={new Map()} />),
     );

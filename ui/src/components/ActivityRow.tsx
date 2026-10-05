@@ -90,12 +90,15 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
   const actorAvatarUrl = systemEvent ? null : userProfile?.image ?? null;
 
   const stacked = layout === "stacked";
-  // AgentDash (c4 trust, review #1026): the added/removed chips belong to
-  // issue.updated only — rendered unconditionally they surfaced as a stray
+  // AgentDash (c4 trust, review #1026): the added/removed chips only belong to
+  // rows whose details can carry a reference diff — issue.updated and
+  // issue.comment_added. Rendered unconditionally they surfaced as a stray
   // "Removed references" line under unrelated rows. They render their own
   // issue links, so they must sit OUTSIDE the row link (no nested <a>).
   const referenceSummary =
-    event.action === "issue.updated" ? <IssueReferenceActivitySummary event={event} /> : null;
+    event.action === "issue.updated" || event.action === "issue.comment_added"
+      ? <IssueReferenceActivitySummary event={event} />
+      : null;
   const inner = stacked ? (
     <div className="space-y-1" data-testid="activity-row-stacked">
       <p className="min-w-0 break-words">
