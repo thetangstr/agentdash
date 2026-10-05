@@ -1,6 +1,9 @@
 import express from "express";
 import request from "supertest";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 vi.mock("../services/workforce.js", () => ({ workforceService: () => ({ ensureSkillsInstalled: vi.fn() }) }));
 
@@ -1256,6 +1259,197 @@ describe("POST /api/onboarding/confirm-plan", () => {
     expect(res.body.details?.repair).toEqual(expect.any(String));
     expect(res.body.details?.agentIds).toEqual(["agent-2"]);
     expect(mockApprovalCreate).not.toHaveBeenCalled();
+  });
+
+  // AgentDash (cos-followups-2 item 2): a retry that finds every hire already
+  // waiting on an open approval filed nothing — reposting the CoS notice on
+  // every retry spams the thread.
+  it("posts the CoS approval notice once across retries that file nothing new", async () => {
+    const planPayload = {
+      rationale: "one hire",
+      agents: [
+        { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test"], kpis: ["green"] },
+      ],
+      alignmentToShortTerm: "s",
+      alignmentToLongTerm: "l",
+    };
+    mockAgents.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "c1",
+      name: "Quinn",
+      status: "pending_approval",
+      metadata: {},
+    });
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+    // First retry: mid-materialization with no open approval — files one and
+    // posts the notice. Second: phase is ready and the approval is open —
+    // nothing repaired, so nothing is reposted.
+    mockCosState.get
+      .mockResolvedValueOnce({ conversationId: "conv1", phase: "materializing" })
+      .mockResolvedValue({ conversationId: "conv1", phase: "ready" });
+    mockListPendingHireApprovals
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ id: "approval-retry" }]);
+    mockApprovalCreate.mockImplementation(async (_companyId: string, data: any) => ({ id: "approval-retry", type: data.type }));
+
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{
+          id: "conv1",
+          companyId: "c1",
+          metadata: { agentdashAcceptedHires: { "plan:msg1": { attemptId: "a1", agentIds: ["agent-1"] } } },
+        }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+        // The second request re-reads the plan card; the conversation row is
+        // cached by the stub from the first request.
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+      { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: true }] },
+    );
+
+    const first = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+    expect(first.status).toBe(200);
+    expect(mockApprovalCreate).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+
+    const second = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+    expect(second.status).toBe(200);
+    expect(second.body.approvalIds).toEqual(["approval-retry"]);
+    expect(mockApprovalCreate).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // AgentDash (review-1028, items 1 + 11): the gated-hire approval card
+  // carries the tier+model the server resolved — only when the opt-in switch
+  // is on. With it off the payload stamps nothing, matching pre-tier cards.
+  it("stamps the resolved tier+model on each gated hire's approval payload when tiers are on", async () => {
+    const savedTiers = process.env.AGENTDASH_HERMES_MODEL_TIERS;
+    const savedProfiles = process.env.HERMES_PROFILES_DIR;
+    const savedRoot = process.env.AGENTDASH_HERMES_ROOT;
+    const savedTemplate = process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "on";
+    process.env.HERMES_PROFILES_DIR = mkdtempSync(join(tmpdir(), "hermes-tiers-confirm-"));
+    delete process.env.AGENTDASH_HERMES_ROOT;
+    delete process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+    try {
+      mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+      mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+        id: `agent-${data.name}`,
+        companyId,
+        name: data.name,
+        role: data.role,
+        title: data.title ?? null,
+        reportsTo: data.reportsTo ?? null,
+        adapterType: data.adapterType,
+        pausedAt: data.pausedAt,
+        adapterConfig: {},
+      }));
+      let approvalCount = 0;
+      mockApprovalCreate.mockImplementation(async (_companyId: string, data: any) => ({
+        id: `approval-${++approvalCount}`,
+        type: data.type,
+      }));
+
+      const planPayload = {
+        rationale: "lead + ops",
+        agents: [
+          { role: "engineering_lead", name: "Ellie", adapterType: "hermes_local", responsibilities: ["own dashboard"], kpis: ["ship Q3"] },
+          { role: "qa", name: "Quinn", adapterType: "hermes_local", responsibilities: ["test nightly"], kpis: ["zero P0 escapes"] },
+        ],
+        alignmentToShortTerm: "ships v2",
+        alignmentToLongTerm: "lays groundwork",
+      };
+      const app = buildApp(
+        { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+        [
+          [{ id: "conv1", companyId: "c1" }],
+          [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+        ],
+        { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: true }] },
+      );
+
+      const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+      expect(res.status).toBe(201);
+      expect(mockApprovalCreate).toHaveBeenCalledTimes(2);
+      expect(mockApprovalCreate).toHaveBeenNthCalledWith(
+        1,
+        "c1",
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            modelTier: "high",
+            model: "qwen3.8-max",
+          }),
+        }),
+      );
+      expect(mockApprovalCreate).toHaveBeenNthCalledWith(
+        2,
+        "c1",
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            modelTier: "low",
+            model: "deepseek-v4.1-flash",
+          }),
+        }),
+      );
+    } finally {
+      if (savedTiers === undefined) delete process.env.AGENTDASH_HERMES_MODEL_TIERS;
+      else process.env.AGENTDASH_HERMES_MODEL_TIERS = savedTiers;
+      rmSync(process.env.HERMES_PROFILES_DIR!, { recursive: true, force: true });
+      if (savedProfiles === undefined) delete process.env.HERMES_PROFILES_DIR;
+      else process.env.HERMES_PROFILES_DIR = savedProfiles;
+      if (savedRoot === undefined) delete process.env.AGENTDASH_HERMES_ROOT;
+      else process.env.AGENTDASH_HERMES_ROOT = savedRoot;
+      if (savedTemplate === undefined) delete process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+      else process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE = savedTemplate;
+    }
+  });
+
+  it("stamps no tier on the approval payload when the switch is off — pre-tier cards", async () => {
+    const savedTiers = process.env.AGENTDASH_HERMES_MODEL_TIERS;
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    try {
+      mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff", name: "CoS" }]);
+      mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+        id: "agent-1",
+        companyId,
+        name: data.name,
+        role: data.role,
+        title: data.title ?? null,
+        reportsTo: data.reportsTo ?? null,
+        adapterType: data.adapterType,
+        pausedAt: data.pausedAt,
+        adapterConfig: {},
+      }));
+      mockApprovalCreate.mockImplementation(async (_companyId: string, data: any) => ({ id: "approval-1", type: data.type }));
+
+      const planPayload = {
+        rationale: "one hire",
+        agents: [
+          { role: "engineering_lead", name: "Ellie", adapterType: "hermes_local", responsibilities: ["own dashboard"], kpis: ["ship"] },
+        ],
+        alignmentToShortTerm: "s",
+        alignmentToLongTerm: "l",
+      };
+      const app = buildApp(
+        { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+        [
+          [{ id: "conv1", companyId: "c1" }],
+          [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+        ],
+        { companyRows: [{ id: "c1", requireBoardApprovalForNewAgents: true }] },
+      );
+
+      const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+      expect(res.status).toBe(201);
+      expect(mockApprovalCreate).toHaveBeenCalledTimes(1);
+      const payload = mockApprovalCreate.mock.calls[0]?.[1]?.payload as Record<string, unknown>;
+      expect(payload).not.toHaveProperty("modelTier");
+      expect(payload).not.toHaveProperty("model");
+    } finally {
+      if (savedTiers === undefined) delete process.env.AGENTDASH_HERMES_MODEL_TIERS;
+      else process.env.AGENTDASH_HERMES_MODEL_TIERS = savedTiers;
+    }
   });
 });
 

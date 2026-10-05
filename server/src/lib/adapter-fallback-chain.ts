@@ -8,11 +8,15 @@ import { logger } from "../middleware/logger.js";
  * primary adapter fails, written as comma-separated `adapter[:model]`
  * entries, e.g.:
  *
- *   AGENTDASH_FALLBACK_CHAIN=hermes_local:k3,hermes_local:glm-5.3
+ *   AGENTDASH_FALLBACK_CHAIN=hermes_local:qwen3.8-max,hermes_local:deepseek-v4.1-flash
  *
  * Two hops may name the same adapter with different models — that is the
- * point: "Kimi K3 via Hermes, then GLM via Hermes" is one adapter, two hops.
- * A hop without a model runs the adapter on its own configured default.
+ * point: "Qwen 3.8 Max via Hermes, then DeepSeek V4.1 Flash via Hermes" is
+ * one adapter, two hops (the shipped high–low tier pair). A hop whose model
+ * is a tier model is dispatched with that tier's provider too, so the pair
+ * above lands on the token plan, not on Hermes' own default provider.
+ * A hop without a model runs the adapter on its own configured default —
+ * it never inherits the high-tier default the PRIMARY call gets.
  *
  * The chain is read from the environment on every call, like
  * AGENTDASH_MK_INVITE_CODES, so an operator can change it with an env edit

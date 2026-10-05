@@ -1,5 +1,8 @@
 import express from "express";
 import request from "supertest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerAdapterModule } from "../adapters/index.js";
 
@@ -952,5 +955,350 @@ describe("agent routes adapter validation", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(422);
     expect(String(res.body.error ?? res.body.message ?? "")).toContain(`Unknown adapter type: ${missingAdapterType}`);
+  });
+});
+
+// AgentDash (review-1028, items 1/3/5 + 11): route-level coverage for the
+// opt-in model tiers. POST /agents, POST /agent-hires and PATCH /agents/:id
+// all funnel through applyCreateDefaultsByAdapterType + the instance gate —
+// these exercise the real route handlers end to end with the BYOK marker
+// path pointed at a temp dir.
+describe("agent routes hermes model tiers", () => {
+  let profilesDir: string;
+  const ENV_KEYS = [
+    "AGENTDASH_HERMES_MODEL_TIERS",
+    "HERMES_PROFILES_DIR",
+    "AGENTDASH_HERMES_ROOT",
+    "AGENTDASH_HERMES_PROFILE_TEMPLATE",
+  ] as const;
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(async () => {
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
+    vi.resetModules();
+    vi.doUnmock("../routes/agents.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([]);
+    mockCompanySkillService.resolveRequestedSkillKeys.mockResolvedValue([]);
+    mockAccessService.canUser.mockResolvedValue(true);
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    mockAccessService.ensureMembership.mockResolvedValue(undefined);
+    mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
+    mockLogActivity.mockResolvedValue(undefined);
+    mockAgentInstructionsService.materializeManagedBundle.mockImplementation(
+      async (agent: { adapterConfig?: unknown }) => ({
+        bundle: {},
+        adapterConfig: { ...((agent.adapterConfig ?? {}) as Record<string, unknown>) },
+      }),
+    );
+    mockAgentService.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: String(input.name ?? "Agent"),
+      urlKey: "agent",
+      role: String(input.role ?? "general"),
+      title: (input.title as string | null) ?? null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: String(input.adapterType ?? "process"),
+      adapterConfig: (input.adapterConfig as Record<string, unknown> | undefined) ?? {},
+      runtimeConfig: (input.runtimeConfig as Record<string, unknown> | undefined) ?? {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: (input.metadata as Record<string, unknown> | null | undefined) ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+    mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Hermes Agent",
+      urlKey: "hermes-agent",
+      role: "engineer",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "hermes_local",
+      adapterConfig: (patch.adapterConfig as Record<string, unknown> | undefined) ?? {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: (patch.metadata as Record<string, unknown> | null | undefined) ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Hermes Agent",
+      urlKey: "hermes-agent",
+      role: "engineer",
+      title: "Backend Engineer",
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "hermes_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    profilesDir = mkdtempSync(join(tmpdir(), "hermes-tiers-routes-"));
+    process.env.HERMES_PROFILES_DIR = profilesDir;
+    delete process.env.AGENTDASH_HERMES_ROOT;
+    delete process.env.AGENTDASH_HERMES_PROFILE_TEMPLATE;
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "on";
+  });
+
+  afterEach(async () => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    rmSync(profilesDir, { recursive: true, force: true });
+  });
+
+  function createCallArgs() {
+    return mockAgentService.create.mock.calls.map(([, input]: unknown[]) => input as Record<string, unknown>);
+  }
+
+  it("POST /agents stamps the role's tier on a modelless hermes_local agent", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({ name: "Cos", role: "chief_of_staff", adapterType: "hermes_local", adapterConfig: {} }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig).toMatchObject({
+      model: "qwen3.8-max",
+      provider: "alibaba-token-plan-cn",
+    });
+    expect(input?.metadata).toMatchObject({ modelTier: "high" });
+  });
+
+  it("POST /agents maps an ops-role hire to the low tier", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({ name: "Eng", role: "engineer", title: "Backend Engineer", adapterType: "hermes_local" }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
+    expect(input?.metadata).toMatchObject({ modelTier: "low" });
+  });
+
+  it("POST /agents maps a pm with a non-leadership title to low (item 4)", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({ name: "Coord", role: "pm", title: "Project Coordinator", adapterType: "hermes_local" }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
+    expect(input?.metadata).toMatchObject({ modelTier: "low" });
+  });
+
+  it("POST /agents never overwrites an explicit model", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({
+          name: "Zai",
+          role: "ceo",
+          adapterType: "hermes_local",
+          adapterConfig: { model: "glm-5.3-flash", provider: "zai" },
+        }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig).toEqual({ model: "glm-5.3-flash", provider: "zai" });
+  });
+
+  it("POST /agents keeps an explicit non-tier provider whole — no tier model either (item 3)", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({
+          name: "Byop",
+          role: "ceo",
+          adapterType: "hermes_local",
+          adapterConfig: { provider: "zai" },
+        }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig).toEqual({ provider: "zai" });
+  });
+
+  it("POST /agents applies nothing with the switch off — the pre-tier behaviour", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({ name: "Cos", role: "chief_of_staff", adapterType: "hermes_local", adapterConfig: {} }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig ?? {}).not.toHaveProperty("model");
+    expect(input?.adapterConfig ?? {}).not.toHaveProperty("provider");
+  });
+
+  it("POST /agents applies nothing on a BYOK box even with the switch on", async () => {
+    mkdirSync(join(profilesDir, "agentdash"), { recursive: true });
+    writeFileSync(
+      join(profilesDir, "agentdash", "agentdash-provider.json"),
+      JSON.stringify({ provider: "zai", model: "glm-5.3-flash" }),
+    );
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({ name: "Cos", role: "chief_of_staff", adapterType: "hermes_local", adapterConfig: {} }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig ?? {}).not.toHaveProperty("model");
+  });
+
+  it("POST /agent-hires stamps the tier through the same funnel", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agent-hires")
+        .send({ name: "Cos", role: "chief_of_staff", adapterType: "hermes_local", adapterConfig: {} }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [input] = createCallArgs();
+    expect(input?.adapterConfig).toMatchObject({
+      model: "qwen3.8-max",
+      provider: "alibaba-token-plan-cn",
+    });
+    expect(input?.metadata).toMatchObject({ modelTier: "high" });
+  });
+
+  it("PATCH /agents/:id on an unrelated adapterConfig field does NOT move the agent onto a tier (item 5)", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { cwd: "/tmp/work" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toMatchObject({ cwd: "/tmp/work" });
+    expect(patch?.adapterConfig).not.toHaveProperty("model");
+    expect(patch?.adapterConfig).not.toHaveProperty("provider");
+  });
+
+  it("PATCH /agents/:id clearing the model applies the tier (item 5)", async () => {
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "custom-model" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toMatchObject({
+      model: "deepseek-v4.1-flash",
+      provider: "alibaba-token-plan-cn",
+    });
+    expect(patch?.metadata).toMatchObject({ modelTier: "low" });
+  });
+
+  it("PATCH /agents/:id clearing the model on an explicit non-tier provider keeps the provider (items 3+5)", async () => {
+    // The two rules collide here: the model was cleared (item 5 says apply
+    // the tier) but the agent's provider is a person's explicit non-tier
+    // choice (item 3 says leave it whole). The provider wins — a tier model
+    // on a foreign provider is a guaranteed wrong route, while an empty
+    // model on the kept provider is a reviewable hermes default.
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "custom-model", provider: "custom-p" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toEqual({ model: "", provider: "custom-p" });
+  });
+
+  it("PATCH /agents/:id switching adapterType to hermes_local applies the tier (item 5)", async () => {
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterType: "process",
+      adapterConfig: {},
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterType: "hermes_local" }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
+    expect(patch?.metadata).toMatchObject({ modelTier: "low" });
+  });
+
+  it("PATCH /agents/:id with a custom model removes the recorded tier", async () => {
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "glm-5.3-flash", provider: "zai" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toMatchObject({ model: "glm-5.3-flash", provider: "zai" });
+    expect(patch?.metadata).toMatchObject({ other: "kept" });
+    expect(patch?.metadata).not.toHaveProperty("modelTier");
   });
 });
