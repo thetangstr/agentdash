@@ -533,7 +533,19 @@ export async function readHermesProviderStatus(deps: HermesProviderSetupDeps = {
   };
 }
 
-/** Synchronous twin of readHermesProviderStatus().configured, for readAdapterStatus(). */
+/**
+ * Synchronous twin of readHermesProviderStatus().configured, for
+ * readAdapterStatus().
+ *
+ * Detection boundary (review-1028 follow-up): this only sees providers set
+ * up through `configureHermesProvider` — that flow is the only writer of
+ * the marker. A key configured by hand (editing the template profile's env
+ * directly) leaves no marker, so `hermesModelTiersActive()` would not
+ * detect that BYOK box. The failure direction is loud, not silent: tier
+ * dispatch fails on the missing provider in Hermes config. The marker is
+ * also box-wide by design — one company's own key disables tiers for every
+ * company on a shared box, which is the safe direction.
+ */
 export function hermesProviderConfiguredSync(env: NodeJS.ProcessEnv = process.env): boolean {
   const r = resolveDeps({ env });
   try {

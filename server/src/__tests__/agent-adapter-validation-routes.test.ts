@@ -1301,4 +1301,81 @@ describe("agent routes hermes model tiers", () => {
     expect(patch?.metadata).toMatchObject({ other: "kept" });
     expect(patch?.metadata).not.toHaveProperty("modelTier");
   });
+
+  it("PATCH /agents/:id on an unrelated adapterConfig field preserves the recorded tier with the switch off (review-1028 follow-up)", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { timeoutSec: 600 } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.adapterConfig).toMatchObject({ timeoutSec: 600, model: "deepseek-v4.1-flash" });
+    expect(patch?.metadata).toMatchObject({ modelTier: "low", other: "kept" });
+  });
+
+  it("PATCH /agents/:id resending the same model value preserves the recorded tier with the switch off", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.metadata).toMatchObject({ modelTier: "low" });
+  });
+
+  it("PATCH /agents/:id picking a custom model still clears the recorded tier with the switch off", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterConfig: { model: "glm-5.3-flash", provider: "zai" } }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.metadata).toMatchObject({ other: "kept" });
+    expect(patch?.metadata).not.toHaveProperty("modelTier");
+  });
+
+  it("PATCH /agents/:id switching away from hermes_local clears the recorded tier with the switch off", async () => {
+    process.env.AGENTDASH_HERMES_MODEL_TIERS = "off";
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter(externalAdapter);
+    mockAgentService.getById.mockResolvedValue({
+      ...(await mockAgentService.getById()),
+      adapterConfig: { model: "deepseek-v4.1-flash", provider: "alibaba-token-plan-cn" },
+      metadata: { modelTier: "low", other: "kept" },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({ adapterType: "external_test", adapterConfig: {} }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
+    expect(patch?.metadata).toMatchObject({ other: "kept" });
+    expect(patch?.metadata).not.toHaveProperty("modelTier");
+  });
 });
