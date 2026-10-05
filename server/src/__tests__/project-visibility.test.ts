@@ -220,6 +220,44 @@ describeEmbeddedPostgres("restricted project visibility", () => {
     ).toBe(200);
   });
 
+  describe("GH #917: project mutations check visibility before edit authority", () => {
+    it("PATCH is 404, not 403, for an off-list member — and nothing is written", async () => {
+      const res = await request(appAs(asUser("member-user", "member")))
+        .patch(`/api/projects/${SECRET_PROJECT}`)
+        .send({ name: "renamed-by-offlist" });
+      expect(res.status).toBe(404);
+      const row = await db
+        .select({ name: projects.name })
+        .from(projects)
+        .where(eq(projects.id, SECRET_PROJECT))
+        .then((rows) => rows[0]);
+      expect(row?.name).toBe("Sam's restricted project");
+    });
+
+    it("access list read/replace and delete are 404 for an off-list member, never 403", async () => {
+      const app = appAs(asUser("member-user", "member"));
+      expect((await request(app).get(`/api/projects/${SECRET_PROJECT}/access`)).status).toBe(404);
+      expect(
+        (await request(app).put(`/api/projects/${SECRET_PROJECT}/access`).send({ access: [] }))
+          .status,
+      ).toBe(404);
+      expect((await request(app).delete(`/api/projects/${SECRET_PROJECT}`)).status).toBe(404);
+    });
+
+    it("the creator keeps write authority; a listed agent is visible but never an editor", async () => {
+      const res = await request(appAs(asUser("sam", "member")))
+        .patch(`/api/projects/${SECRET_PROJECT}`)
+        .send({ name: "Sam renamed it" });
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe("Sam renamed it");
+
+      const agentRes = await request(appAs(asAgent(LEAD_AGENT)))
+        .patch(`/api/projects/${SECRET_PROJECT}`)
+        .send({ name: "agent must not write" });
+      expect(agentRes.status).toBe(403);
+    });
+  });
+
   it("issue list: the restricted project's issues vanish for an off-list member", async () => {
     const titles = async (actor: Record<string, unknown>) => {
       const res = await request(appAs(actor)).get(`/api/companies/${COMPANY}/issues`);
