@@ -391,6 +391,92 @@ describe("upgrading one box", () => {
   });
 });
 
+// ---- The Railway backup quota (P0: upgrades broke at 10 backups) -------------
+
+describe("the Railway backup quota", () => {
+  const day = (n: number) => new Date(Date.UTC(2026, 8, 1) - n * 86_400_000).toISOString();
+  const manual = (id: string, daysAgo: number) => ({ id, name: "Manual", createdAt: day(daysAgo), expiresAt: null });
+  const scheduled = (id: string, daysAgo: number) => ({ id, name: "Daily", createdAt: day(daysAgo), expiresAt: day(-daysAgo) });
+  const volOf = (env: ReturnType<typeof setup>, instanceId: string | null) =>
+    [...env.fake.volumes.values()].find((v) => v.instanceId === instanceId)!;
+
+  it("prunes the oldest manual backups to make room, then takes the pre-upgrade snapshot", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    // At the plan limit (10): 8 manual snapshots oldest-first, plus 2 scheduled.
+    pg.backupRecords.push(...Array.from({ length: 8 }, (_, i) => manual(`m${i}`, 40 - i)), scheduled("d1", 1), scheduled("w1", 3));
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    const ids = pg.backupRecords.map((b) => b.id);
+    // The two oldest manual backups went; the other six and both scheduled ones remain,
+    // and the new pre-upgrade snapshot brings the count back to 9.
+    expect(ids).not.toContain("m0");
+    expect(ids).not.toContain("m1");
+    expect(ids).toEqual(expect.arrayContaining(["m2", "m3", "m4", "m5", "m6", "m7", "d1", "w1"]));
+    expect(pg.backupRecords).toHaveLength(9);
+    expect(pg.backupRecords.at(-1)).toMatchObject({ name: "Manual" });
+    expect(env.fake.backupsTaken.sort()).toEqual([box.pgVolumeId, box.webVolumeId].sort());
+    expect(alerts).toHaveLength(0);
+  });
+
+  it("fails the upgrade without retrying when only scheduled backups fill the volume", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push(...Array.from({ length: 9 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    const r = await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state).toBe("failed");
+    expect(up.error).toContain(pg.instanceId);
+    expect(up.error).toMatch(/backup/i);
+    // Nothing was deleted, no snapshot was attempted, and the job went dead instead of retrying.
+    expect(pg.backupRecords).toHaveLength(9);
+    expect(env.fake.backupsTaken).toEqual([]);
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, String(r.jobId)));
+    expect(job!.state).toBe("dead");
+    expect(alerts.map((a) => a.kind)).toContain("job_dead");
+    expect((await boxRow(box.id)).holdUpgrades).toBe(true);
+  });
+
+  it("waits out a backup deletion already in progress, then prunes and snapshots", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push(...Array.from({ length: 9 }, (_, i) => manual(`m${i}`, 30 - i)));
+    // Another actor's deletion is still running on this volume; it clears after two list polls.
+    pg.deleting = { backupId: "other-actors-backup", clearsAfterLists: 2 };
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    expect(env.fake.backupsTaken).toContain(box.pgVolumeId);
+    expect(pg.backupRecords.map((b) => b.id)).not.toContain("m0");
+  });
+
+  it("keeps the newest two manual backups and fails clearly rather than pruning them", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push(manual("old", 20), manual("keep-a", 5), manual("keep-b", 2), ...Array.from({ length: 7 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    await upgradeOneBox(db, env.resolver, { slug: box.slug, now: true }, "test");
+    await drain(env.runner);
+    const up = await upgradeOf(box.id);
+    expect(up.state).toBe("failed");
+    expect(up.error).toContain(pg.instanceId);
+    // The one eligible manual backup was pruned, but the newest two were kept;
+    // with the scheduled ones never touchable, the volume stays full and no snapshot ran.
+    const ids = pg.backupRecords.map((b) => b.id);
+    expect(ids).toEqual(expect.arrayContaining(["keep-a", "keep-b"]));
+    expect(ids).not.toContain("old");
+    expect(pg.backupRecords).toHaveLength(9);
+    expect(env.fake.backupsTaken).toEqual([]);
+  });
+});
+
 // ---- Review fixes (#898) -----------------------------------------------------
 
 const MUTATIONS = ["serviceInstanceUpdate", "variableCollectionUpsert", "volumeInstanceBackupCreate", "serviceInstanceDeployV2", "deploymentRollback"];

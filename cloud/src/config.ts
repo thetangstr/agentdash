@@ -54,6 +54,8 @@ export interface CloudConfig {
   boxSourceRepo: string;
   /** The edge router serves the slug hosts (SC-4 and DNS #758); until then health is checked on the Railway host only. */
   edgeLive: boolean;
+  /** Railway's per-volume backup cap; pre-upgrade snapshots prune the oldest manual backups to stay under it. */
+  volumeBackupLimit: number;
   /** SC-7 (GH #768): the public front door. See ./front-door/. */
   frontDoor: FrontDoorConfig;
   /** SC-8 (GH #769): Stripe forwarding and per-box Stripe/Resend. Optional so hand-built test configs stay valid. */
@@ -244,6 +246,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     boxImageRepo: imageRepo,
     boxSourceRepo: sourceRepo,
     edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
+    volumeBackupLimit: positiveInt(env, "CLOUD_VOLUME_BACKUP_LIMIT", 10),
     frontDoor: loadFrontDoorConfig(env),
     billing: (() => {
       try {

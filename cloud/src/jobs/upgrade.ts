@@ -30,9 +30,9 @@ import type { CloudDb } from "../db/client.js";
 import { boxEvents, boxes, boxUpgrades, BOX_UPGRADE_DONE_STATES, rollouts, type BoxUpgradeState } from "../db/schema.js";
 import { redactString } from "../logger.js";
 import { DEPLOY_FAILED, deleteDeploymentTrigger, deploymentTriggerIds, deployService, getProject, latestDeployment, type ProjectDetail, updateServiceInstance, upsertVariables, variableNames } from "../railway/api.js";
-import type { RailwayClient } from "../railway/client.js";
+import { RailwayApiError, type RailwayClient } from "../railway/client.js";
 import { GUARDED_SECRETS, PG_MOUNT, publicHost, WEB_MOUNT } from "../railway/provisioner.js";
-import { createVolumeBackup, deployedArtifact, getDeployment, rollbackDeployment } from "../railway/upgrade-api.js";
+import { BACKUP_PRUNE_WAIT_MS, BackupPruneExhaustedError, createVolumeBackup, DEFAULT_VOLUME_BACKUP_LIMIT, deployedArtifact, getDeployment, makeRoomForVolumeBackup, rollbackDeployment } from "../railway/upgrade-api.js";
 import { assertBoxProjectName, boxProjectName, ProjectNameRefused, projectTag } from "../railway/names.js";
 
 /** How long a rollback request may stay unlisted before the job asks Railway again. */
@@ -59,6 +59,10 @@ export interface UpgradeDeps {
   deployWaitMs?: number;
   healthWaitMs?: number;
   edgeHealthWaitMs?: number;
+  /** Railway's per-volume backup cap; prune the oldest manual backups before each pre-upgrade snapshot. */
+  backupLimit?: number;
+  /** Give up waiting on in-flight backup deletions after this long. */
+  backupPruneWaitMs?: number;
 }
 
 /**
@@ -153,6 +157,8 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
   const deployWaitMs = deps.deployWaitMs ?? 15 * 60_000;
   const healthWaitMs = deps.healthWaitMs ?? 5 * 60_000;
   const edgeHealthWaitMs = deps.edgeHealthWaitMs ?? 2 * 60_000;
+  const backupLimit = deps.backupLimit ?? DEFAULT_VOLUME_BACKUP_LIMIT;
+  const backupPruneWaitMs = deps.backupPruneWaitMs ?? BACKUP_PRUNE_WAIT_MS;
 
   const load = async (ctx: Pick<JobContext, "db" | "job">): Promise<UpgradeRow> => {
     const id = typeof ctx.job.payload?.upgradeId === "string" ? ctx.job.payload.upgradeId : null;
@@ -333,7 +339,21 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
         for (const [key, vol] of targets) {
           if (snaps[key]) continue;
           if (!vol) throw new Error(`the ${key} volume is not listed; retrying`);
-          const workflowId = await createVolumeBackup(client, vol.id, { signal: ctx.signal });
+          let workflowId: string;
+          try {
+            // Railway caps a volume at 10 backups; accumulated "Manual" snapshots
+            // used to fail every eleventh upgrade. Prune the oldest ones first.
+            await makeRoomForVolumeBackup(client, vol.id, { signal: ctx.signal, limit: backupLimit, pollMs, waitMs: backupPruneWaitMs, log: ctx.log, sleep: (ms) => sleep(ms, ctx.signal) });
+            workflowId = await createVolumeBackup(client, vol.id, { signal: ctx.signal });
+          } catch (err) {
+            // Nothing prunable — or Railway still refuses the create — can never
+            // heal by retrying: fail dead so ops is paged once, not after 5 tries.
+            if (err instanceof BackupPruneExhaustedError) throw new FatalJobError(`cannot take the pre-upgrade ${key} snapshot: ${err.message}`);
+            if (err instanceof RailwayApiError && err.messages.some((m) => /limit.*backup|backup.*limit/i.test(m))) {
+              throw new FatalJobError(`cannot take the pre-upgrade ${key} snapshot on volume instance ${vol.id}: ${err.messages.join("; ")}`);
+            }
+            throw err;
+          }
           snaps[key] = { volumeInstanceId: vol.id, workflowId, at: new Date().toISOString() };
           // Recorded per volume, so a retry never snapshots the same volume twice.
           await patchUpgrade(ctx.db, up.id, { snapshots: snaps });
