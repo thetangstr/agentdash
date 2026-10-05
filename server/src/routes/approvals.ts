@@ -367,6 +367,17 @@ export function approvalRoutes(
         hostExecutionContextForCompany(companyId),
       );
     }
+    // GH #828 (provenance spoof): `payload.metadata.source ===
+    // "assistant_hire_request"` is stamped server-side by the gated-action
+    // hire path and read back by the digest to render the request as
+    // assistant-made. A caller writing the tag into a free-form payload is
+    // claiming provenance they did not earn — only an assistant grant may.
+    const payloadSource = (
+      approvalInput.payload as { metadata?: { source?: unknown } } | undefined
+    )?.metadata?.source;
+    if (payloadSource === "assistant_hire_request" && req.actor.source !== "assistant_grant") {
+      throw forbidden('The "assistant_hire_request" source tag may only be set by an assistant grant');
+    }
     const normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
