@@ -258,6 +258,16 @@ export function approvalRoutes(
     return approval;
   }
 
+  // AgentDash (#1054): connector provenance is selected by authenticated
+  // connector code, never by a JSON claim at the public REST boundary.
+  function assertRestDecisionChannel(channel: unknown) {
+    if (channel !== undefined && channel !== "web" && channel !== "assistant") {
+      throw forbidden("REST approval decisions cannot claim a connector channel");
+    }
+    // The authority service separately requires an authenticated assistant
+    // grant for "assistant". Do not weaken that check or internal connectors.
+  }
+
   /** Decision provenance recorded alongside the status change. */
   function decisionMeta(
     context: Awaited<ReturnType<typeof authority.requireDecisionAuthority>>,
@@ -465,6 +475,7 @@ export function approvalRoutes(
 
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
+    assertRestDecisionChannel(req.body.channel);
     const id = req.params.id as string;
     const existingApproval = await requireApprovalAccess(req, id);
     if (!existingApproval) {
@@ -499,6 +510,7 @@ export function approvalRoutes(
 
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
+    assertRestDecisionChannel(req.body.channel);
     const id = req.params.id as string;
     const existingApproval = await requireApprovalAccess(req, id);
     if (!existingApproval) {
@@ -537,6 +549,7 @@ export function approvalRoutes(
    */
   router.post("/approvals/:id/override", validate(overrideApprovalSchema), async (req, res) => {
     assertBoard(req);
+    assertRestDecisionChannel(req.body.channel);
     const id = req.params.id as string;
     const existingApproval = await requireApprovalAccess(req, id);
     if (!existingApproval) {

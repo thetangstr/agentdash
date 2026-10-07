@@ -103,6 +103,8 @@ export function agentCreatorFromProposal(deps: Deps) {
   };
 }
 
+// AgentDash: approval-channel-provenance is inherited from the canonical default bundle;
+// synthesized workers cannot claim connector provenance through REST decisions.
 // AgentDash: agent-creation-authority is inherited from the canonical default bundle;
 // proposal-created workers must escalate privileged hires to a board administrator.
 // AgentDash: accepted-hire-recovery is inherited verbatim from the canonical default

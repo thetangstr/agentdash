@@ -25,6 +25,7 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { approvalRoutes } from "../routes/approvals.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalService } from "../services/approvals.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -144,7 +145,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-mk-approvals-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  }, 120_000);
 
   afterEach(async () => {
     // Approving wakes the requesting agent, which creates heartbeat rows that
@@ -181,6 +182,41 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const approval = await createApproval(db, company.id, agent.id);
     return { company, owner, steward, bystander, agent, approval };
   }
+
+  for (const endpoint of ["approve", "reject", "override"]) {
+    it.each(["telegram", "teams", "whatsapp", "bridge_inbox"])(`REST ${endpoint} refuses forged %s provenance`, async (channel) => {
+      const { company, steward, owner, approval } = await seed();
+      const user = endpoint === "override" ? owner : steward;
+      const app = await createApp(db, makeBoardActor(company.id, user.principalId, endpoint === "override" ? "owner" : "operator"));
+      const res = await request(app).post(`/api/approvals/${approval.id}/${endpoint}`).send({
+        channel, revision: 1, idempotencyKey: randomUUID(), decision: "approved", overrideReason: "Test override",
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      const [stored] = await db.select().from(approvals).where(eq(approvals.id, approval.id));
+      expect(stored.status).toBe("pending");
+      expect(stored.decisionChannel).toBeNull();
+    });
+  }
+
+  it.each(["telegram", "teams", "whatsapp", "bridge_inbox"] as const)("trusted internal decisions retain %s provenance", async (channel) => {
+    const { company, steward, approval } = await seed();
+    const context = await approvalAuthorityService(db).requireDecisionAuthority(approval, makeBoardActor(company.id, steward.principalId), {
+      channel, revision: 1, idempotencyKey: randomUUID(),
+    });
+    const { approval: stored } = await approvalService(db).reject(approval.id, steward.principalId, null, {
+      channel: context.channel, actorRole: context.role, revision: context.revision, idempotencyKey: context.idempotencyKey,
+    });
+    expect(stored.decisionChannel).toBe(channel);
+  });
+
+  it.each(["session", "assistant_grant"])("REST assistant provenance respects authenticated %s authority", async (source) => {
+    const { company, steward, approval } = await seed();
+    const app = await createApp(db, { ...makeBoardActor(company.id, steward.principalId), source });
+    const res = await request(app).post(`/api/approvals/${approval.id}/reject`).send({ channel: "assistant", revision: 1, idempotencyKey: randomUUID() });
+    expect(res.status).toBe(source === "assistant_grant" ? 200 : 403);
+    const [stored] = await db.select().from(approvals).where(eq(approvals.id, approval.id));
+    expect(stored.decisionChannel).toBe(source === "assistant_grant" ? "assistant" : null);
+  });
 
   it("lets the current steward of the requesting agent approve", async () => {
     const { company, steward, approval } = await seed();
@@ -343,7 +379,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const res = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 0, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+        .send({ revision: 0, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
     // revision 0 is not a valid revision value at all.
     expect([400, 409]).toContain(res.status);
@@ -351,7 +387,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const stale = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 99, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+        .send({ revision: 99, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
     expect(stale.status).toBe(409);
 
@@ -371,14 +407,14 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const first = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 1, idempotencyKey, channel: "telegram" }),
+        .send({ revision: 1, idempotencyKey, channel: "web" }),
     );
     expect(first.status, JSON.stringify(first.body)).toBe(200);
 
     const replay = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 1, idempotencyKey, channel: "telegram" }),
+        .send({ revision: 1, idempotencyKey, channel: "web" }),
     );
 
     expect(replay.status).toBe(200);
@@ -407,7 +443,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const res = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
 
     expect(res.status).toBe(403);
@@ -479,7 +515,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const stale = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
     expect(stale.status).toBe(409);
 
@@ -495,7 +531,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const fresh = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 2, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+        .send({ revision: 2, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
     expect(fresh.status, JSON.stringify(fresh.body)).toBe(200);
   });
@@ -613,7 +649,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     const res = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/reject`)
-        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "teams" }),
+        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -624,6 +660,6 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
       .from(approvals)
       .where(eq(approvals.id, approval.id))
       .then((rows) => rows[0]!);
-    expect(stored.decisionChannel).toBe("teams");
+    expect(stored.decisionChannel).toBe("web");
   });
 });

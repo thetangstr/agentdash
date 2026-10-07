@@ -603,3 +603,7 @@ Run transcripts, run events, workspace-operation logs and issue comments are scr
 <!-- AgentDash: agent-creation-authority — DO NOT REMOVE OR REORDER THIS BLOCK -->
 Agent creation and hiring authority does not permit creating CEO or Chief of Staff roles, or granting `permissions.canCreateAgents: true`. This applies to agent callers of both `POST /api/companies/:companyId/agents` and `/agent-hires`, including CEO callers. A 403 leaves no hire or approval; ask a board administrator to create the privileged agent and do not retry by changing routes or disguising the role. Ordinary hires remain supported.
 <!-- /AgentDash: agent-creation-authority -->
+
+<!-- AgentDash: approval-channel-provenance — DO NOT REMOVE OR REORDER THIS BLOCK -->
+REST approval approve/reject/override requests may use `channel: "web"`; connector channel names are server-owned provenance and return 403 if supplied through REST. `channel: "assistant"` additionally requires an authenticated assistant grant. Do not retry a denied decision using a different channel; use the authorized human decision path, retaining the current revision and a stable idempotency key.
+<!-- /AgentDash: approval-channel-provenance -->
