@@ -27,18 +27,25 @@
  *   declared in their manifest may call it (enforced by `host-client-factory`).
  * - The host handler itself does not cache resolved values. Each call goes
  *   through the secret provider to honour rotation.
+ * - Company scope (GH #811): plugin config is instance-global, so the secret
+ *   refs it declares pin a single company. A config whose refs span more than
+ *   one company has no defensible scope and resolves nothing. Connection-managed
+ *   secrets (for example `github-token-*`) are never resolvable by plugin
+ *   workers — only the owning flow may touch them (the `allowManaged` pattern
+ *   from GH #802).
  *
  * @see PLUGIN_SPEC.md §22 — Secrets
  * @see host-client-factory.ts — capability gating
  * @see services/secrets.ts — secretService used by agent env bindings
  */
 
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companySecrets, companySecretVersions, pluginConfig } from "@paperclipai/db";
 import type { SecretProvider } from "@paperclipai/shared";
 import { getSecretProvider } from "../secrets/provider-registry.js";
 import { pluginRegistryService } from "./plugin-registry.js";
+import { secretService } from "./secrets.js";
 import {
   collectSecretRefPaths,
   isUuidSecretRef,
@@ -211,9 +218,29 @@ export function createPluginSecretsHandler(
   // Rate limit: max 30 resolution attempts per plugin per minute
   const rateLimiter = createRateLimiter(30, 60_000);
 
+  const secrets = secretService(db);
+
   let cachedAllowedRefs: Set<string> | null = null;
   let cachedAllowedRefsExpiry = 0;
+  // The company the config's refs pin: a single companyId, the "mixed" sentinel
+  // when the config references secrets in more than one company, or null when
+  // none of the declared refs currently resolve to a secret (GH #811).
+  let cachedScopeCompanyId: string | null = null;
+  let cachedScopeMixed = false;
   const CONFIG_CACHE_TTL_MS = 30_000; // 30 seconds, matches event bus TTL
+
+  async function secretRefsCompanyScope(
+    refs: Set<string>,
+  ): Promise<{ companyId: string | null; mixed: boolean }> {
+    if (refs.size === 0) return { companyId: null, mixed: false };
+    const rows = await db
+      .select({ companyId: companySecrets.companyId })
+      .from(companySecrets)
+      .where(inArray(companySecrets.id, [...refs]));
+    const companies = new Set(rows.map((row) => row.companyId));
+    if (companies.size === 1) return { companyId: [...companies][0]!, mixed: false };
+    return { companyId: null, mixed: companies.size > 1 };
+  }
 
   return {
     async resolve(params: PluginSecretsResolveParams): Promise<string> {
@@ -258,6 +285,9 @@ export function createPluginSecretsHandler(
         const schema = (plugin?.manifestJson as unknown as Record<string, unknown> | null)
           ?.instanceConfigSchema as Record<string, unknown> | undefined;
         cachedAllowedRefs = extractSecretRefsFromConfig(configRow?.configJson, schema);
+        const scope = await secretRefsCompanyScope(cachedAllowedRefs);
+        cachedScopeCompanyId = scope.companyId;
+        cachedScopeMixed = scope.mixed;
         cachedAllowedRefsExpiry = now + CONFIG_CACHE_TTL_MS;
       }
 
@@ -266,16 +296,35 @@ export function createPluginSecretsHandler(
         throw secretNotFound(trimmedRef);
       }
 
+      if (cachedScopeMixed || !cachedScopeCompanyId) {
+        // The config references secrets across company boundaries, so no
+        // defensible company scope exists; resolve nothing (GH #811).
+        throw secretNotFound(trimmedRef);
+      }
+
       // ---------------------------------------------------------------
-      // 2. Look up the secret record by UUID
+      // 2. Look up the secret record by UUID, scoped to the company the
+      //    plugin's configured refs pin (GH #811)
       // ---------------------------------------------------------------
       const secret = await db
         .select()
         .from(companySecrets)
-        .where(eq(companySecrets.id, trimmedRef))
+        .where(
+          and(
+            eq(companySecrets.id, trimmedRef),
+            eq(companySecrets.companyId, cachedScopeCompanyId),
+          ),
+        )
         .then((rows) => rows[0] ?? null);
 
       if (!secret) {
+        throw secretNotFound(trimmedRef);
+      }
+
+      // Connection-managed secrets (for example a GitHub token) are never
+      // resolvable by plugin workers — only the owning flow may touch them
+      // (the `allowManaged` pattern from GH #802).
+      if (await secrets.isManaged(secret)) {
         throw secretNotFound(trimmedRef);
       }
 
