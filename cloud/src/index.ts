@@ -105,6 +105,7 @@ async function main() {
           sourceRepo: config.boxSourceRepo,
           edgeLive: config.edgeLive,
           alerter,
+          backupLimit: config.volumeBackupLimit,
         }),
       ] });
     runner.start();
