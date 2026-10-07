@@ -93,13 +93,33 @@ test("issue chat: follows new comments at the bottom, leaves a scrolled-up reade
 test("Ask: opens on the newest message, Jump to latest after a scroll up, sending follows again", async ({ page, request }) => {
   const company = await ensureCompany(request);
   // Serve a long conversation from a fixture so nothing depends on a model.
+  // The send is answered here too: a real POST would wake the CoS reply path,
+  // which shares the server's E2E LLM stub call counter with the
+  // deep-interview spec and shifts its canned answers.
   await page.route("**/api/conversations/*/messages*", async (route) => {
+    const conversationId =
+      new URL(route.request().url()).pathname.match(/\/api\/conversations\/([^/]+)\/messages/)?.[1] ?? "c";
+    if (route.request().method() === "POST") {
+      const sent = (route.request().postDataJSON() ?? {}) as { body?: string };
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "00000000-0000-4000-8000-000000000999",
+          conversationId,
+          role: "user",
+          content: sent.body ?? "",
+          cardKind: null,
+          cardPayload: null,
+          createdAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
     if (route.request().method() !== "GET") {
       await route.continue();
       return;
     }
-    const conversationId =
-      new URL(route.request().url()).pathname.match(/\/api\/conversations\/([^/]+)\/messages/)?.[1] ?? "c";
     const base = Date.now() - 600_000;
     const rows = Array.from({ length: 30 }, (_, index) => ({
       id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
