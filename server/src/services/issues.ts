@@ -3393,6 +3393,15 @@ export function issueService(db: Db) {
           const [parent] = await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, issueData.parentId)));
           if (!parent) throw unprocessable("Parent issue is unavailable");
         }
+        if (issueData.goalId) {
+          // Cross-company goal ids must fail the same way the issue PATCH
+          // authority stage does: an unknown/foreign goal is a 404.
+          const [goalRow] = await tx
+            .select({ id: goals.id })
+            .from(goals)
+            .where(and(eq(goals.id, issueData.goalId), eq(goals.companyId, companyId)));
+          if (!goalRow) throw notFound("Goal not found");
+        }
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;

@@ -369,10 +369,12 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    // Visibility first: a 403 here would confirm the restricted project
+    // exists. Invisible means nonexistent — 404, matching GET /projects/:id.
+    await assertProjectVisible(db, req, existing);
     // A4 (2026-08-16): editing follows ownership, not direction. Under the
     // direction rule a member could create a project they could never edit.
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
-    await assertProjectVisible(db, req, existing);
     const body = { ...req.body };
     // A5: restricting a project must not blind the agent working on it — the
     // lead agent joins the access list in the same request.
@@ -866,6 +868,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    await assertProjectVisible(db, req, existing);
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
     const rows = await db.select().from(projectAccess).where(eq(projectAccess.projectId, id));
     res.json({ visibility: existing.visibility, access: rows });
@@ -878,6 +881,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    await assertProjectVisible(db, req, existing);
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
     const grantedBy = req.actor.type === "board" ? (req.actor.userId ?? "system") : "system";
     const entries = (req.body.access as Array<{ principalType: "user" | "agent"; principalId: string }>) ?? [];
@@ -916,6 +920,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    await assertProjectVisible(db, req, existing);
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
 
     // `issues.project_id` has no cascade, so deleting a project that holds any
