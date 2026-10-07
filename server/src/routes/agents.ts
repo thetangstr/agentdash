@@ -94,6 +94,8 @@ import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompan
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import {
   canReadCompanySpend,
+  assertWorkspaceOperationVisible,
+  filterVisibleWorkspaceOperations,
   agentVisibilityCondition,
   assertAgentIdVisible,
   assertIssueIdVisible,
@@ -5198,7 +5200,7 @@ export function agentRoutes(
 
     const context = asRecord(run.contextSnapshot);
     const executionWorkspaceId = asNonEmptyString(context?.executionWorkspaceId);
-    const operations = await workspaceOperations.listForRun(runId, executionWorkspaceId);
+    const operations = await filterVisibleWorkspaceOperations(db, req, run.companyId, await workspaceOperations.listForRun(runId, executionWorkspaceId));
     res.json(redactCurrentUserValue(operations, await getCurrentUserRedactionOptions()));
   });
 
@@ -5210,6 +5212,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, operation.companyId);
+    await assertWorkspaceOperationVisible(db, req, operation);
 
     const offset = Number(req.query.offset ?? 0);
     const limitBytes = readRunLogLimitBytes(req.query.limitBytes);

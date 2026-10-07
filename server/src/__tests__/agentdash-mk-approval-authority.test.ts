@@ -145,7 +145,7 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-mk-approvals-");
     db = createDb(tempDb.connectionString);
-  }, 120_000);
+  }, 20_000);
 
   afterEach(async () => {
     // Approving wakes the requesting agent, which creates heartbeat rows that

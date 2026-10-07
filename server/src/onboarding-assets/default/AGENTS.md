@@ -611,3 +611,7 @@ REST approval approve/reject/override requests may use `channel: "web"`; connect
 <!-- AgentDash: spend-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->
 Spend and budget amounts are restricted to authorized readers. Company and agent reads return `null` for unavailable monthly spend and budget; do not turn this into zero or infer hidden amounts. `GET /api/companies/:companyId/budgets/overview` returns 403 without spend access. Members retain nonfinancial budget-stop status and should ask an administrator to resolve a stop. Restricted financial activity is omitted.
 <!-- /AgentDash: spend-visibility -->
+
+<!-- AgentDash: operation-log-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Workspace-operation logs and related lists require access to both the linked execution workspace and the linked heartbeat run. A 404 means unavailable: do not probe alternate run/workspace routes. Operations with both links removed remain company-visible; an inconsistent cross-company link is refused.
+<!-- /AgentDash: operation-log-visibility -->
