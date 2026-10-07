@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 
 /**
  * E2E (GH #785, UX-4): the five-question assessment is optional.
@@ -14,7 +15,7 @@ import { test, expect } from "@playwright/test";
  * workspace is created and the success path is the one under test.
  */
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = resolveE2eServerPort(3399);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 test("a new workspace goes from /company-create to setup without the assessment", async ({ page, request }) => {

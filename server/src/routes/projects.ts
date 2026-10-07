@@ -369,10 +369,12 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    // Visibility first: a 403 here would confirm the restricted project
+    // exists. Invisible means nonexistent — 404, matching GET /projects/:id.
+    await assertProjectVisible(db, req, existing);
     // A4 (2026-08-16): editing follows ownership, not direction. Under the
     // direction rule a member could create a project they could never edit.
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
-    await assertProjectVisible(db, req, existing);
     const body = { ...req.body };
     // A5: restricting a project must not blind the agent working on it — the
     // lead agent joins the access list in the same request.
@@ -443,6 +445,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, existing);
     const workspaces = await svc.listWorkspaces(id);
     res.json(workspaces);
   });
@@ -455,6 +460,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, existing);
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
@@ -502,6 +510,8 @@ export function projectRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, existing.companyId);
+      // GH #1052: visibility before the host-command and cwd authority checks.
+      await assertProjectVisible(db, req, existing);
       const existingWorkspace = (await svc.listWorkspaces(id)).find((workspace) => workspace.id === workspaceId);
       await assertHostWorkspaceCommandAuthority(
         db,
@@ -558,6 +568,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, project.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, project);
 
     const workspace = project.workspaces.find((entry) => entry.id === workspaceId) ?? null;
     if (!workspace) {
@@ -830,6 +843,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, existing);
     const workspace = await svc.removeWorkspace(id, workspaceId);
     if (!workspace) {
       res.status(404).json({ error: "Project workspace not found" });
@@ -866,6 +882,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    await assertProjectVisible(db, req, existing);
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
     const rows = await db.select().from(projectAccess).where(eq(projectAccess.projectId, id));
     res.json({ visibility: existing.visibility, access: rows });
@@ -878,6 +895,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    await assertProjectVisible(db, req, existing);
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
     const grantedBy = req.actor.type === "board" ? (req.actor.userId ?? "system") : "system";
     const entries = (req.body.access as Array<{ principalType: "user" | "agent"; principalId: string }>) ?? [];
@@ -916,6 +934,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    await assertProjectVisible(db, req, existing);
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
 
     // `issues.project_id` has no cascade, so deleting a project that holds any

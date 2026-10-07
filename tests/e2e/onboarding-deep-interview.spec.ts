@@ -19,6 +19,7 @@
 //      the in-progress state is returned from the resume endpoint.
 
 import { test, expect } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 import { chrisCtoPersona } from "./personas/chris-cto";
 
 const SKIP_LLM = process.env.PAPERCLIP_E2E_SKIP_LLM !== "false";
@@ -65,7 +66,7 @@ const persona = {
 async function bootstrapUser(
   page: import("@playwright/test").Page,
 ): Promise<{ companyId: string; baseUrl: string }> {
-  const baseUrl = page.url().split("/").slice(0, 3).join("/") || "http://127.0.0.1:3199";
+  const baseUrl = page.url().split("/").slice(0, 3).join("/") || `http://127.0.0.1:${resolveE2eServerPort(3399)}`;
 
   // 1. Sign up
   await page.goto("/auth?mode=sign_up");
@@ -173,7 +174,7 @@ test.describe("Deep-interview onboarding — happy path", () => {
 
     // Bootstrap user in local_trusted mode — no sign-up form needed.
     // The spec uses /api/companies directly.
-    const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
+    const baseUrl = `http://127.0.0.1:${resolveE2eServerPort(3399)}`;
 
     // Closes #295: ensureCompanyExists POSTs a workspace if none exists,
     // since the local_trusted bootstrap does NOT auto-provision one. Was
@@ -233,7 +234,7 @@ test.describe("Deep-interview resume", () => {
       "ANTHROPIC_API_KEY required for non-stub runs",
     );
 
-    const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
+    const baseUrl = `http://127.0.0.1:${resolveE2eServerPort(3399)}`;
 
     // Closes #295: see top-of-file helper.
     const companyId = await ensureCompanyExists(page.request, baseUrl);
@@ -268,7 +269,7 @@ test.describe("Deep-interview resume", () => {
 
 test.describe("Deep-interview — confirm-plan flow", () => {
   test("POST /onboarding/confirm-plan creates ≥2 agents when plan card exists", async ({ page }) => {
-    const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
+    const baseUrl = `http://127.0.0.1:${resolveE2eServerPort(3399)}`;
 
     // Closes #295: see top-of-file helper.
     const companyId = await ensureCompanyExists(page.request, baseUrl);

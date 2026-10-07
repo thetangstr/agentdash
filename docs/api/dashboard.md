@@ -48,6 +48,7 @@ From `packages/shared/src/types/dashboard.ts`; computed in `server/src/services/
 | `companyId` | UUID | |
 | `agents` | object | Counts by status: `active`, `running`, `paused`, `error`. An `idle` agent counts as `active`. An agent in any other status adds a key of that name, such as `terminated`. |
 | `tasks` | object | Issue counts: `open` (every status except `done` and `cancelled`), `inProgress`, `blocked`, `done`. |
+| `costs` | object or null | `null` for a member who cannot read the cost routes (no `agents:create` permission); the field is withheld rather than reported as zero. Otherwise the object below. |
 | `costs.monthSpendCents` | number | Spend since the start of the current UTC month. |
 | `costs.monthBudgetCents` | integer | The company's `budgetMonthlyCents`. |
 | `costs.monthUtilizationPercent` | number | Spend over budget × 100, two decimals; 0 when there is no budget. |
@@ -55,7 +56,7 @@ From `packages/shared/src/types/dashboard.ts`; computed in `server/src/services/
 | `budgets` | object | `activeIncidents`, `pendingApprovals`, `pausedAgents`, `pausedProjects` — from the company's budget policies. |
 | `runActivity` | array | One entry per UTC day for the last 14 days: `date` (`YYYY-MM-DD`), `succeeded`, `failed` (failed or timed out), `other`, `total`. |
 | `harness` | object | Run health over the last 24 hours, overall and per adapter type: `overallStatus` (`ok` · `warn` · `critical`), `totalRuns`, `failedRuns`, `failureRatePercent`, and `adapters[]`. A status is `warn` when any run failed and `critical` when at least 3 failed and the failure rate is at least 50%. |
-| `taskQuality` | object | Review outcomes over the last 30 days: `issuesInScope`, `acceptanceRatePercent`, `dodCoveragePercent`, `unreviewedDoneIssues`, `spendPerAcceptedIssueCents`, and related counts. |
+| `taskQuality` | object | Review outcomes over the last 30 days: `issuesInScope`, `acceptanceRatePercent`, `dodCoveragePercent`, `unreviewedDoneIssues`, `spendPerAcceptedIssueCents`, and related counts. Its four spend figures (`issueLinkedSpendCents`, `issueLinkedTokens`, `issueLinkedCachedTokens`, `spendPerAcceptedIssueCents`) are `null` under the same cost-route rule as `costs`. |
 
 The month spend here counts every cost event since the month began. For a chosen date range, or spend per agent, use [Costs](/api/costs). The complete schema is in [the reference](/api/reference#tag/dashboard/getDashboard).
 

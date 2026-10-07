@@ -19,6 +19,7 @@ import { logActivity } from "../services/activity-log.js";
 import { formatGitCredentialResponse, parseGitCredentialRequest } from "../services/git-credential-helper.js";
 import { githubConnectionService, type GitHubConnectionDeps } from "../services/github-connection.js";
 import { assertCompanyAccess, assertCompanyAdministrator, isCompanyAdministrator } from "./authz.js";
+import { filterVisibleByProject } from "./visibility.js";
 
 export interface GitHubConnectionRouteDeps extends GitHubConnectionDeps {
   logActivity?: typeof logActivity;
@@ -60,7 +61,9 @@ export function githubConnectionRoutes(db: Db, deps: GitHubConnectionRouteDeps =
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const body: GitHubConnectionsResponse = {
-      connections: await svc.list(companyId),
+      // GH #1052: a connection names its project, workspace and repo; one
+      // into a restricted project is absent for an actor off its access list.
+      connections: await filterVisibleByProject(db, req, await svc.list(companyId)),
       canManage: boardOnly(req) && (await isCompanyAdministrator(access, req, companyId)),
     };
     res.json(body);
