@@ -142,11 +142,17 @@ export function useLiveAutoFollow({
     const onScroll = () => {
       const metrics = readScrollMetrics(container);
       const previous = lastMetricsRef.current;
-      lastMetricsRef.current = metrics;
       const nearBottom = metrics.distanceFromBottom <= LIVE_SCROLL_BOTTOM_TOLERANCE_PX;
-      // Growth alone (content added below while following) is not the viewer
-      // leaving the bottom; the follow step will catch up.
-      if (!nearBottom && isFollowingRef.current && metrics.scrollHeight > previous.scrollHeight) return;
+      if (!nearBottom && isFollowingRef.current) {
+        // Growth alone (content added below while following) is not the
+        // viewer leaving the bottom: keep the baseline so the follow step
+        // catches up. Anything beyond that growth is the viewer scrolling
+        // up, even when it lands in the same frame as new output: release.
+        const growth = Math.max(0, metrics.scrollHeight - previous.scrollHeight);
+        const movedAwayBy = metrics.distanceFromBottom - (previous.distanceFromBottom + growth);
+        if (!(Number.isFinite(previous.distanceFromBottom) && movedAwayBy > LIVE_SCROLL_BOTTOM_TOLERANCE_PX)) return;
+      }
+      lastMetricsRef.current = metrics;
       setFollowing(nearBottom);
     };
     const target: Window | HTMLElement = container;

@@ -799,6 +799,23 @@ function useIssueChatRunStoppedReason(message: ThreadMessage): string | null {
 // AgentDash: the chat's run blocks offer Readable/Raw; Business lives on the run page.
 const CHAT_TRANSCRIPT_MODES: readonly TranscriptViewMode[] = ["readable", "raw"];
 
+/**
+ * The chat shows a Business preference as Readable. Clicking the option that
+ * is already shown does nothing, so pressing "Readable" here never quietly
+ * replaces the run page's Business default (PR #1059 review).
+ */
+function useChatTranscriptMode(): [TranscriptViewMode, (mode: TranscriptViewMode) => void] {
+  const [preferredTranscriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const transcriptMode = chatTranscriptMode(preferredTranscriptMode);
+  const setChatMode = useCallback(
+    (mode: TranscriptViewMode) => {
+      if (mode !== transcriptMode) setTranscriptMode(mode);
+    },
+    [transcriptMode, setTranscriptMode],
+  );
+  return [transcriptMode, setChatMode];
+}
+
 function IssueChatReadableErrors({ lines }: { lines: string[] }) {
   if (lines.length === 0) return null;
   return (
@@ -818,9 +835,7 @@ function IssueChatRunReadableSummary({ message, streaming }: { message: ThreadMe
   const entries = useIssueChatRunTranscript(message);
   const usage = useIssueChatRunUsage(message);
   const stoppedReason = useIssueChatRunStoppedReason(message);
-  const [preferredTranscriptMode, setTranscriptMode] = useTranscriptModePreference();
-  // AgentDash: chat run blocks have no Business rendering; Business shows as Readable here.
-  const transcriptMode = chatTranscriptMode(preferredTranscriptMode);
+  const [transcriptMode, setTranscriptMode] = useChatTranscriptMode();
   if (!entries) return null;
   return (
     <div className="flex items-start gap-2">
@@ -881,9 +896,7 @@ function IssueChatChainOfThought({
   }, [isActive]);
 
   // AgentDash: Readable mode (default) shares AgentDetail's presentation.
-  const [preferredTranscriptMode, setTranscriptMode] = useTranscriptModePreference();
-  // AgentDash: chat run blocks have no Business rendering; Business shows as Readable here.
-  const transcriptMode = chatTranscriptMode(preferredTranscriptMode);
+  const [transcriptMode, setTranscriptMode] = useChatTranscriptMode();
   const runEntries = useIssueChatRunTranscript(message);
   const readableTools = useMemo(
     () => toolParts.map((tool) => toReadableToolRowItem(tool, isMessageRunning)),

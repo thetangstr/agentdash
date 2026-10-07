@@ -9,7 +9,8 @@ import {
   timelineSimulatedLabels,
   TIMELINE_MILESTONES,
 } from "./milestoneTimeline";
-import { issueDocumentKeySchema } from "@paperclipai/shared";
+import { issueDocumentKeySchema, normalizeEscapedLineBreaks } from "@paperclipai/shared";
+import realArtefact from "../fixtures/milestone-timeline-p9-at-2026-10-06-4.trimmed.json";
 import { SAMPLE_MILESTONE_TIMELINE, SAMPLE_TIMELINE_RUN_ID } from "../fixtures/milestoneTimelineFixture";
 
 const RUN_ID = SAMPLE_TIMELINE_RUN_ID;
@@ -117,7 +118,7 @@ describe("parseMilestoneTimeline", () => {
   it("reads Clockchain status and ledger ids without calling Clockchain", () => {
     const timeline = parsed(SAMPLE_MILESTONE_TIMELINE);
     const discover = timeline.milestones.find((m) => m.milestone === "discover");
-    expect(discover?.log).toEqual({ status: "anchored", ledgerId: "ledger-77", blockHeight: "1203" });
+    expect(discover?.log).toEqual({ status: "anchored", ledgerId: "ledger-77", blockHeight: "1203", coveredBy: [] });
     expect(timeline.milestones.find((m) => m.milestone === "proposal")?.log?.status).toBe("not-yet-logged");
     expect(timeline.anchors[0]).toMatchObject({ milestone: "discover", ledgerId: "ledger-12", blockHeight: "998" });
   });
@@ -130,12 +131,75 @@ describe("timelineMatchesRun", () => {
     expect(timelineMatchesRun(timeline, { id: RUN_ID, companyId })).toBe(true);
     expect(timelineMatchesRun(timeline, { id: "11111111-1111-4111-8111-111111111111", companyId })).toBe(false);
     expect(timelineMatchesRun(timeline, { id: RUN_ID, companyId: "other" })).toBe(false);
-    expect(timelineMatchesRun({ ...timeline, agentdash: null }, { id: "anything", companyId: "x" })).toBe(true);
+    // A timeline must name its run: no join key, no timeline.
+    expect(timelineMatchesRun({ ...timeline, agentdash: null }, { id: RUN_ID, companyId })).toBe(false);
+    expect(
+      timelineMatchesRun({ ...timeline, agentdash: { ...timeline.agentdash!, heartbeatRunId: null } }, { id: RUN_ID, companyId }),
+    ).toBe(false);
   });
 
   it("reads join keys from agency.agentdash too", () => {
     const { agentdash, ...rest } = SAMPLE_MILESTONE_TIMELINE;
     const timeline = parsed({ ...rest, agency: { runtime: "hermes", agentdash } });
     expect(timeline.agentdash?.heartbeatRunId).toBe(RUN_ID);
+  });
+});
+
+// AgentDash (PR #1059 review): a real Track C artefact (ac_travel_mvp
+// f869eeeb, p9-at-2026-10-06-4, trimmed to 47 events, usernames scrubbed).
+describe("real Track C artefact", () => {
+  const REAL_RUN = realArtefact.agency.agentdash.heartbeatRunId;
+  const REAL_COMPANY = realArtefact.agency.agentdash.companyId;
+  const plain = JSON.stringify(realArtefact);
+
+  it("has multi-line strings, so it exercises the newline escapes", () => {
+    expect(plain).toContain("\\n");
+  });
+
+  it("survives the issue-document PUT normalizer, fenced or bare, and parses", () => {
+    for (const body of ["```json\n" + plain + "\n```", plain, JSON.stringify(realArtefact, null, 2)]) {
+      const stored = normalizeEscapedLineBreaks(body);
+      const result = parseMilestoneTimeline(stored);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.timeline.events).toHaveLength(realArtefact.events.length);
+      expect(result.timeline.droppedEvents).toBe(0);
+      expect(timelineMatchesRun(result.timeline, { id: REAL_RUN, companyId: REAL_COMPANY })).toBe(true);
+      const multiLine = result.timeline.events.find((e) => e.detail?.includes("\n"));
+      expect(multiLine).toBeTruthy();
+    }
+  });
+
+  it("repairs a document stored by the old normalizer (raw line breaks inside strings)", () => {
+    const oldNormalizer = (v: string) => v.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\r/g, "\n");
+    const stored = oldNormalizer("```json\n" + plain + "\n```");
+    expect(() => JSON.parse(stored.slice(8, -4))).toThrow();
+    const result = parseMilestoneTimeline(stored);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.timeline.events).toHaveLength(realArtefact.events.length);
+  });
+
+  it("reads the real Clockchain shape: not-yet-logged with coveredBy, anchors with ledger and block", () => {
+    const result = parseMilestoneTimeline(plain);
+    if (!result.ok) throw new Error(result.detail);
+    const discover = result.timeline.milestones[0]!;
+    expect(discover.log?.status).toBe("not-yet-logged");
+    expect(discover.log?.ledgerId).toBeNull();
+    expect(discover.log?.coveredBy.length).toBeGreaterThan(0);
+    expect(discover.log?.coveredBy[0]).not.toMatch(/^ledger:/);
+    expect(result.timeline.anchors[0]?.blockHeight).toMatch(/^\d+$/);
+    expect(result.timeline.events.some((e) => e.simulated)).toBe(true);
+  });
+});
+
+describe("harness text redaction", () => {
+  it("redacts secrets in summary, detail and honesty", () => {
+    const secret = "SUPERSECRETvalue123";
+    const result = parseMilestoneTimeline({
+      ...SAMPLE_MILESTONE_TIMELINE,
+      honesty: [`token=${secret}`],
+      events: [{ ...SAMPLE_MILESTONE_TIMELINE.events[1], summary: `api_key=${secret}`, detail: `Bearer ${secret}` }],
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 });

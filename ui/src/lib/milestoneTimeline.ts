@@ -9,7 +9,11 @@
 //   - additive unknown fields are ignored;
 //   - `simulated` is preserved verbatim (never dropped);
 //   - `basis: "inferred"` is flagged;
-//   - `source.ref = "seq=<n>"` points at AgentDash's own run-log row `seq`.
+//   - `source.ref = "seq=<n>"` points at AgentDash's own run-log row `seq`;
+//   - the timeline must name this run (`agentdash.heartbeatRunId`);
+//   - harness text goes through AgentDash's secret redaction like every
+//     other transcript view.
+import { redactSecrets } from "./redactSecrets";
 
 export const MILESTONE_TIMELINE_SCHEMA_PREFIX = "ac.milestone-timeline/";
 export const MILESTONE_TIMELINE_SUPPORTED_MAJOR = 1;
@@ -64,10 +68,13 @@ export interface TimelineEvent {
 }
 
 export interface TimelineMilestoneLog {
-  /** e.g. "not-yet-logged", "logged", "anchored". */
+  /** e.g. "not-yet-logged" (the only value Track C writes today). */
   status: string;
+  /** Forward-compatible: shown only when the harness sends them. */
   ledgerId: string | null;
   blockHeight: string | null;
+  /** Existing anchors that already cover the stage (`coveredBy: ["ledger:<id>"]`). */
+  coveredBy: string[];
 }
 
 export interface TimelineAnchor {
@@ -122,6 +129,12 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+/** Harness free text, redacted like the rest of the run page. */
+function text(value: unknown): string | null {
+  const raw = str(value);
+  return raw === null ? null : redactSecrets(raw);
+}
+
 function idLike(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return str(value);
@@ -139,12 +152,58 @@ function isMilestone(value: unknown): value is TimelineMilestone {
 export function extractTimelineJson(body: string): unknown {
   const trimmed = body.trim();
   const fenced = trimmed.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/i);
-  const text = fenced ? fenced[1]! : trimmed;
+  const json = fenced ? fenced[1]! : trimmed;
   try {
-    return JSON.parse(text);
+    return JSON.parse(json);
   } catch {
-    return undefined;
+    // Documents stored before the server stopped unescaping `\n` inside
+    // code have raw line breaks inside JSON strings; escape those and retry.
+    try {
+      return JSON.parse(escapeControlCharsInStrings(json));
+    } catch {
+      return undefined;
+    }
   }
+}
+
+/**
+ * Escape raw U+0000–U+001F inside JSON string literals only (newlines
+ * between tokens stay as they are, so pretty-printed JSON is untouched).
+ */
+export function escapeControlCharsInStrings(json: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < json.length; i += 1) {
+    const ch = json[i]!;
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      out += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inString = false;
+      out += ch;
+      continue;
+    }
+    const code = ch.charCodeAt(0);
+    if (code < 0x20) {
+      out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : ch === "\t" ? "\\t" : `\\u${code.toString(16).padStart(4, "0")}`;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /** `"seq=42"` → 42; anything else → null. */
@@ -179,7 +238,7 @@ function parseEvent(raw: unknown): TimelineEvent | null {
   const id = idLike(raw.id);
   const lane = raw.lane === "agency" || raw.lane === "traveler" ? raw.lane : null;
   const kind = str(raw.kind);
-  const summary = str(raw.summary);
+  const summary = text(raw.summary);
   if (!id || !lane || !kind || !summary || !isMilestone(raw.milestone)) return null;
   const source = isObject(raw.source) ? raw.source : null;
   const sourceRef = source ? str(source.ref) : null;
@@ -196,9 +255,9 @@ function parseEvent(raw: unknown): TimelineEvent | null {
     subtype: str(raw.subtype),
     tool: str(raw.tool),
     summary,
-    detail: str(raw.detail),
+    detail: text(raw.detail),
     outcome: parseOutcome(raw.outcome),
-    simulated: parseSimulated(raw.simulated),
+    simulated: parseSimulated(raw.simulated) ? redactSecrets(parseSimulated(raw.simulated)!) : null,
     sourceSeq: parseSourceSeq(sourceRef),
     sourceRef,
   };
@@ -209,10 +268,16 @@ function parseLog(raw: unknown): TimelineMilestoneLog | null {
   const status = str(raw.status);
   if (!status) return null;
   const ledger = isObject(raw.ledger) ? raw.ledger : null;
+  const coveredBy = Array.isArray(raw.coveredBy)
+    ? raw.coveredBy
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .map((entry) => entry.replace(/^ledger:/, "").trim())
+    : [];
   return {
     status,
     ledgerId: idLike(raw.ledgerId) ?? idLike(ledger?.id) ?? null,
     blockHeight: idLike(raw.blockHeight) ?? idLike(raw.block) ?? idLike(ledger?.blockHeight) ?? null,
+    coveredBy,
   };
 }
 
@@ -273,7 +338,7 @@ export function parseMilestoneTimeline(input: unknown): MilestoneTimelineParseRe
       const ids = isObject(item.ids) ? item.ids : {};
       anchors.push({
         milestone: item.milestone,
-        summary: str(item.summary) ?? "Anchored on Clockchain",
+        summary: text(item.summary) ?? "Anchored on Clockchain",
         ledgerId: idLike(ids.ledgerId),
         blockHeight: idLike(ids.blockHeight),
       });
@@ -284,7 +349,7 @@ export function parseMilestoneTimeline(input: unknown): MilestoneTimelineParseRe
     ok: true,
     timeline: {
       schema: String(raw.schema),
-      label: str(raw.label),
+      label: text(raw.label),
       runId: str(raw.runId),
       agentdash: parseJoinKeys(raw),
       startedAt: str(raw.startedAt),
@@ -293,24 +358,27 @@ export function parseMilestoneTimeline(input: unknown): MilestoneTimelineParseRe
       milestones,
       events,
       anchors,
-      honesty: Array.isArray(raw.honesty) ? raw.honesty.filter((line): line is string => typeof line === "string" && line.trim().length > 0) : [],
+      honesty: Array.isArray(raw.honesty)
+        ? raw.honesty.filter((line): line is string => typeof line === "string" && line.trim().length > 0).map((line) => redactSecrets(line))
+        : [],
       droppedEvents,
     },
   };
 }
 
 /**
- * A timeline only belongs on this run's page when its join keys do not point
- * somewhere else. Missing keys are tolerated (the document key already names
- * the run); a mismatched run or company is not.
+ * A timeline belongs on this run's page only when it names this run:
+ * `agentdash.heartbeatRunId` (or `agency.agentdash.heartbeatRunId`) must equal
+ * the run id. A timeline with no join key, or one naming another run or
+ * company, is not shown as this run's timeline.
  */
 export function timelineMatchesRun(
   timeline: MilestoneTimeline,
   run: { id: string; companyId: string },
 ): boolean {
   const keys = timeline.agentdash;
-  if (!keys) return true;
-  if (keys.heartbeatRunId && keys.heartbeatRunId.toLowerCase() !== run.id.toLowerCase()) return false;
+  if (!keys?.heartbeatRunId) return false;
+  if (keys.heartbeatRunId.toLowerCase() !== run.id.toLowerCase()) return false;
   if (keys.companyId && keys.companyId.toLowerCase() !== run.companyId.toLowerCase()) return false;
   return true;
 }

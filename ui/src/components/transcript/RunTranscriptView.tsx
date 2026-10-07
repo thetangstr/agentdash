@@ -4,7 +4,7 @@ import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
 import { CREDENTIALS_HIDDEN_NOTE, redactSecrets, redactSecretsInValue } from "../../lib/redactSecrets";
 import { ReadableTranscriptView, type ReadableRunUsage } from "./ReadableTranscript";
-import { BusinessTranscriptView } from "./BusinessTranscript";
+import { BusinessTranscriptView, type TimelineProvenance } from "./BusinessTranscript";
 import type { MilestoneTimeline } from "../../lib/milestoneTimeline";
 
 // AgentDash: "business" is the default (founder decision 2026-10-06): the
@@ -49,6 +49,11 @@ interface RunTranscriptViewProps {
   onOpenLogLine?: (seq: number) => void;
   /** AgentDash: Raw-mode row to scroll to and highlight. */
   rawFocus?: RawTranscriptFocus | null;
+  /** AgentDash: who posted the timeline document and when (Business mode). */
+  timelineProvenance?: TimelineProvenance | null;
+  /** AgentDash: the run record's status and error (Business mode outcome). */
+  runStatus?: string | null;
+  runError?: string | null;
 }
 
 function findScrollParent(element: HTMLElement): HTMLElement | Window {
@@ -225,9 +230,14 @@ export function RunTranscriptView({
   timelineNotice,
   onOpenLogLine,
   rawFocus,
+  timelineProvenance,
+  runStatus,
+  runError,
 }: RunTranscriptViewProps) {
   // A posted timeline renders even before the run's own log has loaded.
-  if (mode === "business" && (entries.length > 0 || timeline)) {
+  // Business is a whole-run view; a `limit`ed preview (live widgets) shows
+  // the latest Readable entries instead.
+  if (mode === "business" && !limit && (entries.length > 0 || timeline)) {
     return (
       <BusinessTranscriptView
         entries={entries}
@@ -237,6 +247,9 @@ export function RunTranscriptView({
         timeline={timeline}
         timelineNotice={timelineNotice}
         onOpenLogLine={onOpenLogLine}
+        timelineProvenance={timelineProvenance}
+        runStatus={runStatus}
+        runError={runError}
         className={className}
       />
     );

@@ -49,6 +49,10 @@ export interface BusinessSummaryOptions {
   streaming?: boolean;
   usage?: { inputTokens: number; outputTokens: number; costUsd?: number; durationMs?: number | null } | null;
   stoppedReason?: string | null;
+  /** The run record's status (succeeded, failed, timed_out, cancelled, running, queued). */
+  runStatus?: string | null;
+  /** The run record's error, used when the transcript has no result line. */
+  runError?: string | null;
 }
 
 const EXCERPT_MAX = 220;
@@ -192,17 +196,27 @@ export function buildBusinessSummary(
     if (step) steps.push(step);
   });
 
+  // The run record's status wins over the transcript: a crashed or
+  // timed-out run often never writes a result line.
   const footer = readable.footer;
+  const status = options.runStatus ?? null;
+  const footerError = footer?.isError ? (footer.errors[0] ?? footer.text ?? null) : null;
+  const errorNote = (value: string | null | undefined) => (value ? plainExcerpt(redactSecrets(value), 300) : null);
   let outcome: BusinessOutcome;
-  if (stopped) {
+  if (stopped || status === "cancelled") {
     outcome = { state: "stopped", label: "Stopped", note: options.stoppedReason || null };
+  } else if (status === "timed_out") {
+    outcome = { state: "failed", label: "Ran out of time", note: errorNote(options.runError ?? footerError) };
+  } else if (status === "failed") {
+    outcome = { state: "failed", label: "Did not finish", note: errorNote(footerError ?? options.runError) };
+  } else if (status === "succeeded") {
+    outcome = { state: "done", label: "Finished", note: null };
+  } else if (streaming || status === "running" || status === "queued") {
+    outcome = { state: "working", label: "Still working", note: null };
   } else if (footer?.isError) {
-    const note = footer.errors[0] ?? footer.text ?? null;
-    outcome = { state: "failed", label: "Did not finish", note: note ? plainExcerpt(note, 300) : null };
+    outcome = { state: "failed", label: "Did not finish", note: errorNote(footerError) };
   } else if (footer) {
     outcome = { state: "done", label: "Finished", note: null };
-  } else if (streaming) {
-    outcome = { state: "working", label: "Still working", note: null };
   } else {
     outcome = { state: "unknown", label: "No result recorded", note: null };
   }

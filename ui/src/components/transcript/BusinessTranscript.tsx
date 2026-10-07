@@ -66,10 +66,23 @@ function kindLabel(kind: string): string {
   return KIND_LABEL[kind] ?? kind.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
-function formatClock(ts: string): string | null {
+/** Date and time, so a run that crosses midnight reads unambiguously. */
+export function formatEventTime(ts: string): string | null {
   const value = Date.parse(ts);
   if (!Number.isFinite(value)) return null;
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+/** Who posted the timeline document and when, for the "Posted by" line. */
+export interface TimelineProvenance {
+  by: string;
+  at: string | null;
 }
 
 function stepCount(n: number): string {
@@ -219,8 +232,14 @@ function BusinessSummaryView({ summary, notice }: { summary: BusinessSummary; no
 function clockchainText(log: TimelineMilestoneLog): string {
   const status = log.status === "not-yet-logged" ? "not logged yet" : log.status.replace(/[-_]+/g, " ");
   const parts = [`Clockchain: ${status}`];
+  // Only fields the harness actually sent.
   if (log.ledgerId) parts.push(`ledger ${log.ledgerId}`);
   if (log.blockHeight) parts.push(`block ${log.blockHeight}`);
+  if (log.coveredBy.length > 0) {
+    parts.push(
+      `covered by ${log.coveredBy.length === 1 ? "ledger entry" : `${log.coveredBy.length} ledger entries`} ${log.coveredBy.join(", ")}`,
+    );
+  }
   return parts.join(" · ");
 }
 
@@ -238,7 +257,7 @@ function TimelineEventRow({
   event: TimelineEvent;
   onOpenLogLine?: (seq: number) => void;
 }) {
-  const clock = formatClock(event.ts);
+  const clock = formatEventTime(event.ts);
   const problem = event.outcome === "refused" || event.outcome === "error";
   return (
     <li
@@ -314,11 +333,13 @@ function BusinessTimelineView({
   summary,
   hasTranscript,
   onOpenLogLine,
+  provenance,
 }: {
   timeline: MilestoneTimeline;
   summary: BusinessSummary;
   hasTranscript: boolean;
   onOpenLogLine?: (seq: number) => void;
+  provenance: TimelineProvenance | null;
 }) {
   const baseId = useId();
   const simulatedLabels = useMemo(() => timelineSimulatedLabels(timeline), [timeline]);
@@ -339,6 +360,12 @@ function BusinessTimelineView({
   return (
     <div className="space-y-4" data-transcript-mode="business" data-business-source="timeline">
       {timeline.label && <p className="text-sm font-medium text-foreground">{timeline.label}</p>}
+      {provenance && (
+        <p data-business-provenance className="-mt-3 text-xs text-muted-foreground">
+          Business log posted by {provenance.by}
+          {provenance.at ? ` · ${provenance.at}` : ""}
+        </p>
+      )}
 
       {simulatedLabels.length > 0 && (
         <p
@@ -456,6 +483,9 @@ export function BusinessTranscriptView({
   timeline,
   timelineNotice,
   onOpenLogLine,
+  timelineProvenance,
+  runStatus,
+  runError,
   className,
 }: {
   entries: readonly TranscriptEntry[];
@@ -468,12 +498,17 @@ export function BusinessTranscriptView({
   timelineNotice?: string | null;
   /** Open the Raw view at the run-log row with this `seq`. */
   onOpenLogLine?: (seq: number) => void;
+  /** Who posted the timeline and when. */
+  timelineProvenance?: TimelineProvenance | null;
+  /** The run record's status and error; they win over the transcript's result line. */
+  runStatus?: string | null;
+  runError?: string | null;
   className?: string;
 }) {
   const readable = useReadableTranscript(entries, streaming);
   const summary = useMemo(
-    () => buildBusinessSummary(readable, { streaming, usage, stoppedReason }),
-    [readable, streaming, usage, stoppedReason],
+    () => buildBusinessSummary(readable, { streaming, usage, stoppedReason, runStatus, runError }),
+    [readable, streaming, usage, stoppedReason, runStatus, runError],
   );
   return (
     <div className={className}>
@@ -483,6 +518,7 @@ export function BusinessTranscriptView({
           summary={summary}
           hasTranscript={entries.length > 0}
           onOpenLogLine={onOpenLogLine}
+          provenance={timelineProvenance ?? null}
         />
       ) : (
         <BusinessSummaryView summary={summary} notice={timelineNotice ?? null} />

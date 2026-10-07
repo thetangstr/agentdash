@@ -2670,6 +2670,12 @@ describe("IssueChatThread", () => {
     expect(container.querySelector("[data-readable-error]")?.textContent).toContain("ECONNREFUSED");
     expect(container.querySelector("[data-readable-footer]")?.textContent).toContain("Completed · 1m · 1.2k in / 300 out");
 
+    // Pressing the Readable that is already shown keeps the run page's Business default.
+    act(() => {
+      container.querySelector<HTMLButtonElement>('button[data-transcript-mode="readable"]')!.click();
+    });
+    expect(window.localStorage.getItem("agentdash.runTranscriptMode")).toBeNull();
+
     const rawButton = container.querySelector<HTMLButtonElement>('button[data-transcript-mode="raw"]');
     expect(rawButton).not.toBeNull();
     act(() => rawButton!.click());

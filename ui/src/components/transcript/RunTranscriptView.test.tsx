@@ -7,6 +7,7 @@ import { ThemeProvider } from "../../context/ThemeContext";
 import { RunTranscriptView } from "./RunTranscriptView";
 import { parseMilestoneTimeline, type MilestoneTimeline } from "../../lib/milestoneTimeline";
 import { SAMPLE_MILESTONE_TIMELINE } from "../../fixtures/milestoneTimelineFixture";
+import realArtefact from "../../fixtures/milestone-timeline-p9-at-2026-10-06-4.trimmed.json";
 
 function render(node: React.ReactNode) {
   return renderToStaticMarkup(<ThemeProvider>{node}</ThemeProvider>);
@@ -238,6 +239,30 @@ describe("RunTranscriptView business mode", () => {
     expect(html).toContain("Clockchain: not logged yet");
     // The traveler lane is folded under "what the other side did".
     expect(html).toContain("What the other side did (1)");
+  });
+
+  it("says who posted the business log and when, and shows real coveredBy anchors", () => {
+    const real = parseMilestoneTimeline(realArtefact);
+    if (!real.ok) throw new Error(real.detail);
+    const html = render(
+      <RunTranscriptView
+        mode="business"
+        entries={toolRun}
+        timeline={real.timeline}
+        timelineProvenance={{ by: "agent pairing-rome-a", at: "Oct 7, 12:06:30 AM" }}
+      />,
+    );
+    expect(html).toContain("Business log posted by agent pairing-rome-a · Oct 7, 12:06:30 AM");
+    expect(html).toContain("Clockchain: not logged yet · covered by 3 ledger entries");
+    expect(html).not.toContain("· block undefined");
+  });
+
+  it("uses the run's own status when the transcript has no result", () => {
+    const html = render(
+      <RunTranscriptView mode="business" entries={toolRun.slice(0, 3)} runStatus="timed_out" runError="Timed out after 30m" />,
+    );
+    expect(html).toContain('data-business-outcome="failed"');
+    expect(html).toContain("Ran out of time");
   });
 
   it("renders a posted timeline before the run log has loaded", () => {

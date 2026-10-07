@@ -15,6 +15,15 @@ import os from "node:os";
 import path from "node:path";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { SAMPLE_MILESTONE_TIMELINE } from "../../ui/src/fixtures/milestoneTimelineFixture";
+// A real Track C artefact (ac_travel_mvp f869eeeb, trimmed): multi-line strings
+// that JSON writes as `\n`, the case the document PUT used to corrupt.
+const realArtefact = JSON.parse(
+  fs.readFileSync(path.resolve(process.cwd(), "ui/src/fixtures/milestone-timeline-p9-at-2026-10-06-4.trimmed.json"), "utf8"),
+) as {
+  label: string;
+  agency: { agentdash: Record<string, string> } & Record<string, unknown>;
+  events: Array<{ lane: string }>;
+} & Record<string, unknown>;
 
 const FAKE_CLAUDE = `#!/usr/bin/env node
 process.stdin.resume();
@@ -132,6 +141,33 @@ async function putTimeline(request: APIRequestContext, seeded: Seeded, schema?: 
   expect(res.ok(), await res.text()).toBe(true);
 }
 
+/** PUT any body to the run's timeline key, with baseRevisionId on an update. */
+async function putTimelineBody(request: APIRequestContext, seeded: Seeded, body: string) {
+  const url = `/api/issues/${seeded.issueId}/documents/milestone-timeline-${seeded.runId}`;
+  const existing = await request.get(url);
+  const baseRevisionId = existing.ok() ? ((await existing.json()) as { latestRevisionId: string }).latestRevisionId : null;
+  const res = await request.put(url, { data: { title: "Business log", format: "markdown", body, baseRevisionId } });
+  expect(res.ok(), await res.text()).toBe(true);
+  const stored = await request.get(url);
+  return ((await stored.json()) as { body: string }).body;
+}
+
+function realArtefactFor(seeded: Seeded) {
+  return {
+    ...realArtefact,
+    agency: {
+      ...realArtefact.agency,
+      agentdash: {
+        ...realArtefact.agency.agentdash,
+        companyId: seeded.company.id,
+        agentId: seeded.agentId,
+        heartbeatRunId: seeded.runId,
+        issueId: seeded.issueId,
+      },
+    },
+  };
+}
+
 const runUrl = (s: Seeded) => `/${s.company.issuePrefix}/agents/${s.agentId}/runs/${s.runId}`;
 const modeButton = (page: Page, mode: string) => page.locator(`button[data-transcript-mode="${mode}"]`).first();
 
@@ -232,5 +268,30 @@ test.describe("run page Business view", () => {
     expect(await page.evaluate(() => localStorage.getItem("agentdash.runTranscriptMode"))).not.toBe("raw");
     await page.reload();
     await expect(page.locator('[data-business-source="timeline"]')).toBeVisible({ timeout: 30_000 });
+  });
+  test("a real Track C artefact survives the document PUT, fenced or bare, and renders", async ({ page, request }) => {
+    const artefact = realArtefactFor(seeded);
+    const plain = JSON.stringify(artefact);
+    expect(plain).toContain("\\n");
+
+    // Bare JSON: stored byte for byte.
+    const bare = await putTimelineBody(request, seeded, plain);
+    expect(JSON.parse(bare)).toEqual(artefact);
+
+    // Plain JSON in a ```json fence: the code block is stored literally.
+    const fencedBody = "```json\n" + plain + "\n```";
+    const fenced = await putTimelineBody(request, seeded, fencedBody);
+    expect(fenced).toBe(fencedBody);
+
+    await page.goto(runUrl(seeded));
+    const timeline = page.locator('[data-business-source="timeline"]');
+    await expect(timeline).toBeVisible({ timeout: 30_000 });
+    await expect(timeline).toContainText(realArtefact.label);
+    await expect(timeline.locator("[data-business-provenance]")).toContainText("Business log posted by");
+    await expect(timeline).toContainText("Clockchain: not logged yet · covered by");
+    await expect(timeline.locator("[data-business-simulated-label]").first()).toBeVisible();
+    const agencyEvents = realArtefact.events.filter((event) => event.lane === "agency").length;
+    await expect(timeline.locator("li[data-business-event]").filter({ visible: true })).toHaveCount(agencyEvents);
+    await shoot(page, "after-business-real-artefact");
   });
 });

@@ -89,6 +89,22 @@ describe("buildBusinessSummary", () => {
     expect(JSON.stringify(stopped.steps)).not.toContain("SIGTERM");
   });
 
+  // AgentDash (PR #1059 review): the run record's status wins.
+  it("reads the run's own status when the transcript has no result line", () => {
+    const noResult = buildReadableTranscript([{ kind: "assistant", ts: "2026-03-12T00:00:01.000Z", text: "Working" }]);
+    expect(buildBusinessSummary(noResult, { runStatus: "failed", runError: "Adapter crashed" }).outcome).toEqual({
+      state: "failed",
+      label: "Did not finish",
+      note: "Adapter crashed",
+    });
+    expect(buildBusinessSummary(noResult, { runStatus: "timed_out" }).outcome.label).toBe("Ran out of time");
+    expect(buildBusinessSummary(noResult, { runStatus: "cancelled" }).outcome.state).toBe("stopped");
+    expect(buildBusinessSummary(noResult, { runStatus: "succeeded" }).outcome.label).toBe("Finished");
+    expect(buildBusinessSummary(noResult, { runStatus: "running" }).outcome.state).toBe("working");
+    // A clean result line on a run the record marks failed is not "Finished".
+    expect(buildBusinessSummary(buildReadableTranscript(run), { runStatus: "failed" }).outcome.state).toBe("failed");
+  });
+
   it("redacts secrets in step text", () => {
     const secret = "SUPERSECRETvalue123";
     const summary = buildBusinessSummary(

@@ -139,6 +139,35 @@ describe("useLiveAutoFollow", () => {
     expect(followState?.isFollowing).toBe(true);
   });
 
+  // AgentDash (PR #1059 review probe): new output and a scroll up in the
+  // same frame. The scroll up must win.
+  it("lets go when the viewer scrolls up in the same frame as new output", () => {
+    act(() => root.render(<RunPane ready lines={10} contentKey="a" />));
+    expect(box().scrollTop).toBe(300);
+    // One more line renders, but the follow step has not run yet (same
+    // contentKey); the viewer scrolls to the top before it does.
+    act(() => root.render(<RunPane ready lines={11} contentKey="a" />));
+    act(() => {
+      box().scrollTop = 0;
+      box().dispatchEvent(new Event("scroll"));
+    });
+    act(() => root.render(<RunPane ready lines={11} contentKey="b" />));
+    expect(followState?.isFollowing).toBe(false);
+    expect(box().scrollTop).toBe(0);
+  });
+
+  it("keeps following when content grows with no scroll from the viewer", () => {
+    act(() => root.render(<RunPane ready lines={10} contentKey="a" />));
+    act(() => root.render(<RunPane ready lines={11} contentKey="a" />));
+    // A scroll event at the old position (e.g. layout) is pure growth.
+    act(() => {
+      box().dispatchEvent(new Event("scroll"));
+    });
+    expect(followState?.isFollowing).toBe(true);
+    act(() => root.render(<RunPane ready lines={11} contentKey="b" />));
+    expect(box().scrollTop).toBe(340);
+  });
+
   it("follows content changes that do not add log lines (contentKey)", () => {
     act(() => root.render(<RunPane ready lines={5} contentKey="a" />));
     expect(box().scrollTop).toBe(100);

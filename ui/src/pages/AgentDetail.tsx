@@ -112,6 +112,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
 import { RunTranscriptView, type RawTranscriptFocus } from "../components/transcript/RunTranscriptView";
+import { formatEventTime, type TimelineProvenance } from "../components/transcript/BusinessTranscript";
 // AgentDash: persisted Readable/Raw transcript preference shared with every run surface.
 import { TranscriptModeToggle } from "../components/transcript/ReadableTranscript";
 import { useTranscriptModePreference, type TranscriptViewMode } from "../lib/transcriptModePreference";
@@ -4719,6 +4720,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
   // Run-log rows already shown, by seq, so the WebSocket and the polling /
   // initial fetch paths never show the same row twice.
   const seenLogSeqRef = useRef<Set<number>>(new Set());
+  const truncatedLogSeqRef = useRef<Set<number>>(new Set());
   const isLive = run.status === "running" || run.status === "queued";
   const runIssueId = asNonEmptyString(asRecord(run.contextSnapshot)?.issueId);
   const { data: workspaceOperations = [] } = useQuery({
@@ -4742,6 +4744,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     }
 
     const parsed: RunLogLine[] = [];
+    const replacements = new Map<number, RunLogLine>();
     for (const line of split) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -4754,6 +4757,11 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
         if (!chunk) continue;
         const seq = typeof raw.seq === "number" && Number.isFinite(raw.seq) ? raw.seq : undefined;
         if (seq !== undefined) {
+          if (truncatedLogSeqRef.current.has(seq)) {
+            truncatedLogSeqRef.current.delete(seq);
+            replacements.set(seq, { ts, stream, chunk, seq });
+            continue;
+          }
           if (seenLogSeqRef.current.has(seq)) continue;
           seenLogSeqRef.current.add(seq);
         }
@@ -4763,8 +4771,13 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
       }
     }
 
-    if (parsed.length > 0) {
-      setLogLines((prev) => appendRunLogLines(prev, parsed));
+    if (parsed.length > 0 || replacements.size > 0) {
+      setLogLines((prev) =>
+        appendRunLogLines(
+          replacements.size > 0 ? prev.map((line) => (line.seq !== undefined ? replacements.get(line.seq) ?? line : line)) : prev,
+          parsed,
+        ),
+      );
     }
   }
 
@@ -4786,6 +4799,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     let cancelled = false;
     pendingLogLineRef.current = "";
     seenLogSeqRef.current = new Set();
+    truncatedLogSeqRef.current = new Set();
     setLogLines([]);
     setLogOffset(0);
     setHasMoreLog(false);
@@ -4932,6 +4946,8 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           if (seq !== undefined) {
             if (seenLogSeqRef.current.has(seq)) return;
             seenLogSeqRef.current.add(seq);
+            // A live chunk cut to its tail: the persisted row replaces it.
+            if (payload.truncated === true) truncatedLogSeqRef.current.add(seq);
           }
           setLogLines((prev) => appendRunLogLines(prev, [seq !== undefined ? { ts, stream, chunk, seq } : { ts, stream, chunk }]));
           return;
@@ -5046,8 +5062,11 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     // A live run's timeline may be posted at the end of the run.
     refetchInterval: isLive ? 15_000 : false,
   });
+  // Parsed once per document revision (up to 512 KiB), not per live poll.
+  const timelineDoc = timelineQuery.data ?? null;
+  const timelineRevision = timelineDoc ? `${timelineDoc.id}:${timelineDoc.latestRevisionId ?? timelineDoc.latestRevisionNumber}` : null;
   const { timeline, timelineNotice } = useMemo((): { timeline: MilestoneTimeline | null; timelineNotice: string | null } => {
-    const doc = timelineQuery.data;
+    const doc = timelineDoc;
     if (!doc) return { timeline: null, timelineNotice: null };
     const parsed = parseMilestoneTimeline(doc.body);
     if (!parsed.ok) {
@@ -5059,9 +5078,32 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
             : "A business log was posted for this run but could not be read. Here is a plain summary instead.",
       };
     }
-    if (!timelineMatchesRun(parsed.timeline, run)) return { timeline: null, timelineNotice: null };
+    if (!timelineMatchesRun(parsed.timeline, { id: run.id, companyId: run.companyId })) {
+      return {
+        timeline: null,
+        timelineNotice:
+          "A business log was posted for this run, but it does not say it belongs to this run, so it is not shown. Here is a plain summary instead.",
+      };
+    }
     return { timeline: parsed.timeline, timelineNotice: null };
-  }, [timelineQuery.data, run]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by document revision on purpose
+  }, [timelineRevision, run.id, run.companyId]);
+
+  // "Posted by <agent or team member> · <date time>" above the timeline.
+  const { data: companyAgents } = useQuery({
+    queryKey: queryKeys.agents.list(run.companyId),
+    queryFn: () => agentsApi.list(run.companyId),
+    enabled: Boolean(timeline),
+  });
+  const timelineProvenance = useMemo((): TimelineProvenance | null => {
+    if (!timeline || !timelineDoc) return null;
+    const agentId = timelineDoc.updatedByAgentId ?? timelineDoc.createdByAgentId;
+    const userId = timelineDoc.updatedByUserId ?? timelineDoc.createdByUserId;
+    const agentName = agentId ? companyAgents?.find((candidate) => candidate.id === agentId)?.name : null;
+    const by = agentId ? (agentName ? `agent ${agentName}` : "an agent") : userId ? "a team member" : "an unknown poster";
+    const at = timelineDoc.updatedAt ? formatEventTime(String(timelineDoc.updatedAt)) : null;
+    return { by, at };
+  }, [timeline, timelineDoc, companyAgents]);
 
   // A Business "Log line n" link: open Raw at that row. The row is looked up
   // once the log has loaded (the click can land while it is still loading).
@@ -5171,6 +5213,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
             timelineNotice={timelineNotice}
             onOpenLogLine={openLogLine}
             rawFocus={rawFocus}
+            timelineProvenance={timelineProvenance}
+            runStatus={run.status}
+            runError={run.error ?? null}
           />
         </div>
         {hasMoreLog && (
