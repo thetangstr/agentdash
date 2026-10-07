@@ -399,8 +399,8 @@ describe("upgrading one box", () => {
 
 describe("the Railway backup quota", () => {
   const day = (n: number) => new Date(Date.UTC(2026, 8, 1) - n * 86_400_000).toISOString();
-  const manual = (id: string, daysAgo: number, locked = false) => ({ id, name: "Manual", createdAt: day(daysAgo), expiresAt: null, locked });
-  const scheduled = (id: string, daysAgo: number) => ({ id, name: "Daily", createdAt: day(daysAgo), expiresAt: day(-daysAgo) });
+  const manual = (id: string, daysAgo: number, locked = false) => ({ id, name: "Manual", createdAt: day(daysAgo), expiresAt: null, scheduleId: null, locked });
+  const scheduled = (id: string, daysAgo: number) => ({ id, name: "Daily", createdAt: day(daysAgo), expiresAt: day(-daysAgo), scheduleId: "sched-daily" });
   const volOf = (env: ReturnType<typeof setup>, instanceId: string | null) =>
     [...env.fake.volumes.values()].find((v) => v.instanceId === instanceId)!;
   /** Every volumeInstanceBackupDelete sent (refused ones included), by backup id. */
@@ -502,6 +502,30 @@ describe("the Railway backup quota", () => {
     }
   });
 
+  it("never deletes a backup named \"Manual\" that a schedule took (it has a scheduleId), even with no expiry", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    // The oldest "Manual" is really a scheduled backup: no expiresAt, but a scheduleId.
+    pg.backupRecords.push({ ...manual("m0", 40), scheduleId: "sched-x" }, ...Array.from({ length: 7 }, (_, i) => manual(`m${i + 1}`, 30 - i)), scheduled("d1", 1), scheduled("w1", 3));
+    await run(env, box.slug);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    expect(deletes(env)).toEqual(["m1"]);
+    expect(pg.backupRecords.map((b) => b.id)).toContain("m0");
+  });
+
+  it("fails without deleting when the only old \"Manual\" backup has a scheduleId", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push({ ...manual("old", 20), scheduleId: "sched-x" }, manual("keep-a", 5), manual("keep-b", 2), ...Array.from({ length: 7 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    await run(env, box.slug);
+    expect((await upgradeOf(box.id)).state).toBe("failed");
+    expect(deletes(env)).toEqual([]);
+    expect(pg.backupRecords).toHaveLength(10);
+  });
+
   it("waits out another actor's deletion and re-plans, so it deletes nothing once there is room", async () => {
     const env = setup();
     const box = await activeBox(env);
@@ -567,10 +591,10 @@ describe("the Railway backup quota", () => {
       expect(deletes({ fake })).toEqual([]);
     });
 
-    it("plans: scheduled, locked and the newest two manual backups are never eligible", () => {
-      const all = [manual("a", 9), manual("b", 8, true), manual("c", 7), manual("d", 2), manual("e", 1), { ...scheduled("s", 3), locked: false }, { id: "x", name: "Manual", createdAt: day(10), expiresAt: day(-1), locked: false }];
+    it("plans: scheduled (expiry or scheduleId), locked and the newest two manual backups are never eligible", () => {
+      const all = [manual("a", 9), manual("b", 8, true), manual("c", 7), manual("d", 2), manual("e", 1), { ...scheduled("s", 3), locked: false }, { id: "x", name: "Manual", createdAt: day(10), expiresAt: day(-1), scheduleId: null, locked: false }, { id: "y", name: "Manual", createdAt: day(11), expiresAt: null, scheduleId: "sched-y", locked: false }];
       const plan = planBackupPrune(all, { limit: 6, keepManual: 2 });
-      expect(plan.need).toBe(2);
+      expect(plan.need).toBe(3);
       expect(plan.eligible.map((b) => b.id)).toEqual(["a", "c"]);
       expect(planBackupPrune(all, { limit: 10, keepManual: 2 }).need).toBe(0);
     });

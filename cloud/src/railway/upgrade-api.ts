@@ -65,8 +65,9 @@ export async function createVolumeBackup(client: RailwayClient, volumeInstanceId
 // deliberately narrow:
 //   - it plans before it deletes: when too few backups are eligible to make
 //     room, it fails without deleting anything;
-//   - eligible = named "Manual", no expiry (scheduled ones expire), not
-//     locked, and not among the newest KEEP_MANUAL_BACKUPS manual ones;
+//   - eligible = named "Manual", no expiry and no scheduleId (scheduled
+//     backups carry both), not locked, and not among the newest
+//     KEEP_MANUAL_BACKUPS manual ones;
 //   - Railway runs one deletion per volume at a time, so after each delete it
 //     polls the backup LIST until that backup is gone (never re-sending the
 //     delete), inside one bounded window per volume.
@@ -76,6 +77,8 @@ export interface VolumeBackup {
   name: string | null;
   createdAt: string;
   expiresAt: string | null;
+  /** The backup schedule that took it; null for a backup taken on demand. */
+  scheduleId: string | null;
   /** True when Railway reports the backup locked (see backupLockField). Never pruned. */
   locked: boolean;
 }
@@ -106,7 +109,9 @@ export class BackupPruneTimeoutError extends Error {
   }
 }
 
-// Railway's VolumeInstanceBackup type is not documented. Rather than guess a
+// Railway's VolumeInstanceBackup type is not documented, and as introspected
+// live on 2026-10-06 it has no lock field at all (createdAt creatorId expiresAt
+// externalId id name referencedMB scheduleId usedMB volumeInstanceSizeMB). Rather than guess a
 // lock field's name (selecting a field that does not exist fails the whole
 // query), read the type once per client and select any scalar field whose
 // name mentions "lock". Without one, Railway's own refusal ("locked") is the
@@ -142,7 +147,7 @@ export async function listVolumeBackups(client: RailwayClient, volumeInstanceId:
   const lock = o.lockField && /^[A-Za-z_][A-Za-z0-9_]*$/.test(o.lockField) ? o.lockField : null;
   const d = await client.request<{ volumeInstanceBackupList: Array<Record<string, unknown>> | null }>(
     "volumeInstanceBackupList",
-    `query($v:String!){ volumeInstanceBackupList(volumeInstanceId:$v){ id name createdAt expiresAt${lock ? ` ${lock}` : ""} } }`,
+    `query($v:String!){ volumeInstanceBackupList(volumeInstanceId:$v){ id name createdAt expiresAt scheduleId${lock ? ` ${lock}` : ""} } }`,
     { v: volumeInstanceId },
     { signal: o.signal },
   );
@@ -153,6 +158,8 @@ export async function listVolumeBackups(client: RailwayClient, volumeInstanceId:
       name: typeof b.name === "string" ? b.name : null,
       createdAt: String(b.createdAt),
       expiresAt: typeof b.expiresAt === "string" ? b.expiresAt : null,
+      // Anything but an explicit null counts as scheduled (never pruned).
+      scheduleId: b.scheduleId === null || b.scheduleId === undefined ? null : String(b.scheduleId),
       // Anything but an explicit "not locked" counts as locked.
       locked: l !== undefined && l !== null && l !== false && l !== "",
     };
@@ -186,7 +193,7 @@ export function planBackupPrune(backups: VolumeBackup[], o: { limit: number; kee
   const manual = backups.filter((b) => b.name === MANUAL_BACKUP_NAME).sort(byAge);
   // The newest manual backups are kept whatever their lock state.
   const kept = new Set(manual.slice(Math.max(0, manual.length - o.keepManual)).map((b) => b.id));
-  const eligible = manual.filter((b) => !kept.has(b.id) && b.expiresAt === null && !b.locked && !o.skip?.has(b.id));
+  const eligible = manual.filter((b) => !kept.has(b.id) && b.expiresAt === null && b.scheduleId === null && !b.locked && !o.skip?.has(b.id));
   return { need, eligible, manual: manual.length, locked: backups.filter((b) => b.locked).length };
 }
 

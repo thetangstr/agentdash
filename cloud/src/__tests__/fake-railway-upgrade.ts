@@ -68,7 +68,7 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
         resolve: () => {
           const scalar = (name: string) => ({ name, type: { kind: "NON_NULL", ofType: { kind: "SCALAR" } } });
           const lock = this.backupLockField();
-          return { __type: { fields: [scalar("id"), scalar("name"), scalar("createdAt"), { name: "expiresAt", type: { kind: "SCALAR", ofType: null } }, ...(lock ? [{ name: lock, type: { kind: "SCALAR", ofType: null } }] : [])] } };
+          return { __type: { fields: [scalar("id"), scalar("name"), scalar("createdAt"), { name: "expiresAt", type: { kind: "SCALAR", ofType: null } }, { name: "scheduleId", type: { kind: "SCALAR", ofType: null } }, ...(lock ? [{ name: lock, type: { kind: "SCALAR", ofType: null } }] : [])] } };
         },
       },
       {
@@ -85,7 +85,7 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
           const lock = this.backupLockField();
           const selectsLock = lock !== null && new RegExp(`\\b${lock}\\b`).test(String(query));
           return {
-            volumeInstanceBackupList: vol.backupRecords.map((b) => ({ id: b.id, name: b.name, createdAt: b.createdAt, expiresAt: b.expiresAt, ...(selectsLock ? { [lock]: b.locked ?? false } : {}) })),
+            volumeInstanceBackupList: vol.backupRecords.map((b) => ({ id: b.id, name: b.name, createdAt: b.createdAt, expiresAt: b.expiresAt, scheduleId: b.scheduleId ?? null, ...(selectsLock ? { [lock]: b.locked ?? false } : {}) })),
           };
         },
       },

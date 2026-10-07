@@ -22,6 +22,8 @@ export interface FakeVolumeBackup {
   name: string;
   createdAt: string;
   expiresAt: string | null;
+  /** Set on backups a schedule took (Daily/Weekly). */
+  scheduleId?: string | null;
   /** Railway refuses to delete a locked backup. */
   locked?: boolean;
 }
