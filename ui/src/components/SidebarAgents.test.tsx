@@ -6,6 +6,8 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockLocation = vi.hoisted(() => ({ pathname: "/PAP/dashboard" }));
 import { SidebarAgentRows, useSidebarAgentRows } from "./SidebarAgents";
 
 // The agent rows as the Team item nests them (SidebarTeamItem), without its
@@ -55,7 +57,7 @@ vi.mock("@/lib/router", () => ({
       {children}
     </a>
   ),
-  useLocation: () => ({ pathname: "/PAP/dashboard", search: "", hash: "", state: null }),
+  useLocation: () => ({ pathname: mockLocation.pathname, search: "", hash: "", state: null }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -158,6 +160,8 @@ describe("SidebarAgents", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    mockLocation.pathname = "/PAP/dashboard";
+    localStorage.clear();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = null;
@@ -319,5 +323,156 @@ describe("SidebarAgents", () => {
     await flushReact();
 
     expect(mockAgentsApi.resume).not.toHaveBeenCalled();
+  });
+
+  // AgentDash: agents grouped by team (reporting line) under Team.
+  describe("team groups", () => {
+    const org = () => [
+      makeAgent({ id: "solo", name: "Felix", urlKey: "felix" }),
+      makeAgent({ id: "cos", name: "Casper", urlKey: "casper" }),
+      makeAgent({ id: "eng", name: "Maya", urlKey: "maya", reportsTo: "cos" }),
+      makeAgent({ id: "be", name: "Priya", urlKey: "priya", reportsTo: "eng" }),
+      makeAgent({ id: "mkt", name: "Jules", urlKey: "jules", reportsTo: "cos" }),
+      makeAgent({ id: "orphan", name: "Orla", urlKey: "orla", reportsTo: "gone" }),
+    ];
+    const agentHrefs = () =>
+      [...container.querySelectorAll("a")]
+        .map((a) => a.getAttribute("href"))
+        .filter((h) => h?.startsWith("/agents/"));
+    const toggleFor = (name: string) =>
+      [...container.querySelectorAll("button")].find((b) =>
+        new RegExp(`^(Show|Hide) ${name}'s team$`).test(b.getAttribute("aria-label") ?? ""),
+      );
+    const groupOf = (leadId: string) => container.querySelector(`[data-sidebar-team-group="${leadId}"]`);
+    const click = async (el: Element | undefined) => {
+      await act(async () => {
+        el!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+    };
+    const render = async () => {
+      const currentRoot = createRoot(container);
+      root = currentRoot;
+      await act(async () => {
+        currentRoot.render(
+          <QueryClientProvider client={queryClient}>
+            <SidebarAgents />
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      return currentRoot;
+    };
+
+    it("nests reports under their lead, expanded by default", async () => {
+      mockAgentsApi.list.mockResolvedValue(org());
+      await render();
+
+      // Every agent is visible; leads keep their own link.
+      // Default order (useAgentOrder): top level by name, then reports by name.
+      expect(agentHrefs()).toEqual([
+        "/agents/casper", "/agents/jules", "/agents/maya", "/agents/priya", "/agents/felix", "/agents/orla",
+      ]);
+      // Casper's group holds Maya's group, which holds Priya.
+      expect(groupOf("cos")?.querySelector('a[href="/agents/maya"]')).not.toBeNull();
+      expect(groupOf("cos")?.querySelector('a[href="/agents/jules"]')).not.toBeNull();
+      expect(groupOf("eng")?.querySelector('a[href="/agents/priya"]')).not.toBeNull();
+      expect(groupOf("cos")?.contains(groupOf("eng"))).toBe(true);
+      // Standalone and missing-manager agents are top level, with no chevron.
+      expect(container.querySelector('a[href="/agents/felix"]')?.closest("[data-sidebar-team-group]")).toBeNull();
+      expect(container.querySelector('a[href="/agents/orla"]')?.closest("[data-sidebar-team-group]")).toBeNull();
+      expect(toggleFor("Felix")).toBeUndefined();
+      expect(toggleFor("Priya")).toBeUndefined();
+
+      const casper = toggleFor("Casper");
+      expect(casper?.getAttribute("type")).toBe("button");
+      expect(casper?.getAttribute("aria-expanded")).toBe("true");
+      expect(casper?.getAttribute("aria-label")).toBe("Hide Casper's team");
+      expect(casper?.getAttribute("aria-controls")).toBe(groupOf("cos")?.id);
+      // The chevron never sits inside the lead's link.
+      expect(casper?.closest("a")).toBeNull();
+    });
+
+    it("shows a collapsed team open while one of its agents is being viewed, without forgetting the collapse", async () => {
+      mockAgentsApi.list.mockResolvedValue(org());
+      let currentRoot = await render();
+      await click(toggleFor("Maya"));
+      expect(agentHrefs()).not.toContain("/agents/priya");
+
+      await act(async () => currentRoot.unmount());
+      root = null;
+      mockLocation.pathname = "/PAP/agents/priya";
+      currentRoot = await render();
+      expect(agentHrefs()).toContain("/agents/priya");
+      expect(toggleFor("Maya")?.getAttribute("aria-expanded")).toBe("true");
+      // The remembered choice is untouched.
+      expect(localStorage.getItem("agentdash.sidebarTeamExpanded:company-1:user-1:eng")).toBe("false");
+
+      await act(async () => currentRoot.unmount());
+      root = null;
+      mockLocation.pathname = "/PAP/dashboard";
+      await render();
+      expect(agentHrefs()).not.toContain("/agents/priya");
+    });
+
+    it("collapses one team at a time and remembers it per user per company per lead", async () => {
+      mockAgentsApi.list.mockResolvedValue(org());
+      let currentRoot = await render();
+
+      await click(toggleFor("Maya"));
+      expect(toggleFor("Maya")?.getAttribute("aria-expanded")).toBe("false");
+      expect(toggleFor("Maya")?.getAttribute("aria-label")).toBe("Show Maya's team");
+      expect(agentHrefs()).not.toContain("/agents/priya");
+      // The lead row and the other team stay put.
+      expect(agentHrefs()).toContain("/agents/maya");
+      expect(agentHrefs()).toContain("/agents/jules");
+      expect(toggleFor("Casper")?.getAttribute("aria-expanded")).toBe("true");
+      expect(localStorage.getItem("agentdash.sidebarTeamExpanded:company-1:user-1:eng")).toBe("false");
+      expect(localStorage.getItem("agentdash.sidebarTeamExpanded:company-1:user-1:cos")).toBeNull();
+
+      await act(async () => currentRoot.unmount());
+      root = null;
+      currentRoot = await render();
+      expect(toggleFor("Maya")?.getAttribute("aria-expanded")).toBe("false");
+      expect(agentHrefs()).not.toContain("/agents/priya");
+
+      // Collapsing the outer team hides everything under it.
+      await click(toggleFor("Casper"));
+      expect(agentHrefs()).toEqual(["/agents/casper", "/agents/felix", "/agents/orla"]);
+
+      // Expanding again forgets the stored collapse.
+      await click(toggleFor("Casper"));
+      await click(toggleFor("Maya"));
+      expect(agentHrefs()).toContain("/agents/priya");
+      expect(localStorage.getItem("agentdash.sidebarTeamExpanded:company-1:user-1:eng")).toBeNull();
+    });
+
+    it("ignores another user's remembered collapse", async () => {
+      localStorage.setItem("agentdash.sidebarTeamExpanded:company-1:user-2:cos", "false");
+      mockAgentsApi.list.mockResolvedValue(org());
+      await render();
+      expect(toggleFor("Casper")?.getAttribute("aria-expanded")).toBe("true");
+      expect(agentHrefs()).toContain("/agents/maya");
+    });
+
+    it("renders a reporting cycle without crashing or dropping agents", async () => {
+      mockAgentsApi.list.mockResolvedValue([
+        makeAgent({ id: "p", name: "Pat", urlKey: "pat", reportsTo: "q" }),
+        makeAgent({ id: "q", name: "Quinn", urlKey: "quinn", reportsTo: "p" }),
+      ]);
+      await render();
+      expect(agentHrefs()).toEqual(["/agents/pat", "/agents/quinn"]);
+      expect(groupOf("p")?.querySelector('a[href="/agents/quinn"]')).not.toBeNull();
+    });
+
+    it("keeps the row behaviour for a lead: actions menu and live count", async () => {
+      mockAgentsApi.list.mockResolvedValue(org());
+      mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([{ agentId: "cos" }, { agentId: "cos" }]);
+      await render();
+      const casperLink = container.querySelector('a[href="/agents/casper"]');
+      expect(casperLink?.textContent).toContain("2 live");
+      await openAgentMenu("Open actions for Casper");
+      expect(document.body.textContent).toContain("Pause agent");
+    });
   });
 });

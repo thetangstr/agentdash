@@ -318,10 +318,24 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const showLegacyWorkingDirectoryField =
     isLocal && shouldShowLegacyWorkingDirectoryField({ isCreate, adapterConfig: config });
   const uiAdapter = useMemo(() => getUIAdapter(adapterType), [adapterType]);
-  const supportedEnvironmentDrivers = useMemo(
-    () => new Set(supportedEnvironmentDriversForAdapter(adapterType)),
-    [adapterType],
-  );
+  // AgentDash: the server's matrix carries instance switches (for example
+  // AGENTDASH_HERMES_SSH_ENABLED); fall back to the static matrix until it loads.
+  const { data: environmentCapabilities } = useQuery({
+    queryKey: selectedCompanyId ? ["environment-capabilities", selectedCompanyId] : ["environment-capabilities", "none"],
+    queryFn: () => environmentsApi.capabilities(selectedCompanyId!),
+    enabled: Boolean(selectedCompanyId) && environmentsEnabled,
+  });
+  const supportedEnvironmentDrivers = useMemo(() => {
+    const serverSupport = environmentCapabilities?.adapters?.find((entry) => entry.adapterType === adapterType);
+    if (serverSupport) {
+      return new Set(
+        Object.entries(serverSupport.drivers)
+          .filter(([, status]) => status === "supported")
+          .map(([driver]) => driver),
+      );
+    }
+    return new Set<string>(supportedEnvironmentDriversForAdapter(adapterType));
+  }, [adapterType, environmentCapabilities]);
   const runnableEnvironments = useMemo(
     () => environments.filter((environment) => {
       if (!supportedEnvironmentDrivers.has(environment.driver)) return false;

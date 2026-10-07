@@ -100,6 +100,18 @@ export function sortAgentsByDefaultSidebarOrder(agents: Agent[]): Agent[] {
     if (children) queue.push(...children);
   }
 
+  // AgentDash: agents on a reporting cycle have no top-level ancestor, so the
+  // walk above never reaches them; keep them in the list (by name) rather
+  // than dropping them from the sidebar.
+  if (sorted.length < agents.length) {
+    const reached = new Set(sorted.map((agent) => agent.id));
+    sorted.push(
+      ...agents
+        .filter((agent) => !reached.has(agent.id))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    );
+  }
+
   return sorted;
 }
 

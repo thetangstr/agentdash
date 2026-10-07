@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockResolveEnvironmentDriverConfigForRuntime } = vi.hoisted(() => ({
   mockResolveEnvironmentDriverConfigForRuntime: vi.fn(),
@@ -8,6 +8,10 @@ vi.mock("../services/environment-config.js", () => ({
   resolveEnvironmentDriverConfigForRuntime: mockResolveEnvironmentDriverConfigForRuntime,
 }));
 
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildSshSpawnTarget } from "@paperclipai/adapter-utils/ssh";
 import {
   DEFAULT_SANDBOX_REMOTE_CWD,
   resolveEnvironmentExecutionTarget,
@@ -95,6 +99,162 @@ describe("resolveEnvironmentExecutionTarget", () => {
       transport: "sandbox",
       paperclipApiUrl: "https://paperclip.example.test",
       paperclipTransport: "direct",
+    });
+  });
+
+  describe("hermes_local over SSH", () => {
+    const companyId = "0008870a-4a07-4e09-9a3e-1998f4c7d640";
+    let identityFile = "";
+    let knownHostsFile = "";
+
+    beforeEach(async () => {
+      delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
+      delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
+      const dir = await mkdtemp(join(tmpdir(), "hermes-ssh-target-"));
+      identityFile = join(dir, "ac-provider_ed25519");
+      knownHostsFile = join(dir, "known_hosts");
+      await writeFile(identityFile, "placeholder", { mode: 0o600 });
+      await writeFile(`${identityFile}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPub agentdash\n");
+      await writeFile(knownHostsFile, "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHost\n");
+      mockResolveEnvironmentDriverConfigForRuntime.mockResolvedValue({
+        driver: "ssh",
+        config: {
+          host: "127.0.0.1",
+          port: 22,
+          username: "ac-provider",
+          remoteWorkspacePath: "/Users/ac-provider/agentdash",
+          privateKey: null,
+          privateKeySecretRef: null,
+          knownHosts: null,
+          strictHostKeyChecking: true,
+        },
+      });
+    });
+
+    const allowlist = (companies: string[], extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ "ac-provider@127.0.0.1": { companies, identityFile, knownHostsFile, ...extra } });
+
+    afterEach(() => {
+      delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
+      delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
+    });
+
+    const resolveHermes = (overrides: { companyId?: string } = {}) =>
+      resolveEnvironmentExecutionTarget({
+        db: {} as never,
+        companyId: overrides.companyId ?? companyId,
+        adapterType: "hermes_local",
+        environment: { id: "env-ssh", driver: "ssh", config: {} },
+        leaseId: "lease-1",
+        leaseMetadata: {},
+      });
+
+    it("returns null with the flag off, exactly as before", async () => {
+      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = allowlist([companyId]);
+      await expect(resolveHermes()).resolves.toBeNull();
+      expect(mockResolveEnvironmentDriverConfigForRuntime).not.toHaveBeenCalled();
+    });
+
+    it("builds a hardened ssh target and argv for an allowlisted company and target", async () => {
+      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = allowlist([companyId]);
+
+      const target = await resolveHermes();
+      expect(target).toMatchObject({
+        kind: "remote",
+        transport: "ssh",
+        remoteCwd: "/Users/ac-provider/agentdash",
+        spec: {
+          host: "127.0.0.1",
+          port: 22,
+          username: "ac-provider",
+          privateKey: null,
+          knownHosts: null,
+          strictHostKeyChecking: true,
+          identityFile,
+          knownHostsFile,
+        },
+      });
+      if (target?.kind !== "remote" || target.transport !== "ssh") throw new Error("expected ssh target");
+
+      // No process is spawned: the argv the run would hand to `ssh` is built and inspected.
+      const spawnTarget = await buildSshSpawnTarget({
+        spec: target.spec,
+        command: "hermes",
+        args: ["chat", "-q", "task", "-Q"],
+        env: {},
+      });
+      await spawnTarget.cleanup();
+      expect(spawnTarget.command).toBe("ssh");
+      expect(spawnTarget.args.slice(0, -1)).toEqual([
+        "-F", "/dev/null",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", `UserKnownHostsFile=${knownHostsFile}`,
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-i", identityFile,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "ForwardAgent=no",
+        "-o", "ForwardX11=no",
+        "-o", "ClearAllForwardings=yes",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        "-o", "PermitLocalCommand=no",
+        "-p", "22",
+        "ac-provider@127.0.0.1",
+      ]);
+    });
+
+    it("refuses (never falls back to local) for a company the target is not allowed for", async () => {
+      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = allowlist([companyId]);
+      await expect(resolveHermes({ companyId: "22222222-2222-4222-8222-222222222222" })).rejects.toThrow(
+        /ac-provider@127\.0\.0\.1/,
+      );
+    });
+
+    it("pins the port from operator config and refuses an environment on another port", async () => {
+      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = allowlist([companyId], { port: 2222 });
+      await expect(resolveHermes()).rejects.toThrow(/only on SSH port 2222/);
+
+      mockResolveEnvironmentDriverConfigForRuntime.mockResolvedValue({
+        driver: "ssh",
+        config: {
+          host: "127.0.0.1",
+          port: 2222,
+          username: "ac-provider",
+          remoteWorkspacePath: "/Users/ac-provider/agentdash",
+          privateKey: "tenant-key-material-never-used",
+          privateKeySecretRef: null,
+          knownHosts: "tenant-known-hosts-never-used",
+          strictHostKeyChecking: false,
+        },
+      });
+      const target = await resolveHermes();
+      if (target?.kind !== "remote" || target.transport !== "ssh") throw new Error("expected ssh target");
+      // Tenant key material, inline known_hosts and a relaxed host-key policy are all ignored.
+      expect(target.spec).toMatchObject({
+        port: 2222,
+        privateKey: null,
+        knownHosts: null,
+        strictHostKeyChecking: true,
+        identityFile,
+        knownHostsFile,
+      });
+      const spawnTarget = await buildSshSpawnTarget({ spec: target.spec, command: "hermes", args: [], env: {} });
+      await spawnTarget.cleanup();
+      expect(spawnTarget.args.slice(-4, -1)).toEqual(["-p", "2222", "ac-provider@127.0.0.1"]);
+      expect(spawnTarget.args).not.toContain("StrictHostKeyChecking=no");
+    });
+
+    it("refuses a target that is not on the allowlist", async () => {
+      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({
+        "ac-prov-b@127.0.0.1": { companies: [companyId], identityFile, knownHostsFile },
+      });
+      await expect(resolveHermes()).rejects.toThrow(/allowed list/);
     });
   });
 });

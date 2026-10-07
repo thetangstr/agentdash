@@ -15,13 +15,16 @@ const HSTS_MAX_AGE = 15_552_000; // 180 days
  *   `/_plugins/...` documents served by this server). The OAuth consent
  *   surface escalates itself to DENY + frame-ancestors 'none' in app.ts,
  *   which stays the stricter value on that route.
+ * - Content-Security-Policy frame-ancestors 'self': the same rule in the
+ *   form modern browsers prefer. Routes that set their own CSP (the
+ *   sandboxed asset/attachment responses, OAuth consent) replace it.
  * - Strict-Transport-Security only when the request itself arrived over
  *   HTTPS (req.secure honours X-Forwarded-Proto via `trust proxy` on
  *   internet-facing deployments) or the configured public base URL is
  *   https — a loopback or Tailscale-HTTP box must not tell browsers to
  *   upgrade a transport it never serves.
  *
- * CSP is deliberately not set here: the UI shell inlines a theme bootstrap
+ * A full CSP (script/style/connect sources) is deliberately not set here: the UI shell inlines a theme bootstrap
  * <script>, pulls Google Fonts (styles + font files from two external
  * origins), uses same-origin WebSockets, and in dev runs behind Vite's
  * injected transforms. A strict CSP needs per-mode work and is tracked as
@@ -32,6 +35,7 @@ export function securityHeaders(): RequestHandler {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
     const publicBaseUrl = configuredPublicBaseUrl();
     if (req.secure || publicBaseUrl?.toLowerCase().startsWith("https://")) {
       res.setHeader("Strict-Transport-Security", `max-age=${HSTS_MAX_AGE}; includeSubDomains`);

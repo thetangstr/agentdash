@@ -1,3 +1,5 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { SshRemoteExecutionSpec } from "./ssh.js";
 import {
@@ -18,7 +20,7 @@ import {
   startSandboxCallbackBridgeServer,
   startSandboxCallbackBridgeWorker,
 } from "./sandbox-callback-bridge.js";
-import { parseSshRemoteExecutionSpec, runSshCommand, shellQuote } from "./ssh.js";
+import { parseSshRemoteExecutionSpec, runSshCommand, shellQuote, syncDirectoryToSsh } from "./ssh.js";
 import {
   ensureCommandResolvable,
   resolveCommandForLogs,
@@ -276,6 +278,87 @@ export async function runAdapterExecutionTargetProcess(
     terminalResultCleanup: options.terminalResultCleanup,
     remoteExecution: adapterExecutionTargetToRemoteSpec(target),
   });
+}
+
+const STAGED_ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const STAGED_ENV_RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+// The remote wrapper: bind the env-file path, source it with auto-export,
+// delete it (an EXIT trap covers failed sourcing or a signal), then exec the
+// real command. Only the wrapper, the env-file path and the command argv ride
+// the remote command line — never an env value.
+const STAGED_ENV_WRAPPER =
+  'trap \'rm -f "$PAPERCLIP_RUNENV"\' EXIT; PAPERCLIP_RUNENV=$1; set -a; . "$PAPERCLIP_RUNENV"; set +a; ' +
+  'rm -f "$PAPERCLIP_RUNENV"; unset PAPERCLIP_RUNENV; shift; exec "$@"';
+
+/**
+ * AgentDash: run a command on an SSH execution target without putting env
+ * values on the remote command line.
+ *
+ * `runAdapterExecutionTargetProcess` renders `opts.env` into the remote argv
+ * (`exec env KEY='value' ...`), which every local uid on the far host can read
+ * from the process list. Here the env is written locally to a 0600 file,
+ * piped over ssh stdin (tar, never argv) into a run-scoped directory under the
+ * remote cwd, sourced by a wrapper that deletes it, and the directory is swept
+ * on every exit path. A staging failure fails the run; there is no argv
+ * fallback.
+ */
+export async function runAdapterExecutionTargetProcessWithStagedEnv(
+  runId: string,
+  target: AdapterSshExecutionTarget,
+  command: string,
+  args: string[],
+  options: AdapterExecutionTargetProcessOptions,
+): Promise<RunProcessResult> {
+  if (!STAGED_ENV_RUN_ID_RE.test(runId)) {
+    throw new Error("Refusing to stage a run environment over SSH for an unsafe run id.");
+  }
+  for (const key of Object.keys(options.env)) {
+    if (!STAGED_ENV_KEY_RE.test(key)) {
+      throw new Error(`Invalid SSH environment variable key: ${key}`);
+    }
+  }
+  const remoteDir = path.posix.join(target.remoteCwd, ".paperclip-runenv", runId);
+  const remoteEnvFile = path.posix.join(remoteDir, "runenv");
+
+  const stagingDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-runenv-"));
+  try {
+    const body = Object.entries(options.env)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .map(([key, value]) => `${key}=${shellQuote(value)}`)
+      .join("\n");
+    await writeFile(path.join(stagingDir, "runenv"), body.length > 0 ? `${body}\n` : "", { mode: 0o600 });
+    await syncDirectoryToSsh({ spec: target.spec, localDir: stagingDir, remoteDir });
+  } catch (error) {
+    throw new Error(
+      `Failed to stage the run environment on the SSH execution target: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  try {
+    return await runAdapterExecutionTargetProcess(
+      runId,
+      target,
+      "sh",
+      ["-c", STAGED_ENV_WRAPPER, "runenv", remoteEnvFile, command, ...args],
+      { ...options, env: {} },
+    );
+  } finally {
+    try {
+      await runSshCommand(target.spec, `rm -rf ${shellQuote(remoteDir)}`, { timeoutMs: 15_000 });
+    } catch (cleanupError) {
+      await options
+        .onLog(
+          "stderr",
+          `[paperclip] warning: could not remove the remote run environment directory: ${
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          }\n`,
+        )
+        .catch(() => undefined);
+    }
+  }
 }
 
 export async function runAdapterExecutionTargetShellCommand(
