@@ -8,8 +8,9 @@
  */
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = resolveE2eServerPort(3399);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 async function createCompany(request: APIRequestContext, productProfile?: string) {

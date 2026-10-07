@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { assertSafeE2eBaseUrl, resolveE2eServerPort } from "./e2e-port";
 
-const BASE = process.env.PAPERCLIP_E2E_BASE_URL ?? "http://127.0.0.1:3105";
+const BASE = assertSafeE2eBaseUrl(process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${resolveE2eServerPort(3105)}`);
 const DATA_DIR = process.env.PAPERCLIP_E2E_DATA_DIR ?? process.env.PAPERCLIP_HOME;
 const CONFIG_PATH = process.env.PAPERCLIP_E2E_CONFIG_PATH ?? path.resolve(process.cwd(), ".paperclip/config.json");
 const BOOTSTRAP_SCRIPT_PATH = path.resolve(process.cwd(), "packages/db/scripts/create-auth-bootstrap-invite.ts");
