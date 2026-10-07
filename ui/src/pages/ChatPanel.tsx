@@ -1,5 +1,7 @@
 // AgentDash: chat substrate page
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowDown } from "lucide-react";
+import { useLiveAutoFollow } from "../hooks/useLiveAutoFollow";
 import { useMessages, REPLY_PENDING_TIMEOUT_MS } from "../realtime/useMessages";
 import { publishConversationMessage } from "../realtime/conversationEventBus";
 import { MessageList } from "../components/MessageList";
@@ -72,7 +74,6 @@ export default function ChatPanel({
   hasChiefOfStaff?: boolean;
 }) {
   const messages = useMessages(conversationId);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
   // AgentDash (scan 3, lane G): the starter chips go away as soon as this
   // person sends anything, without waiting for the message to come back.
   const [sentThisSession, setSentThisSession] = useState(false);
@@ -92,66 +93,6 @@ export default function ChatPanel({
     }, 1000);
     return () => clearTimeout(t);
   }, [messages, conversationId]);
-
-  // Land on the newest message the moment the first page paints. A smooth
-  // scroll used to be interrupted by the "CoS is thinking" block (and card
-  // images) still laying out, so the chat opened ~52px above the bottom; and
-  // scrollIntoView on a marker inside the pb-4 scroller stops that padding
-  // short, so the container's own scrollTop is set instead.
-  const didInitialScrollRef = useRef(false);
-  useEffect(() => {
-    didInitialScrollRef.current = false;
-  }, [conversationId]);
-  useEffect(() => {
-    if (didInitialScrollRef.current || messages.length === 0) return;
-    didInitialScrollRef.current = true;
-    const el = scrollRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-      // A second pass once late layout (avatars, cards, the thinking block)
-      // has settled, still instant.
-      window.requestAnimationFrame(() => {
-        const node = scrollRef.current;
-        if (node) node.scrollTop = node.scrollHeight;
-      });
-    }
-  }, [messages.length]);
-
-  // Auto-scroll the messages area to the bottom whenever a new message arrives.
-  // Keyed on length + last message id (not the array reference) to avoid running
-  // on every re-render when the underlying messages haven't changed.
-  useEffect(() => {
-    const el = scrollRef.current;
-    // jsdom doesn't implement scrollTo; feature-detect so unit tests pass.
-    if (el && typeof el.scrollTo === "function") {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    }
-  }, [messages.length, lastMessageId]);
-
-  // AgentDash (c3 copy): a desktop→phone resize changes scrollHeight and
-  // clientHeight, so a chat that was pinned to the bottom jumps to mid-thread.
-  // Track whether the person is at the bottom, and on any scroller resize
-  // restore the pin only when they had not scrolled up themselves.
-  const atBottomRef = useRef(true);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   // AgentDash (P0, v2026.1002.0): the chat is never silent while a reply is
   // owed. A conversation that ends on the person's message shows "CoS is
@@ -180,6 +121,20 @@ export default function ChatPanel({
   const stalled = Boolean(pending) && !retrying && pendingAge >= REPLY_PENDING_TIMEOUT_MS;
   const thinking = retrying || (Boolean(pending) && !stalled);
 
+  // AgentDash (chat auto-follow): the shared rule for live conversations
+  // (hooks/useLiveAutoFollow). The chat opens on the newest message, instantly
+  // (a smooth scroll used to be interrupted by the "CoS is thinking" block and
+  // cards still laying out, opening ~52px short). It stays on the newest
+  // message while the person is at the bottom, including through a
+  // desktop-to-phone resize; a scroll up lets go and nothing moves under them
+  // (new messages used to yank them back down); "Jump to latest" or sending a
+  // message follows again.
+  const follow = useLiveAutoFollow({
+    live: true,
+    resetKey: conversationId,
+    contentKey: `${messages.length}:${lastMessageId ?? ""}:${thinking}:${stalled}:${sendError ?? ""}`,
+  });
+
   useEffect(() => {
     if (retryFromCount !== null && messages.length > retryFromCount) setRetryFromCount(null);
   }, [messages.length, retryFromCount]);
@@ -196,6 +151,8 @@ export default function ChatPanel({
   function send(body: string) {
     setSendError(null);
     setSentThisSession(true);
+    // Your own message always brings you back to the latest.
+    follow.jumpToLatest();
     conversationsApi
       .post(conversationId, body, companyId)
       .then((posted) => {
@@ -235,12 +192,13 @@ export default function ChatPanel({
   return (
     <div className="chat-panel flex flex-col h-full bg-surface-page">
       <ChatHeader {...(headerProps ?? {})} />
-      <div ref={scrollRef} data-testid="chat-scroller" className="flex-1 overflow-y-auto px-4 pt-3 pb-4 max-sm:px-3">
+      <div className="relative min-h-0 flex-1">
+      <div ref={follow.scrollerRef} data-testid="chat-scroller" className="h-full overflow-y-auto px-4 pt-3 pb-4 max-sm:px-3">
         {/* min-h-full + justify-end pins messages to the bottom of the scroll
             area so a short conversation sits next to the composer instead of
             floating at the top with a big empty gap. As messages accumulate
             they push older content up and out via overflow-y-auto. */}
-        <div className="max-w-2xl mx-auto min-h-full flex flex-col justify-end">
+        <div ref={follow.contentRef} className="max-w-2xl mx-auto min-h-full flex flex-col justify-end">
           {messages.length === 0 && emptyState ? (
             <div data-testid="chat-empty-state">{emptyState}</div>
           ) : (
@@ -274,7 +232,20 @@ export default function ChatPanel({
           {sendError ? (
             <p data-testid="chat-send-error" role="alert" className="mt-3 text-xs text-danger-500">{sendError}</p>
           ) : null}
+          <div ref={follow.anchorRef} aria-hidden="true" />
         </div>
+      </div>
+      {!follow.isFollowing && messages.length > 0 ? (
+        <button
+          type="button"
+          onClick={follow.jumpToLatest}
+          data-testid="chat-jump-to-latest"
+          className="absolute bottom-3 left-1/2 inline-flex min-h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background px-4 text-xs font-medium text-muted-foreground shadow-md transition-colors hover:text-foreground max-sm:min-h-11"
+        >
+          <ArrowDown className="h-4 w-4" aria-hidden="true" />
+          Jump to latest
+        </button>
+      ) : null}
       </div>
       <div
         data-testid="chat-composer-dock"

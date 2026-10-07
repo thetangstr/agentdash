@@ -3,6 +3,8 @@ import type { CSSProperties } from "react";
 import { ArrowDown } from "lucide-react";
 import { usePanel } from "../context/PanelContext";
 import { cn } from "../lib/utils";
+// AgentDash (chat auto-follow): no smooth scroll for reduced-motion viewers.
+import { preferredScrollBehavior } from "../hooks/useLiveAutoFollow";
 
 function resolveScrollTarget() {
   const mainContent = document.getElementById("main-content");
@@ -61,12 +63,12 @@ export function ScrollToBottom() {
     const target = resolveScrollTarget();
 
     if (target.type === "element") {
-      target.element.scrollTo({ top: target.element.scrollHeight, behavior: "smooth" });
+      target.element.scrollTo({ top: target.element.scrollHeight, behavior: preferredScrollBehavior() });
       return;
     }
 
     const scroller = document.scrollingElement ?? document.documentElement;
-    window.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    window.scrollTo({ top: scroller.scrollHeight, behavior: preferredScrollBehavior() });
   }, []);
 
   if (!visible) return null;

@@ -168,8 +168,15 @@ vi.mock("./IssueLinkQuicklook", () => ({
   ),
 }));
 
+const { issueRuntimeOptions } = vi.hoisted(() => ({
+  issueRuntimeOptions: { current: null as null | { onSend: (message: { body: string }) => Promise<void> | void } },
+}));
+
 vi.mock("../hooks/usePaperclipIssueRuntime", () => ({
-  usePaperclipIssueRuntime: () => ({}),
+  usePaperclipIssueRuntime: (options: { onSend: (message: { body: string }) => Promise<void> | void }) => {
+    issueRuntimeOptions.current = options;
+    return {};
+  },
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2848,3 +2855,281 @@ describe("IssueChatThread", () => {
     });
   });
 });
+
+// AgentDash (chat auto-follow): the issue conversation follows the latest
+// comment / live transcript only while the viewer is at the bottom, using the
+// shared hooks/useLiveAutoFollow rule.
+describe("IssueChatThread auto-follow", () => {
+  let scrollHost: HTMLElement;
+  let container: HTMLDivElement;
+  let layout: { scrollHeight: number; clientHeight: number; scrollTop: number };
+
+  const comment = (index: number, authorUserId: string | null = null) => ({
+    id: `follow-${index}`,
+    companyId: "company-1",
+    issueId: "issue-1",
+    authorAgentId: authorUserId ? null : "agent-perf-codex",
+    authorUserId,
+    body: `Comment ${index}`,
+    createdAt: new Date(Date.UTC(2026, 3, 6, 12, index)),
+    updatedAt: new Date(Date.UTC(2026, 3, 6, 12, index)),
+  });
+  const commentsUpTo = (count: number) => Array.from({ length: count }, (_, index) => comment(index));
+
+  const liveRun = {
+    id: "run-live",
+    issueId: "issue-1",
+    status: "running",
+    invocationSource: "comment",
+    triggerDetail: null,
+    startedAt: "2026-04-06T13:00:00.000Z",
+    finishedAt: null,
+    createdAt: "2026-04-06T13:00:00.000Z",
+    agentId: "agent-1",
+    agentName: "Agent 1",
+    adapterType: "codex_local",
+  } as const;
+  const transcript = (lines: number) =>
+    new Map([
+      [
+        liveRun.id,
+        Array.from({ length: lines }, (_, index) => ({
+          kind: "assistant" as const,
+          ts: new Date(Date.UTC(2026, 3, 6, 13, 0, index + 1)).toISOString(),
+          text: `Working line ${index}`,
+        })),
+      ],
+    ]);
+
+  const maxTop = () => Math.max(0, layout.scrollHeight - layout.clientHeight);
+
+  function installLayout(el: HTMLElement) {
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => layout.scrollHeight });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => layout.clientHeight });
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true,
+      get: () => layout.scrollTop,
+      set: (value: number) => {
+        layout.scrollTop = Math.min(Math.max(0, value), maxTop());
+      },
+    });
+    el.scrollTo = ((options: ScrollToOptions) => {
+      el.scrollTop = options.top ?? 0;
+      el.dispatchEvent(new Event("scroll"));
+    }) as typeof el.scrollTo;
+  }
+
+  const userScrollTo = (top: number) => {
+    act(() => {
+      scrollHost.scrollTop = top;
+      scrollHost.dispatchEvent(new Event("scroll"));
+    });
+  };
+
+  beforeEach(async () => {
+    // Earlier tests leave canned return values on these spies; use the real
+    // composer-viewport logic (it only acts while the composer has focus).
+    const actualScroll = await vi.importActual<typeof import("../lib/issue-chat-scroll")>("../lib/issue-chat-scroll");
+    captureComposerViewportSnapshotMock.mockImplementation(actualScroll.captureComposerViewportSnapshot);
+    restoreComposerViewportSnapshotMock.mockImplementation(actualScroll.restoreComposerViewportSnapshot);
+    shouldPreserveComposerViewportMock.mockImplementation(actualScroll.shouldPreserveComposerViewport);
+    layout = { scrollHeight: 2000, clientHeight: 600, scrollTop: 0 };
+    scrollHost = document.createElement("main");
+    scrollHost.id = "main-content";
+    scrollHost.style.overflowY = "auto";
+    installLayout(scrollHost);
+    container = document.createElement("div");
+    scrollHost.appendChild(container);
+    document.body.appendChild(scrollHost);
+    window.scrollTo = vi.fn();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    scrollHost.remove();
+    issueRuntimeOptions.current = null;
+  });
+
+  function renderThread(
+    root: ReturnType<typeof createRoot>,
+    props: Partial<Parameters<typeof IssueChatThread>[0]> & { comments: ReturnType<typeof commentsUpTo> },
+    initialEntry = "/issues/PAP-1",
+  ) {
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <IssueChatThread
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            agentMap={issueChatLongThreadAgentMap}
+            currentUserId="user-board"
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+            draftKey="issue-1"
+            {...props}
+          />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it("opens where the page opens, then follows new comments once the viewer is at the bottom", () => {
+    const root = createRoot(container);
+    renderThread(root, { comments: commentsUpTo(5) });
+    // The issue page opens at its top: the thread does not drag it down.
+    expect(scrollHost.scrollTop).toBe(0);
+
+    userScrollTo(1400);
+    layout.scrollHeight = 2400;
+    renderThread(root, { comments: commentsUpTo(6) });
+    expect(scrollHost.scrollTop).toBe(1800);
+
+    act(() => root.unmount());
+  });
+
+  it("follows a live run's growing transcript at the bottom; a scroll up lets go and keeps the position", () => {
+    const root = createRoot(container);
+    renderThread(root, { comments: commentsUpTo(3), liveRuns: [liveRun], transcriptsByRunId: transcript(2) });
+    userScrollTo(1400);
+
+    layout.scrollHeight = 2300;
+    renderThread(root, { comments: commentsUpTo(3), liveRuns: [liveRun], transcriptsByRunId: transcript(4) });
+    expect(scrollHost.scrollTop).toBe(1700);
+
+    userScrollTo(900);
+    layout.scrollHeight = 2700;
+    renderThread(root, { comments: commentsUpTo(3), liveRuns: [liveRun], transcriptsByRunId: transcript(7) });
+    expect(scrollHost.scrollTop).toBe(900);
+
+    act(() => root.unmount());
+  });
+
+  it("Jump to latest during a live run goes to the bottom and follows again", () => {
+    const root = createRoot(container);
+    renderThread(root, { comments: commentsUpTo(3), liveRuns: [liveRun], transcriptsByRunId: transcript(2) });
+    userScrollTo(300);
+
+    const jump = container.querySelector('[data-testid="issue-chat-jump-to-latest"]') as HTMLButtonElement;
+    act(() => jump.click());
+    expect(scrollHost.scrollTop).toBe(1400);
+
+    layout.scrollHeight = 2500;
+    renderThread(root, { comments: commentsUpTo(3), liveRuns: [liveRun], transcriptsByRunId: transcript(5) });
+    expect(scrollHost.scrollTop).toBe(1900);
+
+    act(() => root.unmount());
+  });
+
+  it("sending your own message brings the viewer back to the latest and follows", async () => {
+    const root = createRoot(container);
+    renderThread(root, { comments: commentsUpTo(4) });
+    userScrollTo(200);
+
+    await act(async () => {
+      await issueRuntimeOptions.current?.onSend({ body: "My reply" });
+    });
+    layout.scrollHeight = 2600;
+    renderThread(root, { comments: [...commentsUpTo(4), comment(4, "user-board")] });
+    await act(async () => {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    });
+    expect(scrollHost.scrollTop).toBe(2000);
+
+    layout.scrollHeight = 2900;
+    renderThread(root, { comments: [...commentsUpTo(4), comment(4, "user-board"), comment(5)] });
+    expect(scrollHost.scrollTop).toBe(2300);
+
+    act(() => root.unmount());
+  });
+
+  it("does not override a deep link to a comment", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    const scrolledTo: string[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function scrollIntoView(this: Element) {
+      scrolledTo.push(this.id);
+      scrollHost.scrollTop = 500;
+      scrollHost.dispatchEvent(new Event("scroll"));
+    }) as unknown as typeof Element.prototype.scrollIntoView;
+    try {
+      const root = createRoot(container);
+      renderThread(root, { comments: commentsUpTo(5) }, "/issues/PAP-1#comment-follow-2");
+      expect(scrolledTo).toContain("comment-follow-2");
+      expect(scrollHost.scrollTop).toBe(500);
+
+      layout.scrollHeight = 2400;
+      renderThread(root, { comments: commentsUpTo(6) }, "/issues/PAP-1#comment-follow-2");
+      expect(scrollHost.scrollTop).toBe(500);
+
+      act(() => root.unmount());
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  describe("embedded run surface", () => {
+    let pane: HTMLDivElement;
+
+    beforeEach(() => {
+      pane = document.createElement("div");
+      pane.style.overflowY = "auto";
+      container.appendChild(pane);
+      // The pane, not the page, scrolls here.
+      scrollHost.style.overflowY = "visible";
+      installLayout(pane);
+      layout = { scrollHeight: 900, clientHeight: 320, scrollTop: 0 };
+    });
+
+    function renderEmbedded(root: ReturnType<typeof createRoot>, lines: number) {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <IssueChatThread
+              comments={[]}
+              linkedRuns={[]}
+              timelineEvents={[]}
+              liveRuns={[liveRun]}
+              onAdd={async () => {}}
+              showComposer={false}
+              showJumpToLatest={false}
+              variant="embedded"
+              enableLiveTranscriptPolling={false}
+              transcriptsByRunId={transcript(lines)}
+              hasOutputForRun={() => true}
+            />
+          </MemoryRouter>,
+        );
+      });
+    }
+
+    const embeddedJump = () =>
+      pane.querySelector('[data-testid="issue-chat-embedded-jump-to-latest"]') as HTMLButtonElement | null;
+
+    it("opens on the latest output and follows it; a scroll up lets go until Jump to latest", () => {
+      const root = createRoot(pane);
+      renderEmbedded(root, 3);
+      expect(pane.scrollTop).toBe(580);
+      expect(embeddedJump()).toBeNull();
+
+      layout.scrollHeight = 1100;
+      renderEmbedded(root, 5);
+      expect(pane.scrollTop).toBe(780);
+
+      act(() => {
+        pane.scrollTop = 100;
+        pane.dispatchEvent(new Event("scroll"));
+      });
+      layout.scrollHeight = 1300;
+      renderEmbedded(root, 7);
+      expect(pane.scrollTop).toBe(100);
+      expect(embeddedJump()?.textContent).toContain("Jump to latest");
+
+      act(() => embeddedJump()!.click());
+      expect(pane.scrollTop).toBe(980);
+      expect(embeddedJump()).toBeNull();
+
+      act(() => root.unmount());
+    });
+  });
+});
+

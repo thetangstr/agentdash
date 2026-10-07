@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useLiveAutoFollow } from "./useLiveAutoFollow";
+import { preferredScrollBehavior, useLiveAutoFollow, type AutoFollowStart } from "./useLiveAutoFollow";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,7 +29,7 @@ function installLayout() {
   Object.defineProperty(HTMLElement.prototype, "clientHeight", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.dataset.box ? 100 : 0;
+      return this.dataset.box ? Number(this.dataset.height ?? 100) : 0;
     },
   });
   Object.defineProperty(HTMLElement.prototype, "scrollTop", {
@@ -58,8 +58,18 @@ function installLayout() {
 
 let followState: ReturnType<typeof useLiveAutoFollow> | null = null;
 
-function RunPane({ ready, lines, contentKey }: { ready: boolean; lines: number; contentKey?: unknown }) {
-  const follow = useLiveAutoFollow({ live: true, resetKey: "run-1", contentKey: contentKey ?? lines });
+function RunPane({
+  ready,
+  lines,
+  contentKey,
+  startAt,
+}: {
+  ready: boolean;
+  lines: number;
+  contentKey?: unknown;
+  startAt?: AutoFollowStart;
+}) {
+  const follow = useLiveAutoFollow({ live: true, resetKey: "run-1", contentKey: contentKey ?? lines, startAt });
   followState = follow;
   // Like the run page: no pane (and no anchor) while the log is loading.
   if (!ready) return <p>Loading run logs...</p>;
@@ -176,5 +186,76 @@ describe("useLiveAutoFollow", () => {
     act(() => root.render(<RunPane ready lines={9} contentKey="a" />));
     act(() => root.render(<RunPane ready lines={9} contentKey="b" />));
     expect(box().scrollTop).toBe(260);
+  });
+
+  // AgentDash (chat auto-follow): a desktop-to-phone reflow shortens the
+  // pane. That is layout, not the viewer scrolling up: stay at the bottom.
+  it("stays at the bottom when the pane gets shorter while following", () => {
+    act(() => root.render(<RunPane ready lines={10} />));
+    expect(box().scrollTop).toBe(300);
+    act(() => {
+      box().dataset.height = "60";
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(followState?.isFollowing).toBe(true);
+    expect(box().scrollTop).toBe(340);
+  });
+
+  describe('startAt: "current"', () => {
+    it("leaves the opening position alone and does not follow until the viewer reaches the bottom", () => {
+      act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+      expect(box().scrollTop).toBe(0);
+      expect(followState?.isFollowing).toBe(false);
+      act(() => root.render(<RunPane ready lines={12} startAt="current" />));
+      expect(box().scrollTop).toBe(0);
+
+      // The viewer scrolls to the bottom themselves: from here on it follows.
+      act(() => {
+        box().scrollTop = 380;
+        box().dispatchEvent(new Event("scroll"));
+      });
+      expect(followState?.isFollowing).toBe(true);
+      act(() => root.render(<RunPane ready lines={15} startAt="current" />));
+      expect(box().scrollTop).toBe(500);
+
+      // ...and a scroll up lets go again, keeping the position as it grows.
+      act(() => {
+        box().scrollTop = 120;
+        box().dispatchEvent(new Event("scroll"));
+      });
+      expect(followState?.isFollowing).toBe(false);
+      act(() => root.render(<RunPane ready lines={18} startAt="current" />));
+      expect(box().scrollTop).toBe(120);
+    });
+
+    it("does not treat a view that cannot scroll yet as the viewer choosing the bottom", () => {
+      act(() => root.render(<RunPane ready lines={2} startAt="current" />));
+      act(() => {
+        box().dispatchEvent(new Event("scroll"));
+      });
+      expect(followState?.isFollowing).toBe(false);
+      act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+      expect(box().scrollTop).toBe(0);
+    });
+
+    it("follows again after jump-to-latest", () => {
+      act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+      act(() => followState!.jumpToLatest());
+      expect(box().scrollTop).toBe(300);
+      expect(followState?.isFollowing).toBe(true);
+      act(() => root.render(<RunPane ready lines={11} startAt="current" />));
+      expect(box().scrollTop).toBe(340);
+    });
+  });
+});
+
+describe("preferredScrollBehavior", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is instant when the viewer prefers reduced motion, smooth otherwise", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduce") }));
+    expect(preferredScrollBehavior()).toBe("auto");
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    expect(preferredScrollBehavior()).toBe("smooth");
   });
 });
