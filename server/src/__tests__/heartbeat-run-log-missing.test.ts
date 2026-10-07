@@ -54,4 +54,54 @@ describe("heartbeat readLog", () => {
     expect(result).toMatchObject({ runId: "run-1", store: "local_file", logRef: "logs/run-1.ndjson", nextOffset: 16 });
     expect(result).not.toHaveProperty("missing");
   });
+
+  it("keeps the response contract and pages a large unmarked log instead of redacting it all at once", async () => {
+    const line = (i: number) =>
+      `${JSON.stringify({ ts: "t", stream: "stdout", chunk: i % 40 === 0 ? "export API_KEY=Zq8Rk2Vm7Tn4Wb9Xc3Ls\n" : `step ${i} ${"x".repeat(80)}\n` })}\n`;
+    let content = "";
+    for (let i = 0; Buffer.byteLength(content) < 600_000; i++) content += line(i);
+    mockRunLogStoreRead.mockResolvedValueOnce({
+      content,
+      nextOffset: undefined,
+      redactedAtPersist: false,
+      buffer: Buffer.from(content),
+      verifiedBytes: 0,
+      startOffset: 0,
+    });
+
+    const result = await heartbeat.readLog(
+      { id: "run-2", companyId: "company-1", logStore: "local_file", logRef: "logs/run-2.ndjson" },
+      { offset: 0, limitBytes: 1024 * 1024 },
+    );
+
+    // Same fields the endpoint always returned — store internals never leak.
+    expect(Object.keys(result).sort()).toEqual(["content", "logRef", "nextOffset", "redactedAtPersist", "runId", "store"]);
+    expect(result.content).not.toContain("Zq8Rk2Vm7Tn4Wb9Xc3Ls");
+    expect(result.nextOffset).toBeGreaterThan(0);
+    expect(result.nextOffset).toBeLessThanOrEqual(256_000);
+    expect(content.slice(0, result.nextOffset).endsWith("\n")).toBe(true);
+  });
+
+  it("serves a marked range as stored", async () => {
+    const content = `${JSON.stringify({ ts: "t", stream: "stdout", chunk: "ok\n" })}\n`;
+    mockRunLogStoreRead.mockResolvedValueOnce({
+      content,
+      redactedAtPersist: true,
+      buffer: Buffer.from(content),
+      verifiedBytes: Buffer.byteLength(content),
+      startOffset: 0,
+    });
+    const result = await heartbeat.readLog(
+      { id: "run-3", companyId: "company-1", logStore: "local_file", logRef: "logs/run-3.ndjson" },
+    );
+    expect(result).toEqual({
+      runId: "run-3",
+      store: "local_file",
+      logRef: "logs/run-3.ndjson",
+      content,
+      nextOffset: undefined,
+      redactedAtPersist: true,
+    });
+  });
 });
+

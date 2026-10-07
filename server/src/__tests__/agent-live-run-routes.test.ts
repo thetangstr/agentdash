@@ -356,6 +356,7 @@ describe("agent live run routes", () => {
     }, {
       offset: 12,
       limitBytes: 64,
+      signal: expect.any(AbortSignal),
     });
     expect(res.body).toEqual({
       runId: "run-1",
