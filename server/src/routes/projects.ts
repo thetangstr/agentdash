@@ -445,6 +445,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, existing);
     const workspaces = await svc.listWorkspaces(id);
     res.json(workspaces);
   });
@@ -457,6 +460,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, existing);
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
@@ -504,6 +510,8 @@ export function projectRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, existing.companyId);
+      // GH #1052: visibility before the host-command and cwd authority checks.
+      await assertProjectVisible(db, req, existing);
       const existingWorkspace = (await svc.listWorkspaces(id)).find((workspace) => workspace.id === workspaceId);
       await assertHostWorkspaceCommandAuthority(
         db,
@@ -560,6 +568,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, project.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, project);
 
     const workspace = project.workspaces.find((entry) => entry.id === workspaceId) ?? null;
     if (!workspace) {
@@ -832,6 +843,9 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    // GH #1052: a restricted project's workspaces are as invisible as the
+    // project itself — 404 before any authority check can answer 403.
+    await assertProjectVisible(db, req, existing);
     const workspace = await svc.removeWorkspace(id, workspaceId);
     if (!workspace) {
       res.status(404).json({ error: "Project workspace not found" });

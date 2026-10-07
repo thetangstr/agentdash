@@ -255,6 +255,138 @@ describeEmbeddedPostgres("restricted project visibility", () => {
         .patch(`/api/projects/${SECRET_PROJECT}`)
         .send({ name: "agent must not write" });
       expect(agentRes.status).toBe(403);
+
+      // Restore the shared fixture so later name-based assertions do not
+      // depend on test order.
+      await db
+        .update(projects)
+        .set({ name: "Sam's restricted project" })
+        .where(eq(projects.id, SECRET_PROJECT));
+    });
+  });
+
+  /**
+   * GH #1052: the workspace sub-routes of a restricted project follow the
+   * same rule as the project itself. Off-list, the project does not exist:
+   * every read and write is 404 and nothing is written. Falsification:
+   * drop the `assertProjectVisible` call from any one handler and its case
+   * returns 200/201/422 instead of 404.
+   */
+  describe("GH #1052: project workspace routes obey the project rule", () => {
+    const SECRET_WS = randomUUID();
+    const createdWorkspaceIds: string[] = [];
+
+    beforeAll(async () => {
+      await db.insert(projectWorkspaces).values({
+        id: SECRET_WS,
+        companyId: COMPANY,
+        projectId: SECRET_PROJECT,
+        name: "Secret repo checkout",
+        sourceType: "git_repo",
+        repoUrl: "https://github.com/acme/secret-repo",
+      });
+    });
+
+    afterAll(async () => {
+      for (const id of [SECRET_WS, ...createdWorkspaceIds]) {
+        await db.delete(projectWorkspaces).where(eq(projectWorkspaces.id, id));
+      }
+    });
+
+    const workspaceRow = async (id: string) =>
+      db
+        .select({ name: projectWorkspaces.name })
+        .from(projectWorkspaces)
+        .where(eq(projectWorkspaces.id, id))
+        .then((rows) => rows[0] ?? null);
+
+    const workspaceCount = async () =>
+      (await db.select({ id: projectWorkspaces.id }).from(projectWorkspaces).where(eq(projectWorkspaces.projectId, SECRET_PROJECT)))
+        .length;
+
+    for (const [label, actor] of [
+      ["an off-list member", () => asUser("member-user", "member")],
+      ["an off-list agent", () => asAgent(OUTSIDE_AGENT)],
+    ] as const) {
+      it(`list: 404 for ${label}, and no workspace data in the body`, async () => {
+        const res = await request(appAs(actor())).get(`/api/projects/${SECRET_PROJECT}/workspaces`);
+        expect(res.status).toBe(404);
+        expect(JSON.stringify(res.body)).not.toContain("secret-repo");
+      });
+
+      it(`create, update and delete: 404 for ${label}, nothing written`, async () => {
+        const app = appAs(actor());
+        const before = await workspaceCount();
+        const created = await request(app)
+          .post(`/api/projects/${SECRET_PROJECT}/workspaces`)
+          .send({ name: "planted", sourceType: "git_repo", repoUrl: "https://github.com/acme/planted" });
+        const patched = await request(app)
+          .patch(`/api/projects/${SECRET_PROJECT}/workspaces/${SECRET_WS}`)
+          .send({ name: "renamed-by-offlist" });
+        const deleted = await request(app).delete(`/api/projects/${SECRET_PROJECT}/workspaces/${SECRET_WS}`);
+        if (created.status === 201) createdWorkspaceIds.push(created.body.id);
+        expect({ create: created.status, update: patched.status, delete: deleted.status }).toEqual({
+          create: 404,
+          update: 404,
+          delete: 404,
+        });
+        expect(await workspaceCount()).toBe(before);
+        expect((await workspaceRow(SECRET_WS))?.name).toBe("Secret repo checkout");
+        expect(await workspaceRow(SECRET_WS)).not.toBeNull();
+      });
+
+      it(`runtime services and commands: 404 for ${label} on every action`, async () => {
+        const app = appAs(actor());
+        for (const kind of ["runtime-services", "runtime-commands"]) {
+          for (const action of ["start", "stop", "restart", "run"]) {
+            const res = await request(app)
+              .post(`/api/projects/${SECRET_PROJECT}/workspaces/${SECRET_WS}/${kind}/${action}`)
+              .send({});
+            expect({ kind, action, status: res.status }).toEqual({ kind, action, status: 404 });
+          }
+        }
+      });
+    }
+
+    it("on-list actors keep access: creator and admin read and write, the listed agent reads", async () => {
+      for (const actor of [asUser("sam", "member"), asUser("admin-user", "admin"), asAgent(LEAD_AGENT)]) {
+        const res = await request(appAs(actor)).get(`/api/projects/${SECRET_PROJECT}/workspaces`);
+        expect(res.status).toBe(200);
+        expect(res.body.map((w: { id: string }) => w.id)).toContain(SECRET_WS);
+      }
+
+      for (const [actor, name] of [
+        [asUser("sam", "member"), "creator workspace"],
+        [asUser("admin-user", "admin"), "admin workspace"],
+      ] as const) {
+        const app = appAs(actor);
+        const created = await request(app)
+          .post(`/api/projects/${SECRET_PROJECT}/workspaces`)
+          .send({ name, sourceType: "git_repo", repoUrl: "https://github.com/acme/on-list" });
+        expect(created.status).toBe(201);
+        createdWorkspaceIds.push(created.body.id);
+
+        const patched = await request(app)
+          .patch(`/api/projects/${SECRET_PROJECT}/workspaces/${created.body.id}`)
+          .send({ name: `${name} renamed` });
+        expect(patched.status).toBe(200);
+        expect(patched.body.name).toBe(`${name} renamed`);
+
+        // The visibility check passes; the request then reaches the handler's
+        // own validation (this repo-only workspace has no local path).
+        const runtime = await request(app)
+          .post(`/api/projects/${SECRET_PROJECT}/workspaces/${created.body.id}/runtime-services/start`)
+          .send({});
+        expect(runtime.status).toBe(422);
+
+        const deleted = await request(app).delete(`/api/projects/${SECRET_PROJECT}/workspaces/${created.body.id}`);
+        expect(deleted.status).toBe(200);
+      }
+    });
+
+    it("an open project's workspaces stay readable to every member", async () => {
+      const res = await request(appAs(asUser("member-user", "member"))).get(`/api/projects/${OPEN_PROJECT}/workspaces`);
+      expect(res.status).toBe(200);
     });
   });
 
