@@ -88,51 +88,13 @@ For each `user@host` on the allowlist:
    confirm the key is ed25519. AgentDash never reads the private key itself;
    only `ssh` uses it.
 
-   > **Residual risk you must plan for.** Every agent that runs *locally* on the
-   > AgentDash server (claude_local, codex_local, a local hermes_local, in any
-   > company) runs as that same server user and has shell tools. File
-   > permissions cannot keep the key from them: any of them could run
-   > `ssh -i /etc/agentdash/ssh/ac-provider_ed25519 ac-provider@127.0.0.1`
-   > itself. The forced command below limits what that key can do on the far
-   > side; it does not hide the key. If that is not acceptable, don't run local
-   > agents on this server, or put the key behind a root-owned helper the server
-   > user can call but not read.
-
-2. **Authorize it on the target, restricted to the launcher.** Append the public
-   key to the target user's `~/.ssh/authorized_keys` (file 600, `~/.ssh` 700)
-   with `restrict` (no agent, port or X11 forwarding, no PTY), `from=` (only
-   this server) and a forced `command=` that only lets through the command
-   shapes AgentDash sends:
+2. **Authorize it on the target.** Append the public key to the target user's
+   `~/.ssh/authorized_keys` (file 600, `~/.ssh` 700) with `restrict` (no agent,
+   port or X11 forwarding, no PTY) and `from=` (only this server):
 
    ```
-   restrict,from="127.0.0.1",command="/usr/local/bin/agentdash-hermes-gate" ssh-ed25519 AAAA... agentdash -> ac-provider
+   restrict,from="127.0.0.1" ssh-ed25519 AAAA... agentdash -> ac-provider
    ```
-
-   An example gate (owned by root, mode 755). It allows the five things
-   AgentDash does over this key, all inside the workspace: create and enter the
-   workspace, check the API is reachable, stage the run's env file, run Hermes,
-   and remove the env file. Everything else is refused and logged.
-
-   ```sh
-   #!/bin/sh
-   # /usr/local/bin/agentdash-hermes-gate
-   WS=/Users/ac-provider/agentdash
-   cmd=${SSH_ORIGINAL_COMMAND:-}
-   case "$cmd" in
-     "sh -lc 'mkdir -p '\"'\"'$WS'\"'\"' && cd "*) ;;                 # lease: make + enter workspace
-     "sh -lc 'mkdir -p '\"'\"'$WS/.paperclip-runenv/"*) ;;           # stage the run env file (tar on stdin)
-     "rm -rf '$WS/.paperclip-runenv/"*) ;;                            # remove the run env dir
-     "sh -lc 'if [ -f \"\$HOME/.profile\" ]"*"cd '\"'\"'$WS'\"'\"' && exec '\"'\"'sh'\"'\"' '\"'\"'-c'\"'\"'"*"'\"'\"'hermes'\"'\"' '\"'\"'chat'\"'\"'"*) ;;  # run hermes
-     "sh -lc "*"curl"*|"sh -lc "*"command -v "*) ;;                   # API reachability probe / hermes check
-     *) logger -t agentdash-hermes-gate "refused: $cmd"; echo "refused" >&2; exit 1 ;;
-   esac
-   exec /bin/sh -c "$cmd"
-   ```
-
-   Treat this as a starting point, not a sandbox: tighten the patterns to your
-   paths, and test them with the manual check in step 4. AgentDash cannot
-   enforce what the far side allows. Setting this up is the operator's
-   responsibility.
 
 3. **Pin the host key** in a known_hosts file of its own:
 
@@ -153,6 +115,40 @@ For each `user@host` on the allowlist:
        -o ControlMaster=no -o ControlPath=none -o PermitLocalCommand=no \
        -p 22 ac-provider@127.0.0.1 "sh -lc 'command -v hermes'"
    ```
+
+### Residual risk: the key is a shell as the target user
+
+Read this before you set `AGENTDASH_HERMES_SSH_ENABLED=true`. **Enabling the
+flag means the operator accepts this risk.**
+
+- Every agent that runs *locally* on the AgentDash host (claude_local,
+  codex_local, a local hermes_local, in **any** company) runs as the same OS user
+  as the AgentDash server, and has shell tools.
+- File permissions can't keep the dedicated key from those processes. Any of
+  them can read it and run `ssh -i <key> ac-provider@127.0.0.1` itself.
+- That gives it a shell as the target OS user, including that user's Hermes home
+  and **provider API keys**.
+- `restrict` and `from=` don't change this. Neither does a forced `command=`
+  filter: the run command legitimately carries arbitrary prompt text, so a
+  filter that lets AgentDash's commands through can't reliably stop anything
+  else.
+
+The real mitigations:
+
+1. **Don't run local agents of other companies on that host.** If the only
+   locally-run agents belong to the same company the target account serves,
+   nobody gains access they didn't already have.
+2. **Keep the key away from the server user.** Put a root-owned launcher behind
+   a narrow `sudo` rule. Outline:
+   - the key belongs to root (or a dedicated account) and the server user can't
+     read it;
+   - a root-owned launcher, not writable by the server user, opens the SSH
+     connection to exactly one target with fixed options;
+   - a `sudoers` entry lets the server user run only that launcher, with no
+     shell escape and no environment passthrough.
+
+   AgentDash doesn't ship this launcher. It has to be built and reviewed for the
+   host it runs on.
 
 ## 4. Create the environment and pin the agent
 
@@ -216,12 +212,35 @@ plugin environments rather than being run on the server host.
   environment (database URL, auth secrets) is never sent.
 - Hermes runs in the environment's workspace directory, as the target user.
 
-Not available over SSH yet: managed per-agent Hermes profiles (the remote
-user's own Hermes home is used), Hermes' structured `stream-json` transcript
-(text mode is used), and token metering (the session ledger lives with the
-remote user; runs are recorded as `unmetered_no_ledger`). The prompt is passed
-as a `hermes chat -q` argument, as it is for local runs, so other users on the
-target host can see it in the process list.
+### Budgets don't apply to SSH runs
+
+SSH runs are **unmetered**. Hermes' session ledger lives in the remote user's
+Hermes home, so AgentDash records these runs as `unmetered_no_ledger` and has
+no token counts for them. As a result **AgentDash budget hard-stops and token
+ceilings don't fire for SSH-pinned Hermes agents.** The controls that do apply
+are the agent's `timeoutSec` (wall-clock limit per run) and `maxTurnsPerRun`
+(passed to Hermes as `--max-turns`). Set both on every SSH-pinned agent. The
+provider key belongs to the remote OS user, so its spend shows up on that key's
+provider account. Reading the remote ledger is tracked in #1064.
+
+### Known limitations and follow-ups
+
+- **The prompt is visible on the target host (#1062).** The prompt is passed
+  as a `hermes chat -q` argument, so any OS user on the target host can read it
+  with `ps`. That is acceptable only while every such user can already reach that
+  company's prompts. **It must move to stdin or a 0600 staged file before any
+  second target user (for example `ac-prov-b`, `ac-prov-c`) serves a different
+  company;** until then, don't add such a target.
+- **A pinned environment can be retargeted (#1063).** Someone who can edit
+  environments (including an agent with that permission) can change a pinned SSH
+  environment's user, host or port to another target allowlisted for the *same*
+  company. No `agent.ssh_environment_pinned` entry is written for that.
+  `agent.ssh_run_launched` still records the real `user@host` of every run. Fix
+  this before any company gets a second allowlisted target.
+- **No metering (#1064)**: see above.
+- Not available over SSH yet: managed per-agent Hermes profiles (the remote
+  user's own Hermes home is used) and Hermes' structured `stream-json`
+  transcript (text mode is used).
 
 ## 6. Turning it off (rollback)
 
