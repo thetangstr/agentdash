@@ -35,6 +35,7 @@ import {
   logActivity,
   secretService,
 } from "../services/index.js";
+import { insertActivity, publishActivity } from "../services/activity-log.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   approvalVisibilityCondition,
@@ -393,36 +394,50 @@ export function approvalRoutes(
         && approvalInput.requestedByAgentId !== actor.agentId) {
       throw forbidden("An agent can only request approvals on its own behalf");
     }
-    const approval = await svc.create(companyId, {
-      ...approvalInput,
-      payload: normalizedPayload,
-      requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
-      requestedByAgentId:
-        approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
-      status: "pending",
-      decisionNote: null,
-      decidedByUserId: null,
-      decidedAt: null,
-      updatedAt: new Date(),
-    });
-
-    if (uniqueIssueIds.length > 0) {
-      await issueApprovalsSvc.linkManyForApproval(approval.id, uniqueIssueIds, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
+    // GH #919: create + issue links + the activity row are one unit — a link
+    // failure must not leave a pending approval with no links and no record.
+    // Issue visibility is still checked above on the outer db (read-only);
+    // linkManyForApproval re-checks existence/company inside the tx.
+    // The activity row is inserted inside the tx, but its live/plugin events
+    // are published only after COMMIT: a listener that reads the approval back
+    // (live-event visibility, plugins, the UI) must find it, and a rollback
+    // must announce nothing. insertActivity also never initializes the
+    // instance-settings singleton while this tx holds domain locks.
+    const { approval, publication } = await db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as Db;
+      const created = await approvalService(tx).create(companyId, {
+        ...approvalInput,
+        payload: normalizedPayload,
+        requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
+        requestedByAgentId:
+          approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
+        status: "pending",
+        decisionNote: null,
+        decidedByUserId: null,
+        decidedAt: null,
+        updatedAt: new Date(),
       });
-    }
 
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      action: "approval.created",
-      entityType: "approval",
-      entityId: approval.id,
-      details: { type: approval.type, issueIds: uniqueIssueIds },
+      if (uniqueIssueIds.length > 0) {
+        await issueApprovalService(tx).linkManyForApproval(created.id, uniqueIssueIds, {
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        });
+      }
+
+      const activityPublication = await insertActivity(tx, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        action: "approval.created",
+        entityType: "approval",
+        entityId: created.id,
+        details: { type: created.type, issueIds: uniqueIssueIds },
+      });
+      return { approval: created, publication: activityPublication };
     });
+    publishActivity(publication);
 
     await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
 
