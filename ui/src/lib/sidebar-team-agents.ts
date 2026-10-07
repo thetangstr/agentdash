@@ -1,6 +1,9 @@
-// AgentDash: UX-6 follow-up — whether the default-profile sidebar's Agents
-// list under Team is expanded, remembered per user per company. Collapsed is
-// the default; storage failures (private mode, quota) fall back to it.
+// AgentDash: UX-6 follow-up — whether the sidebar's agent list under Team is
+// expanded, remembered per user per company. Expanded is the default (the
+// founder wants agents visible in the left bar); only an explicit collapse is
+// stored, as "false". Older builds stored "true" for expanded and nothing for
+// collapsed, so a stored "true" still reads as expanded and a missing key now
+// reads as the new default. Storage failures fall back to expanded.
 const STORAGE_PREFIX = "agentdash.sidebarTeamAgentsExpanded";
 const ANONYMOUS_USER_ID = "anonymous";
 
@@ -13,19 +16,18 @@ export function getSidebarTeamAgentsStorageKey(
 }
 
 export function readSidebarTeamAgentsExpanded(storageKey: string | null): boolean {
-  if (!storageKey) return false;
+  if (!storageKey) return true;
   try {
-    return localStorage.getItem(storageKey) === "true";
+    return localStorage.getItem(storageKey) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
 export function writeSidebarTeamAgentsExpanded(storageKey: string | null, expanded: boolean) {
   if (!storageKey) return;
   try {
-    if (expanded) localStorage.setItem(storageKey, "true");
-    else localStorage.removeItem(storageKey);
+    localStorage.setItem(storageKey, expanded ? "true" : "false");
   } catch {
     // Ignore localStorage failures.
   }

@@ -158,4 +158,49 @@ test.describe("sidebar keeps work, Settings holds configuration", () => {
     ).toHaveAttribute("aria-current", "page");
     await snap(page, "after-team-org-tab");
   });
+
+  // Founder request 2026-10-06: agents are visible in the left bar, grouped
+  // by team (reporting line), each team collapsible and remembered.
+  test("Team: agents listed in the sidebar, grouped by team, collapsible", async ({ page, request }) => {
+    const company = await createCompany(request);
+    async function hire(name: string, reportsTo: string | null) {
+      const res = await request.post(`${BASE_URL}/api/companies/${company.id}/agent-hires`, {
+        data: { name, role: "general", title: name, reportsTo, adapterType: "process", adapterConfig: { command: "true" } },
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+      const hire = (await res.json()) as { agent: { id: string }; approval?: { id: string } | null };
+      if (hire.approval) {
+        const approved = await request.post(`${BASE_URL}/api/approvals/${hire.approval.id}/approve`, {
+          data: { decisionNote: "Approved for sidebar e2e setup." },
+        });
+        expect(approved.ok(), await approved.text()).toBe(true);
+      }
+      return hire.agent.id;
+    }
+    const lead = await hire("Casper", null);
+    await hire("Maya", lead);
+    await hire("Felix", null);
+
+    await page.goto(`${BASE_URL}/${company.issuePrefix}/dashboard`);
+    const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "More", exact: true }) });
+    // Expanded by default: every agent is in the left bar.
+    await expect(sidebar.getByRole("button", { name: "Hide agents" })).toHaveAttribute("aria-expanded", "true");
+    for (const name of ["Casper", "Maya", "Felix"]) {
+      await expect(sidebar.getByRole("link", { name, exact: true })).toBeVisible();
+    }
+    const casperTeam = sidebar.getByRole("button", { name: "Hide Casper's team" });
+    await expect(casperTeam).toHaveAttribute("aria-expanded", "true");
+    await snap(page, "after-team-groups-expanded");
+
+    await casperTeam.click();
+    await expect(sidebar.getByRole("button", { name: "Show Casper's team" })).toHaveAttribute("aria-expanded", "false");
+    await expect(sidebar.getByRole("link", { name: "Maya", exact: true })).toHaveCount(0);
+    await expect(sidebar.getByRole("link", { name: "Casper", exact: true })).toBeVisible();
+
+    // Remembered across a reload.
+    await page.reload();
+    await expect(sidebar.getByRole("button", { name: "Show Casper's team" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Maya", exact: true })).toHaveCount(0);
+    await expect(sidebar.getByRole("link", { name: "Felix", exact: true })).toBeVisible();
+  });
 });

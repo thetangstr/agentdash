@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronRight,
   MoreHorizontal,
   PauseCircle,
   Pencil,
@@ -17,6 +18,13 @@ import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { useAgentOrder } from "../hooks/useAgentOrder";
+import {
+  buildSidebarAgentTree,
+  getSidebarTeamGroupStorageKey,
+  readSidebarTeamGroupExpanded,
+  writeSidebarTeamGroupExpanded,
+  type SidebarAgentTreeNode,
+} from "../lib/sidebar-agent-teams";
 import { AgentIcon } from "./AgentIconPicker";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
 import { Button } from "@/components/ui/button";
@@ -27,6 +35,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Agent } from "@paperclipai/shared";
 
 function SidebarAgentItem({
@@ -38,6 +47,7 @@ function SidebarAgentItem({
   onPauseResume,
   runCount,
   setSidebarOpen,
+  teamToggle,
 }: {
   activeAgentId: string | null;
   activeTab: string | null;
@@ -47,6 +57,8 @@ function SidebarAgentItem({
   onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
   runCount: number;
   setSidebarOpen: (open: boolean) => void;
+  /** AgentDash: the team-group chevron, for an agent with direct reports. */
+  teamToggle?: ReactNode;
 }) {
   const routeRef = agentRouteRef(agent);
   const href = activeTab ? `${agentUrl(agent)}/${activeTab}` : agentUrl(agent);
@@ -71,7 +83,9 @@ function SidebarAgentItem({
           if (isMobile) setSidebarOpen(false);
         }}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 pr-8 text-[13px] font-medium transition-colors max-sm:min-h-11 max-sm:pr-14 max-sm:text-sm",
+          "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium transition-colors max-sm:min-h-11 max-sm:text-sm",
+          // Room for the actions menu, plus the team chevron when there is one.
+          teamToggle ? "pr-14 max-sm:pr-20" : "pr-8 max-sm:pr-14",
           isActive
             ? "bg-accent text-foreground"
             : "text-foreground/80 hover:bg-accent/50 hover:text-foreground"
@@ -98,6 +112,8 @@ function SidebarAgentItem({
           </span>
         )}
       </NavLink>
+
+      {teamToggle}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -246,6 +262,7 @@ export function useSidebarAgentRows() {
   return {
     activeAgentId,
     activeTab,
+    companyId: selectedCompanyId ?? null,
     currentUserId,
     isMobile,
     liveCountByAgent,
@@ -259,34 +276,102 @@ export function useSidebarAgentRows() {
 
 export type SidebarAgentRowsState = ReturnType<typeof useSidebarAgentRows>;
 
-export function SidebarAgentRows({
-  activeAgentId,
-  activeTab,
-  isMobile,
-  liveCountByAgent,
-  orderedAgents,
-  pendingAgentIds,
-  pauseResume,
-  setSidebarOpen,
-}: SidebarAgentRowsState) {
+function renderAgentItem(agent: Agent, rows: SidebarAgentRowsState, teamToggle?: ReactNode) {
   return (
-    <div className="flex flex-col gap-0.5 mt-0.5">
-      {orderedAgents.map((agent: Agent) => {
-        const runCount = liveCountByAgent.get(agent.id) ?? 0;
-        return (
-          <SidebarAgentItem
-            key={agent.id}
-            activeAgentId={activeAgentId}
-            activeTab={activeTab}
-            agent={agent}
-            disabled={pendingAgentIds.has(agent.id)}
-            isMobile={isMobile}
-            onPauseResume={pauseResume}
-            runCount={runCount}
-            setSidebarOpen={setSidebarOpen}
-          />
-        );
-      })}
+    <SidebarAgentItem
+      key={agent.id}
+      activeAgentId={rows.activeAgentId}
+      activeTab={rows.activeTab}
+      agent={agent}
+      disabled={rows.pendingAgentIds.has(agent.id)}
+      isMobile={rows.isMobile}
+      onPauseResume={rows.pauseResume}
+      runCount={rows.liveCountByAgent.get(agent.id) ?? 0}
+      setSidebarOpen={rows.setSidebarOpen}
+      teamToggle={teamToggle}
+    />
+  );
+}
+
+// AgentDash: one team — a lead with direct reports. The lead's row stays a
+// normal agent link; the chevron beside it shows or hides the reports, and
+// that choice is remembered per user per company per lead. Expanded by default.
+function SidebarTeamGroup({
+  node,
+  rows,
+}: {
+  node: SidebarAgentTreeNode<Agent>;
+  rows: SidebarAgentRowsState;
+}) {
+  const lead = node.agent;
+  const storageKey = rows.companyId
+    ? getSidebarTeamGroupStorageKey(rows.companyId, rows.currentUserId, lead.id)
+    : null;
+  const [expanded, setExpanded] = useState(() => readSidebarTeamGroupExpanded(storageKey));
+
+  // The user id arrives with the session query, so the key can change after
+  // mount; re-read so the remembered state follows the right user/company.
+  useEffect(() => {
+    setExpanded(readSidebarTeamGroupExpanded(storageKey));
+  }, [storageKey]);
+
+  const toggle = (
+    <CollapsibleTrigger
+      aria-label={expanded ? `Hide ${lead.name}'s team` : `Show ${lead.name}'s team`}
+      className="absolute right-7 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:right-8 max-sm:h-11 max-sm:w-11"
+    >
+      <ChevronRight className={cn("h-3 w-3 transition-transform", expanded && "rotate-90")} />
+    </CollapsibleTrigger>
+  );
+
+  return (
+    <Collapsible
+      open={expanded}
+      onOpenChange={(next) => {
+        setExpanded(next);
+        writeSidebarTeamGroupExpanded(storageKey, next);
+      }}
+    >
+      {renderAgentItem(lead, rows, toggle)}
+      <CollapsibleContent
+        data-sidebar-team-group={lead.id}
+        className="ml-3 flex min-w-0 flex-col gap-0.5 border-l border-border pl-1.5 mt-0.5"
+      >
+        <SidebarAgentTreeRows nodes={node.children} rows={rows} />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function SidebarAgentTreeRows({
+  nodes,
+  rows,
+}: {
+  nodes: SidebarAgentTreeNode<Agent>[];
+  rows: SidebarAgentRowsState;
+}) {
+  return (
+    <>
+      {nodes.map((node) =>
+        node.children.length > 0 ? (
+          <SidebarTeamGroup key={node.agent.id} node={node} rows={rows} />
+        ) : (
+          renderAgentItem(node.agent, rows)
+        ),
+      )}
+    </>
+  );
+}
+
+// AgentDash: the agent list under Team, grouped by reporting line — a lead
+// with reports heads a collapsible group; agents with no manager in the list
+// and no reports are plain top-level rows. Order within each level follows
+// useAgentOrder; indentation stops at two levels (lib/sidebar-agent-teams).
+export function SidebarAgentRows(rows: SidebarAgentRowsState) {
+  const tree = useMemo(() => buildSidebarAgentTree(rows.orderedAgents), [rows.orderedAgents]);
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5 mt-0.5">
+      <SidebarAgentTreeRows nodes={tree} rows={rows} />
     </div>
   );
 }

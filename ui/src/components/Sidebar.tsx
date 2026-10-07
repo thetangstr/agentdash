@@ -76,7 +76,7 @@ export function Sidebar() {
           </button>
           {/* AgentDash: the six primary items (UX-6 #787), the same for every
               company. Team → /agents, with the per-agent list nested under it
-              (collapsed by default) — still one primary item. */}
+              (expanded by default, grouped by team) — still one primary item. */}
           <SidebarNavItem to="/dashboard" label="Home" icon={LayoutDashboard} liveCount={liveRunCount} />
           <SidebarNavItem to="/cos" label="Ask" icon={MessageSquare} />
           <SidebarNavItem to="/issues" label="Work" icon={CircleDot} />
