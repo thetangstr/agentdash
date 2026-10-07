@@ -18,6 +18,7 @@ import {
 } from "@paperclipai/db";
 import { notFound } from "../errors.js";
 import { actorHumanRole } from "./authz.js";
+import { accessService } from "../services/access.js";
 
 /**
  * A5 (2026-08-16): open by default, restriction per project.
@@ -142,6 +143,31 @@ export async function isProjectVisible(
     )
     .then((rows) => rows[0] ?? null);
   return Boolean(row);
+}
+
+/**
+ * Who may see what a company spends — the predicate behind the /costs
+ * routes' `assertSpendVisibility` and the dashboard's spend redaction
+ * (GH #918). Company access must already be established by the caller.
+ *
+ * Agents keep their access (an agent reporting its own run cost is how
+ * usage is recorded at all), instance admins always may, and members need
+ * `agents:create` — the same de-facto "agent administrator" key the rest
+ * of the permission system uses, deliberately not a new key (a new one
+ * defaults to nobody, locking owners out of their own billing).
+ *
+ * Fails closed: a permission lookup that throws answers false, never 500.
+ */
+export async function canReadCompanySpend(
+  db: Db,
+  req: Request,
+  companyId: string,
+): Promise<boolean> {
+  if (req.actor.type === "agent") return true;
+  if (req.actor.isInstanceAdmin) return true;
+  return accessService(db)
+    .canUser(companyId, req.actor.userId, "agents:create")
+    .catch(() => false);
 }
 
 /** 404, never 403 — invisible means nonexistent. */

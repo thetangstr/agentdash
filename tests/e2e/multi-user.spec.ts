@@ -1,4 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { assertSafeE2eBaseUrl, resolveE2eServerPort } from "./e2e-port";
 
 /**
  * E2E: Multi-user implementation tests (local_trusted mode).
@@ -16,7 +17,7 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
  * synthetic local-board user, so no second human can ever exist here.
  */
 
-const BASE = process.env.PAPERCLIP_E2E_BASE_URL ?? "http://127.0.0.1:3104";
+const BASE = assertSafeE2eBaseUrl(process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${resolveE2eServerPort(3104)}`);
 
 // ---------------------------------------------------------------------------
 // Helpers

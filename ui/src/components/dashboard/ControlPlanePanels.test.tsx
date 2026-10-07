@@ -180,12 +180,14 @@ describe("ControlPlanePanels", () => {
       value: "$12.50",
       unmetered: false,
       unmeasured: false,
+      restricted: false,
     });
     expect(monthSpendTile({ monthSpendCents: 0, monthTokens: 0, monthRuns: 0, monthChatTurns: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 })).toEqual({
       label: "Spend this month",
       value: "$0.00",
       unmetered: false,
       unmeasured: false,
+      restricted: false,
     });
   });
 
@@ -198,6 +200,7 @@ describe("ControlPlanePanels", () => {
       value: "Not measured",
       unmetered: false,
       unmeasured: true,
+      restricted: false,
     });
     expect(tile.value).not.toBe("$0.00");
   });
@@ -211,6 +214,21 @@ describe("ControlPlanePanels", () => {
       value: "Not measured",
       unmetered: false,
       unmeasured: true,
+      restricted: false,
+    });
+    expect(tile.value).not.toBe("$0.00");
+  });
+
+  // GH #918: `costs` is null for members who cannot read the cost routes —
+  // the tile must say "not yours to see", never fake a zero.
+  it("marks a null costs block as restricted, never a zero", () => {
+    const tile = monthSpendTile(null);
+    expect(tile).toEqual({
+      label: "Spend this month",
+      value: "—",
+      unmetered: false,
+      unmeasured: false,
+      restricted: true,
     });
     expect(tile.value).not.toBe("$0.00");
   });

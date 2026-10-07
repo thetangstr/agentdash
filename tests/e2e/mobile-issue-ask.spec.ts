@@ -17,8 +17,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = resolveE2eServerPort(3399);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const SHOTS_DIR = process.env.MOBILE_SHOTS_DIR?.trim() || null;
 const PHONE = { width: 390, height: 844 };

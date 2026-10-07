@@ -39,8 +39,11 @@ function Stat({
 }
 
 export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOutcomeQuality }) {
+  // GH #918: the spend fields are null (never zeroed) for members who cannot
+  // read the cost routes — the stat says so instead of inventing a figure.
+  const spendRestricted = quality.issueLinkedTokens === null;
   const spendPerAccepted = quality.spendPerAcceptedIssueCents === null
-    ? "n/a"
+    ? spendRestricted ? "—" : "n/a"
     : formatCents(quality.spendPerAcceptedIssueCents);
   const openTaskRunLabel = quality.greenRunsWithOpenTasks === 1
     ? "1 finished run left a task open"
@@ -50,7 +53,7 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
     quality.greenRunsPendingReview > 0 ||
     quality.unreviewedDoneIssues > 0 ||
     quality.escalatedIssues > 0 ||
-    quality.issueLinkedSpendCents > 0;
+    (quality.issueLinkedSpendCents ?? 0) > 0;
 
   return (
     <section className={cn("rounded-lg border px-4 py-3", tone(quality))}>
@@ -85,10 +88,12 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
           // Costs page reports; cached reads are listed separately rather
           // than folded into the headline number.
           detail={
-            `${quality.issueLinkedTokens.toLocaleString()} issue-linked tokens` +
-            (quality.issueLinkedCachedTokens > 0
-              ? ` · ${quality.issueLinkedCachedTokens.toLocaleString()} cached reads`
-              : "")
+            spendRestricted
+              ? "Visible to administrators only"
+              : `${quality.issueLinkedTokens!.toLocaleString()} issue-linked tokens` +
+                ((quality.issueLinkedCachedTokens ?? 0) > 0
+                  ? ` · ${quality.issueLinkedCachedTokens!.toLocaleString()} cached reads`
+                  : "")
           }
         />
         <Stat
@@ -124,10 +129,10 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
               <span>{quality.escalatedIssues} tasks need a decision</span>
             </div>
           ) : null}
-          {quality.issueLinkedSpendCents > 0 ? (
+          {(quality.issueLinkedSpendCents ?? 0) > 0 ? (
             <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
               <CircleDollarSign className="h-3.5 w-3.5 shrink-0" />
-              <span>{formatCents(quality.issueLinkedSpendCents)} issue-linked spend</span>
+              <span>{formatCents(quality.issueLinkedSpendCents!)} issue-linked spend</span>
             </div>
           ) : null}
         </div>

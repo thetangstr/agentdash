@@ -1,4 +1,5 @@
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 
 /**
  * E2E: Signoff execution policy flow.
@@ -21,7 +22,7 @@ import { test, expect, request as pwRequest, type APIRequestContext } from "@pla
  *     the in_review state the signoff policy requires).
  */
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+const PORT = resolveE2eServerPort(3399);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const COMPANY_NAME = `E2E-Signoff-${Date.now()}`;
 
