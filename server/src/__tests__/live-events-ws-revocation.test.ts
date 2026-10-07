@@ -758,6 +758,15 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
   // cookie, then revoke through better-auth and assert the socket closes —
   // the heartbeat interval is faked and never advanced, so any close must
   // have come from the hook, not the periodic re-check.
+  //
+  // Hook-covered paths (all verified below to close the socket with no
+  // heartbeat): sign-out, revoke-session, revoke-sessions, revoke-other-sessions,
+  // the expired-session cleanup inside get-session, and internalAdapter
+  // deleteUser. change-password with revokeOtherSessions shares the tested
+  // deleteUserSessions machinery. Heartbeat-only by design: direct database
+  // writes (ops SQL, another process — the access-change bus is in-process)
+  // and reset-password, which this config leaves non-revoking
+  // (revokeSessionsOnPasswordReset unset, sessions legitimately survive it).
   describe("better-auth session and user deletion revoke the socket", () => {
     const ORIGIN = "http://127.0.0.1:3100";
     let auth!: ReturnType<typeof createBetterAuthInstance>;
@@ -872,6 +881,81 @@ describeEmbeddedPostgres("live events websocket closes when access is revoked", 
 
       expect(await closeCodeWithin(first, 5000)).toBe(1008);
       expect(await closeCodeWithin(second, 5000)).toBe(1008);
+    });
+
+    it("revoke-other-sessions closes the other sockets and leaves the caller's open", async () => {
+      const email = `revokeother-${randomUUID()}@example.com`;
+      const user = await signUp(email);
+      const secondCookie = await signIn(email);
+      const first = await connectAuthed(user.userId, user.cookie);
+      const second = await connectAuthed(user.userId, secondCookie);
+
+      const res = await request(authApp)
+        .post("/api/auth/revoke-other-sessions")
+        .set("Origin", ORIGIN)
+        .set("Cookie", secondCookie)
+        .send();
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      // The revoked session's socket closes with no heartbeat; the caller's
+      // session row survives, so its socket must stay open and keep receiving.
+      expect(await closeCodeWithin(first, 5000)).toBe(1008);
+      const marker = await settle([second]);
+      expect(marker).toBeTruthy();
+      expect(await closeCodeWithin(second, 200)).toBeNull();
+    });
+
+    it("revoke-session closes only the named session's socket", async () => {
+      const email = `revokeone-${randomUUID()}@example.com`;
+      const user = await signUp(email);
+      const secondCookie = await signIn(email);
+      const first = await connectAuthed(user.userId, user.cookie);
+      const second = await connectAuthed(user.userId, secondCookie);
+
+      // The cookie carries `${sessionToken}.${signature}`; the DB row stores
+      // the raw sessionToken, which is what revoke-session expects.
+      const cookieValue = decodeURIComponent(user.cookie.split("=").slice(1).join("="));
+      const targetToken = cookieValue.split(".")[0] ?? "";
+      const rows = await db
+        .select({ token: authSessions.token })
+        .from(authSessions)
+        .where(eq(authSessions.userId, user.userId));
+      expect(rows.map((row) => row.token)).toContain(targetToken);
+
+      const res = await request(authApp)
+        .post("/api/auth/revoke-session")
+        .set("Origin", ORIGIN)
+        .set("Cookie", secondCookie)
+        .send({ token: targetToken });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      expect(await closeCodeWithin(first, 5000)).toBe(1008);
+      const marker = await settle([second]);
+      expect(marker).toBeTruthy();
+      expect(await closeCodeWithin(second, 200)).toBeNull();
+    });
+
+    it("get-session reaps an expired session row, and the hook still closes the socket", async () => {
+      const user = await signUp(`expired-${randomUUID()}@example.com`);
+      const client = await connectAuthed(user.userId, user.cookie);
+      expect(client.isOpen()).toBe(true);
+
+      await db
+        .update(authSessions)
+        .set({ expiresAt: new Date(Date.now() - 60_000) })
+        .where(eq(authSessions.userId, user.userId));
+
+      // get-session on the expired cookie deletes the row through the
+      // adapter — the delete hooks fire, so the socket closes immediately
+      // rather than waiting for the heartbeat re-check to notice the expiry.
+      const res = await request(authApp)
+        .get("/api/auth/get-session")
+        .set("Origin", ORIGIN)
+        .set("Cookie", user.cookie)
+        .send();
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      expect(await closeCodeWithin(client, 5000)).toBe(1008);
     });
 
     it("deleting the user through the internal adapter fires the user.delete hook and closes the socket", async () => {
