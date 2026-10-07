@@ -48,12 +48,42 @@ export interface DashboardTaskOutcomeQuality {
   acceptanceRatePercent: number;
   greenRunsPendingReview: number;
   greenRunsWithOpenTasks: number;
-  issueLinkedSpendCents: number;
+  /**
+   * AgentDash (GH #918): all four spend figures are `null` for members who
+   * cannot read the cost routes — never a fake zero.
+   */
+  issueLinkedSpendCents: number | null;
   /** Input + output tokens on issue-linked cost events; cached reads excluded. */
-  issueLinkedTokens: number;
+  issueLinkedTokens: number | null;
   /** Cached input reads on the same events, reported separately. */
-  issueLinkedCachedTokens: number;
+  issueLinkedCachedTokens: number | null;
   spendPerAcceptedIssueCents: number | null;
+}
+
+export interface DashboardCosts {
+  monthSpendCents: number;
+  /**
+   * AgentDash: input + cached input + output tokens this month. On a BYOK
+   * box cost is not metered (cost is billed by the model provider), so Home
+   * shows tokens when monthSpendCents is zero and this is not.
+   */
+  /** Input + output tokens; cached input is not counted. */
+  monthTokens: number;
+  /**
+   * Runs started this month. Unmetered runs record no cost events, so when
+   * spend and tokens are both zero this is the difference between "nothing
+   * ran" and "usage was never measured" — the figure reads "Not measured",
+   * never "$0.00".
+   */
+  monthRuns: number;
+  /**
+   * This month's agent chat replies (same definition as the agent page's
+   * chatTurnsThisMonth). CoS/teammate conversations leave no heartbeat run,
+   * so a chat-only company would otherwise still read "$0.00".
+   */
+  monthChatTurns: number;
+  monthBudgetCents: number;
+  monthUtilizationPercent: number;
 }
 
 export interface DashboardSummary {
@@ -70,31 +100,12 @@ export interface DashboardSummary {
     blocked: number;
     done: number;
   };
-  costs: {
-    monthSpendCents: number;
-    /**
-     * AgentDash: input + cached input + output tokens this month. On a BYOK
-     * box cost is not metered (cost is billed by the model provider), so Home
-     * shows tokens when monthSpendCents is zero and this is not.
-     */
-    /** Input + output tokens; cached input is not counted. */
-    monthTokens: number;
-    /**
-     * Runs started this month. Unmetered runs record no cost events, so when
-     * spend and tokens are both zero this is the difference between "nothing
-     * ran" and "usage was never measured" — the figure reads "Not measured",
-     * never "$0.00".
-     */
-    monthRuns: number;
-    /**
-     * This month's agent chat replies (same definition as the agent page's
-     * chatTurnsThisMonth). CoS/teammate conversations leave no heartbeat run,
-     * so a chat-only company would otherwise still read "$0.00".
-     */
-    monthChatTurns: number;
-    monthBudgetCents: number;
-    monthUtilizationPercent: number;
-  };
+  /**
+   * AgentDash (GH #918): `null` when the actor cannot read the cost routes
+   * (members without `agents:create`). The rest of the summary is still
+   * theirs — only the spend numbers are withheld, never faked as zeros.
+   */
+  costs: DashboardCosts | null;
   pendingApprovals: number;
   budgets: {
     activeIncidents: number;

@@ -28,11 +28,11 @@ import {
 import {
   assertProjectIdVisible,
   budgetPolicyVisibilityCondition,
+  canReadCompanySpend,
   projectScopedVisibilityCondition,
 } from "./visibility.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
-import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalService } from "../services/approvals.js";
@@ -79,7 +79,6 @@ export function costRoutes(
   // primary agent-budget write paths, so the ceiling must bind here too —
   // enforcing it only on PATCH /agents/:id would leave it trivially bypassable.
   const governance = agentGovernanceService(db);
-  const access = accessService(db);
 
   /**
    * Who may see what a company spends.
@@ -104,13 +103,7 @@ export function costRoutes(
     companyId: string,
   ) {
     assertCompanyAccess(req, companyId);
-    if (req.actor.type === "agent") return;
-    if (req.actor.isInstanceAdmin) return;
-    // Fail closed: a permission lookup that throws must not surface as a 500.
-    const allowed = await access
-      .canUser(companyId, req.actor.userId, "agents:create")
-      .catch(() => false);
-    if (allowed) return;
+    if (await canReadCompanySpend(db, req, companyId)) return;
     throw forbidden(
       "Spend and billing are visible to administrators only. "
       + "Ask an owner for the agents:create permission if you need them.",
