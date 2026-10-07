@@ -7,6 +7,11 @@ import {
 import { parseObject } from "../adapters/utils.js";
 import { resolveEnvironmentDriverConfigForRuntime } from "./environment-config.js";
 import type { EnvironmentRuntimeService } from "./environment-runtime.js";
+import {
+  assertHermesSshLaunchReady,
+  evaluateHermesSshEnvironment,
+  hermesSshEnabled,
+} from "./hermes-ssh-policy.js";
 
 export const DEFAULT_SANDBOX_REMOTE_CWD = "/tmp";
 
@@ -104,6 +109,13 @@ export async function resolveEnvironmentExecutionTarget(input: {
     };
   }
 
+  // AgentDash: hermes_local over SSH, behind AGENTDASH_HERMES_SSH_ENABLED and
+  // the allowlist. With the flag off this is the same null as before.
+  const hermesOverSsh =
+    input.adapterType === "hermes_local" &&
+    input.environment.driver === "ssh" &&
+    hermesSshEnabled();
+
   if (
     (
       input.adapterType !== "codex_local" &&
@@ -112,7 +124,8 @@ export async function resolveEnvironmentExecutionTarget(input: {
       input.adapterType !== "gemini_local" &&
       input.adapterType !== "opencode_local" &&
       input.adapterType !== "pi_local" &&
-      input.adapterType !== "cursor"
+      input.adapterType !== "cursor" &&
+      !hermesOverSsh
     ) ||
     input.environment.driver !== "ssh"
   ) {
@@ -131,6 +144,45 @@ export async function resolveEnvironmentExecutionTarget(input: {
     typeof input.leaseMetadata?.remoteCwd === "string" && input.leaseMetadata.remoteCwd.trim().length > 0
       ? input.leaseMetadata.remoteCwd.trim()
       : parsed.config.remoteWorkspacePath;
+
+  if (hermesOverSsh) {
+    // Never fall back to a local run: a refusal here fails the run.
+    const decision = evaluateHermesSshEnvironment({
+      companyId: input.companyId,
+      config: parsed.config as unknown as Record<string, unknown>,
+    });
+    if (!decision.ok) throw new Error(decision.message);
+    const identityFile = parsed.config.identityFile!;
+    const knownHostsFile = parsed.config.knownHostsFile!;
+    await assertHermesSshLaunchReady({ identityFile, knownHostsFile });
+    const paperclipApiUrl =
+      typeof input.leaseMetadata?.paperclipApiUrl === "string" && input.leaseMetadata.paperclipApiUrl.trim().length > 0
+        ? input.leaseMetadata.paperclipApiUrl.trim()
+        : null;
+    return {
+      kind: "remote",
+      transport: "ssh",
+      environmentId: input.environment.id ?? null,
+      leaseId: input.leaseId ?? null,
+      remoteCwd,
+      paperclipApiUrl,
+      spec: {
+        host: parsed.config.host,
+        port: parsed.config.port,
+        username: parsed.config.username,
+        remoteWorkspacePath: parsed.config.remoteWorkspacePath,
+        // The dedicated identity file and pinned known_hosts replace any
+        // stored key material or inline host keys.
+        privateKey: null,
+        knownHosts: null,
+        strictHostKeyChecking: true,
+        identityFile,
+        knownHostsFile,
+        remoteCwd,
+        paperclipApiUrl,
+      },
+    };
+  }
 
   return {
     kind: "remote",

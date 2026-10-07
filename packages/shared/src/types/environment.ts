@@ -20,6 +20,10 @@ export interface SshEnvironmentConfig {
   privateKeySecretRef: EnvSecretRefBinding | null;
   knownHosts: string | null;
   strictHostKeyChecking: boolean;
+  /** AgentDash: absolute path of a dedicated identity file on the server. */
+  identityFile?: string;
+  /** AgentDash: absolute path of a pinned known_hosts file on the server. */
+  knownHostsFile?: string;
 }
 
 export type SandboxEnvironmentProvider = "fake" | (string & {});

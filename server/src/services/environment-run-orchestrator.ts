@@ -43,6 +43,7 @@ import {
 import { buildWorkspaceRealizationRequest } from "./workspace-realization.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
 import { logActivity } from "./activity-log.js";
+import { assertHermesSshLaunchReady, evaluateHermesSshEnvironment, hermesSshEnabled } from "./hermes-ssh-policy.js";
 import { parseObject } from "../adapters/utils.js";
 import type { RealizedExecutionWorkspace } from "./workspace-runtime.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
@@ -275,6 +276,36 @@ export function environmentRunOrchestrator(
       defaultEnvironmentId: input.defaultEnvironmentId,
     });
 
+    // AgentDash: hermes_local over SSH (flag on only). Refuse before the lease,
+    // so an unlisted host is never even connected to; never fall back to local.
+    let hermesSshTarget: string | null = null;
+    if (input.adapterType === "hermes_local" && environment.driver === "ssh" && hermesSshEnabled()) {
+      const decision = evaluateHermesSshEnvironment({
+        companyId: input.companyId,
+        config: parseObject(environment.config),
+      });
+      if (!decision.ok) {
+        throw new EnvironmentRunError("unsupported_adapter_environment", decision.message, {
+          environmentId: environment.id,
+          driver: environment.driver,
+        });
+      }
+      const sshConfig = parseObject(environment.config);
+      try {
+        await assertHermesSshLaunchReady({
+          identityFile: String(sshConfig.identityFile),
+          knownHostsFile: String(sshConfig.knownHostsFile),
+        });
+      } catch (err) {
+        throw new EnvironmentRunError(
+          "unsupported_adapter_environment",
+          err instanceof Error ? err.message : String(err),
+          { environmentId: environment.id, driver: environment.driver, cause: err },
+        );
+      }
+      hermesSshTarget = decision.target;
+    }
+
     // Step 2: Acquire lease
     const leaseRecord = await acquireLease({
       companyId: input.companyId,
@@ -303,6 +334,27 @@ export function environmentRunOrchestrator(
         issueId: input.issueId,
       },
     });
+
+    if (hermesSshTarget) {
+      // AgentDash: audit every hermes run launched over SSH (target and ids only).
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: "agent",
+        actorId: input.agentId,
+        agentId: input.agentId,
+        runId: input.heartbeatRunId,
+        action: "agent.ssh_run_launched",
+        entityType: "heartbeat_run",
+        entityId: input.heartbeatRunId,
+        details: {
+          environmentId: environment.id,
+          adapterType: input.adapterType,
+          sshTarget: hermesSshTarget,
+          leaseId: leaseRecord.lease.id,
+          issueId: input.issueId,
+        },
+      });
+    }
 
     // Step 4: Resolve execution transport
     const executionTransport = await resolveTransport({

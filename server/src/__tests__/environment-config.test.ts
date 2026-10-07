@@ -36,6 +36,32 @@ describe("environment config helpers", () => {
     });
   });
 
+  it("keeps absolute identityFile/knownHostsFile paths and rejects relative ones", () => {
+    const base = {
+      host: "127.0.0.1",
+      username: "ac-provider",
+      remoteWorkspacePath: "/Users/ac-provider/agentdash",
+    };
+    const config = normalizeEnvironmentConfig({
+      driver: "ssh",
+      config: {
+        ...base,
+        identityFile: "/etc/agentdash/ssh/ac-provider_ed25519",
+        knownHostsFile: "/etc/agentdash/ssh/known_hosts",
+      },
+    });
+    expect(config).toMatchObject({
+      identityFile: "/etc/agentdash/ssh/ac-provider_ed25519",
+      knownHostsFile: "/etc/agentdash/ssh/known_hosts",
+    });
+    expect(() =>
+      normalizeEnvironmentConfig({ driver: "ssh", config: { ...base, identityFile: "keys/id_ed25519" } }),
+    ).toThrow(/must be absolute/);
+    expect(() =>
+      normalizeEnvironmentConfig({ driver: "ssh", config: { ...base, knownHostsFile: "known_hosts" } }),
+    ).toThrow(/must be absolute/);
+  });
+
   it("rejects raw SSH private keys in the stored config shape", () => {
     expect(() =>
       normalizeEnvironmentConfig({

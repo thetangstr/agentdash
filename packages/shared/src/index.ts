@@ -1307,6 +1307,7 @@ export type {
   AdapterEnvironmentSupport,
   EnvironmentCapabilities,
   EnvironmentProviderCapability,
+  EnvironmentSupportOptions,
   EnvironmentSupportStatus,
 } from "./environment-support.js";
 

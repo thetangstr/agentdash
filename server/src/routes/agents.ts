@@ -124,6 +124,7 @@ import {
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { resolveEnvironmentExecutionTarget } from "../services/environment-execution-target.js";
+import { assertHermesSshEnvironmentPermitted, hermesSshEnabled } from "../services/hermes-ssh-policy.js";
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import type { AdapterEnvironmentCheck, AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
 import { secretService } from "../services/secrets.js";
@@ -279,6 +280,42 @@ export function agentRoutes(
     if (environmentId === undefined || environmentId === null) return;
     await assertEnvironmentSelectionForCompany(environmentService(db), companyId, environmentId, {
       allowedDrivers: allowedEnvironmentDriversForAgent(adapterType),
+    });
+    // AgentDash: hermes_local over SSH (flag on) — allowlist + hardening.
+    if (adapterType === "hermes_local" && hermesSshEnabled()) {
+      const environment = await environmentsSvc.getById(environmentId);
+      if (environment?.driver === "ssh") {
+        assertHermesSshEnvironmentPermitted({ companyId, config: environment.config });
+      }
+    }
+  }
+
+  /**
+   * AgentDash: audit a hermes agent being pinned to an SSH environment. Only
+   * the target and ids are recorded — never key material or env values.
+   */
+  async function logHermesSshEnvironmentPin(
+    req: Request,
+    agent: { id: string; companyId: string },
+    pinned: { environmentId: string; sshTarget: string } | null,
+  ) {
+    // `pinned` is only ever non-null for a hermes_local agent on an SSH environment.
+    if (!pinned) return;
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "agent.ssh_environment_pinned",
+      entityType: "agent",
+      entityId: agent.id,
+      details: {
+        environmentId: pinned.environmentId,
+        adapterType: "hermes_local",
+        sshTarget: pinned.sshTarget,
+      },
     });
   }
 
@@ -1277,9 +1314,9 @@ export function agentRoutes(
   async function assertAgentDefaultEnvironmentSelection(
     companyId: string,
     environmentId: string | null | undefined,
-    options?: { allowedDrivers?: string[]; allowedSandboxProviders?: string[] },
-  ) {
-    if (environmentId === undefined || environmentId === null) return;
+    options?: { allowedDrivers?: string[]; allowedSandboxProviders?: string[]; adapterType?: string },
+  ): Promise<{ environmentId: string; sshTarget: string } | null> {
+    if (environmentId === undefined || environmentId === null) return null;
     const environment = await environmentsSvc.getById(environmentId);
     if (!environment || environment.companyId !== companyId) {
       throw unprocessable("Selected environment must belong to the same company");
@@ -1303,6 +1340,16 @@ export function agentRoutes(
         );
       }
     }
+    // AgentDash: hermes_local over SSH. Only reachable with the flag on — with
+    // it off the driver check above already refused "ssh" for hermes.
+    if (options?.adapterType === "hermes_local" && environment.driver === "ssh") {
+      const { target } = assertHermesSshEnvironmentPermitted({
+        companyId,
+        config: environment.config as Record<string, unknown> | null,
+      });
+      return { environmentId: environment.id, sshTarget: target };
+    }
+    return null;
   }
 
   function hasOwn(value: object, key: string): boolean {
@@ -1310,7 +1357,7 @@ export function agentRoutes(
   }
 
   function allowedEnvironmentDriversForAgent(adapterType: string): string[] {
-    return supportedEnvironmentDriversForAdapter(adapterType);
+    return supportedEnvironmentDriversForAdapter(adapterType, { hermesSshEnabled: hermesSshEnabled() });
   }
 
   function allowedSandboxProvidersForAgent(adapterType: string): string[] | undefined {
@@ -2870,6 +2917,15 @@ export function agentRoutes(
       return;
     }
 
+    // AgentDash: hermes_local over SSH (flag on only) — the hire path pins an
+    // environment too, so it gets the same company/allowlist/hardening check.
+    const hermesSshHirePin = normalizedHireInput.adapterType === "hermes_local" && hermesSshEnabled()
+      ? await assertAgentDefaultEnvironmentSelection(companyId, normalizedHireInput.defaultEnvironmentId, {
+          allowedDrivers: allowedEnvironmentDriversForAgent(normalizedHireInput.adapterType),
+          adapterType: normalizedHireInput.adapterType,
+        })
+      : null;
+
     const harnessPreflightResult = requireHarnessPreflight
       ? await runRequiredHarnessPreflight({
           companyId,
@@ -2989,6 +3045,7 @@ export function agentRoutes(
         desiredSkills: desiredSkillAssignment.desiredSkills,
       },
     });
+    await logHermesSshEnvironmentPin(req, agent, hermesSshHirePin);
     const telemetryClient = getTelemetryClient();
     if (telemetryClient) {
       trackAgentCreated(telemetryClient, { agentRole: agent.role, agentId: agent.id });
@@ -3087,9 +3144,10 @@ export function agentRoutes(
       normalizedAdapterConfig,
     );
     await assertAgentEnvironmentSelection(companyId, createInput.adapterType, createInput.defaultEnvironmentId);
-    await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
+    const hermesSshPin = await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
       allowedDrivers: allowedEnvironmentDriversForAgent(createInput.adapterType),
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
+      adapterType: createInput.adapterType,
     });
 
     // Which kind of agent this is, and who answers for it.
@@ -3190,6 +3248,7 @@ export function agentRoutes(
         desiredSkills: desiredSkillAssignment.desiredSkills,
       },
     });
+    await logHermesSshEnvironmentPin(req, agent, hermesSshPin);
     const telemetryClient = getTelemetryClient();
     if (telemetryClient) {
       trackAgentCreated(telemetryClient, { agentRole: agent.role, agentId: agent.id });
@@ -4048,8 +4107,9 @@ export function agentRoutes(
         baseAdapterConfig,
       );
     }
+    let hermesSshPin: { environmentId: string; sshTarget: string } | null = null;
     if (touchesAdapterConfiguration || Object.prototype.hasOwnProperty.call(patchData, "defaultEnvironmentId")) {
-      await assertAgentDefaultEnvironmentSelection(
+      hermesSshPin = await assertAgentDefaultEnvironmentSelection(
         existing.companyId,
         Object.prototype.hasOwnProperty.call(patchData, "defaultEnvironmentId")
           ? (typeof patchData.defaultEnvironmentId === "string" ? patchData.defaultEnvironmentId : null)
@@ -4057,6 +4117,7 @@ export function agentRoutes(
         {
           allowedDrivers: allowedEnvironmentDriversForAgent(requestedAdapterType),
           allowedSandboxProviders: allowedSandboxProvidersForAgent(requestedAdapterType),
+          adapterType: requestedAdapterType,
         },
       );
     }
@@ -4085,6 +4146,13 @@ export function agentRoutes(
       entityId: agent.id,
       details: summarizeAgentUpdateDetails(patchData),
     });
+    // Audit only a new pin: a fresh environment, or an agent newly switched to hermes.
+    if (
+      (hasOwn(patchData, "defaultEnvironmentId") && patchData.defaultEnvironmentId !== existing.defaultEnvironmentId) ||
+      requestedAdapterType !== existing.adapterType
+    ) {
+      await logHermesSshEnvironmentPin(req, agent, hermesSshPin);
+    }
 
     // A second, specific entry when accountability moved.
     //

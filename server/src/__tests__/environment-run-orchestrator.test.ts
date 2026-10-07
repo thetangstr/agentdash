@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -10,6 +13,7 @@ const mockBuildWorkspaceRealizationRequest = vi.hoisted(() => vi.fn());
 const mockUpdateLeaseMetadata = vi.hoisted(() => vi.fn());
 const mockUpdateExecutionWorkspace = vi.hoisted(() => vi.fn());
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const mockGetEnvironmentById = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/environment-execution-target.js", () => ({
   resolveEnvironmentExecutionTarget: mockResolveEnvironmentExecutionTarget,
@@ -27,7 +31,7 @@ vi.mock("../services/workspace-realization.js", () => ({
 vi.mock("../services/environments.js", () => ({
   environmentService: vi.fn(() => ({
     ensureLocalEnvironment: vi.fn(),
-    getById: vi.fn(),
+    getById: mockGetEnvironmentById,
     acquireLease: vi.fn(),
     releaseLease: vi.fn(),
     updateLeaseMetadata: mockUpdateLeaseMetadata,
@@ -467,5 +471,111 @@ describe("environmentRunOrchestrator — realizeForRun", () => {
     );
 
     expect(mockResolveEnvironmentExecutionTarget).not.toHaveBeenCalled();
+  });
+});
+
+describe("environmentRunOrchestrator — hermes_local over SSH", () => {
+  const FOUNDER_COMPANY = "0008870a-4a07-4e09-9a3e-1998f4c7d640";
+  const keyDir = mkdtempSync(join(tmpdir(), "hermes-ssh-orchestrator-"));
+  const identityFile = join(keyDir, "ac-provider_ed25519");
+  const knownHostsFile = join(keyDir, "known_hosts");
+  writeFileSync(identityFile, "placeholder", { mode: 0o600 });
+  writeFileSync(`${identityFile}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPub agentdash\n");
+  writeFileSync(knownHostsFile, "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHost\n");
+  const sshEnvironment: Environment = {
+    ...makeEnvironment("ssh"),
+    id: "env-ssh",
+    companyId: FOUNDER_COMPANY,
+    config: {
+      host: "127.0.0.1",
+      port: 22,
+      username: "ac-provider",
+      remoteWorkspacePath: "/Users/ac-provider/agentdash",
+      strictHostKeyChecking: true,
+      identityFile,
+      knownHostsFile,
+    },
+  };
+
+  function makeRuntime() {
+    return {
+      acquireRunLease: vi.fn().mockResolvedValue({
+        lease: makeLease({ id: "lease-ssh", environmentId: "env-ssh", provider: "ssh" }),
+        leaseContext: { executionWorkspaceId: null },
+      }),
+    } as unknown as EnvironmentRuntimeService & { acquireRunLease: ReturnType<typeof vi.fn> };
+  }
+
+  const acquire = (runtime: EnvironmentRuntimeService, companyId = FOUNDER_COMPANY) =>
+    environmentRunOrchestrator({} as never, { environmentRuntime: runtime }).acquireForRun({
+      companyId,
+      selectedEnvironmentId: "env-ssh",
+      defaultEnvironmentId: "env-local",
+      adapterType: "hermes_local",
+      issueId: null,
+      heartbeatRunId: "run-1",
+      agentId: "agent-1",
+      persistedExecutionWorkspace: null,
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
+    delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
+    mockGetEnvironmentById.mockResolvedValue(sshEnvironment);
+  });
+
+  it("with the flag off, leases as before and writes no SSH audit", async () => {
+    const runtime = makeRuntime();
+    await acquire(runtime);
+    expect(runtime.acquireRunLease).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity.mock.calls.map(([, entry]) => entry.action)).toEqual(["environment.lease_acquired"]);
+  });
+
+  it("refuses an unlisted target before any lease (no connection is made)", async () => {
+    process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+    process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-prov-b@127.0.0.1": [FOUNDER_COMPANY] });
+    const runtime = makeRuntime();
+    const error = await acquire(runtime).catch((err) => err);
+    expect(error).toBeInstanceOf(EnvironmentRunError);
+    expect(error.code).toBe("unsupported_adapter_environment");
+    expect(error.message).toContain("ac-provider@127.0.0.1");
+    expect(runtime.acquireRunLease).not.toHaveBeenCalled();
+    delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
+    delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
+  });
+
+  it("audits a launch over SSH for an allowlisted company and target", async () => {
+    process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+    process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] });
+    const runtime = makeRuntime();
+    await acquire(runtime);
+    expect(runtime.acquireRunLease).toHaveBeenCalledTimes(1);
+    const audit = mockLogActivity.mock.calls.find(([, entry]) => entry.action === "agent.ssh_run_launched");
+    expect(audit?.[1]).toMatchObject({
+      companyId: FOUNDER_COMPANY,
+      agentId: "agent-1",
+      runId: "run-1",
+      entityType: "heartbeat_run",
+      details: { environmentId: "env-ssh", sshTarget: "ac-provider@127.0.0.1", adapterType: "hermes_local" },
+    });
+    delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
+    delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
+  });
+
+  it("refuses before any lease when the pinned key file is missing", async () => {
+    process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+    process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] });
+    mockGetEnvironmentById.mockResolvedValue({
+      ...sshEnvironment,
+      config: { ...sshEnvironment.config, identityFile: join(keyDir, "missing_ed25519") },
+    });
+    const runtime = makeRuntime();
+    const error = await acquire(runtime).catch((err) => err);
+    expect(error).toBeInstanceOf(EnvironmentRunError);
+    expect(error.message).toContain("key file");
+    expect(runtime.acquireRunLease).not.toHaveBeenCalled();
+    delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
+    delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
   });
 });
