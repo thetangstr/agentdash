@@ -6,6 +6,7 @@ import {
   AGENT_ROLES,
   AGENT_STATUSES,
   AGENT_VISIBILITIES,
+  AGENT_WAKE_POLICIES,
   INBOX_MINE_ISSUE_STATUS_FILTER,
 } from "../constants.js";
 import { agentAdapterTypeSchema } from "../adapter-type.js";
@@ -117,6 +118,8 @@ export const agentRuntimeConfigSchema = z.object({
     maxDailyTokens: z.number().int().nonnegative().nullable().optional(),
   }).catchall(z.unknown()).optional(),
   recoveryBudget: agentRecoveryBudgetConfigSchema.optional(),
+  // AgentDash (wake policy): board-only; see AGENT_WAKE_POLICIES.
+  wakePolicy: z.enum(AGENT_WAKE_POLICIES).optional(),
 }).catchall(z.unknown());
 
 const createAgentBaseSchema = z.object({

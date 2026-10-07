@@ -26,6 +26,7 @@ import { insertActivity } from '../activity-log.js';
 import type { heartbeatService } from '../heartbeat.js';
 import type { HumanOperation, HumanOperationContext, HumanRecoveryReference } from '../human-control.js';
 import { humanCompany } from './workforce.js';
+import { isBoardAssignmentOnlyAgent } from '../agent-wake-policy.js';
 
 const TASK_RECOVERY_PERMIT_DEFAULT_TTL_MINUTES = 15;
 
@@ -269,11 +270,18 @@ export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): H
             throw conflict('Issue has no assignee agent to run the remediation.');
           }
           const [assignee] = await ctx.db
-            .select({ id: agents.id, status: agents.status })
+            .select({ id: agents.id, status: agents.status, runtimeConfig: agents.runtimeConfig, metadata: agents.metadata })
             .from(agents)
             .where(and(eq(agents.id, assigneeAgentId), eq(agents.companyId, companyId)));
           if (!assignee || assignee.status === 'paused' || assignee.status === 'terminated' || assignee.status === 'pending_approval') {
             throw conflict('Issue assignee agent is not invokable in its current state.');
+          }
+          // AgentDash (wake policy): the permit run is created directly, past
+          // the heartbeat guard, and is not an issue assignment — so a
+          // board_assignment_only agent refuses it here, before anything is
+          // written. Reassigning the issue is that agent's only way to start.
+          if (isBoardAssignmentOnlyAgent(assignee)) {
+            throw conflict('This agent only starts runs when a board member assigns it an issue; reassign the issue instead of remediating it.');
           }
 
           const now = new Date();

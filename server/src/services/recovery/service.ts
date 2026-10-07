@@ -1,3 +1,4 @@
+import { isBoardAssignmentOnlyAgent } from "../agent-wake-policy.js";
 import { workspacePersistenceHold } from "../workspace-persistence-recovery.js";
 import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -396,6 +397,20 @@ export function recoveryService(
     return db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0] ?? null);
   }
 
+  /**
+   * AgentDash (wake policy): every recovery wake goes through here. A
+   * board_assignment_only agent's recovery belongs to whoever assigns its
+   * work (a board member / external harness), never to these sweeps. The
+   * heartbeat guard would refuse each wake anyway, but every refusal is a
+   * skipped wake row — and a sweep re-trying every 30 s floods the agent's
+   * ledger with rows nobody asked for. So policy agents are skipped before
+   * the wake is requested, and no row is written.
+   */
+  async function enqueueRecoveryWakeup(agentId: string, opts?: RecoveryWakeupOptions) {
+    if (isBoardAssignmentOnlyAgent(await getAgent(agentId))) return null;
+    return deps.enqueueWakeup(agentId, opts);
+  }
+
   async function getLatestIssueRun(companyId: string, issueId: string): Promise<LatestIssueRun> {
     return db
       .select({
@@ -550,7 +565,7 @@ export function recoveryService(
     source: string;
     retryOfRunId?: string | null;
   }) {
-    const queued = await deps.enqueueWakeup(input.agentId, {
+    const queued = await enqueueRecoveryWakeup(input.agentId, {
       source: "automation",
       triggerDetail: "system",
       reason: input.reason,
@@ -586,7 +601,7 @@ export function recoveryService(
   }
 
   async function enqueueInitialAssignedTodoDispatch(issue: typeof issues.$inferSelect, agentId: string) {
-    return deps.enqueueWakeup(agentId, {
+    return enqueueRecoveryWakeup(agentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: "issue_assigned",
@@ -702,7 +717,7 @@ export function recoveryService(
         },
       });
 
-      const queued = await deps.enqueueWakeup(creatorAgent.id, {
+      const queued = await enqueueRecoveryWakeup(creatorAgent.id, {
         source: "automation",
         triggerDetail: "system",
         reason: "issue_assigned",
@@ -1213,7 +1228,7 @@ export function recoveryService(
       });
     }
     if (ownerAgentId) {
-      await deps.enqueueWakeup(ownerAgentId, {
+      await enqueueRecoveryWakeup(ownerAgentId, {
         source: "assignment",
         triggerDetail: "system",
         reason: "issue_assigned",
@@ -1585,7 +1600,7 @@ export function recoveryService(
       return raced;
     }
 
-    await deps.enqueueWakeup(ownerAgentId, {
+    await enqueueRecoveryWakeup(ownerAgentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: "issue_assigned",
@@ -1830,6 +1845,15 @@ export function recoveryService(
         continue;
       }
 
+      // AgentDash (wake policy): the sweep never touches a
+      // board_assignment_only agent's issues — no wake, no comment, no
+      // escalation task. Its recovery is a fresh board-key assignment.
+      const assignedAgent = await getAgent(agentId);
+      if (isBoardAssignmentOnlyAgent(assignedAgent)) {
+        result.skipped += 1;
+        continue;
+      }
+
       // AgentDash (recovery budget remediation): an issue whose automatic
       // recovery budget is exhausted needs a human to clear it. Re-dispatching
       // only produced a refused retry, an escalation and a fresh "Recover
@@ -1854,7 +1878,7 @@ export function recoveryService(
         continue;
       }
 
-      const agent = await getAgent(agentId);
+      const agent = assignedAgent;
       if (!agent || agent.companyId !== issue.companyId || !isAgentInvokable(agent)) {
         result.skipped += 1;
         continue;
@@ -2746,7 +2770,7 @@ export function recoveryService(
       },
     });
 
-    const wake = await deps.enqueueWakeup(ownerSelection.agentId, {
+    const wake = await enqueueRecoveryWakeup(ownerSelection.agentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: "issue_assigned",

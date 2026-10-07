@@ -14,6 +14,7 @@ import { agentService } from "../agents.js";
 import { nextFallbackHop, readFallbackChain } from "../../lib/adapter-fallback-chain.js";
 import { HERMES_LOCAL_ADAPTER_TYPE, hermesModelTierForModel, resolveHermesModelTier } from "@paperclipai/shared";
 import { hermesModelTiersActive } from "../hermes-model-tiers.js";
+import { isBoardAssignmentOnlyAgent } from "../agent-wake-policy.js";
 
 /**
  * AGE-113 invariant: automatic recovery may not switch an agent's adapter or
@@ -123,6 +124,17 @@ export async function executeHealFix(
   },
   diagnosis: HealDiagnosis,
 ): Promise<HealFixResult> {
+  // AgentDash (wake policy): every fix below writes wake rows directly (past
+  // the heartbeat wake-policy guard) or rewrites the agent's runtime state.
+  // A board_assignment_only agent is never "healed" — refuse here too,
+  // whatever the scan let through.
+  const [target] = await db
+    .select({ runtimeConfig: agents.runtimeConfig, metadata: agents.metadata })
+    .from(agents)
+    .where(eq(agents.id, run.agentId));
+  if (isBoardAssignmentOnlyAgent(target)) {
+    return { succeeded: false, actionTaken: "wake_policy_refused", costUsd: 0 };
+  }
   switch (diagnosis.fixType) {
     case "retry":
       return await executeRetryFix(db, run, diagnosis);

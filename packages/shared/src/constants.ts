@@ -47,6 +47,34 @@ export const AGENT_AUTONOMY_KINDS = ["stewarded", "autonomous"] as const;
 export type AgentAutonomy = (typeof AGENT_AUTONOMY_KINDS)[number];
 
 /**
+ * AgentDash (wake policy): which wakes may start a run for an agent, stored as
+ * `runtimeConfig.wakePolicy`. Absent or "default" keeps today's behaviour.
+ * "board_assignment_only": only an issue assignment made with a board API key
+ * may start a run, and only on an agent pinned to a non-local environment;
+ * every other wake is refused and recorded as a skipped wake request with one
+ * of AGENT_WAKE_POLICY_REFUSAL_CODES. One policy for every company — there is
+ * no per-company variant. See doc/AGENT-WAKE-POLICY.md.
+ */
+export const AGENT_WAKE_POLICIES = ["default", "board_assignment_only"] as const;
+export type AgentWakePolicy = (typeof AGENT_WAKE_POLICIES)[number];
+
+/**
+ * Stable refusal codes the board_assignment_only policy writes into a skipped
+ * wake request's `reason` (and a refused run's `errorCode`). The
+ * `travel_pairing.` prefix is historical — the policy began as the travel
+ * pairing guard — and is kept verbatim because external harnesses match on
+ * these strings. Never rename them.
+ */
+export const AGENT_WAKE_POLICY_REFUSAL_CODES = [
+  "travel_pairing.wake_source",
+  "travel_pairing.not_issue_assignment",
+  "travel_pairing.not_board_key",
+  "travel_pairing.no_environment",
+  "travel_pairing.environment_mismatch",
+] as const;
+export type AgentWakePolicyRefusalCode = (typeof AGENT_WAKE_POLICY_REFUSAL_CODES)[number];
+
+/**
  * Agent visibility (2026-09-30). 'company': every member sees the agent.
  * 'owner': only admins and the people who answer for it. An agent with no
  * value inherits its company's `agentVisibilityDefault`.

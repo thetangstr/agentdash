@@ -51,6 +51,129 @@ describe("GET /health", () => {
     expect(res.body).toMatchObject({ status: "ok", version: serverVersion });
   }, 15_000);
 
+  describe("instance identity and closed-door flags", () => {
+    const saved = {
+      PAPERCLIP_INSTANCE_ID: process.env.PAPERCLIP_INSTANCE_ID,
+      PAPERCLIP_HOME: process.env.PAPERCLIP_HOME,
+      AGENTDASH_INSTANCE_LABEL: process.env.AGENTDASH_INSTANCE_LABEL,
+      AGENTDASH_TRIAL_ANONYMOUS: process.env.AGENTDASH_TRIAL_ANONYMOUS,
+      AGENTDASH_DEPLOYMENT_KIND: process.env.AGENTDASH_DEPLOYMENT_KIND,
+    };
+    afterEach(() => {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    const authenticatedOpts = (authDisableSignUp?: boolean) => ({
+      deploymentMode: "authenticated" as const,
+      deploymentExposure: "public" as const,
+      authReady: true,
+      companyDeletionEnabled: false,
+      ...(authDisableSignUp === undefined ? {} : { authDisableSignUp }),
+    });
+
+    function fullShapeApp(authDisableSignUp?: boolean) {
+      const db = {
+        execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ count: 0 }]) })),
+        })),
+      } as unknown as Db;
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "board", userId: "user-1", source: "session" };
+        next();
+      });
+      app.use("/health", healthRoutes(db, authenticatedOpts(authDisableSignUp)));
+      return app;
+    }
+
+    it("reports the real instance id and the data dir basename — never a path", async () => {
+      delete process.env.AGENTDASH_INSTANCE_LABEL;
+      process.env.PAPERCLIP_INSTANCE_ID = "hq-main";
+      process.env.PAPERCLIP_HOME = "/tmp/some/secret/place/.agentdash-hq";
+      const res = await request(createApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ instanceId: "hq-main", dataDirName: ".agentdash-hq" });
+      expect(JSON.stringify(res.body)).not.toContain("/tmp/some/secret/place");
+    });
+
+    it("prefers the health-only AGENTDASH_INSTANCE_LABEL and ignores a malformed one", async () => {
+      process.env.PAPERCLIP_INSTANCE_ID = "default";
+      process.env.AGENTDASH_INSTANCE_LABEL = "agentdash-hq";
+      let res = await request(createApp()).get("/health");
+      expect(res.body.instanceId).toBe("agentdash-hq");
+
+      process.env.AGENTDASH_INSTANCE_LABEL = "../../etc/passwd";
+      res = await request(createApp()).get("/health");
+      expect(res.body.instanceId).toBe("default");
+    });
+
+    it("omits instanceId instead of failing when PAPERCLIP_INSTANCE_ID is malformed", async () => {
+      delete process.env.AGENTDASH_INSTANCE_LABEL;
+      process.env.PAPERCLIP_INSTANCE_ID = "bad id!";
+      const res = await request(createApp()).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.instanceId).toBeUndefined();
+    });
+
+    it("carries the identity and both flags on the public (redacted) shape", async () => {
+      process.env.PAPERCLIP_INSTANCE_ID = "hq-main";
+      process.env.AGENTDASH_TRIAL_ANONYMOUS = "false";
+      const app = express();
+      app.use("/health", healthRoutes(undefined, authenticatedOpts(true)));
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        deploymentMode: "authenticated",
+        instanceId: "hq-main",
+        signUpDisabled: true,
+        trialAnonymousEnabled: false,
+      });
+      expect(typeof res.body.dataDirName).toBe("string");
+    });
+
+    it("carries the identity and both flags on the full (authenticated) shape", async () => {
+      process.env.PAPERCLIP_INSTANCE_ID = "hq-main";
+      delete process.env.AGENTDASH_TRIAL_ANONYMOUS;
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+      const res = await request(fullShapeApp(true)).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        instanceId: "hq-main",
+        signUpDisabled: true,
+        trialAnonymousEnabled: true,
+      });
+    });
+
+    it("reports signUpDisabled false when sign-up is open (the default)", async () => {
+      const res = await request(fullShapeApp()).get("/health");
+      expect(res.body.signUpDisabled).toBe(false);
+      const publicRes = await request(createApp()).get("/health");
+      expect(publicRes.body.signUpDisabled).toBe(false);
+    });
+
+    it("reports trialAnonymousEnabled false on a hosted box whatever the flag says", async () => {
+      process.env.AGENTDASH_TRIAL_ANONYMOUS = "true";
+      process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+      const res = await request(createApp()).get("/health");
+      expect(res.body.trialAnonymousEnabled).toBe(false);
+    });
+
+    it("keeps the identity on the 503 database_unreachable shape", async () => {
+      process.env.PAPERCLIP_INSTANCE_ID = "hq-main";
+      const db = {
+        execute: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
+      } as unknown as Db;
+      const res = await request(createApp(db)).get("/health");
+      expect(res.status).toBe(503);
+      expect(res.body).toMatchObject({ status: "unhealthy", instanceId: "hq-main" });
+      expect(typeof res.body.signUpDisabled).toBe("boolean");
+    });
+  });
+
   it("returns 200 when the database probe succeeds", async () => {
     const db = {
       execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),

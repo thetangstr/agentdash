@@ -12,7 +12,7 @@
 //    ever applied, whatever it says.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { agentWakeupRequests, agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import { executeHealFix } from "../services/run-healer/fixer.js";
 import type { HealDiagnosis } from "../services/run-healer/diagnosis.js";
@@ -88,6 +88,21 @@ describeEmbeddedPostgres("run-healer adapter_switch under the AGE-113 invariant"
       .where(eq(agents.id, agentId));
     return { adapterType: row.adapterType, config: (row.adapterConfig ?? {}) as Record<string, unknown> };
   }
+
+  it("refuses every fix for a board_assignment_only agent and writes no wake row", async () => {
+    const { agentId, run } = await plantAgentWithFailedRun("codex_local", { model: "gpt-5.6-terra" });
+    await db
+      .update(agents)
+      .set({ runtimeConfig: { wakePolicy: "board_assignment_only" } })
+      .where(eq(agents.id, agentId));
+
+    for (const fixType of ["retry", "adapter_switch", "config_update"] as const) {
+      const result = await executeHealFix(db, run, { ...switchDiagnosis, fixType });
+      expect(result).toMatchObject({ succeeded: false, actionTaken: "wake_policy_refused" });
+    }
+    const wakes = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
+    expect(wakes).toHaveLength(0);
+  });
 
   it("refuses the switch: agent stays exactly as configured, run re-enqueued on its own config", async () => {
     process.env.AGENTDASH_FALLBACK_CHAIN = "hermes_local:k3,hermes_local:glm-5.3";
