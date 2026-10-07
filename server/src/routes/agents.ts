@@ -101,6 +101,8 @@ import {
   resolveAgentVisibility,
   runVisibilityCondition,
   runVisibilityParam,
+  projectScopedVisibilityCondition,
+  wakeVisibilityCondition,
   visibleAgentIdsFor,
 } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
@@ -1611,6 +1613,21 @@ export function agentRoutes(
     );
   }
 
+  /**
+   * AgentDash (wake policy): switching an agent ON to board_assignment_only
+   * also refuses the runs it already had queued or scheduled (timers, comment
+   * wakes, retries from before the switch), so none of them starts under the
+   * policy. The run-start check refuses any that slip past this.
+   */
+  async function refusePendingRunsIfWakePolicyTurnedOn(
+    before: { runtimeConfig?: unknown; metadata?: unknown },
+    after: { id: string; runtimeConfig?: unknown; metadata?: unknown },
+  ) {
+    if (resolveAgentWakePolicy(before) === "board_assignment_only") return;
+    if (resolveAgentWakePolicy(after) !== "board_assignment_only") return;
+    await heartbeat.refusePendingRunsForWakePolicy(after.id);
+  }
+
   async function assertNoAgentRuntimeConfigAdapterConfigMutation(
     req: Request,
     companyId: string,
@@ -2756,6 +2773,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Revision not found" });
       return;
     }
+    await refusePendingRunsIfWakePolicyTurnedOn(existing, updated);
 
     await logActivity(db, {
       companyId: updated.companyId,
@@ -2812,7 +2830,13 @@ export function agentRoutes(
       res.status(400).json({ error: bounds.error });
       return;
     }
-    res.json(await readAgentRunWindow(db, agent, bounds));
+    // A5 (GH #830): rows tied to an issue in a restricted project the caller
+    // is not listed on are absent, exactly as on every other run list.
+    res.json(await readAgentRunWindow(db, agent, bounds, {
+      runs: runVisibilityCondition(req, agent.companyId),
+      wakes: wakeVisibilityCondition(req, agent.companyId),
+      comments: projectScopedVisibilityCondition(req, agent.companyId, issuesTable.projectId),
+    }));
   });
 
   router.get("/agents/:id/task-sessions", async (req, res) => {
@@ -4281,6 +4305,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
+    await refusePendingRunsIfWakePolicyTurnedOn(existing, agent);
 
     await logActivity(db, {
       companyId: agent.companyId,

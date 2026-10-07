@@ -219,6 +219,7 @@ import {
   boardAssignmentOnlyWakeRefusal,
   isBoardAssignmentOnlyAgent,
 } from "./agent-wake-policy.js";
+import type { AgentWakePolicyRefusalCode } from "@paperclipai/shared";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -6669,14 +6670,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * run-start auto-checkout put back (the run never legitimately held the
      * issue), the execution lock released, and the agent finalized.
      */
-    const refuseWakePolicyRun = async (
-      refusalCode: typeof WAKE_POLICY_REFUSAL.noEnvironment | typeof WAKE_POLICY_REFUSAL.environmentMismatch,
-    ) => {
+    const refuseWakePolicyRun = async (refusalCode: AgentWakePolicyRefusalCode) => {
       const refusedAt = new Date();
-      const refusalError =
-        refusalCode === WAKE_POLICY_REFUSAL.environmentMismatch
-          ? "Wake policy refused the run: the resolved execution environment differs from the agent's pinned environment"
-          : "Wake policy refused the run: the pinned environment is missing or is a local environment";
+      const refusalError = wakePolicyRunRefusalMessage(refusalCode);
       const refusedRun = await setRunStatus(run.id, "cancelled", {
         finishedAt: refusedAt,
         error: refusalError,
@@ -6704,9 +6700,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await releaseIssueExecutionAndPromote(refusedRun);
       }
       // Marked last, so a skipped wake means the refusal has fully settled:
-      // run cancelled, issue restored and its execution lock released.
+      // run cancelled (never executed), issue restored and its execution lock
+      // released. runId is cleared so the row has the stable refused-wake
+      // shape (skipped, runId null) whichever lane refused it.
       await setWakeupStatus(run.wakeupRequestId, "skipped", {
         reason: refusalCode,
+        runId: null,
         finishedAt: refusedAt,
         error: refusalError,
       });
@@ -6724,11 +6723,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * re-pointed since the wake was accepted.
      */
     if (isBoardAssignmentOnlyAgent(agent)) {
-      const environmentRefusal =
-        (await boardAssignmentOnlyEnvironmentRefusal(db, agent)) ??
+      // The run's ORIGIN is re-checked too (rules a–d against the wake that
+      // created it, and the issue must still be assigned to this agent): a
+      // run queued or scheduled before the policy was switched on — a timer,
+      // a comment wake, a retry — never starts under it.
+      const runStartRefusal =
+        (await wakePolicyRunOriginRefusal(run, agent)) ??
         (selectedEnvironmentId !== agent.defaultEnvironmentId ? WAKE_POLICY_REFUSAL.environmentMismatch : null);
-      if (environmentRefusal) {
-        await refuseWakePolicyRun(environmentRefusal as typeof WAKE_POLICY_REFUSAL.noEnvironment | typeof WAKE_POLICY_REFUSAL.environmentMismatch);
+      if (runStartRefusal) {
+        await refuseWakePolicyRun(runStartRefusal);
         return;
       }
     }
@@ -8611,6 +8614,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return { kind: "released" as const };
       }
 
+      // AgentDash (wake policy): this immediate-recovery lane inserts an
+      // automation run directly, past enqueueWakeup. A board_assignment_only
+      // agent's recovery is a fresh board-key assignment, never an internal
+      // retry: record the refusal in this transaction and release the issue.
+      // Checked before the block-immediately branch too, so a policy agent's
+      // issue is never blocked or commented on by this lane either.
+      if (isBoardAssignmentOnlyAgent(recoveryAgent)) {
+        await writeWakePolicyRefusedWake(
+          {
+            companyId: issue.companyId,
+            agentId: run.agentId,
+            refusedReason: issue.status === "todo" ? "issue_assignment_recovery" : "issue_continuation_needed",
+            payload: { issueId: issue.id, retryOfRunId: run.id },
+          },
+          tx,
+        );
+        return { kind: "released" as const };
+      }
+
       const automaticRecoveryFailed =
         didAutomaticRecoveryFail(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
       const shouldBlockImmediately =
@@ -8643,23 +8665,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           previousStatus: issue.status,
           comment,
         };
-      }
-
-      // AgentDash (wake policy): this immediate-recovery lane inserts an
-      // automation run directly, past enqueueWakeup. A board_assignment_only
-      // agent's recovery is a fresh board-key assignment, never an internal
-      // retry: record the refusal in this transaction and release the issue.
-      if (isBoardAssignmentOnlyAgent(recoveryAgent)) {
-        await writeWakePolicyRefusedWake(
-          {
-            companyId: issue.companyId,
-            agentId: recoveryAgent.id,
-            refusedReason: issue.status === "todo" ? "issue_assignment_recovery" : "issue_continuation_needed",
-            payload: { issueId: issue.id, retryOfRunId: run.id },
-          },
-          tx,
-        );
-        return { kind: "released" as const };
       }
 
       const retryReason = issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed";
@@ -8942,6 +8947,93 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
    * with the lane's own reason in payload.refusedReason and the run it would
    * have retried in payload.retryOfRunId (a stable shape harnesses match on).
    */
+  function wakePolicyRunRefusalMessage(code: AgentWakePolicyRefusalCode) {
+    switch (code) {
+      case WAKE_POLICY_REFUSAL.environmentMismatch:
+        return "Wake policy refused the run: the resolved execution environment differs from the agent's pinned environment";
+      case WAKE_POLICY_REFUSAL.noEnvironment:
+        return "Wake policy refused the run: the pinned environment is missing or is a local environment";
+      default:
+        return `Wake policy refused the run: it did not come from a board-key issue assignment (${code})`;
+    }
+  }
+
+  /**
+   * AgentDash (wake policy): would the wake that created this run be allowed
+   * under board_assignment_only right now? Used at run start and when the
+   * policy is switched on, so runs queued or scheduled earlier (timers,
+   * comment wakes, retries) never start under it. A promoted deferred wake is
+   * judged on its original wakeReason, as at promotion.
+   */
+  async function wakePolicyRunOriginRefusal(
+    run: Pick<typeof heartbeatRuns.$inferSelect, "wakeupRequestId" | "contextSnapshot">,
+    agent: typeof agents.$inferSelect,
+  ): Promise<AgentWakePolicyRefusalCode | null> {
+    const wake = run.wakeupRequestId
+      ? await db
+          .select()
+          .from(agentWakeupRequests)
+          .where(eq(agentWakeupRequests.id, run.wakeupRequestId))
+          .then((rows) => rows[0] ?? null)
+      : null;
+    if (!wake) return WAKE_POLICY_REFUSAL.wakeSource;
+    const context = parseObject(run.contextSnapshot);
+    const wakePayload = parseObject(wake.payload);
+    const reason = wake.reason === "issue_execution_promoted"
+      ? readNonEmptyString(context.wakeReason)
+      : readNonEmptyString(wake.reason);
+    return (
+      boardAssignmentOnlyWakeRefusal({
+        source: readNonEmptyString(wake.source),
+        reason,
+        requestedByActorType: wake.requestedByActorType,
+        requestedByCredential: readNonEmptyString(wakePayload[WAKE_PAYLOAD_REQUESTED_BY_CREDENTIAL_KEY]),
+      }) ??
+      await boardAssignmentOnlyIssueRefusal(db, agent, readNonEmptyString(context.issueId)) ??
+      await boardAssignmentOnlyEnvironmentRefusal(db, agent)
+    );
+  }
+
+  /**
+   * AgentDash (wake policy): called when an agent is switched to
+   * board_assignment_only. Every queued or scheduled-retry run whose origin
+   * the policy would refuse is cancelled before it can start (it never
+   * executed), its wake becomes the standard refused row (skipped, runId
+   * null, the refusal code as reason), and any issue lock it held is
+   * released. Runs that already qualify are left alone.
+   */
+  async function refusePendingRunsForWakePolicy(agentId: string) {
+    const agent = await getAgent(agentId);
+    if (!agent || !isBoardAssignmentOnlyAgent(agent)) return { cancelled: 0 };
+    const pending = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["queued", "scheduled_retry"])));
+    let cancelled = 0;
+    for (const pendingRun of pending) {
+      const code = await wakePolicyRunOriginRefusal(pendingRun, agent);
+      if (!code) continue;
+      const refusedAt = new Date();
+      const message = wakePolicyRunRefusalMessage(code);
+      const refusedRun = await db
+        .update(heartbeatRuns)
+        .set({ status: "cancelled", finishedAt: refusedAt, error: message, errorCode: code, updatedAt: refusedAt })
+        .where(and(eq(heartbeatRuns.id, pendingRun.id), inArray(heartbeatRuns.status, ["queued", "scheduled_retry"])))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      if (!refusedRun) continue; // claimed meanwhile; the run-start check refuses it
+      cancelled += 1;
+      await releaseIssueExecutionAndPromote(refusedRun);
+      await setWakeupStatus(refusedRun.wakeupRequestId, "skipped", {
+        reason: code,
+        runId: null,
+        finishedAt: refusedAt,
+        error: message,
+      });
+    }
+    return { cancelled };
+  }
+
   async function writeWakePolicyRefusedWake(
     input: {
       companyId: string;
@@ -8960,6 +9052,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       reason: WAKE_POLICY_REFUSAL.wakeSource,
       payload: {
         refusedReason: input.refusedReason,
+        // No HTTP credential exists on these internal lanes.
+        [WAKE_PAYLOAD_REQUESTED_BY_CREDENTIAL_KEY]: null,
         ...(input.payload ?? {}),
       },
       status: "skipped",
@@ -8993,13 +9087,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const requestedByCredential = opts.requestedByActorSource !== undefined
       ? opts.requestedByActorSource ?? null
       : currentRequestActorSource();
-    // The reserved credential key is server-written only: whatever a caller
-    // put there is dropped, so provenance cannot be spoofed through a payload.
+    // `let`: for a board_assignment_only agent the reserved credential key is
+    // rewritten below (server-written only, never trusted from the caller).
+    // Other agents' payloads pass through untouched.
     let payload: Record<string, unknown> | null = opts.payload ?? null;
-    if (payload && Object.prototype.hasOwnProperty.call(payload, WAKE_PAYLOAD_REQUESTED_BY_CREDENTIAL_KEY)) {
-      payload = { ...payload };
-      delete payload[WAKE_PAYLOAD_REQUESTED_BY_CREDENTIAL_KEY];
-    }
     const {
       contextSnapshot: enrichedContextSnapshot,
       issueIdFromPayload,
@@ -9110,6 +9201,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * Agents without the policy skip this block entirely.
      */
     if (isBoardAssignmentOnlyAgent(agent)) {
+      // Whatever a caller put under the reserved key is replaced by the
+      // credential this request actually authenticated with (or null), on
+      // refusals and accepted wakes alike, so provenance cannot be spoofed
+      // through a payload and every row discloses how it was requested.
+      payload = { ...(payload ?? {}), [WAKE_PAYLOAD_REQUESTED_BY_CREDENTIAL_KEY]: requestedByCredential ?? null };
       const refusal =
         boardAssignmentOnlyWakeRefusal({
           source,
@@ -9123,9 +9219,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await writeSkippedRequest(refusal);
         return null;
       }
-      // Recorded on the wake so the deferred-promotion lane, which creates
-      // the run later without coming back through here, can re-check it.
-      payload = { ...(payload ?? {}), [WAKE_PAYLOAD_REQUESTED_BY_CREDENTIAL_KEY]: requestedByCredential };
+      // The recorded credential (set above) is what the deferred-promotion
+      // lane and the run-start check re-read later.
     }
 
     const policy = parseHeartbeatPolicy(agent);
@@ -10569,6 +10664,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     promoteDueScheduledRetries,
 
     resumeQueuedRuns,
+
+    refusePendingRunsForWakePolicy,
 
     scheduleBoundedRetry: async (
       runId: string,

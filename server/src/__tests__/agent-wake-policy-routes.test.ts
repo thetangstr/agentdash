@@ -228,6 +228,49 @@ describeEmbeddedPostgres("wake policy over HTTP", () => {
     expect((row.runtimeConfig as Record<string, unknown>).wakePolicy).toBe("default");
   });
 
+  it("switching the policy on via PATCH refuses the agent's already-queued timer run", async () => {
+    const { companyId, agentId } = await seed({ policy: false });
+    const wakeupRequestId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: wakeupRequestId,
+      companyId,
+      agentId,
+      source: "timer",
+      triggerDetail: "system",
+      reason: "heartbeat_timer",
+      status: "queued",
+      requestedByActorType: "system",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "timer",
+      triggerDetail: "system",
+      status: "queued",
+      wakeupRequestId,
+      contextSnapshot: { wakeReason: "heartbeat_timer" },
+    });
+    await db.update(agentWakeupRequests).set({ runId }).where(eq(agentWakeupRequests.id, wakeupRequestId));
+    const row = await db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0]!);
+
+    const res = await request(createApp(boardActor(companyId, "session")))
+      .patch(`/api/agents/${agentId}`)
+      .send({ runtimeConfig: { ...(row.runtimeConfig as Record<string, unknown>), wakePolicy: "board_assignment_only" } });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    const run = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).then((rows) => rows[0]!);
+    expect(run.status).toBe("cancelled");
+    expect(run.errorCode).toBe("travel_pairing.wake_source");
+    const wake = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.id, wakeupRequestId))
+      .then((rows) => rows[0]!);
+    expect(wake).toMatchObject({ status: "skipped", reason: "travel_pairing.wake_source", runId: null });
+  });
+
   it("an agent key cannot change another agent's wake policy", async () => {
     const { companyId, agentId } = await seed({ policy: true });
     const ceoId = randomUUID();

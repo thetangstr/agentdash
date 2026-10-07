@@ -3,6 +3,7 @@ import { and, eq, exists, inArray, isNull, or, sql, type SQL } from "drizzle-orm
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
+  agentWakeupRequests,
   agents,
   approvals,
   budgetPolicies,
@@ -322,6 +323,22 @@ function runIssueProjectIdSql(): SQL {
  */
 export function runVisibilityCondition(req: Request, companyId: string): SQL | undefined {
   return projectScopedVisibilityCondition(req, companyId, runIssueProjectIdSql());
+}
+
+/**
+ * AgentDash (run window): the same rule for wake requests, keyed on the
+ * wake payload's `issueId`. A wake naming an issue in a restricted project
+ * vanishes for an off-list actor; a wake with no (or a malformed) issue id is
+ * company-visible, like a run with none.
+ */
+export function wakeVisibilityCondition(req: Request, companyId: string): SQL | undefined {
+  const ref = sql`(${agentWakeupRequests.payload} ->> 'issueId')`;
+  return projectScopedVisibilityCondition(
+    req,
+    companyId,
+    sql`(select i.project_id from ${issues} i where i.id =
+      case when ${ref} ~* ${CANONICAL_UUID_PATTERN} then ${ref}::uuid end)`,
+  );
 }
 
 /**

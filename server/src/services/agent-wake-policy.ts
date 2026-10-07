@@ -69,8 +69,11 @@ export function isBoardAssignmentOnlyAgent(agent: AgentPolicyFields): boolean {
  * recovery) that must not touch policy agents at all.
  */
 export function agentNotBoardAssignmentOnlySql(): SQL {
-  return sql`(coalesce(${agents.runtimeConfig} ->> 'wakePolicy', '') <> ${BOARD_ASSIGNMENT_ONLY_WAKE_POLICY}
-    and coalesce(${agents.metadata} ->> 'travelPairing', '') <> 'true')`;
+  // jsonb equality, so the truthiness matches resolveAgentWakePolicy exactly:
+  // only the string "board_assignment_only" and only the BOOLEAN true count
+  // (a string "true" alias does not enable the policy, here or in the guard).
+  return sql`(not coalesce(${agents.runtimeConfig} -> 'wakePolicy' = ${JSON.stringify(BOARD_ASSIGNMENT_ONLY_WAKE_POLICY)}::jsonb, false)
+    and not coalesce(${agents.metadata} -> 'travelPairing' = 'true'::jsonb, false))`;
 }
 
 /**

@@ -249,6 +249,15 @@ function isAgentInvokable(agent: typeof agents.$inferSelect | null | undefined) 
   return Boolean(agent && !["paused", "terminated", "pending_approval"].includes(agent.status));
 }
 
+/**
+ * AgentDash (wake policy): may recovery hand this agent work? Recovery never
+ * assigns, escalates to, or picks as an owner a board_assignment_only agent —
+ * its work only ever comes from a board member's assignment.
+ */
+function isRecoveryAssignableAgent(agent: typeof agents.$inferSelect | null | undefined) {
+  return isAgentInvokable(agent) && !isBoardAssignmentOnlyAgent(agent);
+}
+
 function isStrandedIssueRecoveryIssue(issue: Pick<typeof issues.$inferSelect, "originKind">) {
   return isStrandedIssueRecoveryOriginKind(issue.originKind);
 }
@@ -672,7 +681,9 @@ export function recoveryService(
         continue;
       }
       const creatorAgent = await getAgent(creatorAgentId);
-      if (!creatorAgent || creatorAgent.companyId !== candidate.companyId || !isAgentInvokable(creatorAgent)) {
+      // AgentDash (wake policy): an orphan blocker is never assigned back to a
+      // board_assignment_only creator (isRecoveryAssignableAgent).
+      if (!creatorAgent || creatorAgent.companyId !== candidate.companyId || !isRecoveryAssignableAgent(creatorAgent)) {
         skipped += 1;
         continue;
       }
@@ -913,7 +924,7 @@ export function recoveryService(
         issueId: input.sourceIssue?.id ?? null,
         projectId: input.sourceIssue?.projectId ?? null,
       });
-      if (isAgentInvokable(candidate) && !budgetBlock) return candidate.id;
+      if (isRecoveryAssignableAgent(candidate) && !budgetBlock) return candidate.id;
     }
 
     return null;
@@ -1292,6 +1303,13 @@ export function recoveryService(
       let liveness: RunLivenessEvidence | null = null;
       let activityAt: Date | null = null;
       const runAgent = await getAgent(run.agentId);
+      // AgentDash (wake policy): a board_assignment_only agent's run is never
+      // evaluated here — no evaluation issue, no blocked source issue, no
+      // comment. Whoever assigned the work owns its supervision.
+      if (isBoardAssignmentOnlyAgent(runAgent)) {
+        result.skipped += 1;
+        continue;
+      }
       if (runAgent) {
         try {
           liveness = livenessProbe(run, runAgent);
@@ -1500,7 +1518,7 @@ export function recoveryService(
         issueId: issue.id,
         projectId: issue.projectId,
       });
-      if (isAgentInvokable(candidate) && !budgetBlock) return candidate.id;
+      if (isRecoveryAssignableAgent(candidate) && !budgetBlock) return candidate.id;
     }
 
     return null;
@@ -2557,6 +2575,8 @@ export function recoveryService(
     const budgetBlockedCandidateAgentIds: string[] = [];
 
     for (const candidate of candidates) {
+      // AgentDash (wake policy): never chosen as an escalation owner.
+      if (isBoardAssignmentOnlyAgent(await getAgent(candidate.agentId))) continue;
       const budgetBlock = await budgets.getInvocationBlock(issue.companyId, candidate.agentId, {
         issueId: issue.id,
         projectId: issue.projectId,
@@ -2647,6 +2667,11 @@ export function recoveryService(
       .where(eq(issues.id, input.finding.issueId))
       .then((rows) => rows[0] ?? null);
     if (!issue || issue.companyId !== input.finding.companyId) return { kind: "skipped" as const };
+    // AgentDash (wake policy): never block, comment on or escalate a
+    // board_assignment_only agent's issue.
+    if (issue.assigneeAgentId && isBoardAssignmentOnlyAgent(await getAgent(issue.assigneeAgentId))) {
+      return { kind: "skipped" as const };
+    }
     if (await workspacePersistenceHold(db, issue.companyId, issue.assigneeAgentId, issue.id)) return { kind: "skipped" as const };
     for (const member of input.finding.dependencyPath) {
       if (await workspacePersistenceHold(db, issue.companyId, null, member.issueId)) return { kind: "skipped" as const };

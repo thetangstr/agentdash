@@ -1434,4 +1434,215 @@ describeEmbeddedPostgres("board_assignment_only wake policy guard", () => {
       ).toBe(false);
     });
   });
+
+  describe("runs that predate the policy and recovery sweeps", () => {
+    async function seedPendingRun(input: {
+      companyId: string;
+      agentId: string;
+      status: "queued" | "scheduled_retry";
+      wake: {
+        source: string;
+        reason: string;
+        requestedByActorType?: "user" | "agent" | "system";
+        payload?: Record<string, unknown>;
+      };
+      issueId?: string;
+    }) {
+      const wakeupRequestId = randomUUID();
+      const runId = randomUUID();
+      await db.insert(agentWakeupRequests).values({
+        id: wakeupRequestId,
+        companyId: input.companyId,
+        agentId: input.agentId,
+        source: input.wake.source,
+        triggerDetail: "system",
+        reason: input.wake.reason,
+        payload: input.wake.payload ?? (input.issueId ? { issueId: input.issueId } : {}),
+        status: "queued",
+        requestedByActorType: input.wake.requestedByActorType ?? "system",
+      });
+      await db.insert(heartbeatRuns).values({
+        id: runId,
+        companyId: input.companyId,
+        agentId: input.agentId,
+        invocationSource: input.wake.source,
+        triggerDetail: "system",
+        status: input.status,
+        wakeupRequestId,
+        contextSnapshot: input.issueId
+          ? { issueId: input.issueId, taskId: input.issueId, wakeReason: input.wake.reason }
+          : { wakeReason: input.wake.reason },
+        ...(input.status === "scheduled_retry" ? { scheduledRetryAt: new Date(Date.now() - 1000), scheduledRetryAttempt: 1 } : {}),
+      });
+      await db
+        .update(agentWakeupRequests)
+        .set({ runId })
+        .where(eq(agentWakeupRequests.id, wakeupRequestId));
+      return { runId, wakeupRequestId };
+    }
+
+    async function readWake(id: string) {
+      return db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, id)).then((rows) => rows[0]!);
+    }
+
+    async function readRun(id: string) {
+      return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, id)).then((rows) => rows[0]!);
+    }
+
+    it("a timer run queued before the policy was switched on is refused at run start and never executes", async () => {
+      const companyId = await seedCompany();
+      const environmentId = await seedEnvironment(companyId);
+      const agentId = await seedAgent({
+        companyId,
+        travelPairing: true,
+        defaultEnvironmentId: environmentId,
+        adapterType: "process",
+        adapterConfig: { command: process.execPath, args: ["-e", "process.exit(0)"] },
+      });
+      const { runId, wakeupRequestId } = await seedPendingRun({
+        companyId,
+        agentId,
+        status: "queued",
+        wake: { source: "timer", reason: "heartbeat_timer" },
+      });
+
+      await heartbeatService(db).resumeQueuedRuns();
+
+      await waitFor(async () => (await readWake(wakeupRequestId)).status === "skipped");
+      const wake = await readWake(wakeupRequestId);
+      expect(wake.reason).toBe("travel_pairing.wake_source");
+      expect(wake.runId).toBeNull();
+      const run = await readRun(runId);
+      expect(run.status).toBe("cancelled");
+      expect(run.errorCode).toBe("travel_pairing.wake_source");
+      // Never executed: no lease was taken and no other run exists.
+      const leases = await db.select().from(environmentLeases).where(eq(environmentLeases.heartbeatRunId, runId));
+      expect(leases).toHaveLength(0);
+      expect(await countRunsForAgent(agentId)).toBe(1);
+    });
+
+    it("switching the policy on refuses pending runs that do not qualify and keeps a board-key assignment", async () => {
+      const companyId = await seedCompany();
+      const environmentId = await seedEnvironment(companyId);
+      const agentId = await seedAgent({ companyId, travelPairing: true, defaultEnvironmentId: environmentId });
+      const issueId = await seedAssignedIssue({ companyId, assigneeAgentId: agentId });
+      const timer = await seedPendingRun({
+        companyId,
+        agentId,
+        status: "queued",
+        wake: { source: "timer", reason: "heartbeat_timer" },
+      });
+      const retry = await seedPendingRun({
+        companyId,
+        agentId,
+        status: "scheduled_retry",
+        wake: { source: "automation", reason: "transient_failure_retry" },
+        issueId,
+      });
+      const comment = await seedPendingRun({
+        companyId,
+        agentId,
+        status: "queued",
+        wake: { source: "assignment", reason: "issue_assigned", requestedByActorType: "user", payload: { issueId, requestedVia: "session" } },
+        issueId,
+      });
+      const assignment = await seedPendingRun({
+        companyId,
+        agentId,
+        status: "queued",
+        wake: { source: "assignment", reason: "issue_assigned", requestedByActorType: "user", payload: { issueId, requestedVia: "board_key" } },
+        issueId,
+      });
+
+      const result = await heartbeat.refusePendingRunsForWakePolicy(agentId);
+      expect(result.cancelled).toBe(3);
+
+      for (const [pending, code] of [
+        [timer, "travel_pairing.wake_source"],
+        [retry, "travel_pairing.wake_source"],
+        [comment, "travel_pairing.not_board_key"],
+      ] as const) {
+        const wake = await readWake(pending.wakeupRequestId);
+        expect(wake.status).toBe("skipped");
+        expect(wake.reason).toBe(code);
+        expect(wake.runId).toBeNull();
+        const run = await readRun(pending.runId);
+        expect(run.status).toBe("cancelled");
+        expect(run.errorCode).toBe(code);
+        expect(run.startedAt).toBeNull();
+      }
+      expect((await readRun(assignment.runId)).status).toBe("queued");
+      expect((await readWake(assignment.wakeupRequestId)).status).toBe("queued");
+    });
+
+    it("refusePendingRunsForWakePolicy is a no-op for an agent without the policy", async () => {
+      const companyId = await seedCompany();
+      const agentId = await seedAgent({ companyId, travelPairing: false });
+      const timer = await seedPendingRun({
+        companyId,
+        agentId,
+        status: "queued",
+        wake: { source: "timer", reason: "heartbeat_timer" },
+      });
+      expect((await heartbeat.refusePendingRunsForWakePolicy(agentId)).cancelled).toBe(0);
+      expect((await readRun(timer.runId)).status).toBe("queued");
+    });
+
+    it("the silent-run scan never evaluates, blocks or comments on a policy agent's run", async () => {
+      const companyId = await seedCompany();
+      const environmentId = await seedEnvironment(companyId);
+      const agentId = await seedAgent({ companyId, travelPairing: true, defaultEnvironmentId: environmentId });
+      const issueId = await seedAssignedIssue({ companyId, assigneeAgentId: agentId });
+      await db.update(issues).set({ status: "in_progress" }).where(eq(issues.id, issueId));
+      const longAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      await db.insert(heartbeatRuns).values({
+        companyId,
+        agentId,
+        invocationSource: "assignment",
+        triggerDetail: "system",
+        status: "running",
+        contextSnapshot: { issueId, taskId: issueId },
+        startedAt: longAgo,
+        lastOutputAt: longAgo,
+        createdAt: longAgo,
+      });
+      const issuesBefore = await db.select({ id: issues.id }).from(issues).where(eq(issues.companyId, companyId));
+
+      const result = await heartbeat.scanSilentActiveRuns({ companyId });
+
+      expect(result.created).toBe(0);
+      expect(result.skipped).toBe(1);
+      const issuesAfter = await db.select().from(issues).where(eq(issues.companyId, companyId));
+      expect(issuesAfter).toHaveLength(issuesBefore.length);
+      expect(issuesAfter.find((issue) => issue.id === issueId)?.status).toBe("in_progress");
+      expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issueId))).toHaveLength(0);
+      // Leave nothing running for the shared teardown.
+      await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date() }).where(eq(heartbeatRuns.agentId, agentId));
+    });
+
+    it("an orphan blocker is never assigned back to a policy agent that created it", async () => {
+      const companyId = await seedCompany();
+      const environmentId = await seedEnvironment(companyId);
+      const agentId = await seedAgent({ companyId, travelPairing: true, defaultEnvironmentId: environmentId });
+      const plainId = await seedAgent({ companyId, travelPairing: false, name: "PlainAgent" });
+      const blockerId = randomUUID();
+      await db.insert(issues).values({
+        id: blockerId,
+        companyId,
+        title: "Orphan blocker",
+        status: "todo",
+        priority: "medium",
+        createdByAgentId: agentId,
+      });
+      const blockedId = await seedAssignedIssue({ companyId, assigneeAgentId: plainId });
+      await db.insert(issueRelations).values({ companyId, issueId: blockerId, relatedIssueId: blockedId, type: "blocks" });
+
+      await heartbeat.reconcileStrandedAssignedIssues();
+
+      const blocker = await db.select().from(issues).where(eq(issues.id, blockerId)).then((rows) => rows[0]!);
+      expect(blocker.assigneeAgentId).toBeNull();
+      expect(await db.select().from(issueComments).where(eq(issueComments.issueId, blockerId))).toHaveLength(0);
+      expect(await wakeupRowsFor(agentId)).toHaveLength(0);
+    });
+  });
 });

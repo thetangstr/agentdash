@@ -7,6 +7,10 @@ import {
   agents,
   agentWakeupRequests,
   companies,
+  companyMemberships,
+  principalPermissionGrants,
+  projectAccess,
+  projects,
   createDb,
   heartbeatRuns,
   issueComments,
@@ -829,5 +833,83 @@ describeEmbeddedPostgres("GET /agents/:id/run-window", () => {
       payload: { refusedReason: "missing_issue_comment", retryOfRunId },
     });
     expect(JSON.stringify(res.body)).not.toContain("sk-should-not-leak");
+  });
+
+  it("hides runs, wakes and comments on a restricted project from a granted member off its access list", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const [restricted] = await db
+      .insert(projects)
+      .values({ companyId: company.id, name: "Secret project", status: "in_progress", visibility: "restricted" })
+      .returning();
+    const openIssue = await createIssue(db, company.id, agent.id, "Open issue");
+    const secretIssue = await createIssue(db, company.id, agent.id, "Secret issue");
+    await db.update(issues).set({ projectId: restricted!.id }).where(sql`${issues.id} = ${secretIssue.id}`);
+
+    for (const issue of [openIssue, secretIssue]) {
+      await db.insert(heartbeatRuns).values({
+        companyId: company.id,
+        agentId: agent.id,
+        invocationSource: "assignment",
+        status: "succeeded",
+        createdAt: new Date(INSIDE),
+        finishedAt: new Date(INSIDE),
+        error: `error for ${issue.title}`,
+        contextSnapshot: { issueId: issue.id, taskId: issue.id },
+      });
+      await db.insert(agentWakeupRequests).values({
+        companyId: company.id,
+        agentId: agent.id,
+        source: "assignment",
+        reason: "issue_assigned",
+        status: "finished",
+        payload: { issueId: issue.id },
+        requestedAt: new Date(INSIDE),
+        finishedAt: new Date(INSIDE),
+      });
+      await db.insert(issueComments).values({
+        companyId: company.id,
+        issueId: issue.id,
+        authorUserId: "someone",
+        body: `body of ${issue.title}`,
+        createdAt: new Date(INSIDE),
+      });
+    }
+
+    // A plain member holding an explicit agents:create grant — not an admin,
+    // so restricted-project rules apply to them.
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: "plain-member",
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: "plain-member",
+      permissionKey: "agents:create",
+    });
+
+    const hidden = await request(createApp(db, memberActor(company.id))).get(runWindowQuery(agent.id));
+    expect(hidden.status, JSON.stringify(hidden.body)).toBe(200);
+    expect(hidden.body.runs.map((r: { issueId: string }) => r.issueId)).toEqual([openIssue.id]);
+    expect(hidden.body.wakes.map((w: { payload: { issueId: string } }) => w.payload.issueId)).toEqual([openIssue.id]);
+    expect(hidden.body.comments.map((c: { issueId: string }) => c.issueId)).toEqual([openIssue.id]);
+    expect(JSON.stringify(hidden.body)).not.toContain("Secret issue");
+
+    // Once listed on the project, the member sees all of it.
+    await db.insert(projectAccess).values({
+      projectId: restricted!.id,
+      principalType: "user",
+      principalId: "plain-member",
+      grantedByUserId: "local-board",
+    });
+    const listed = await request(createApp(db, memberActor(company.id))).get(runWindowQuery(agent.id));
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+    expect(listed.body.runs).toHaveLength(2);
+    expect(listed.body.wakes).toHaveLength(2);
+    expect(listed.body.comments).toHaveLength(2);
   });
 });

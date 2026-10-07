@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { agentWakeupRequests, heartbeatRuns, issueComments, issues, type Db } from "@paperclipai/db";
 import { redactEventPayload } from "../redaction.js";
 
@@ -41,10 +41,25 @@ export function parseRunWindowBounds(rawFrom: unknown, rawTo: unknown): RunWindo
   return { from, to };
 }
 
+/**
+ * Caller-specific visibility, composed into each list's WHERE. The route
+ * passes the same restricted-project rules every other run list uses, so a
+ * member off a restricted project's access list never sees its runs, wakes
+ * or comments here either. `undefined` means no extra filter.
+ */
+export type RunWindowVisibility = {
+  runs?: SQL;
+  wakes?: SQL;
+  comments?: SQL;
+};
+
+const UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+
 export async function readAgentRunWindow(
   db: Db,
   agent: { id: string; companyId: string },
   bounds: RunWindowBounds,
+  visibility: RunWindowVisibility = {},
 ) {
   const { from, to } = bounds;
   const limit = RUN_WINDOW_ROW_CAP + 1;
@@ -76,6 +91,7 @@ export async function readAgentRunWindow(
           // that is still open, or finished inside the window, belongs to it.
           lte(heartbeatRuns.createdAt, to),
           or(isNull(heartbeatRuns.finishedAt), gte(heartbeatRuns.finishedAt, from)),
+          visibility.runs,
         ),
       )
       .orderBy(asc(heartbeatRuns.createdAt), asc(heartbeatRuns.id))
@@ -104,6 +120,7 @@ export async function readAgentRunWindow(
           // `from` but promoted or refused inside the window belongs to it.
           lte(agentWakeupRequests.requestedAt, to),
           or(isNull(agentWakeupRequests.finishedAt), gte(agentWakeupRequests.finishedAt, from)),
+          visibility.wakes,
         ),
       )
       .orderBy(asc(agentWakeupRequests.requestedAt), asc(agentWakeupRequests.id))
@@ -129,12 +146,14 @@ export async function readAgentRunWindow(
           // Four lanes, one row each: comments on issues currently assigned
           // to the agent, on issues it was EVER woken for (the wake ledger is
           // append-only), comments it authored, and comments one of its runs
-          // wrote. Compared as text so a malformed payload issueId can never
-          // fail the whole query on a uuid cast.
+          // wrote. The payload id is cast only when it is a canonical uuid,
+          // so a malformed one can never fail the query, and the comparison
+          // stays uuid-to-uuid (index-friendly).
           or(
             eq(issues.assigneeAgentId, agent.id),
-            sql`${issueComments.issueId}::text in (
-              select ${agentWakeupRequests.payload} ->> 'issueId'
+            sql`${issueComments.issueId} in (
+              select case when ${agentWakeupRequests.payload} ->> 'issueId' ~* ${UUID_PATTERN}
+                then (${agentWakeupRequests.payload} ->> 'issueId')::uuid end
               from ${agentWakeupRequests}
               where ${agentWakeupRequests.companyId} = ${agent.companyId}
                 and ${agentWakeupRequests.agentId} = ${agent.id}
@@ -150,6 +169,7 @@ export async function readAgentRunWindow(
           ),
           gte(issueComments.createdAt, from),
           lte(issueComments.createdAt, to),
+          visibility.comments,
         ),
       )
       .orderBy(asc(issueComments.createdAt), asc(issueComments.id))
