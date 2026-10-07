@@ -358,6 +358,7 @@ export type {
   DashboardHarnessHealth,
   DashboardHarnessStatus,
   DashboardRunActivityDay,
+  DashboardCosts,
   DashboardSummary,
   WaitingOnYou,
   WaitingOnYouDecision, WaitingOnYouQuestion, WaitingOnYouReview,
