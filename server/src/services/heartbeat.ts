@@ -56,7 +56,7 @@ import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-sto
 import {
   createRunLogStreamRedactor,
   logSafeError,
-  redactRunLogNdjson,
+  redactRunLogReadForServe,
   redactRunLogText,
   redactRunLogValue,
 } from "./run-log-redaction.js";
@@ -10202,16 +10202,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         runId,
         store: run.logStore,
         logRef: run.logRef,
-        ...result,
         // AgentDash (GH #992): chunks are redacted at append time, but the
         // read pass runs again so log files written before this change (or by
         // a path that missed it) are still safe to serve. The content is
         // NDJSON — each line is parsed and its `chunk` redacted structurally,
         // so JSON escaping can never be corrupted; byte-range reads still see
-        // truncated first/last lines handled as plain text. Files the store
-        // marks redactedAtPersist skip the pass — every byte in them already
-        // went through the redacting append in this process.
-        content: result.redactedAtPersist ? result.content : redactRunLogNdjson(result.content),
+        // truncated first/last lines handled as plain text. Bytes the store
+        // marks as written-redacted skip the pass; the rest is redacted in
+        // event-loop-yielding slices and capped per request (nextOffset pages).
+        ...(await redactRunLogReadForServe(result)),
       };
     },
 

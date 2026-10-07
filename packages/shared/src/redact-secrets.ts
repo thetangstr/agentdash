@@ -419,9 +419,49 @@ function secretFragments(secret: string): string[] {
   return [...fragments];
 }
 
-const knownSecretsRegexCache = new Map<string, RegExp>();
+// Compiled matcher per exact secret list, bounded LRU. The key is taken
+// BEFORE any derivation: building encodings and every 14-char fragment,
+// sorting and joining them costs milliseconds per call for a dozen secrets,
+// and `redactSecretsInValue` calls `redactSecrets` once per string — an
+// NDJSON run-log read made thousands of calls and blocked the event loop for
+// tens of seconds (2026-10-07 HQ stall). The derivation is a pure function of
+// the list, so a hit returns exactly the regex a rebuild would produce.
+const KNOWN_SECRETS_REGEX_CACHE_MAX = 32;
+const knownSecretsRegexCache = new Map<string, RegExp | null>();
+
+function knownSecretsCacheKey(secrets: readonly string[]): string {
+  // Length-prefixed so no secret content can make two lists collide.
+  let key = "";
+  for (const secret of secrets) key += `${secret.length}:${secret}\u0000`;
+  return key;
+}
 
 function knownSecretsRegex(secrets: readonly string[]): RegExp | null {
+  if (secrets.length === 0) return null;
+  const cacheKey = knownSecretsCacheKey(secrets);
+  if (knownSecretsRegexCache.has(cacheKey)) {
+    const cached = knownSecretsRegexCache.get(cacheKey) ?? null;
+    // Refresh recency.
+    knownSecretsRegexCache.delete(cacheKey);
+    knownSecretsRegexCache.set(cacheKey, cached);
+    return cached;
+  }
+  const regex = buildKnownSecretsRegex(secrets);
+  knownSecretsRegexCache.set(cacheKey, regex);
+  while (knownSecretsRegexCache.size > KNOWN_SECRETS_REGEX_CACHE_MAX) {
+    const oldest = knownSecretsRegexCache.keys().next().value;
+    if (oldest === undefined) break;
+    knownSecretsRegexCache.delete(oldest);
+  }
+  return regex;
+}
+
+/** Test seam: size of the compiled known-secrets cache. */
+export function __knownSecretsRegexCacheSizeForTests(): number {
+  return knownSecretsRegexCache.size;
+}
+
+function buildKnownSecretsRegex(secrets: readonly string[]): RegExp | null {
   const literals = new Set<string>();
   for (const secret of secrets) {
     literals.add(secret);
@@ -430,14 +470,7 @@ function knownSecretsRegex(secrets: readonly string[]): RegExp | null {
   }
   const all = [...literals].filter(Boolean).sort((a, b) => b.length - a.length);
   if (all.length === 0) return null;
-  const cacheKey = all.join("");
-  let regex = knownSecretsRegexCache.get(cacheKey);
-  if (!regex) {
-    regex = new RegExp(all.map(escapeRegExp).join("|"), "gd");
-    if (knownSecretsRegexCache.size > 64) knownSecretsRegexCache.clear();
-    knownSecretsRegexCache.set(cacheKey, regex);
-  }
-  return regex;
+  return new RegExp(all.map(escapeRegExp).join("|"), "gd");
 }
 
 // ---------------------------------------------------------------------------
