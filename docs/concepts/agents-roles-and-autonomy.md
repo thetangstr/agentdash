@@ -26,7 +26,7 @@ From `AGENT_ROLES` (13 values). Default `general`.
 
 Display labels come from `AGENT_ROLE_LABELS`. Role is mostly routing and display. Every role gets the same default instruction bundle (`server/src/services/default-agent-instructions.ts`). Two roles still carry meaning in server code:
 
-- `ceo` gets `canCreateAgents` by default (`server/src/services/agent-permissions.ts`). A `ceo` agent is the only agent that may update company settings or branding (`server/src/routes/companies.ts`) or change another agent's permissions (`server/src/routes/agents.ts`). It may also link approvals to issues without the explicit permission (`server/src/routes/issues.ts`).
+- `ceo` gets `canCreateAgents` by default (`server/src/services/agent-permissions.ts`). A `ceo` agent is the only agent that may update company settings or branding (`server/src/routes/companies.ts`). No agent may change another agent's permissions: `PATCH /api/agents/:id/permissions` is board-only (`server/src/routes/agents.ts`). It may also link approvals to issues without the explicit permission (`server/src/routes/issues.ts`).
 - `chief_of_staff` is how the server finds a company's primary agent, for onboarding and the conversation flow (`server/src/routes/onboarding-v2.ts`, `server/src/routes/conversations.ts`).
 
 ## Statuses

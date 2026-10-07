@@ -4,7 +4,7 @@
 // deploymentRollback, volume snapshots, GHCR digests per tag, and box health
 // that reports the release the RUNNING deployment was deployed with.
 import { createHash } from "node:crypto";
-import { type BoxFakeOptions, type FakeService, FakeRailwayBoxes } from "./fake-railway-boxes.js";
+import { type BoxFakeOptions, type FakeService, type FakeVolume, FakeRailwayBoxes } from "./fake-railway-boxes.js";
 
 export interface DeploySnapshot {
   serviceId: string;
@@ -63,16 +63,70 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
         },
       },
       {
+        match: /__type\(name:"VolumeInstanceBackup"\)/,
+        op: "backupSchema",
+        resolve: () => {
+          const scalar = (name: string) => ({ name, type: { kind: "NON_NULL", ofType: { kind: "SCALAR" } } });
+          const lock = this.backupLockField();
+          return { __type: { fields: [scalar("id"), scalar("name"), scalar("createdAt"), { name: "expiresAt", type: { kind: "SCALAR", ofType: null } }, { name: "scheduleId", type: { kind: "SCALAR", ofType: null } }, ...(lock ? [{ name: lock, type: { kind: "SCALAR", ofType: null } }] : [])] } };
+        },
+      },
+      {
+        match: /volumeInstanceBackupList\(/,
+        op: "volumeInstanceBackupList",
+        resolve: (v, _fake, query) => {
+          const vol = this.volOfInstance(v.v);
+          // A deletion in flight completes once the volume has been polled enough.
+          if (vol.deleting && --vol.deleting.clearsAfterLists <= 0) {
+            const { backupId } = vol.deleting;
+            vol.backupRecords = vol.backupRecords.filter((b) => b.id !== backupId);
+            vol.deleting = null;
+          }
+          const lock = this.backupLockField();
+          const selectsLock = lock !== null && new RegExp(`\\b${lock}\\b`).test(String(query));
+          return {
+            volumeInstanceBackupList: vol.backupRecords.map((b) => ({ id: b.id, name: b.name, createdAt: b.createdAt, expiresAt: b.expiresAt, scheduleId: b.scheduleId ?? null, ...(selectsLock ? { [lock]: b.locked ?? false } : {}) })),
+          };
+        },
+      },
+      {
+        match: /volumeInstanceBackupDelete\(/,
+        op: "volumeInstanceBackupDelete",
+        resolve: (v) => {
+          const vol = this.volOfInstance(v.v);
+          // Railway allows one backup deletion in progress per volume.
+          if (vol.deleting) throw new Error("a backup deletion is already in progress for this volume");
+          const b = vol.backupRecords.find((x) => x.id === v.b);
+          if (!b) throw new Error("volume instance backup not found");
+          if (b.locked) throw new Error(`backup ${b.id} is locked`);
+          vol.deleting = { backupId: b.id, clearsAfterLists: this.opts.backupDeleteClearsAfterLists ?? 1 };
+          return { volumeInstanceBackupDelete: { workflowId: this.nextId("wf") } };
+        },
+      },
+      {
         match: /volumeInstanceBackupCreate\(/,
         op: "volumeInstanceBackupCreate",
         resolve: (v) => {
-          const vol = [...this.volumes.values()].find((x) => x.instanceId === v.v);
-          if (!vol) throw new Error("Volume instance not found");
+          const vol = this.volOfInstance(v.v);
+          const limit = this.opts.backupLimit ?? 10;
+          if (vol.backupRecords.length >= limit) throw new Error(`Plan limit of ${limit} backups per volume exceeded`);
+          vol.backupRecords.push({ id: this.nextId("bak"), name: "Manual", createdAt: new Date().toISOString(), expiresAt: null });
           this.backupsTaken.push(vol.instanceId);
           return { volumeInstanceBackupCreate: { workflowId: this.nextId("wf") } };
         },
       },
     );
+  }
+
+  /** The lock field the fake's VolumeInstanceBackup schema exposes (null: none, so Railway's refusal is the only guard). */
+  backupLockField(): string | null {
+    return this.opts.backupLockField === undefined ? "locked" : this.opts.backupLockField;
+  }
+
+  volOfInstance(instanceId: unknown): FakeVolume {
+    const vol = [...this.volumes.values()].find((x) => x.instanceId === instanceId);
+    if (!vol) throw new Error("Volume instance not found");
+    return vol;
   }
 
   override deploy(s: FakeService, commitSha: string | null): string {

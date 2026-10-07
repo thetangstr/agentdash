@@ -10,7 +10,7 @@ import { and, count, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm"
 import type { CloudDb } from "../db/client.js";
 import { boxes, STRIPE_EVENT_STATES, stripeEvents, type StripeEventState } from "../db/schema.js";
 import type { Logger } from "../logger.js";
-import { BILLING_SYNC_STATES, BoxKeyRotationError, currentFleetBilling, promoteDeployedBillingRevs, syncFleetBilling, type SyncDeps } from "../stripe/box-billing.js";
+import { BILLING_SYNC_STATES, BoxKeyRotationError, currentFleetBilling, syncFleetBilling, type SyncDeps } from "../stripe/box-billing.js";
 import type { BillingConfig } from "../stripe/config.js";
 import { ensureStripeEndpoint, type StripeEndpointsClient } from "../stripe/endpoint.js";
 import { BOX_STRIPE_KEY, STRIPE_ENDPOINT_SECRET, type FleetSecretStore } from "../stripe/fleet-secrets.js";
@@ -56,8 +56,10 @@ export function stripeInternalRoutes(deps: StripeInternalDeps): ExpressRouter {
 
   router.get("/stripe/status", async (_req, res) => {
     const { billing: fleet, missing } = await currentFleetBilling(deps.store, billing);
-    // A box counts as on a config only once a deployment after it was sent has succeeded.
-    await promoteDeployedBillingRevs(deps.syncDeps());
+    // GH #923: this GET must stay read-only. A box counts as on a config once
+    // a deployment after the send has succeeded; that promotion now happens in
+    // the 15-second background pass in index.ts, so status only reports the
+    // pending count below instead of promoting inline.
     const pendingDeploy = fleet
       ? (
           await db

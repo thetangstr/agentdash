@@ -67,6 +67,8 @@ const mockAgentService = vi.hoisted(() => ({
   updatePermissions: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
+  listConfigRevisions: vi.fn(),
+  getConfigRevision: vi.fn(),
   // GH #71 carry-forward: POST /companies/:companyId/agents now auto-creates a default API key.
   createApiKey: vi.fn().mockResolvedValue({
     id: "key-1",
@@ -116,6 +118,7 @@ const mockSecretService = vi.hoisted(() => ({
 
 const mockAgentInstructionsService = vi.hoisted(() => ({
   materializeManagedBundle: vi.fn(),
+  getBundle: vi.fn(),
 }));
 const mockCompanySkillService = vi.hoisted(() => ({
   listRuntimeSkillEntries: vi.fn(),
@@ -546,6 +549,81 @@ describe.sequential("agent permission routes", () => {
       .send({}));
 
     expect(res.status).toBe(403);
+  });
+
+  // GH #886: the configuration/skills/instructions-bundle reads delegated to
+  // the creation guard, whose "every active member may create agents" early
+  // return (decided 2026-08-16) also admitted every member to configuration
+  // reads — while the list and detail routes redact those same fields for
+  // members who lack the agents:create grant. Reads ask the grant question
+  // (actorCanReadConfigurationsForCompany); creation keeps its role-given
+  // exception. This actor is a real member: `actorHumanRole` resolves the
+  // membership role, which is exactly what bypassed the grant check before.
+  const memberActor = {
+    type: "board",
+    userId: "member-user",
+    source: "session",
+    isInstanceAdmin: false,
+    companyIds: [companyId],
+    memberships: [
+      {
+        companyId,
+        principalType: "user",
+        principalId: "member-user",
+        status: "active",
+        membershipRole: "member",
+      },
+    ],
+  };
+
+  it.each([
+    ["configuration", `/api/agents/${agentId}/configuration`],
+    ["config-revisions", `/api/agents/${agentId}/config-revisions`],
+    ["config-revision detail", `/api/agents/${agentId}/config-revisions/rev-1`],
+    ["skills", `/api/agents/${agentId}/skills`],
+    ["company agent-configurations", `/api/companies/${companyId}/agent-configurations`],
+    ["instructions-bundle", `/api/agents/${agentId}/instructions-bundle`],
+    ["instructions-bundle file", `/api/agents/${agentId}/instructions-bundle/file?path=AGENTS.md`],
+  ])("refuses a member without agents:create reading %s", async (_label, path) => {
+    mockAccessService.canUser.mockResolvedValue(false);
+
+    const app = await createApp(memberActor);
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl).get(path));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+  });
+
+  it("lets a member holding the agents:create grant read the configuration routes", async () => {
+    mockAccessService.canUser.mockResolvedValue(true);
+
+    const app = await createApp(memberActor);
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/agents/${agentId}/configuration`),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  });
+
+  it("still lets the same member create an agent — creation stays role-given", async () => {
+    mockAccessService.canUser.mockResolvedValue(false);
+
+    const app = await createApp(memberActor);
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${companyId}/agents`)
+        .send({
+          name: "Builder",
+          role: "engineer",
+          adapterType: "hermes_local",
+          adapterConfig: { hermesCommand: "hermes" },
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockAgentService.create).toHaveBeenCalled();
   });
 
   it("blocks agent-authenticated self-updates that set host-executed workspace commands", async () => {
