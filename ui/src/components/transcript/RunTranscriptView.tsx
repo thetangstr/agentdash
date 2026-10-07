@@ -4,11 +4,21 @@ import { cn, formatTokens } from "../../lib/utils";
 import { formatToolPayload } from "../../lib/transcriptPresentation";
 import { CREDENTIALS_HIDDEN_NOTE, redactSecrets, redactSecretsInValue } from "../../lib/redactSecrets";
 import { ReadableTranscriptView, type ReadableRunUsage } from "./ReadableTranscript";
+import { BusinessTranscriptView } from "./BusinessTranscript";
+import type { MilestoneTimeline } from "../../lib/milestoneTimeline";
 
-// AgentDash: "readable" is the Claude-Code-style default (see
-// ReadableTranscript.tsx). "nice" is kept as an alias for older callers and
-// renders the readable view; "raw" is the unchanged per-entry log view.
-export type TranscriptMode = "readable" | "raw" | "nice";
+// AgentDash: "business" is the default (founder decision 2026-10-06): the
+// harness's milestone timeline when one was posted for the run, otherwise a
+// plain-language summary (BusinessTranscript.tsx). "readable" is the
+// Claude-Code-style view (ReadableTranscript.tsx); "nice" is kept as an alias
+// for older callers and renders the readable view; "raw" is the per-entry log.
+export type TranscriptMode = "business" | "readable" | "raw" | "nice";
+
+/** Raw-view row to bring into view and highlight; `token` re-triggers the same row. */
+export interface RawTranscriptFocus {
+  index: number;
+  token: number;
+}
 export type TranscriptDensity = "comfortable" | "compact";
 
 const RAW_VIRTUALIZATION_THRESHOLD = 300;
@@ -31,6 +41,14 @@ interface RunTranscriptViewProps {
   usage?: ReadableRunUsage | null;
   /** AgentDash (c3): cancelled-run stop reason; the readable footer renders "Stopped" neutrally instead of the killed process's "Failed". */
   stoppedReason?: string | null;
+  /** AgentDash: the run's harness-published milestone timeline (Business mode). */
+  timeline?: MilestoneTimeline | null;
+  /** AgentDash: Business-mode note shown above the plain summary. */
+  timelineNotice?: string | null;
+  /** AgentDash: a Business-mode "Log line" link was clicked. */
+  onOpenLogLine?: (seq: number) => void;
+  /** AgentDash: Raw-mode row to scroll to and highlight. */
+  rawFocus?: RawTranscriptFocus | null;
 }
 
 function findScrollParent(element: HTMLElement): HTMLElement | Window {
@@ -70,9 +88,11 @@ function rawEntryText(entry: TranscriptEntry): string {
 function RawTranscriptView({
   entries,
   density,
+  focus,
 }: {
   entries: TranscriptEntry[];
   density: TranscriptDensity;
+  focus?: RawTranscriptFocus | null;
 }) {
   const compact = density === "compact";
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -122,6 +142,43 @@ function RawTranscriptView({
     };
   }, [entries.length, shouldVirtualize]);
 
+  // AgentDash: bring a linked row (Business view "Log line n") into view. When
+  // windowed, render around it first; the spacers keep its estimated offset.
+  const focusIndex = focus && focus.index >= 0 && focus.index < entries.length ? focus.index : null;
+  useEffect(() => {
+    if (focusIndex === null) return;
+    const list = listRef.current;
+    if (shouldVirtualize && list) {
+      setRange({
+        start: Math.max(0, focusIndex - RAW_OVERSCAN_ROWS),
+        end: Math.min(entries.length, focusIndex + RAW_OVERSCAN_ROWS),
+      });
+      // Scroll to the row's estimated offset too, so the windowing (which
+      // follows the scroll position) keeps it rendered.
+      const scrollParent = findScrollParent(list);
+      const estimated = focusIndex * RAW_ESTIMATED_ROW_HEIGHT;
+      if (scrollParent === window) {
+        window.scrollTo({ top: list.getBoundingClientRect().top + window.scrollY + estimated - window.innerHeight / 2 });
+      } else {
+        const element = scrollParent as HTMLElement;
+        const offset = list.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop;
+        element.scrollTop = offset + estimated - element.clientHeight / 2;
+      }
+    }
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => {
+        const row = listRef.current?.querySelector<HTMLElement>(`[data-raw-index="${focusIndex}"]`);
+        row?.scrollIntoView?.({ block: "center" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      window.cancelAnimationFrame(inner);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run per focus request only
+  }, [focus?.token, focusIndex]);
+
   const visibleEntries = shouldVirtualize ? entries.slice(range.start, range.end) : entries;
   const topSpacer = shouldVirtualize ? range.start * RAW_ESTIMATED_ROW_HEIGHT : 0;
   const bottomSpacer = shouldVirtualize ? Math.max(0, entries.length - range.end) * RAW_ESTIMATED_ROW_HEIGHT : 0;
@@ -132,9 +189,12 @@ function RawTranscriptView({
       {visibleEntries.map((entry, idx) => (
         <div
           key={`${entry.kind}-${entry.ts}-${range.start + idx}`}
+          data-raw-index={range.start + idx}
+          data-raw-focused={focusIndex === range.start + idx ? "true" : undefined}
           className={cn(
             "grid gap-x-3",
             "grid-cols-[auto_1fr]",
+            focusIndex === range.start + idx && "rounded-md bg-amber-500/10 ring-1 ring-amber-500/40",
           )}
         >
           <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -152,7 +212,7 @@ function RawTranscriptView({
 
 export function RunTranscriptView({
   entries,
-  mode = "readable",
+  mode = "business",
   density = "comfortable",
   limit,
   streaming = false,
@@ -161,7 +221,27 @@ export function RunTranscriptView({
   thinkingClassName,
   usage,
   stoppedReason,
+  timeline,
+  timelineNotice,
+  onOpenLogLine,
+  rawFocus,
 }: RunTranscriptViewProps) {
+  // A posted timeline renders even before the run's own log has loaded.
+  if (mode === "business" && (entries.length > 0 || timeline)) {
+    return (
+      <BusinessTranscriptView
+        entries={entries}
+        streaming={streaming}
+        usage={usage}
+        stoppedReason={stoppedReason}
+        timeline={timeline}
+        timelineNotice={timelineNotice}
+        onOpenLogLine={onOpenLogLine}
+        className={className}
+      />
+    );
+  }
+
   if (entries.length === 0) {
     return (
       <div className={cn("rounded-2xl border border-dashed border-border/70 bg-background/40 p-4 text-sm text-muted-foreground", className)}>
@@ -177,7 +257,7 @@ export function RunTranscriptView({
         <p className="mb-2 text-xs text-muted-foreground" data-testid="raw-credentials-note">
           {CREDENTIALS_HIDDEN_NOTE}
         </p>
-        <RawTranscriptView entries={visibleEntries} density={density} />
+        <RawTranscriptView entries={visibleEntries} density={density} focus={limit ? null : rawFocus} />
       </div>
     );
   }

@@ -110,10 +110,18 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
-import { RunTranscriptView } from "../components/transcript/RunTranscriptView";
+import { RunTranscriptView, type RawTranscriptFocus } from "../components/transcript/RunTranscriptView";
 // AgentDash: persisted Readable/Raw transcript preference shared with every run surface.
 import { TranscriptModeToggle } from "../components/transcript/ReadableTranscript";
-import { useTranscriptModePreference } from "../lib/transcriptModePreference";
+import { useTranscriptModePreference, type TranscriptViewMode } from "../lib/transcriptModePreference";
+import { useLiveAutoFollow } from "../hooks/useLiveAutoFollow";
+import {
+  milestoneTimelineDocumentKey,
+  parseMilestoneTimeline,
+  timelineMatchesRun,
+  type MilestoneTimeline,
+} from "../lib/milestoneTimeline";
+import { appendRunLogLines, transcriptEntryIndexForSeq } from "../lib/runLogSeq";
 import {
   isUuidLike,
   type Agent,
@@ -219,59 +227,9 @@ const sourceLabels: Record<string, string> = {
   automation: "Automation",
 };
 
-const LIVE_SCROLL_BOTTOM_TOLERANCE_PX = 32;
-type ScrollContainer = Window | HTMLElement;
-
-function isWindowContainer(container: ScrollContainer): container is Window {
-  return container === window;
-}
-
-function isElementScrollContainer(element: HTMLElement): boolean {
-  const overflowY = window.getComputedStyle(element).overflowY;
-  return overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
-}
-
-function findScrollContainer(anchor: HTMLElement | null): ScrollContainer {
-  let parent = anchor?.parentElement ?? null;
-  while (parent) {
-    if (isElementScrollContainer(parent)) return parent;
-    parent = parent.parentElement;
-  }
-  return window;
-}
-
-function readScrollMetrics(container: ScrollContainer): { scrollHeight: number; distanceFromBottom: number } {
-  if (isWindowContainer(container)) {
-    const pageHeight = Math.max(
-      document.documentElement.scrollHeight,
-      document.body.scrollHeight,
-    );
-    const viewportBottom = window.scrollY + window.innerHeight;
-    return {
-      scrollHeight: pageHeight,
-      distanceFromBottom: Math.max(0, pageHeight - viewportBottom),
-    };
-  }
-
-  const viewportBottom = container.scrollTop + container.clientHeight;
-  return {
-    scrollHeight: container.scrollHeight,
-    distanceFromBottom: Math.max(0, container.scrollHeight - viewportBottom),
-  };
-}
-
-function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBehavior = "auto") {
-  if (isWindowContainer(container)) {
-    const pageHeight = Math.max(
-      document.documentElement.scrollHeight,
-      document.body.scrollHeight,
-    );
-    window.scrollTo({ top: pageHeight, behavior });
-    return;
-  }
-
-  container.scrollTo({ top: container.scrollHeight, behavior });
-}
+// AgentDash: live auto-follow (and its scroll helpers) moved to
+// hooks/useLiveAutoFollow.ts, where the "transcript does not follow a live
+// run" fix and its tests live.
 
 type AgentDetailView =
   | "dashboard"
@@ -4704,6 +4662,8 @@ export function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterC
 
 /* ---- Log Viewer ---- */
 
+type RunLogLine = { ts: string; stream: "stdout" | "stderr" | "system"; chunk: string; seq?: number };
+
 function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: string }) {
   // AgentDash (scan 4 lane O1): the footer reads the same metered figures as
   // the Input / Output tiles above it, not the adapter's own result line —
@@ -4719,26 +4679,35 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     return { inputTokens: metrics.input, outputTokens: metrics.output, costUsd: metrics.cost, durationMs };
   }, [run]);
   const [events, setEvents] = useState<HeartbeatRunEvent[]>([]);
-  const [logLines, setLogLines] = useState<Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }>>([]);
+  const [logLines, setLogLines] = useState<RunLogLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [logLoading, setLogLoading] = useState(!!run.logRef);
   const [logError, setLogError] = useState<string | null>(null);
   const [logOffset, setLogOffset] = useState(0);
   const [hasMoreLog, setHasMoreLog] = useState(false);
   const [loadingMoreLog, setLoadingMoreLog] = useState(false);
-  const [isFollowing, setIsFollowing] = useState(false);
   const [isStreamingConnected, setIsStreamingConnected] = useState(false);
-  // AgentDash: Readable is the default; the viewer's choice persists in localStorage.
-  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
-  const logEndRef = useRef<HTMLDivElement>(null);
+  // AgentDash: Business is the default; the viewer's choice persists in
+  // localStorage. A Business "Log line" link opens Raw for this visit only
+  // (modeOverride) without changing the saved choice.
+  const [preferredTranscriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const [modeOverride, setModeOverride] = useState<TranscriptViewMode | null>(null);
+  const transcriptMode = modeOverride ?? preferredTranscriptMode;
+  const chooseTranscriptMode = useCallback(
+    (mode: TranscriptViewMode) => {
+      setModeOverride(null);
+      setTranscriptMode(mode);
+    },
+    [setTranscriptMode],
+  );
+  const [rawFocus, setRawFocus] = useState<RawTranscriptFocus | null>(null);
+  const [logLinkNote, setLogLinkNote] = useState<string | null>(null);
   const pendingLogLineRef = useRef("");
-  const scrollContainerRef = useRef<ScrollContainer | null>(null);
-  const isFollowingRef = useRef(false);
-  const lastMetricsRef = useRef<{ scrollHeight: number; distanceFromBottom: number }>({
-    scrollHeight: 0,
-    distanceFromBottom: Number.POSITIVE_INFINITY,
-  });
+  // Run-log rows already shown, by seq, so the WebSocket and the polling /
+  // initial fetch paths never show the same row twice.
+  const seenLogSeqRef = useRef<Set<number>>(new Set());
   const isLive = run.status === "running" || run.status === "queued";
+  const runIssueId = asNonEmptyString(asRecord(run.contextSnapshot)?.issueId);
   const { data: workspaceOperations = [] } = useQuery({
     queryKey: queryKeys.runWorkspaceOperations(run.id),
     queryFn: () => heartbeatsApi.workspaceOperations(run.id),
@@ -4759,25 +4728,30 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
       pendingLogLineRef.current = "";
     }
 
-    const parsed: Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }> = [];
+    const parsed: RunLogLine[] = [];
     for (const line of split) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        const raw = JSON.parse(trimmed) as { ts?: unknown; stream?: unknown; chunk?: unknown };
+        const raw = JSON.parse(trimmed) as { ts?: unknown; stream?: unknown; chunk?: unknown; seq?: unknown };
         const stream =
           raw.stream === "stderr" || raw.stream === "system" ? raw.stream : "stdout";
         const chunk = typeof raw.chunk === "string" ? raw.chunk : "";
         const ts = typeof raw.ts === "string" ? raw.ts : new Date().toISOString();
         if (!chunk) continue;
-        parsed.push({ ts, stream, chunk });
+        const seq = typeof raw.seq === "number" && Number.isFinite(raw.seq) ? raw.seq : undefined;
+        if (seq !== undefined) {
+          if (seenLogSeqRef.current.has(seq)) continue;
+          seenLogSeqRef.current.add(seq);
+        }
+        parsed.push(seq !== undefined ? { ts, stream, chunk, seq } : { ts, stream, chunk });
       } catch {
         // ignore malformed lines
       }
     }
 
     if (parsed.length > 0) {
-      setLogLines((prev) => [...prev, ...parsed]);
+      setLogLines((prev) => appendRunLogLines(prev, parsed));
     }
   }
 
@@ -4794,91 +4768,11 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     }
   }, [initialEvents]);
 
-  const getScrollContainer = useCallback((): ScrollContainer => {
-    if (scrollContainerRef.current) return scrollContainerRef.current;
-    const container = findScrollContainer(logEndRef.current);
-    scrollContainerRef.current = container;
-    return container;
-  }, []);
-
-  const updateFollowingState = useCallback(() => {
-    const container = getScrollContainer();
-    const metrics = readScrollMetrics(container);
-    lastMetricsRef.current = metrics;
-    const nearBottom = metrics.distanceFromBottom <= LIVE_SCROLL_BOTTOM_TOLERANCE_PX;
-    isFollowingRef.current = nearBottom;
-    setIsFollowing((prev) => (prev === nearBottom ? prev : nearBottom));
-  }, [getScrollContainer]);
-
-  useEffect(() => {
-    scrollContainerRef.current = null;
-    lastMetricsRef.current = {
-      scrollHeight: 0,
-      distanceFromBottom: Number.POSITIVE_INFINITY,
-    };
-
-    if (!isLive) {
-      isFollowingRef.current = false;
-      setIsFollowing(false);
-      return;
-    }
-
-    updateFollowingState();
-  }, [isLive, run.id, updateFollowingState]);
-
-  useEffect(() => {
-    if (!isLive) return;
-    const container = getScrollContainer();
-    updateFollowingState();
-
-    if (container === window) {
-      window.addEventListener("scroll", updateFollowingState, { passive: true });
-    } else {
-      container.addEventListener("scroll", updateFollowingState, { passive: true });
-    }
-    window.addEventListener("resize", updateFollowingState);
-    return () => {
-      if (container === window) {
-        window.removeEventListener("scroll", updateFollowingState);
-      } else {
-        container.removeEventListener("scroll", updateFollowingState);
-      }
-      window.removeEventListener("resize", updateFollowingState);
-    };
-  }, [isLive, run.id, getScrollContainer, updateFollowingState]);
-
-  // Auto-scroll only for live runs when following
-  useEffect(() => {
-    if (!isLive || !isFollowingRef.current) return;
-
-    const container = getScrollContainer();
-    const previous = lastMetricsRef.current;
-    const current = readScrollMetrics(container);
-    const growth = Math.max(0, current.scrollHeight - previous.scrollHeight);
-    const expectedDistance = previous.distanceFromBottom + growth;
-    const movedAwayBy = current.distanceFromBottom - expectedDistance;
-
-    // If user moved away from bottom between updates, release auto-follow immediately.
-    if (movedAwayBy > LIVE_SCROLL_BOTTOM_TOLERANCE_PX) {
-      isFollowingRef.current = false;
-      setIsFollowing(false);
-      lastMetricsRef.current = current;
-      return;
-    }
-
-    scrollToContainerBottom(container, "auto");
-    const after = readScrollMetrics(container);
-    lastMetricsRef.current = after;
-    if (!isFollowingRef.current) {
-      isFollowingRef.current = true;
-    }
-    setIsFollowing((prev) => (prev ? prev : true));
-  }, [events.length, logLines.length, isLive, getScrollContainer]);
-
   // Fetch persisted shell log
   useEffect(() => {
     let cancelled = false;
     pendingLogLineRef.current = "";
+    seenLogSeqRef.current = new Set();
     setLogLines([]);
     setLogOffset(0);
     setHasMoreLog(false);
@@ -5021,7 +4915,12 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           const streamRaw = asNonEmptyString(payload.stream);
           const stream = streamRaw === "stderr" || streamRaw === "system" ? streamRaw : "stdout";
           const ts = asNonEmptyString((payload as Record<string, unknown>).ts) ?? event.createdAt;
-          setLogLines((prev) => [...prev, { ts, stream, chunk }]);
+          const seq = typeof payload.seq === "number" && Number.isFinite(payload.seq) ? payload.seq : undefined;
+          if (seq !== undefined) {
+            if (seenLogSeqRef.current.has(seq)) return;
+            seenLogSeqRef.current.add(seq);
+          }
+          setLogLines((prev) => appendRunLogLines(prev, [seq !== undefined ? { ts, stream, chunk, seq } : { ts, stream, chunk }]));
           return;
         }
 
@@ -5114,11 +5013,88 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     [adapter, censorUsernameInLogs, logLines, parserTick],
   );
 
+  // AgentDash: the harness-published milestone timeline for this run, if any
+  // (doc/RUN-BUSINESS-VIEW.md): issue document `milestone-timeline-<runId>`
+  // on the run's issue, read through the existing company-scoped document
+  // API. No document (404) is the normal case and shows the plain summary.
+  const timelineKey = milestoneTimelineDocumentKey(run.id);
+  const timelineQuery = useQuery({
+    queryKey: runIssueId ? queryKeys.issues.document(runIssueId, timelineKey) : ["issues", "document", "none", timelineKey],
+    queryFn: async () => {
+      try {
+        return await issuesApi.getDocument(runIssueId!, timelineKey);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+      }
+    },
+    enabled: Boolean(runIssueId),
+    retry: false,
+    // A live run's timeline may be posted at the end of the run.
+    refetchInterval: isLive ? 15_000 : false,
+  });
+  const { timeline, timelineNotice } = useMemo((): { timeline: MilestoneTimeline | null; timelineNotice: string | null } => {
+    const doc = timelineQuery.data;
+    if (!doc) return { timeline: null, timelineNotice: null };
+    const parsed = parseMilestoneTimeline(doc.body);
+    if (!parsed.ok) {
+      return {
+        timeline: null,
+        timelineNotice:
+          parsed.reason === "unsupported-version"
+            ? "A business log was posted for this run in a newer format than this page can show. Here is a plain summary instead."
+            : "A business log was posted for this run but could not be read. Here is a plain summary instead.",
+      };
+    }
+    if (!timelineMatchesRun(parsed.timeline, run)) return { timeline: null, timelineNotice: null };
+    return { timeline: parsed.timeline, timelineNotice: null };
+  }, [timelineQuery.data, run]);
+
+  // A Business "Log line n" link: open Raw at that row. The row is looked up
+  // once the log has loaded (the click can land while it is still loading).
+  const [pendingLogSeq, setPendingLogSeq] = useState<{ seq: number; token: number } | null>(null);
+  const openLogLine = useCallback((seq: number) => {
+    setModeOverride("raw");
+    setRawFocus(null);
+    setLogLinkNote(null);
+    setPendingLogSeq((prev) => ({ seq, token: (prev?.token ?? 0) + 1 }));
+  }, []);
+  useEffect(() => {
+    if (!pendingLogSeq) return;
+    const { seq } = pendingLogSeq;
+    const lookup = transcriptEntryIndexForSeq(logLines, seq, adapter, { censorUsernameInLogs });
+    if (lookup.found) {
+      setRawFocus((prev) => ({ index: lookup.entryIndex, token: (prev?.token ?? 0) + 1 }));
+      setLogLinkNote(lookup.exact ? null : `Log line ${seq} was merged into a nearby line; showing the closest one.`);
+      setPendingLogSeq(null);
+      return;
+    }
+    if (lookup.reason === "not-loaded" && (logLoading || isLive)) {
+      // Keep waiting: the row may still arrive.
+      setLogLinkNote(`Finding log line ${seq}…`);
+      return;
+    }
+    setLogLinkNote(
+      lookup.reason === "not-loaded"
+        ? `Log line ${seq} is not loaded yet.${hasMoreLog ? " Load more of the log to reach it." : ""}`
+        : `This run's log has no line numbers, so line ${seq} cannot be found.`,
+    );
+    setPendingLogSeq(null);
+  }, [pendingLogSeq, logLines, logLoading, isLive, hasMoreLog, adapter, censorUsernameInLogs]);
+
+  // AgentDash: live auto-follow for every mode (see useLiveAutoFollow for the
+  // bug it fixes). contentKey covers changes that add no log lines.
+  const follow = useLiveAutoFollow({
+    live: isLive,
+    resetKey: run.id,
+    contentKey: `${transcriptMode}:${events.length}:${logLines.length}:${transcript.length}:${timeline ? timeline.events.length : -1}:${parserTick}`,
+  });
+
   if (loading && logLoading) {
     return <p className="text-xs text-muted-foreground">Loading run logs...</p>;
   }
 
-  if (events.length === 0 && logLines.length === 0 && !logError) {
+  if (events.length === 0 && logLines.length === 0 && !logError && !timeline) {
     return <p className="text-xs text-muted-foreground">No log events.</p>;
   }
 
@@ -5149,20 +5125,10 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           Transcript ({transcript.length})
         </span>
         <div className="flex items-center gap-2">
-          <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} />
-          {isLive && !isFollowing && (
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => {
-                const container = getScrollContainer();
-                isFollowingRef.current = true;
-                setIsFollowing(true);
-                scrollToContainerBottom(container, "auto");
-                lastMetricsRef.current = readScrollMetrics(container);
-              }}
-            >
-              Jump to live
+          <TranscriptModeToggle mode={transcriptMode} onChange={chooseTranscriptMode} />
+          {isLive && !follow.isFollowing && (
+            <Button variant="ghost" size="xs" onClick={follow.jumpToLatest}>
+              Jump to latest
             </Button>
           )}
           {isLive && (
@@ -5177,14 +5143,23 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
         </div>
       </div>
       <div className="max-h-[38rem] overflow-y-auto rounded-2xl border border-border/70 bg-background/40 p-3 sm:p-4">
-        <RunTranscriptView
-          entries={transcript}
-          mode={transcriptMode}
-          streaming={isLive}
-          emptyMessage={run.logRef ? "Waiting for transcript..." : "No persisted transcript for this run."}
-          usage={runUsage}
-          stoppedReason={run.status === "cancelled" ? cancelledRunLabel(run) : null}
-        />
+        {transcriptMode === "raw" && logLinkNote && (
+          <p className="mb-2 text-xs text-muted-foreground" data-testid="log-link-note">{logLinkNote}</p>
+        )}
+        <div ref={follow.contentRef}>
+          <RunTranscriptView
+            entries={transcript}
+            mode={transcriptMode}
+            streaming={isLive}
+            emptyMessage={run.logRef ? "Waiting for transcript..." : "No persisted transcript for this run."}
+            usage={runUsage}
+            stoppedReason={run.status === "cancelled" ? cancelledRunLabel(run) : null}
+            timeline={timeline}
+            timelineNotice={timelineNotice}
+            onOpenLogLine={openLogLine}
+            rawFocus={rawFocus}
+          />
+        </div>
         {hasMoreLog && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
             <Button
@@ -5209,7 +5184,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
             {logError}
           </div>
         )}
-        <div ref={logEndRef} />
+        <div ref={follow.anchorRef} />
       </div>
 
       {(run.status === "failed" || run.status === "timed_out") && (

@@ -22,7 +22,7 @@ import {
   type ReadableTranscript,
   type ReadableTranscriptCache,
 } from "../../lib/readableTranscript";
-import type { TranscriptViewMode } from "../../lib/transcriptModePreference";
+import { TRANSCRIPT_VIEW_MODES, type TranscriptViewMode } from "../../lib/transcriptModePreference";
 import { Check, ChevronDown, ChevronRight, CircleAlert, CircleDashed, GitCompare, Loader2, Square, User, X } from "lucide-react";
 
 /**
@@ -53,14 +53,23 @@ function hasSelectedText() {
 // Mode toggle
 // ---------------------------------------------------------------------------
 
+const TRANSCRIPT_MODE_LABEL: Record<TranscriptViewMode, string> = {
+  business: "Business",
+  readable: "Readable",
+  raw: "Raw",
+};
+
 export function TranscriptModeToggle({
   mode,
   onChange,
   className,
+  options = TRANSCRIPT_VIEW_MODES,
 }: {
   mode: TranscriptViewMode;
   onChange: (mode: TranscriptViewMode) => void;
   className?: string;
+  /** AgentDash: the issue chat offers Readable/Raw only; the run page offers all three. */
+  options?: readonly TranscriptViewMode[];
 }) {
   return (
     <div
@@ -68,14 +77,14 @@ export function TranscriptModeToggle({
       aria-label="Transcript view"
       className={cn("inline-flex rounded-lg border border-border/70 bg-background/70 p-0.5", className)}
     >
-      {(["readable", "raw"] as const).map((option) => (
+      {options.map((option) => (
         <button
           key={option}
           type="button"
           aria-pressed={mode === option}
           data-transcript-mode={option}
           className={cn(
-            "rounded-md px-2 py-0.5 text-[11px] max-sm:text-xs font-medium capitalize transition-colors max-sm:min-h-11 max-sm:px-3",
+            "rounded-md px-2 py-0.5 text-[11px] max-sm:text-xs font-medium transition-colors max-sm:min-h-11 max-sm:px-3",
             mode === option ? "bg-accent text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
           )}
           onClick={(event) => {
@@ -83,7 +92,7 @@ export function TranscriptModeToggle({
             onChange(option);
           }}
         >
-          {option}
+          {TRANSCRIPT_MODE_LABEL[option]}
         </button>
       ))}
     </div>

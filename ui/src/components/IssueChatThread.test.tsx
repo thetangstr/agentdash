@@ -2586,7 +2586,7 @@ describe("IssueChatThread", () => {
   });
 
   it("renders run blocks in the Readable presentation with a persisted Readable/Raw toggle", () => {
-    window.localStorage.removeItem("agentdash.runTranscript.mode");
+    window.localStorage.removeItem("agentdash.runTranscriptMode");
     const root = createRoot(container);
 
     act(() => {
@@ -2645,6 +2645,10 @@ describe("IssueChatThread", () => {
 
     const readableBody = container.querySelector('div[data-transcript-mode="readable"]');
     expect(readableBody).not.toBeNull();
+    // AgentDash: a first-time viewer's Business default shows as Readable in
+    // the chat, whose toggle offers Readable and Raw only.
+    expect(container.querySelector('button[data-transcript-mode="business"]')).toBeNull();
+    expect(container.querySelector('button[data-transcript-mode="readable"]')?.getAttribute("aria-pressed")).toBe("true");
     // Consecutive tool rows fold into the shared "Ran N tools" group; the failed call stays visible.
     expect(container.textContent).toContain("Ran 2 tools");
     expect(readableBody?.textContent).toContain("FAIL app.test.ts");
@@ -2670,14 +2674,14 @@ describe("IssueChatThread", () => {
     expect(rawButton).not.toBeNull();
     act(() => rawButton!.click());
 
-    expect(window.localStorage.getItem("agentdash.runTranscript.mode")).toBe("raw");
+    expect(window.localStorage.getItem("agentdash.runTranscriptMode")).toBe("raw");
     expect(container.querySelector('div[data-transcript-mode="raw"]')).not.toBeNull();
     expect(container.querySelector('div[data-transcript-mode="readable"]')).toBeNull();
 
     act(() => {
       container.querySelector<HTMLButtonElement>('button[data-transcript-mode="readable"]')!.click();
     });
-    expect(window.localStorage.getItem("agentdash.runTranscript.mode")).toBe("readable");
+    expect(window.localStorage.getItem("agentdash.runTranscriptMode")).toBe("readable");
 
     act(() => {
       root.unmount();
@@ -2688,7 +2692,7 @@ describe("IssueChatThread", () => {
   // shows tool input and results; neither may carry a credential.
   it("redacts credentials in the issue chat's Raw view and says so", () => {
     const SECRET = "SUPERSECRETvalue123";
-    window.localStorage.setItem("agentdash.runTranscript.mode", "raw");
+    window.localStorage.setItem("agentdash.runTranscriptMode", "raw");
     const root = createRoot(container);
 
     act(() => {
@@ -2750,7 +2754,7 @@ describe("IssueChatThread", () => {
     act(() => {
       root.unmount();
     });
-    window.localStorage.removeItem("agentdash.runTranscript.mode");
+    window.localStorage.removeItem("agentdash.runTranscriptMode");
   });
 
   it("shows a tool without a result on a finished message as neutral 'No result', not a success", () => {

@@ -1,20 +1,26 @@
-// AgentDash: the viewer's run-transcript mode ("readable" or "raw"), persisted
-// in localStorage so the choice follows them across the agent run panel, issue
-// chat run blocks, LiveRunWidget and ActiveAgentsPanel. Every toggle on the
-// page stays in sync through a shared listener set and the `storage` event.
+// AgentDash: the viewer's run-transcript mode ("business", "readable" or
+// "raw"), persisted in localStorage so the choice follows them across the agent
+// run panel, issue chat run blocks, LiveRunWidget and ActiveAgentsPanel. Every
+// toggle on the page stays in sync through a shared listener set and the
+// `storage` event. Business is the default for a first-time viewer (founder
+// decision 2026-10-06); the issue chat, which has no Business rendering of its
+// own, shows a "business" preference as Readable (see chatTranscriptMode).
 import { useCallback, useSyncExternalStore } from "react";
 
-export type TranscriptViewMode = "readable" | "raw";
+export type TranscriptViewMode = "business" | "readable" | "raw";
+export const TRANSCRIPT_VIEW_MODES: readonly TranscriptViewMode[] = ["business", "readable", "raw"];
 
-export const TRANSCRIPT_MODE_STORAGE_KEY = "agentdash.runTranscript.mode";
-export const DEFAULT_TRANSCRIPT_MODE: TranscriptViewMode = "readable";
+export const TRANSCRIPT_MODE_STORAGE_KEY = "agentdash.runTranscriptMode";
+/** Pre-Business key. Only an explicit "raw" choice carries over; "readable" was the old default. */
+export const LEGACY_TRANSCRIPT_MODE_STORAGE_KEY = "agentdash.runTranscript.mode";
+export const DEFAULT_TRANSCRIPT_MODE: TranscriptViewMode = "business";
 
 const listeners = new Set<() => void>();
 // In-memory fallback so the toggle still works when storage is unavailable.
 let memoryMode: TranscriptViewMode | null = null;
 
 function parseMode(value: unknown): TranscriptViewMode | null {
-  if (value === "readable" || value === "raw") return value;
+  if (value === "business" || value === "readable" || value === "raw") return value;
   // Older builds called the readable view "nice".
   if (value === "nice") return "readable";
   return null;
@@ -25,6 +31,7 @@ export function readTranscriptModePreference(): TranscriptViewMode {
     if (typeof window !== "undefined" && window.localStorage) {
       const stored = parseMode(window.localStorage.getItem(TRANSCRIPT_MODE_STORAGE_KEY));
       if (stored) return stored;
+      if (window.localStorage.getItem(LEGACY_TRANSCRIPT_MODE_STORAGE_KEY) === "raw") return "raw";
     }
   } catch {
     // Storage blocked (private window, sandboxed iframe): fall through.
@@ -47,7 +54,7 @@ export function writeTranscriptModePreference(mode: TranscriptViewMode): void {
 function subscribe(listener: () => void) {
   listeners.add(listener);
   const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === TRANSCRIPT_MODE_STORAGE_KEY) listener();
+    if (event.key === null || event.key === TRANSCRIPT_MODE_STORAGE_KEY || event.key === LEGACY_TRANSCRIPT_MODE_STORAGE_KEY) listener();
   };
   if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
   return () => {
@@ -64,4 +71,12 @@ export function useTranscriptModePreference(): [TranscriptViewMode, (mode: Trans
   const mode = useSyncExternalStore(subscribe, readTranscriptModePreference, getServerSnapshot);
   const setMode = useCallback((next: TranscriptViewMode) => writeTranscriptModePreference(next), []);
   return [mode, setMode];
+}
+
+/**
+ * The issue chat's run blocks interleave with comments and have no Business
+ * rendering: a "business" preference shows them as Readable.
+ */
+export function chatTranscriptMode(mode: TranscriptViewMode): Exclude<TranscriptViewMode, "business"> {
+  return mode === "raw" ? "raw" : "readable";
 }
