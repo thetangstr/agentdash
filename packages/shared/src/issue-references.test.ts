@@ -78,6 +78,16 @@ describe("issue references", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it("ignores oversize identifier-shaped tokens instead of matching their tail", () => {
+    const longPrefix = "A".repeat(65);
+    expect(findIssueReferenceMatches(`${longPrefix}-1`)).toEqual([]);
+    expect(findIssueReferenceMatches("PAP-1234567890123456")).toEqual([]);
+    expect(extractIssueReferenceIdentifiers(`see ${"A".repeat(64)}-1 and PAP-123456789012345`)).toEqual([
+      `${"A".repeat(64)}-1`,
+      "PAP-123456789012345",
+    ]);
+  });
+
   it("keeps long unbalanced bracket tails linear", () => {
     // trimTrailingPunctuation recounted brackets over the whole remaining
     // token per trimmed character — a `/x]]]]…` token was O(n²).

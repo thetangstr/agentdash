@@ -86,6 +86,16 @@ export function invalidUuidLogFields(req: Request) {
   };
 }
 
+export function characterNotInRepertoireLogFields(req: Request) {
+  const routePath = (req as Request & { route?: { path?: unknown } }).route?.path;
+  return {
+    method: req.method,
+    route: typeof routePath === "string" ? `${req.baseUrl ?? ""}${routePath}` : null,
+    path: redactPathForLog(req.originalUrl ?? ""),
+    code: PG_CHARACTER_NOT_IN_REPERTOIRE,
+  };
+}
+
 /** Drop the query string; it can carry tokens and is summarised by name above. */
 function redactPathForLog(url: string): string {
   return url.split("?")[0] ?? "";
@@ -134,6 +144,31 @@ export function errorHandler(
     return;
   }
 
+  // These Postgres mappings run on the original error, before the
+  // private-route rewrite below, so private routes answer the same 400s.
+  // Both responses are fixed strings: nothing from the request or the
+  // driver message reaches the caller.
+  if (isInvalidUuidInput(err)) {
+    logger.warn(
+      invalidUuidLogFields(req),
+      "invalid uuid reached the database; answered 400 (caller error, or a server bug if no listed parameter explains it)",
+    );
+    res.status(400).json({ error: "Invalid identifier" });
+    return;
+  }
+
+  if (isCharacterNotInRepertoire(err)) {
+    // A NUL can also come from server-originated text (adapter output,
+    // imports, plugins), so keep a warn trail like the uuid mapping. Route
+    // and method only: never the driver message or any value.
+    logger.warn(
+      characterNotInRepertoireLogFields(req),
+      "text Postgres cannot store (e.g. NUL) reached the database; answered 400 (caller error, or a server bug if the route persists server-originated text)",
+    );
+    res.status(400).json({ error: "Text contains a byte sequence Postgres cannot store" });
+    return;
+  }
+
   // AgentDash: database/adapter exceptions can embed source text in their
   // message or query. The error sink receives only a safe error on private paths.
   if (isPrivateHumanInputRoute(req.originalUrl) && !(err instanceof ZodError)) {
@@ -165,20 +200,6 @@ export function errorHandler(
 
   if (err instanceof ZodError) {
     res.status(400).json({ error: "Validation error", details: err.errors });
-    return;
-  }
-
-  if (isInvalidUuidInput(err)) {
-    logger.warn(
-      invalidUuidLogFields(req),
-      "invalid uuid reached the database; answered 400 (caller error, or a server bug if no listed parameter explains it)",
-    );
-    res.status(400).json({ error: "Invalid identifier" });
-    return;
-  }
-
-  if (isCharacterNotInRepertoire(err)) {
-    res.status(400).json({ error: "Text contains a byte sequence Postgres cannot store" });
     return;
   }
 

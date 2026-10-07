@@ -207,6 +207,56 @@ describe("errorHandler", () => {
     expect(res.__errorContext).toBeUndefined();
     expect(recordServerError).not.toHaveBeenCalled();
   });
+
+  it("logs the 400-mapped 22021 at warn with the route, never the message or values", () => {
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/abc/comments?token=secret",
+      baseUrl: "/api",
+      route: { path: "/issues/:id/comments" },
+      params: { id: "abc" },
+      query: { token: "secret" },
+      body: { body: "a\u0000b" },
+    } as unknown as Request;
+    const res = makeRes() as any;
+    vi.mocked(logger.warn).mockClear();
+
+    errorHandler(
+      drizzleWrapped("22021", 'invalid byte sequence for encoding "UTF8": 0x00'),
+      req,
+      res,
+      vi.fn() as unknown as NextFunction,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = vi.mocked(logger.warn).mock.calls[0]! as unknown as [Record<string, unknown>, string];
+    expect(fields).toEqual({
+      method: "POST",
+      route: "/api/issues/:id/comments",
+      path: "/api/issues/abc/comments",
+      code: "22021",
+    });
+    expect(message).toMatch(/server bug/);
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls[0])).not.toContain("secret");
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls[0])).not.toContain("0x00");
+  });
+
+  it.each([
+    ["22021", 'invalid byte sequence for encoding "UTF8": 0x00', "Text contains a byte sequence Postgres cannot store"],
+    ["22P02", 'invalid input syntax for type uuid: "PRIVATE"', "Invalid identifier"],
+  ])("maps %s to a 400 on private human routes too, without leaking the message", (code, message, expected) => {
+    const req = makeReq();
+    req.originalUrl = "/api/human-control/prepare";
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+
+    errorHandler(drizzleWrapped(code, message), req, res, vi.fn() as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: expected });
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
 });
 
 describe('private human failure diagnostics', () => {

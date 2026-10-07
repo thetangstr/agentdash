@@ -12,7 +12,10 @@ export interface IssueReferenceMatch {
 // a time hunting `-\d+` — per start position, so a ~1MB plain-text blob made
 // the scan O(n²) and pinned the event loop for minutes (UltraQA-B). Real
 // issue prefixes are short codes; {1,64} keeps each start position O(64).
-const ISSUE_REFERENCE_TOKEN_RE = /https?:\/\/[^\s<>()]+|\/[^\s<>()]+|[A-Z]{1,64}-[0-9]{1,15}/gi;
+// The lookarounds make an oversize token (a longer letter run, or more than
+// 15 digits) produce no match rather than a match on its tail or head.
+const ISSUE_REFERENCE_TOKEN_RE =
+  /https?:\/\/[^\s<>()]+|\/[^\s<>()]+|(?<![A-Z])[A-Z]{1,64}-[0-9]{1,15}(?![0-9])/gi;
 
 function preserveNewlinesAsWhitespace(value: string) {
   return value.replace(/[^\n]/g, " ");
