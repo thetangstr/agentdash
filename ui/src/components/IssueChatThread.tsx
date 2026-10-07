@@ -3361,6 +3361,7 @@ export function IssueChatThread({
 }: IssueChatThreadProps) {
   const location = useLocation();
   const lastScrolledHashRef = useRef<string | null>(null);
+  const hashHoldAppliedRef = useRef<string | null>(null);
   const virtualizedThreadRef = useRef<VirtualizedIssueChatThreadListHandle | null>(null);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const composerViewportAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -3678,6 +3679,9 @@ export function IssueChatThread({
   }, [messages]);
 
   useEffect(() => {
+    // AgentDash (chat auto-follow): the URL hash belongs to the page's own
+    // thread, never to an embedded run surface.
+    if (variant === "embedded") return;
     const hash = location.hash || (typeof window !== "undefined" ? window.location.hash : "");
     if (
       !(
@@ -3689,16 +3693,20 @@ export function IssueChatThread({
     ) return;
     if (messages.length === 0 || lastScrolledHashRef.current === hash) return;
     const targetId = hash.slice(1);
-    // AgentDash (chat auto-follow): the viewer navigated to this anchor. Follow
-    // steps must not cancel the (smooth) scroll there, and landing near the
-    // bottom must not start following; their own scroll input or Jump to
-    // latest does.
-    follow.holdFollow();
     let cancelled = false;
     const attemptScroll = (finalAttempt = false) => {
       if (cancelled || lastScrolledHashRef.current === hash) return;
       const didScroll = scrollToThreadAnchor(targetId, { align: "center", behavior: preferredScrollBehavior() });
       if (!didScroll) return;
+      // AgentDash (chat auto-follow): the viewer navigated to this anchor and
+      // the scroll there has started. Follow steps must not cancel it, and
+      // landing near the bottom must not start following; their own scroll
+      // input or Jump to latest does. Only once per hash, and only for a
+      // target that exists: a hash for an unloaded comment holds nothing.
+      if (hashHoldAppliedRef.current !== hash) {
+        hashHoldAppliedRef.current = hash;
+        follow.holdFollow();
+      }
       if (finalAttempt || !useVirtualizedThread || document.getElementById(targetId)) {
         lastScrolledHashRef.current = hash;
       }
@@ -3712,7 +3720,7 @@ export function IssueChatThread({
       cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [location.hash, messageAnchorIndex, messages, useVirtualizedThread]);
+  }, [location.hash, messageAnchorIndex, messages, useVirtualizedThread, variant]);
 
   // AgentDash: how much of the scroll viewport's bottom the docked composer covers
   // on phones (below md, where the bottom nav shows). 0 on desktop.

@@ -3152,6 +3152,29 @@ describe("IssueChatThread auto-follow", () => {
     }
   });
 
+  it("a hash for a comment that is not loaded holds nothing: scrolling to the bottom still follows", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    const scrollIntoViewMock = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoViewMock as unknown as typeof Element.prototype.scrollIntoView;
+    try {
+      const root = createRoot(container);
+      renderThread(root, { comments: commentsUpTo(5) }, "/issues/PAP-1#comment-not-loaded");
+      expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+      userScrollTo(1400);
+      layout.scrollHeight = 2400;
+      renderThread(root, { comments: commentsUpTo(6) }, "/issues/PAP-1#comment-not-loaded");
+      expect(scrollHost.scrollTop).toBe(1800);
+      layout.scrollHeight = 2600;
+      renderThread(root, { comments: commentsUpTo(7) }, "/issues/PAP-1#comment-not-loaded");
+      expect(scrollHost.scrollTop).toBe(2000);
+
+      act(() => root.unmount());
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
   it("a deep link followed while at the bottom is not cancelled by follow steps", () => {
     function GoTo({ hash }: { hash: string | null }) {
       const navigate = useNavigate();
