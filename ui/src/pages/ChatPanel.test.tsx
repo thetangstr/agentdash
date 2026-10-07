@@ -279,10 +279,16 @@ describe("ChatPanel reply state", () => {
 // scrollHeight and clientHeight change, so a chat pinned to the bottom
 // jumped to mid-thread. The pin is restored on resize only while the
 // reader is still at the bottom; a person reading history is left alone.
-describe("ChatPanel resize pin", () => {
+// AgentDash (chat auto-follow): the same rule covers new messages. While the
+// reader is at the bottom the chat follows; a scroll up lets go (new messages
+// used to yank them back down) and shows "Jump to latest"; sending follows
+// again.
+describe("ChatPanel auto-follow", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
   let resizeCallbacks: Array<() => void>;
+  // A fake layout for the scroller: each message is 200px tall.
+  let layout: { scrollHeight: number; clientHeight: number; scrollTop: number };
 
   class FakeResizeObserver {
     constructor(callback: () => void) {
@@ -293,33 +299,61 @@ describe("ChatPanel resize pin", () => {
     disconnect() {}
   }
 
-  function renderAndMeasure() {
-    mockUseMessages.mockReturnValue([{ id: "m1", role: "agent", content: "Hi" }]);
-    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" />));
-    const scroller = container.querySelector('[data-testid="chat-scroller"]') as HTMLElement;
-    Object.defineProperty(scroller, "scrollHeight", { value: 1000, configurable: true });
-    Object.defineProperty(scroller, "clientHeight", { value: 400, configurable: true });
-    return scroller;
+  const messagesOf = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ id: `m${index + 1}`, role: "agent", content: `Message ${index + 1}` }));
+
+  const scroller = () => container.querySelector('[data-testid="chat-scroller"]') as HTMLElement;
+  const jumpButton = () => container.querySelector('[data-testid="chat-jump-to-latest"]') as HTMLButtonElement | null;
+  const maxTop = () => Math.max(0, layout.scrollHeight - layout.clientHeight);
+
+  function installLayout(el: HTMLElement) {
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => layout.scrollHeight });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => layout.clientHeight });
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true,
+      get: () => layout.scrollTop,
+      set: (value: number) => {
+        layout.scrollTop = Math.min(Math.max(0, value), maxTop());
+      },
+    });
+    el.scrollTo = ((options: ScrollToOptions) => {
+      el.scrollTop = options.top ?? 0;
+      el.dispatchEvent(new Event("scroll"));
+    }) as typeof el.scrollTo;
   }
 
-  const scrollTo = (el: HTMLElement, top: number) => {
-    act(() => {
-      el.scrollTop = top;
-      el.dispatchEvent(new Event("scroll"));
-    });
+  const relayout = () => {
+    act(() => resizeCallbacks.forEach((cb) => cb()));
   };
 
-  const resize = () => {
-    act(() => resizeCallbacks.forEach((cb) => cb()));
+  /** Render `count` messages and let the layout settle (the browser's ResizeObserver pass). */
+  function renderMessages(count: number, extraProps: { suggestions?: string[] } = {}) {
+    mockUseMessages.mockReturnValue(messagesOf(count));
+    act(() => root.render(<ChatPanel conversationId="c1" companyId="co1" {...extraProps} />));
+    if (scroller().dataset.layoutInstalled !== "1") {
+      scroller().dataset.layoutInstalled = "1";
+      installLayout(scroller());
+    }
+    layout.scrollHeight = count * 200;
+    relayout();
+  }
+
+  const userScrollTo = (top: number) => {
+    act(() => {
+      scroller().scrollTop = top;
+      scroller().dispatchEvent(new Event("scroll"));
+    });
   };
 
   beforeEach(() => {
     resizeCallbacks = [];
+    layout = { scrollHeight: 0, clientHeight: 400, scrollTop: 0 };
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     Element.prototype.scrollIntoView = vi.fn();
+    mockPost.mockReset();
   });
 
   afterEach(() => {
@@ -328,19 +362,61 @@ describe("ChatPanel resize pin", () => {
     vi.unstubAllGlobals();
   });
 
+  it("opens on the newest message and follows new ones while the reader is at the bottom", () => {
+    renderMessages(5);
+    expect(scroller().scrollTop).toBe(600);
+    expect(jumpButton()).toBeNull();
+
+    renderMessages(7);
+    expect(scroller().scrollTop).toBe(1000);
+    expect(jumpButton()).toBeNull();
+  });
+
   it("re-pins to the bottom on resize while the reader is at the bottom", () => {
-    const scroller = renderAndMeasure();
-    scrollTo(scroller, 600); // 1000 - 600 - 400 = 0 < 8 → at bottom
-    scroller.scrollTop = 500; // a resize reflow nudged the pin off the bottom
-    resize();
-    expect(scroller.scrollTop).toBe(1000);
+    renderMessages(5);
+    expect(scroller().scrollTop).toBe(600);
+    // A desktop→phone reflow: the scroller gets shorter.
+    layout.clientHeight = 300;
+    relayout();
+    expect(scroller().scrollTop).toBe(700);
   });
 
   it("does not re-pin on resize after the reader scrolled up", () => {
-    const scroller = renderAndMeasure();
-    scrollTo(scroller, 100); // 1000 - 100 - 400 = 500 ≥ 8 → scrolled up
-    scroller.scrollTop = 120;
-    resize();
-    expect(scroller.scrollTop).toBe(120);
+    renderMessages(5);
+    userScrollTo(100);
+    layout.clientHeight = 300;
+    relayout();
+    expect(scroller().scrollTop).toBe(100);
+  });
+
+  it("lets go when the reader scrolls up: new messages leave them where they are, and Jump to latest follows again", () => {
+    renderMessages(5);
+    userScrollTo(120);
+    expect(jumpButton()?.textContent).toContain("Jump to latest");
+
+    renderMessages(8);
+    expect(scroller().scrollTop).toBe(120);
+
+    act(() => jumpButton()!.click());
+    expect(scroller().scrollTop).toBe(1200);
+    expect(jumpButton()).toBeNull();
+
+    renderMessages(9);
+    expect(scroller().scrollTop).toBe(1400);
+  });
+
+  it("follows again when the person sends a message", async () => {
+    mockPost.mockResolvedValue({ id: "m-sent" });
+    renderMessages(5, { suggestions: ["Who should I hire first?"] });
+    userScrollTo(0);
+    expect(jumpButton()).not.toBeNull();
+
+    const chip = container.querySelector('[data-testid="chat-suggestions"] button') as HTMLButtonElement;
+    await act(async () => chip.click());
+    expect(scroller().scrollTop).toBe(600);
+    expect(jumpButton()).toBeNull();
+
+    renderMessages(6);
+    expect(scroller().scrollTop).toBe(800);
   });
 });

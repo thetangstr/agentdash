@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import type { TranscriptEntry } from "../adapters";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import { IssueChatThread } from "./IssueChatThread";
@@ -19,6 +19,13 @@ interface RunChatSurfaceProps {
   transcript: TranscriptEntry[];
   hasOutput: boolean;
   companyId?: string | null;
+  /**
+   * AgentDash (chat auto-follow): render the surface inside its own scrolling
+   * pane with these classes. A live run then opens on its latest output,
+   * follows it while the viewer is at the bottom, and offers Jump to latest.
+   * Without it (an inline surface) nothing scrolls.
+   */
+  scrollPaneClassName?: string;
 }
 
 export const RunChatSurface = memo(function RunChatSurface({
@@ -26,7 +33,9 @@ export const RunChatSurface = memo(function RunChatSurface({
   transcript,
   hasOutput,
   companyId,
+  scrollPaneClassName,
 }: RunChatSurfaceProps) {
+  const [scrollPane, setScrollPane] = useState<HTMLDivElement | null>(null);
   const active = isRunActive(run);
   const liveRuns = useMemo(() => (active ? [run] : EMPTY_LIVE_RUNS), [active, run]);
   const linkedRuns = useMemo<IssueChatLinkedRun[]>(
@@ -49,7 +58,7 @@ export const RunChatSurface = memo(function RunChatSurface({
     [run.id, transcript],
   );
 
-  return (
+  const thread = (
     <IssueChatThread
       comments={EMPTY_COMMENTS}
       linkedRuns={linkedRuns}
@@ -65,6 +74,13 @@ export const RunChatSurface = memo(function RunChatSurface({
       transcriptsByRunId={transcriptsByRunId}
       hasOutputForRun={(runId) => runId === run.id && hasOutput}
       includeSucceededRunsWithoutOutput
+      scrollPane={scrollPaneClassName ? scrollPane : null}
     />
+  );
+  if (!scrollPaneClassName) return thread;
+  return (
+    <div ref={setScrollPane} data-testid="run-chat-scroll-pane" className={scrollPaneClassName}>
+      {thread}
+    </div>
   );
 });

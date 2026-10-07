@@ -90,6 +90,12 @@ import {
   restoreComposerViewportSnapshot,
   shouldPreserveComposerViewport,
 } from "../lib/issue-chat-scroll";
+import {
+  LIVE_SCROLL_BOTTOM_TOLERANCE_PX,
+  preferredScrollBehavior,
+  useLiveAutoFollow,
+  type ScrollContainer,
+} from "../hooks/useLiveAutoFollow";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import { useOptionalToastActions } from "../context/ToastContext";
 import type { CompanyUserProfile } from "../lib/company-members";
@@ -347,6 +353,12 @@ interface IssueChatThreadProps {
    * comment is in the loaded set before we scroll to it.
    */
   onRefreshLatestComments?: () => Promise<unknown> | void;
+  /**
+   * AgentDash (chat auto-follow): the scrolling pane an embedded thread sits
+   * in (RunChatSurface passes its own). An embedded thread follows a live run
+   * only inside such a pane; inline it never scrolls the page.
+   */
+  scrollPane?: HTMLElement | null;
 }
 
 type IssueChatErrorBoundaryProps = {
@@ -515,6 +527,9 @@ const COMPOSER_FOCUS_SCROLL_PADDING_PX = 96;
 // AgentDash: the phone "Latest" control shows once the newest content is this far below the docked composer.
 const FLOATING_JUMP_THRESHOLD_PX = 160;
 const SUBMIT_SCROLL_RESERVE_VH = 0.4;
+// AgentDash (chat auto-follow): room kept above your own just-sent message when
+// a growing reply stops the follow so that message stays in view.
+const SENT_MESSAGE_TOP_MARGIN_PX = 16;
 
 type ComposerAttachmentItem = {
   id: string;
@@ -2649,14 +2664,14 @@ const VirtualizedIssueChatThreadListInner = forwardRef<
       if (index < 0 || index >= messages.length) return;
       virtualizer.scrollToIndex(index, {
         align: options?.align ?? "center",
-        behavior: options?.behavior ?? "smooth",
+        behavior: options?.behavior ?? preferredScrollBehavior(),
       });
     },
     scrollToLatest: (options) => {
       if (messages.length === 0) return;
       virtualizer.scrollToIndex(messages.length - 1, {
         align: "end",
-        behavior: options?.behavior ?? "smooth",
+        behavior: options?.behavior ?? preferredScrollBehavior(),
       });
     },
     measure: () => {
@@ -2867,10 +2882,10 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 
   function focusComposer() {
     if (typeof composerContainerRef.current?.scrollIntoView === "function") {
-      composerContainerRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+      composerContainerRef.current.scrollIntoView({ behavior: preferredScrollBehavior(), block: "end" });
     }
     requestAnimationFrame(() => {
-      window.scrollBy({ top: COMPOSER_FOCUS_SCROLL_PADDING_PX, behavior: "smooth" });
+      window.scrollBy({ top: COMPOSER_FOCUS_SCROLL_PADDING_PX, behavior: preferredScrollBehavior() });
       editorRef.current?.focus();
     });
   }
@@ -3342,9 +3357,11 @@ export function IssueChatThread({
   onCancelInteraction,
   composerRef,
   onRefreshLatestComments,
+  scrollPane = null,
 }: IssueChatThreadProps) {
   const location = useLocation();
   const lastScrolledHashRef = useRef<string | null>(null);
+  const hashHoldAppliedRef = useRef<string | null>(null);
   const virtualizedThreadRef = useRef<VirtualizedIssueChatThreadListHandle | null>(null);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const composerViewportAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -3524,7 +3541,7 @@ export function IssueChatThread({
       if (!virtualizedThreadRef.current) return false;
       virtualizedThreadRef.current.scrollToIndex(virtualIndex, {
         align: options?.align ?? "center",
-        behavior: options?.behavior ?? "smooth",
+        behavior: options?.behavior ?? preferredScrollBehavior(),
       });
       return true;
     }
@@ -3532,7 +3549,7 @@ export function IssueChatThread({
     const element = document.getElementById(anchorId);
     if (!element) return false;
     element.scrollIntoView({
-      behavior: options?.behavior ?? "smooth",
+      behavior: options?.behavior ?? preferredScrollBehavior(),
       block: options?.align === "start"
         ? "start"
         : options?.align === "end"
@@ -3541,6 +3558,54 @@ export function IssueChatThread({
     });
     return true;
   }
+
+  // AgentDash (chat auto-follow): the shared live-follow rule
+  // (hooks/useLiveAutoFollow). While the viewer is at the bottom of the
+  // conversation, new comments and a live run's growing transcript stay in
+  // view; a scroll up lets go and nothing moves under them; Jump to latest,
+  // the page's scroll-to-bottom control or sending a message follows again.
+  // The issue page opens where it always has (its top, or a deep-linked
+  // comment), so the full thread starts following only once the viewer
+  // scrolls to the bottom. An embedded thread follows only a live run inside
+  // its own scroll pane (opening on the latest output); inline, or for a
+  // finished run, it never scrolls.
+  const embeddedVariant = variant === "embedded";
+  const followLive = embeddedVariant ? Boolean(scrollPane) && activeRunIds.size > 0 : true;
+  // Your own just-sent message: a reply that outgrows the reserved space is
+  // followed only until this message would leave the top of the view.
+  const sentAnchorRef = useRef<string | null>(null);
+  const capFollowAtSentMessage = useCallback((container: ScrollContainer): number | null => {
+    const anchorId = sentAnchorRef.current;
+    if (!anchorId || typeof document === "undefined") return null;
+    const element = document.getElementById(anchorId);
+    if (!element) return null;
+    const isPage = container === window;
+    const scrollTop = isPage ? window.scrollY : (container as HTMLElement).scrollTop;
+    const viewTop = isPage ? 0 : (container as HTMLElement).getBoundingClientRect().top;
+    const cap = element.getBoundingClientRect().top - viewTop + scrollTop - SENT_MESSAGE_TOP_MARGIN_PX;
+    // The viewer has already scrolled past it themselves: no cap any more.
+    if (cap < scrollTop - LIVE_SCROLL_BOTTOM_TOLERANCE_PX) {
+      sentAnchorRef.current = null;
+      return null;
+    }
+    return cap;
+  }, []);
+  const follow = useLiveAutoFollow({
+    live: followLive,
+    resetKey: draftKey ?? "issue-chat",
+    contentKey: messages,
+    startAt: embeddedVariant ? "latest" : "current",
+    maxFollowTop: capFollowAtSentMessage,
+  });
+  const followScrollerRef = follow.scrollerRef;
+  useEffect(() => {
+    followScrollerRef(embeddedVariant ? scrollPane : null);
+  }, [embeddedVariant, scrollPane, followScrollerRef]);
+  const followAnchorRef = follow.anchorRef;
+  const setBottomAnchor = useCallback((element: HTMLDivElement | null) => {
+    bottomAnchorRef.current = element;
+    followAnchorRef(element);
+  }, [followAnchorRef]);
 
   const runtime = usePaperclipIssueRuntime({
     messages,
@@ -3569,10 +3634,15 @@ export function IssueChatThread({
         spacerBaselineAnchorRef.current = anchorId;
         spacerInitialReserveRef.current = reserve;
         setBottomSpacerHeight(reserve);
-        requestAnimationFrame(() => {
-          scrollToThreadAnchor(anchorId, { align: "start", behavior: "smooth" });
-        });
       }
+      // AgentDash (chat auto-follow): your own message brings you back to the
+      // latest and follows from there. The reserve spacer below the thread
+      // leaves room for the reply, which fills it without the view moving;
+      // a longer reply is followed until your message reaches the top.
+      sentAnchorRef.current = anchorId;
+      requestAnimationFrame(() => {
+        follow.jumpToLatest();
+      });
     }
 
     lastUserMessageIdRef.current = lastUserId;
@@ -3609,6 +3679,9 @@ export function IssueChatThread({
   }, [messages]);
 
   useEffect(() => {
+    // AgentDash (chat auto-follow): the URL hash belongs to the page's own
+    // thread, never to an embedded run surface.
+    if (variant === "embedded") return;
     const hash = location.hash || (typeof window !== "undefined" ? window.location.hash : "");
     if (
       !(
@@ -3623,8 +3696,17 @@ export function IssueChatThread({
     let cancelled = false;
     const attemptScroll = (finalAttempt = false) => {
       if (cancelled || lastScrolledHashRef.current === hash) return;
-      const didScroll = scrollToThreadAnchor(targetId, { align: "center", behavior: "smooth" });
+      const didScroll = scrollToThreadAnchor(targetId, { align: "center", behavior: preferredScrollBehavior() });
       if (!didScroll) return;
+      // AgentDash (chat auto-follow): the viewer navigated to this anchor and
+      // the scroll there has started. Follow steps must not cancel it, and
+      // landing near the bottom must not start following; their own scroll
+      // input or Jump to latest does. Only once per hash, and only for a
+      // target that exists: a hash for an unloaded comment holds nothing.
+      if (hashHoldAppliedRef.current !== hash) {
+        hashHoldAppliedRef.current = hash;
+        follow.holdFollow();
+      }
       if (finalAttempt || !useVirtualizedThread || document.getElementById(targetId)) {
         lastScrolledHashRef.current = hash;
       }
@@ -3638,7 +3720,7 @@ export function IssueChatThread({
       cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [location.hash, messageAnchorIndex, messages, useVirtualizedThread]);
+  }, [location.hash, messageAnchorIndex, messages, useVirtualizedThread, variant]);
 
   // AgentDash: how much of the scroll viewport's bottom the docked composer covers
   // on phones (below md, where the bottom nav shows). 0 on desktop.
@@ -3652,10 +3734,10 @@ export function IssueChatThread({
 
   function jumpToLatestFallback() {
     if (useVirtualizedThread) {
-      virtualizedThreadRef.current?.scrollToLatest({ behavior: "smooth" });
+      virtualizedThreadRef.current?.scrollToLatest({ behavior: preferredScrollBehavior() });
       return;
     }
-    bottomAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    bottomAnchorRef.current?.scrollIntoView({ behavior: preferredScrollBehavior(), block: "end" });
   }
 
   // Lands on the latest `comment-*` row and then drives the scroll the rest
@@ -3670,25 +3752,32 @@ export function IssueChatThread({
   // on the latest comment element on every tick until the DOM bottom of
   // that element is at the scroll container's bottom (or scroll position
   // and content height stop changing).
-  function scrollToLatestCommentWithSettle(messageSnapshot: readonly ThreadMessage[] = latestMessagesRef.current) {
+  function scrollToLatestCommentWithSettle(
+    messageSnapshot: readonly ThreadMessage[] = latestMessagesRef.current,
+    onSettled?: () => void,
+  ) {
+    const fallback = () => {
+      if (onSettled) onSettled();
+      else jumpToLatestFallback();
+    };
     const latestCommentIndex = findLatestCommentMessageIndex(messageSnapshot);
     if (latestCommentIndex < 0) {
-      jumpToLatestFallback();
+      fallback();
       return;
     }
     const latestCommentAnchor = issueChatMessageAnchorId(messageSnapshot[latestCommentIndex]);
     if (!latestCommentAnchor) {
-      jumpToLatestFallback();
+      fallback();
       return;
     }
 
     const initial = scrollToThreadAnchor(
       latestCommentAnchor,
-      { align: "end", behavior: "smooth" },
+      { align: "end", behavior: preferredScrollBehavior() },
       messageSnapshot,
     );
     if (!initial) {
-      jumpToLatestFallback();
+      fallback();
       return;
     }
 
@@ -3728,6 +3817,7 @@ export function IssueChatThread({
     latestSettleCleanupRef.current = cleanup;
 
     const finish = () => {
+      if (!cancelled) onSettled?.();
       cleanup();
       latestSettleCleanupRef.current = null;
       for (const timeout of latestSettleTimeoutsRef.current) {
@@ -3780,9 +3870,9 @@ export function IssueChatThread({
 
       if (Math.abs(offBottom) > TOLERANCE_PX) {
         if (dockClearance > 0) {
-          (container ?? window).scrollBy({ top: offBottom, behavior: "smooth" });
+          (container ?? window).scrollBy({ top: offBottom, behavior: preferredScrollBehavior() });
         } else {
-          el.scrollIntoView({ behavior: "smooth", block: "end" });
+          el.scrollIntoView({ behavior: preferredScrollBehavior(), block: "end" });
         }
       }
 
@@ -3811,6 +3901,29 @@ export function IssueChatThread({
     scheduleTick(120);
   }
 
+  function jumpToLatestTarget() {
+    // AgentDash (chat auto-follow): Jump to latest always resumes following.
+    // An explicit jump is never capped at a sent message.
+    sentAnchorRef.current = null;
+    // While a run is live its transcript is the latest thing in the thread,
+    // so go to the very bottom and follow it.
+    if (activeRunIds.size > 0 || findLatestCommentMessageIndex(latestMessagesRef.current) < 0) {
+      clearLatestSettleTimeouts();
+      follow.jumpToLatest();
+      return;
+    }
+    // Otherwise land on the latest comment with the settle loop (PAP-2672);
+    // follow steps hold off meanwhile. When it settles: if that comment is
+    // the last row, finish at the true bottom and follow; if finished
+    // activity sorts after it, stay on the comment and follow from there.
+    follow.holdFollow();
+    scrollToLatestCommentWithSettle(latestMessagesRef.current, () => {
+      const snapshot = latestMessagesRef.current;
+      if (findLatestCommentMessageIndex(snapshot) === snapshot.length - 1) follow.jumpToLatest();
+      else follow.resumeFollowing();
+    });
+  }
+
   function handleJumpToLatest() {
     if (onRefreshLatestComments) {
       // Refetching the comments query (page 0 first) brings any comment that
@@ -3820,14 +3933,11 @@ export function IssueChatThread({
       // *loaded* comment but not the absolute newest. (PAP-2672 follow-up.)
       const refreshed = onRefreshLatestComments();
       if (refreshed && typeof (refreshed as Promise<unknown>).then === "function") {
-        (refreshed as Promise<unknown>).then(
-          () => scrollToLatestCommentWithSettle(latestMessagesRef.current),
-          () => scrollToLatestCommentWithSettle(latestMessagesRef.current),
-        );
+        (refreshed as Promise<unknown>).then(jumpToLatestTarget, jumpToLatestTarget);
         return;
       }
     }
-    scrollToLatestCommentWithSettle(latestMessagesRef.current);
+    jumpToLatestTarget();
   }
 
   const stableOnVote = useStableEvent(onVote);
@@ -3960,6 +4070,7 @@ export function IssueChatThread({
         >
           <div data-testid="thread-root">
             <div
+              ref={follow.contentRef}
               data-testid="thread-viewport"
               className={variant === "embedded" ? "space-y-3" : "space-y-4"}
             >
@@ -4007,7 +4118,7 @@ export function IssueChatThread({
                   <IssueAssigneePausedNotice agent={assignedAgent} />
                 </div>
               ) : null}
-              <div ref={bottomAnchorRef} data-testid="issue-chat-bottom-anchor" />
+              <div ref={setBottomAnchor} data-testid="issue-chat-bottom-anchor" />
               {showComposer ? (
                 <div
                   aria-hidden
@@ -4018,6 +4129,23 @@ export function IssueChatThread({
             </div>
           </div>
         </IssueChatErrorBoundary>
+
+        {embeddedVariant && followLive && !follow.isFollowing && messages.length > 0 ? (
+          // AgentDash (chat auto-follow): an embedded run surface scrolls in
+          // its own small pane; once the viewer scrolls up, this sits at the
+          // pane's bottom edge (taking no space) until they jump back.
+          <div className="pointer-events-none sticky bottom-2 z-10 flex h-0 justify-center">
+            <button
+              type="button"
+              onClick={follow.jumpToLatest}
+              data-testid="issue-chat-embedded-jump-to-latest"
+              className="pointer-events-auto inline-flex min-h-9 -translate-y-full items-center gap-1.5 rounded-full border border-border bg-background px-3 text-xs font-medium text-muted-foreground shadow-md transition-colors hover:text-foreground max-sm:min-h-11"
+            >
+              <ArrowDown className="h-4 w-4" aria-hidden="true" />
+              Jump to latest
+            </button>
+          </div>
+        ) : null}
 
         {showComposer ? (
           <div

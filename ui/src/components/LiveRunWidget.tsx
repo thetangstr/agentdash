@@ -144,14 +144,13 @@ export function LiveRunWidget({ issueId, companyId }: LiveRunWidgetProps) {
                 </div>
               </div>
 
-              <div className="max-h-[320px] overflow-y-auto pr-1">
-                <RunChatSurface
-                  run={run}
-                  transcript={transcript}
-                  hasOutput={hasOutputForRun(run.id)}
-                  companyId={companyId}
-                />
-              </div>
+              <RunChatSurface
+                run={run}
+                transcript={transcript}
+                hasOutput={hasOutputForRun(run.id)}
+                companyId={companyId}
+                scrollPaneClassName="max-h-[320px] overflow-y-auto pr-1"
+              />
             </section>
           );
         })}
