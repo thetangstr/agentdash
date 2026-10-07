@@ -53,6 +53,8 @@ describe("applySecurityHeaders", () => {
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
     expect(res.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
     expect(res.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    // Modern browsers honour CSP frame-ancestors over X-Frame-Options.
+    expect(res.headers["content-security-policy"]).toBe("frame-ancestors 'self'");
   });
 
   it("hides X-Powered-By", async () => {
