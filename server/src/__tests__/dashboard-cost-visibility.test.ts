@@ -23,11 +23,15 @@ const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
 /**
- * AgentDash: Home's month spend and token totals follow the same visibility
- * rule as the counts beside them (#930). A member who is neither an admin nor
- * on a restricted project's access list must not see that project's spend or
- * token volume, whether the cost event names the project directly or only
- * through its issue. A listed member and an admin see the whole month.
+ * AgentDash: Home's month spend and token totals follow TWO rules.
+ *
+ * GH #918: they are spend — members without `agents:create` cannot read the
+ * /costs routes, so the dashboard answers `costs: null` and nulls the
+ * taskQuality spend fields. Zeros would lie ("$0.00" is not "unknown").
+ *
+ * #930: for actors who may read spend, the totals still cover only what that
+ * person can see — a restricted project's events (direct or via its issue)
+ * stay out, proven below by an off-list AGENT (agents keep spend access).
  */
 describeEmbeddedPostgres("dashboard month spend and tokens follow project visibility", () => {
   let db!: ReturnType<typeof createDb>;
@@ -38,6 +42,7 @@ describeEmbeddedPostgres("dashboard month spend and tokens follow project visibi
   const SECRET_PROJECT = randomUUID();
   const SECRET_ISSUE = randomUUID();
   const AGENT = randomUUID();
+  const LISTED_AGENT = randomUUID();
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-dashboard-cost-visibility-");
@@ -68,23 +73,44 @@ describeEmbeddedPostgres("dashboard month spend and tokens follow project visibi
         visibility: "restricted",
       },
     ]);
-    await db.insert(projectAccess).values({
-      projectId: SECRET_PROJECT,
-      principalType: "user",
-      principalId: "listed-user",
-      grantedByUserId: "sam",
-    });
-    await db.insert(agents).values({
-      id: AGENT,
-      companyId: COMPANY,
-      name: "Researcher",
-      role: "general",
-      status: "idle",
-      adapterType: "hermes_local",
-      adapterConfig: {},
-      runtimeConfig: {},
-      permissions: {},
-    });
+    await db.insert(projectAccess).values([
+      {
+        projectId: SECRET_PROJECT,
+        principalType: "user",
+        principalId: "listed-user",
+        grantedByUserId: "sam",
+      },
+      {
+        projectId: SECRET_PROJECT,
+        principalType: "agent",
+        principalId: LISTED_AGENT,
+        grantedByUserId: "sam",
+      },
+    ]);
+    await db.insert(agents).values([
+      {
+        id: AGENT,
+        companyId: COMPANY,
+        name: "Researcher",
+        role: "general",
+        status: "idle",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: LISTED_AGENT,
+        companyId: COMPANY,
+        name: "Listed agent",
+        role: "general",
+        status: "idle",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
     await db.insert(issues).values({
       id: SECRET_ISSUE,
       companyId: COMPANY,
@@ -141,16 +167,41 @@ describeEmbeddedPostgres("dashboard month spend and tokens follow project visibi
     companyIds: [COMPANY],
     memberships: [{ companyId: COMPANY, membershipRole: role, status: "active" }],
   });
+  const asAgent = (agentId: string) => ({
+    type: "agent",
+    agentId,
+    companyId: COMPANY,
+    source: "agent_key",
+    companyIds: [COMPANY],
+  });
 
-  it("leaves the restricted project's spend and tokens out for an off-list member", async () => {
-    const res = await request(appAs(asUser("member-user", "member"))).get(`/api/companies/${COMPANY}/dashboard`);
+  it("GH #918: members get costs:null and null taskQuality spend fields — never zeros", async () => {
+    for (const actor of [asUser("member-user", "member"), asUser("listed-user", "member")]) {
+      const res = await request(appAs(actor)).get(`/api/companies/${COMPANY}/dashboard`);
+      expect(res.status).toBe(200);
+      expect(res.body.costs).toBeNull();
+      // Everything else a member is entitled to still answers.
+      expect(res.body.agents).toBeTruthy();
+      expect(res.body.tasks).toBeTruthy();
+      expect(res.body.budgets).toBeTruthy();
+      expect(res.body.taskQuality.issueLinkedSpendCents).toBeNull();
+      expect(res.body.taskQuality.issueLinkedTokens).toBeNull();
+      expect(res.body.taskQuality.issueLinkedCachedTokens).toBeNull();
+      expect(res.body.taskQuality.spendPerAcceptedIssueCents).toBeNull();
+      // The task counts that are NOT spend stay.
+      expect(typeof res.body.taskQuality.acceptanceRatePercent).toBe("number");
+    }
+  });
+
+  it("the restricted project's spend stays out of an off-list agent's totals", async () => {
+    const res = await request(appAs(asAgent(AGENT))).get(`/api/companies/${COMPANY}/dashboard`);
     expect(res.status).toBe(200);
     expect(res.body.costs.monthTokens).toBe(1_500);
     expect(res.body.costs.monthSpendCents).toBe(150);
   });
 
-  it("counts the whole month for a listed member and an admin", async () => {
-    for (const actor of [asUser("listed-user", "member"), asUser("admin-user", "admin")]) {
+  it("counts the whole month for the listed agent and an admin", async () => {
+    for (const actor of [asAgent(LISTED_AGENT), asUser("admin-user", "admin")]) {
       const res = await request(appAs(actor)).get(`/api/companies/${COMPANY}/dashboard`);
       expect(res.status).toBe(200);
       expect(res.body.costs.monthTokens).toBe(321_500);
