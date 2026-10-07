@@ -93,7 +93,7 @@ Send only the fields you are changing. Who may change what:
 - **A person with `agents:create`, or an instance admin** — any field below.
 - **The agent's steward, or the person who created it**, in a company where stewardship is enabled — `title`, `icon`, `capabilities` and `budgetMonthlyCents` only.
 - **The agent itself** — `name`, `title`, `icon` and `capabilities` only.
-- **A CEO agent, or an agent with `canCreateAgents` or an `agents:create` grant**, on another agent — `name`, `title`, `icon`, `capabilities` and `desiredSkills` only.
+- **A CEO agent, or an agent with `canCreateAgents` or an `agents:create` grant**, on another agent — `name`, `title`, `icon` and `capabilities` only.
 
 ```bash
 curl -X PATCH https://your-instance.example/api/agents/$AGENT_ID \
@@ -122,7 +122,7 @@ curl -X PATCH https://your-instance.example/api/agents/$AGENT_ID \
 | `accountableUserId` | string or null | The person answerable for an autonomous agent. When you make an agent autonomous without it, the current value is kept, or else it is you. |
 | `visibility` | `company` · `owner` · null | null inherits the company default. Needs a company owner or admin. |
 
-`permissions` cannot be set here; the schema refuses it with 400. Stewardship cannot be set here either.
+`permissions` cannot be set here; the schema refuses it with 400. Stewardship cannot be set here either, and `desiredSkills` answers 422 naming `POST /api/agents/{id}/skills/sync`, the route that applies a skill assignment. Agent callers get 403 on `PATCH /api/agents/{id}/permissions` — permission grants are board-only.
 
 Setting a custom command, arguments, environment, working directory or host path in `adapterConfig` needs an instance admin, as does a host-executed workspace command. Resending the stored value is accepted.
 
