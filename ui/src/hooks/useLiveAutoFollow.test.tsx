@@ -63,13 +63,23 @@ function RunPane({
   lines,
   contentKey,
   startAt,
+  anchorKey = "a",
+  maxFollowTop,
 }: {
   ready: boolean;
   lines: number;
   contentKey?: unknown;
   startAt?: AutoFollowStart;
+  anchorKey?: string;
+  maxFollowTop?: () => number | null;
 }) {
-  const follow = useLiveAutoFollow({ live: true, resetKey: "run-1", contentKey: contentKey ?? lines, startAt });
+  const follow = useLiveAutoFollow({
+    live: true,
+    resetKey: "run-1",
+    contentKey: contentKey ?? lines,
+    startAt,
+    maxFollowTop,
+  });
   followState = follow;
   // Like the run page: no pane (and no anchor) while the log is loading.
   if (!ready) return <p>Loading run logs...</p>;
@@ -83,7 +93,7 @@ function RunPane({
             </div>
           ))}
         </div>
-        <div ref={follow.anchorRef} />
+        <div key={anchorKey} ref={follow.anchorRef} />
       </div>
     </div>
   );
@@ -246,6 +256,106 @@ describe("useLiveAutoFollow", () => {
       act(() => root.render(<RunPane ready lines={11} startAt="current" />));
       expect(box().scrollTop).toBe(340);
     });
+  });
+});
+
+describe("useLiveAutoFollow holds and caps", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let restoreLayout: () => void;
+
+  beforeEach(() => {
+    restoreLayout = installLayout();
+    vi.stubGlobal("scrollTo", vi.fn());
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    restoreLayout();
+    vi.unstubAllGlobals();
+    followState = null;
+  });
+
+  const box = () => container.querySelector<HTMLElement>("[data-box]")!;
+  const scrollBoxTo = (top: number) =>
+    act(() => {
+      box().scrollTop = top;
+      box().dispatchEvent(new Event("scroll"));
+    });
+
+  it("a held navigation that lands near the bottom does not start following, and growth does not move it", () => {
+    act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+    act(() => followState!.holdFollow());
+    scrollBoxTo(300); // e.g. a deep link to the last message
+    expect(followState?.isFollowing).toBe(false);
+    act(() => root.render(<RunPane ready lines={13} startAt="current" />));
+    expect(box().scrollTop).toBe(300);
+  });
+
+  it("holding while following stops follow steps from cancelling the navigation", () => {
+    act(() => root.render(<RunPane ready lines={10} />));
+    expect(box().scrollTop).toBe(300);
+    act(() => followState!.holdFollow());
+    // An in-flight smooth scroll has moved less than the release threshold.
+    scrollBoxTo(290);
+    act(() => root.render(<RunPane ready lines={12} />));
+    expect(box().scrollTop).toBe(290);
+    expect(followState?.isFollowing).toBe(false);
+  });
+
+  it("the viewer's own wheel input ends a hold", () => {
+    act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+    act(() => followState!.holdFollow());
+    scrollBoxTo(300);
+    expect(followState?.isFollowing).toBe(false);
+    act(() => {
+      box().dispatchEvent(new Event("wheel"));
+    });
+    scrollBoxTo(300);
+    expect(followState?.isFollowing).toBe(true);
+    act(() => root.render(<RunPane ready lines={11} startAt="current" />));
+    expect(box().scrollTop).toBe(340);
+  });
+
+  it("resumeFollowing follows from the current position without scrolling now", () => {
+    act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+    act(() => followState!.holdFollow());
+    scrollBoxTo(280);
+    act(() => followState!.resumeFollowing());
+    expect(box().scrollTop).toBe(280);
+    expect(followState?.isFollowing).toBe(true);
+    act(() => root.render(<RunPane ready lines={11} startAt="current" />));
+    expect(box().scrollTop).toBe(340);
+  });
+
+  it("a follow step stops at maxFollowTop and holds there; jump-to-latest is not capped", () => {
+    const cap = () => 360;
+    act(() => root.render(<RunPane ready lines={10} maxFollowTop={cap} />));
+    act(() => followState!.jumpToLatest());
+    expect(box().scrollTop).toBe(300);
+    act(() => root.render(<RunPane ready lines={11} maxFollowTop={cap} />));
+    expect(box().scrollTop).toBe(340);
+    act(() => root.render(<RunPane ready lines={13} maxFollowTop={cap} />));
+    expect(box().scrollTop).toBe(360);
+    expect(followState?.isFollowing).toBe(false);
+    act(() => root.render(<RunPane ready lines={14} maxFollowTop={cap} />));
+    expect(box().scrollTop).toBe(360);
+    act(() => followState!.jumpToLatest());
+    expect(box().scrollTop).toBe(460);
+  });
+
+  it("keeps following when the end anchor remounts for the same transcript", () => {
+    act(() => root.render(<RunPane ready lines={10} startAt="current" />));
+    scrollBoxTo(300);
+    expect(followState?.isFollowing).toBe(true);
+    act(() => root.render(<RunPane ready lines={10} startAt="current" anchorKey="b" />));
+    expect(followState?.isFollowing).toBe(true);
+    act(() => root.render(<RunPane ready lines={12} startAt="current" anchorKey="b" />));
+    expect(box().scrollTop).toBe(380);
   });
 });
 

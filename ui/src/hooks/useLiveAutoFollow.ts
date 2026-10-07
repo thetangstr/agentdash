@@ -105,6 +105,19 @@ export function scrollToContainerBottom(container: ScrollContainer, behavior: Sc
   else container.scrollTop = container.scrollHeight;
 }
 
+function scrollContainerTo(container: ScrollContainer, top: number) {
+  if (isWindowContainer(container)) {
+    window.scrollTo({ top, behavior: "auto" });
+    return;
+  }
+  if (typeof container.scrollTo === "function") container.scrollTo({ top, behavior: "auto" });
+  else container.scrollTop = top;
+}
+
+function currentScrollTop(container: ScrollContainer): number {
+  return isWindowContainer(container) ? window.scrollY : container.scrollTop;
+}
+
 const UNKNOWN_METRICS: ScrollMetrics = {
   scrollHeight: 0,
   distanceFromBottom: Number.POSITIVE_INFINITY,
@@ -138,6 +151,15 @@ export interface LiveAutoFollow {
   isFollowing: boolean;
   /** "Jump to latest": scroll to the end and follow again. */
   jumpToLatest: () => void;
+  /**
+   * The view is navigating somewhere on purpose (a deep link, a scroll to a
+   * specific message): stop following, and do not start again just because
+   * that lands near the bottom. Following resumes with jumpToLatest,
+   * resumeFollowing, or the viewer's own wheel / touch / key input.
+   */
+  holdFollow: () => void;
+  /** Follow from the current position, without scrolling now. */
+  resumeFollowing: () => void;
   /** The resolved scroll container, once the anchor has mounted. */
   getContainer: () => ScrollContainer | null;
 }
@@ -147,6 +169,7 @@ export function useLiveAutoFollow({
   resetKey,
   contentKey,
   startAt = "latest",
+  maxFollowTop,
 }: {
   live: boolean;
   /** Changes when a different run / conversation is shown. */
@@ -155,6 +178,13 @@ export function useLiveAutoFollow({
   contentKey?: unknown;
   /** Where a newly shown transcript opens (see the file comment). */
   startAt?: AutoFollowStart;
+  /**
+   * Optional cap on how far a follow step may scroll (a scrollTop). When the
+   * bottom is beyond it, the follow scrolls to the cap and stops following,
+   * e.g. so the viewer's own just-sent message never scrolls out of view.
+   * Return null for no cap. Explicit jumpToLatest is never capped.
+   */
+  maxFollowTop?: (container: ScrollContainer) => number | null;
 }): LiveAutoFollow {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [content, setContent] = useState<HTMLElement | null>(null);
@@ -166,6 +196,12 @@ export function useLiveAutoFollow({
   const containerRef = useRef<ScrollContainer | null>(null);
   const isFollowingRef = useRef(false);
   const lastMetricsRef = useRef<ScrollMetrics>(UNKNOWN_METRICS);
+  const heldRef = useRef(false);
+  const maxFollowTopRef = useRef(maxFollowTop);
+  maxFollowTopRef.current = maxFollowTop;
+  // The live/resetKey/startAt the follow state was last set up for, so a
+  // remounted anchor (an error-boundary retry, empty to populated) keeps it.
+  const setUpForRef = useRef<string | null>(null);
 
   const anchorRef = useCallback((element: HTMLElement | null) => setAnchor(element), []);
   const contentRef = useCallback((element: HTMLElement | null) => setContent(element), []);
@@ -197,21 +233,49 @@ export function useLiveAutoFollow({
   const jumpToLatest = useCallback(() => {
     const container = getContainer();
     if (!container) return;
+    heldRef.current = false;
     pinToBottom(container);
     setFollowing(true);
   }, [getContainer, pinToBottom, setFollowing]);
 
-  // A new run, a new anchor or a live/finished switch: resolve the container
-  // again and, for startAt "latest", start at the latest line.
+  const holdFollow = useCallback(() => {
+    heldRef.current = true;
+    setFollowing(false);
+  }, [setFollowing]);
+
+  const resumeFollowing = useCallback(() => {
+    const container = getContainer();
+    if (!container) return;
+    heldRef.current = false;
+    lastMetricsRef.current = readScrollMetrics(container);
+    setFollowing(true);
+  }, [getContainer, setFollowing]);
+
+  // A new run or a live/finished switch: resolve the container again and,
+  // for startAt "latest", start at the latest line. A new anchor or pane for
+  // the same run only re-resolves the container and keeps the follow state.
   useEffect(() => {
     containerRef.current = null;
+    const setUpFor = `${live}|${startAt}|${resetKey}`;
+    if (setUpForRef.current === setUpFor) {
+      const container = getContainer();
+      if (!container) return;
+      if (isFollowingRef.current) pinToBottom(container);
+      else lastMetricsRef.current = readScrollMetrics(container);
+      return;
+    }
     lastMetricsRef.current = UNKNOWN_METRICS;
+    // A different transcript drops a hold; the first set-up keeps one made
+    // before the container resolved (a deep link handled on mount).
+    if (setUpForRef.current !== null) heldRef.current = false;
     if (!live) {
+      setUpForRef.current = setUpFor;
       setFollowing(false);
       return;
     }
     const container = getContainer();
     if (!container) return;
+    setUpForRef.current = setUpFor;
     if (startAt === "latest") {
       pinToBottom(container);
       setFollowing(true);
@@ -222,7 +286,7 @@ export function useLiveAutoFollow({
   }, [live, resetKey, anchor, scroller, getContainer, pinToBottom, setFollowing, startAt]);
 
   const follow = useCallback(() => {
-    if (!live || !isFollowingRef.current) return;
+    if (!live || !isFollowingRef.current || heldRef.current) return;
     const container = getContainer();
     if (!container) return;
     const current = readScrollMetrics(container);
@@ -231,6 +295,18 @@ export function useLiveAutoFollow({
       lastMetricsRef.current = current;
       setFollowing(false);
       return;
+    }
+    const cap = maxFollowTopRef.current?.(container);
+    if (cap !== null && cap !== undefined && Number.isFinite(cap)) {
+      const top = currentScrollTop(container);
+      const bottomTop = top + current.distanceFromBottom;
+      if (cap < bottomTop - 1) {
+        // Follow only as far as the cap, then hold there.
+        if (cap > top) scrollContainerTo(container, cap);
+        lastMetricsRef.current = readScrollMetrics(container);
+        setFollowing(false);
+        return;
+      }
     }
     pinToBottom(container);
   }, [live, getContainer, pinToBottom, setFollowing]);
@@ -258,7 +334,9 @@ export function useLiveAutoFollow({
         return;
       }
       lastMetricsRef.current = metrics;
-      if (!nearBottom) return;
+      // A deliberate navigation (deep link) that lands near the bottom is not
+      // the viewer choosing to follow.
+      if (!nearBottom || heldRef.current) return;
       // startAt "current": a view that does not scroll yet (a page still
       // loading, a short thread) is not the viewer choosing the bottom.
       const scrollable = metrics.scrollHeight > metrics.viewportHeight + LIVE_SCROLL_BOTTOM_TOLERANCE_PX;
@@ -278,11 +356,24 @@ export function useLiveAutoFollow({
       if (isFollowingRef.current) follow();
       else onScroll();
     };
+    // The viewer's own input ends a hold; the scroll it causes then decides.
+    const onUserInput = () => {
+      heldRef.current = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "End", "Home", " "].includes(event.key)) onUserInput();
+    };
     const target: Window | HTMLElement = container;
     target.addEventListener("scroll", onScroll, { passive: true });
+    target.addEventListener("wheel", onUserInput, { passive: true });
+    target.addEventListener("touchstart", onUserInput, { passive: true });
+    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("resize", onResize);
     return () => {
       target.removeEventListener("scroll", onScroll);
+      target.removeEventListener("wheel", onUserInput);
+      target.removeEventListener("touchstart", onUserInput);
+      window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("resize", onResize);
     };
   }, [live, resetKey, anchor, scroller, getContainer, setFollowing, startAt, pinToBottom, follow, containerVersion]);
@@ -305,5 +396,14 @@ export function useLiveAutoFollow({
     return () => observer.disconnect();
   }, [live, content, follow, getContainer, containerVersion]);
 
-  return { anchorRef, contentRef, scrollerRef, isFollowing, jumpToLatest, getContainer };
+  return {
+    anchorRef,
+    contentRef,
+    scrollerRef,
+    isFollowing,
+    jumpToLatest,
+    holdFollow,
+    resumeFollowing,
+    getContainer,
+  };
 }

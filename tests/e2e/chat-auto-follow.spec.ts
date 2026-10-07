@@ -52,16 +52,25 @@ test("issue chat: follows new comments at the bottom, leaves a scrolled-up reade
   });
   expect(issueRes.ok(), await issueRes.text()).toBe(true);
   const issue = (await issueRes.json()) as { id: string; identifier: string | null };
+  /** Posts a comment and returns its row in the thread (anchored by id, never by text). */
   const addComment = async (body: string) => {
     const res = await request.post(`${BASE_URL}/api/issues/${issue.id}/comments`, { data: { body } });
     expect(res.ok(), await res.text()).toBe(true);
+    const comment = (await res.json()) as { id: string };
+    return page.locator(`[id="comment-${comment.id}"]`);
   };
+  /** Two animation frames: every follow step for content already in the DOM has run. */
+  const settleFrames = () =>
+    page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    );
+  let last = page.locator("#none");
   for (let i = 1; i <= 20; i += 1) {
-    await addComment(`Update ${i}: notes on the trial, with enough text to take a couple of lines in the thread.`);
+    last = await addComment(`Update ${i}: notes on the trial, with enough text to take a couple of lines in the thread.`);
   }
 
   await page.goto(`${BASE_URL}/${company.issuePrefix}/issues/${issue.identifier ?? issue.id}`);
-  await expect(page.getByText("Update 20:")).toBeAttached({ timeout: 20_000 });
+  await expect(last).toBeAttached({ timeout: 20_000 });
   // The issue page opens at its top, as before.
   expect((await mainScroll(page)).top).toBe(0);
 
@@ -71,8 +80,7 @@ test("issue chat: follows new comments at the bottom, leaves a scrolled-up reade
     main.scrollTop = main.scrollHeight;
   });
   await expect.poll(async () => (await mainScroll(page)).distanceFromBottom).toBeLessThanOrEqual(2);
-  await addComment("Update 21: arrived while the reader watched the bottom.");
-  const update21 = page.getByText("Update 21:");
+  const update21 = await addComment("Update 21: arrived while the reader watched the bottom.");
   await expect(update21).toBeAttached({ timeout: 20_000 });
   await expect(update21).toBeInViewport();
   await expect.poll(async () => (await mainScroll(page)).distanceFromBottom).toBeLessThanOrEqual(32);
@@ -82,12 +90,21 @@ test("issue chat: follows new comments at the bottom, leaves a scrolled-up reade
   await page.mouse.wheel(0, -900);
   await expect.poll(async () => (await mainScroll(page)).distanceFromBottom).toBeGreaterThan(400);
   const before = (await mainScroll(page)).top;
-  await addComment("Update 22: arrived while the reader was reading history.");
-  const update22 = page.getByText("Update 22:");
+  const update22 = await addComment("Update 22: arrived while the reader was reading history.");
   await expect(update22).toBeAttached({ timeout: 20_000 });
-  await page.waitForTimeout(300);
+  await settleFrames();
   expect(Math.abs((await mainScroll(page)).top - before)).toBeLessThanOrEqual(2);
   await expect(update22).not.toBeInViewport();
+  // The page's way back to the bottom is offered.
+  await expect(page.getByRole("button", { name: "Scroll to bottom" })).toBeVisible();
+
+  // Jump to latest (no run live) lands at the bottom and follows again.
+  await page.getByTestId("issue-chat-jump-to-latest").click();
+  await expect.poll(async () => (await mainScroll(page)).distanceFromBottom, { timeout: 10_000 }).toBeLessThanOrEqual(32);
+  const update23 = await addComment("Update 23: arrived after Jump to latest.");
+  await expect(update23).toBeAttached({ timeout: 20_000 });
+  await expect(update23).toBeInViewport();
+  await expect.poll(async () => (await mainScroll(page)).distanceFromBottom).toBeLessThanOrEqual(32);
 });
 
 test("Ask: opens on the newest message, Jump to latest after a scroll up, sending follows again", async ({ page, request }) => {
@@ -140,7 +157,7 @@ test("Ask: opens on the newest message, Jump to latest after a scroll up, sendin
   const scroller = page.getByTestId("chat-scroller");
   const distance = () =>
     scroller.evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
-  await expect(page.getByText("Note 30:")).toBeInViewport({ timeout: 30_000 });
+  await expect(scroller.getByText("Note 30:", { exact: false })).toBeInViewport({ timeout: 30_000 });
   await expect.poll(distance).toBeLessThanOrEqual(2);
   await expect(page.getByTestId("chat-jump-to-latest")).toHaveCount(0);
 
@@ -160,7 +177,7 @@ test("Ask: opens on the newest message, Jump to latest after a scroll up, sendin
   await expect(jump).toBeVisible();
   await page.getByLabel("Message input").fill("Thanks, that's clear.");
   await page.getByLabel("Message input").press("Enter");
-  await expect(page.getByText("Thanks, that's clear.")).toBeInViewport({ timeout: 20_000 });
+  await expect(scroller.getByText("Thanks, that's clear.", { exact: true })).toBeInViewport({ timeout: 20_000 });
   await expect.poll(distance).toBeLessThanOrEqual(32);
   await expect(jump).toHaveCount(0);
 });

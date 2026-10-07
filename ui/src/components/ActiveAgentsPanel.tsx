@@ -184,14 +184,13 @@ const AgentRunCard = memo(function AgentRunCard({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <RunChatSurface
-          run={run}
-          transcript={transcript}
-          hasOutput={hasOutput}
-          companyId={companyId}
-        />
-      </div>
+      <RunChatSurface
+        run={run}
+        transcript={transcript}
+        hasOutput={hasOutput}
+        companyId={companyId}
+        scrollPaneClassName="min-h-0 flex-1 overflow-y-auto p-3"
+      />
     </div>
   );
 });

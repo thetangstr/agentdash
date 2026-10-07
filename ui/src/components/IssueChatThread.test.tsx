@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, createRef, forwardRef, useImperativeHandle, useState } from "react";
+import { act, createRef, forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@paperclipai/shared";
 import {
@@ -3021,26 +3021,77 @@ describe("IssueChatThread auto-follow", () => {
     act(() => root.unmount());
   });
 
-  it("sending your own message brings the viewer back to the latest and follows", async () => {
-    const root = createRoot(container);
-    renderThread(root, { comments: commentsUpTo(4) });
-    userScrollTo(200);
+  it("sending your own message brings the viewer back to the latest and follows, keeping that message in view", async () => {
+    // Your message sits 2300px down the thread (jsdom has no layout).
+    const originalRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function getBoundingClientRect(this: Element) {
+      if (this.id === "comment-follow-4") {
+        const top = 2300 - layout.scrollTop;
+        return { top, bottom: top + 80, left: 0, right: 0, width: 0, height: 80, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+      }
+      return originalRect.call(this);
+    };
+    try {
+      const root = createRoot(container);
+      renderThread(root, { comments: commentsUpTo(4) });
+      userScrollTo(200);
 
-    await act(async () => {
-      await issueRuntimeOptions.current?.onSend({ body: "My reply" });
-    });
-    layout.scrollHeight = 2600;
-    renderThread(root, { comments: [...commentsUpTo(4), comment(4, "user-board")] });
-    await act(async () => {
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    });
-    expect(scrollHost.scrollTop).toBe(2000);
+      await act(async () => {
+        await issueRuntimeOptions.current?.onSend({ body: "My reply" });
+      });
+      layout.scrollHeight = 2600;
+      const withMine = [...commentsUpTo(4), comment(4, "user-board")];
+      renderThread(root, { comments: withMine });
+      await act(async () => {
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      });
+      expect(scrollHost.scrollTop).toBe(2000);
 
-    layout.scrollHeight = 2900;
-    renderThread(root, { comments: [...commentsUpTo(4), comment(4, "user-board"), comment(5)] });
-    expect(scrollHost.scrollTop).toBe(2300);
+      // The reply grows: followed while your message stays in view...
+      layout.scrollHeight = 2700;
+      renderThread(root, { comments: [...withMine, comment(5)] });
+      expect(scrollHost.scrollTop).toBe(2100);
 
-    act(() => root.unmount());
+      // ...then held with your message at the top instead of scrolling it away.
+      layout.scrollHeight = 3200;
+      renderThread(root, { comments: [...withMine, comment(5), comment(6)] });
+      expect(scrollHost.scrollTop).toBe(2284);
+      layout.scrollHeight = 3400;
+      renderThread(root, { comments: [...withMine, comment(5), comment(6), comment(7)] });
+      expect(scrollHost.scrollTop).toBe(2284);
+
+      act(() => root.unmount());
+    } finally {
+      Element.prototype.getBoundingClientRect = originalRect;
+    }
+  });
+
+  it("Jump to latest with no live run lands at the bottom and resumes following", () => {
+    vi.useFakeTimers();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn() as unknown as typeof Element.prototype.scrollIntoView;
+    try {
+      const root = createRoot(container);
+      renderThread(root, { comments: commentsUpTo(5) });
+      userScrollTo(300);
+
+      const jump = container.querySelector('[data-testid="issue-chat-jump-to-latest"]') as HTMLButtonElement;
+      act(() => jump.click());
+      // The settle loop lands on the latest comment, then hands off to follow.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(scrollHost.scrollTop).toBe(1400);
+
+      layout.scrollHeight = 2400;
+      renderThread(root, { comments: commentsUpTo(6) });
+      expect(scrollHost.scrollTop).toBe(1800);
+
+      act(() => root.unmount());
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      vi.useRealTimers();
+    }
   });
 
   it("does not override a deep link to a comment", () => {
@@ -3067,6 +3118,91 @@ describe("IssueChatThread auto-follow", () => {
     }
   });
 
+  it("a deep link that lands near the bottom does not start following", async () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn(function scrollIntoView() {
+      scrollHost.scrollTop = 1400; // the last comment sits at the bottom
+      // Like a real (smooth) scroll, the scroll event arrives a little later.
+      window.setTimeout(() => scrollHost.dispatchEvent(new Event("scroll")), 0);
+    }) as unknown as typeof Element.prototype.scrollIntoView;
+    try {
+      const root = createRoot(container);
+      renderThread(root, { comments: commentsUpTo(5) }, "/issues/PAP-1#comment-follow-4");
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 20));
+      });
+      expect(scrollHost.scrollTop).toBe(1400);
+
+      layout.scrollHeight = 2400;
+      renderThread(root, { comments: commentsUpTo(6) }, "/issues/PAP-1#comment-follow-4");
+      expect(scrollHost.scrollTop).toBe(1400);
+
+      // The viewer's own scroll to the bottom starts following again.
+      act(() => {
+        scrollHost.dispatchEvent(new Event("wheel"));
+      });
+      userScrollTo(1800);
+      layout.scrollHeight = 2600;
+      renderThread(root, { comments: commentsUpTo(7) }, "/issues/PAP-1#comment-follow-4");
+      expect(scrollHost.scrollTop).toBe(2000);
+
+      act(() => root.unmount());
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it("a deep link followed while at the bottom is not cancelled by follow steps", () => {
+    function GoTo({ hash }: { hash: string | null }) {
+      const navigate = useNavigate();
+      useEffect(() => {
+        if (hash) navigate({ hash });
+      }, [hash, navigate]);
+      return null;
+    }
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    // A smooth scroll in flight: it has moved less than the release threshold.
+    Element.prototype.scrollIntoView = vi.fn(function scrollIntoView() {
+      scrollHost.scrollTop = 1390;
+      scrollHost.dispatchEvent(new Event("scroll"));
+    }) as unknown as typeof Element.prototype.scrollIntoView;
+    const renderWith = (root: ReturnType<typeof createRoot>, count: number, hash: string | null) => {
+      act(() => {
+        root.render(
+          <MemoryRouter initialEntries={["/issues/PAP-1"]}>
+            <GoTo hash={hash} />
+            <IssueChatThread
+              comments={commentsUpTo(count)}
+              linkedRuns={[]}
+              timelineEvents={[]}
+              liveRuns={[]}
+              agentMap={issueChatLongThreadAgentMap}
+              currentUserId="user-board"
+              onAdd={async () => {}}
+              enableLiveTranscriptPolling={false}
+              draftKey="issue-1"
+            />
+          </MemoryRouter>,
+        );
+      });
+    };
+    try {
+      const root = createRoot(container);
+      renderWith(root, 5, null);
+      userScrollTo(1400);
+      renderWith(root, 5, "#comment-follow-1");
+      expect(scrollHost.scrollTop).toBe(1390);
+
+      layout.scrollHeight = 2400;
+      renderWith(root, 6, "#comment-follow-1");
+      expect(scrollHost.scrollTop).toBe(1390);
+
+      act(() => root.unmount());
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
   describe("embedded run surface", () => {
     let pane: HTMLDivElement;
 
@@ -3080,15 +3216,28 @@ describe("IssueChatThread auto-follow", () => {
       layout = { scrollHeight: 900, clientHeight: 320, scrollTop: 0 };
     });
 
-    function renderEmbedded(root: ReturnType<typeof createRoot>, lines: number) {
+    function renderEmbedded(
+      root: ReturnType<typeof createRoot>,
+      lines: number,
+      { inPane = true, live = true }: { inPane?: boolean; live?: boolean } = {},
+    ) {
       act(() => {
         root.render(
           <MemoryRouter>
             <IssueChatThread
               comments={[]}
-              linkedRuns={[]}
+              linkedRuns={live ? [] : [{
+                runId: liveRun.id,
+                status: "succeeded",
+                agentId: liveRun.agentId,
+                agentName: liveRun.agentName,
+                createdAt: liveRun.createdAt,
+                startedAt: liveRun.startedAt,
+                finishedAt: "2026-04-06T13:05:00.000Z",
+              }]}
               timelineEvents={[]}
-              liveRuns={[liveRun]}
+              liveRuns={live ? [liveRun] : []}
+              scrollPane={inPane ? pane : null}
               onAdd={async () => {}}
               showComposer={false}
               showJumpToLatest={false}
@@ -3096,6 +3245,7 @@ describe("IssueChatThread auto-follow", () => {
               enableLiveTranscriptPolling={false}
               transcriptsByRunId={transcript(lines)}
               hasOutputForRun={() => true}
+              includeSucceededRunsWithoutOutput
             />
           </MemoryRouter>,
         );
@@ -3130,6 +3280,30 @@ describe("IssueChatThread auto-follow", () => {
 
       act(() => root.unmount());
     });
+
+    it("a finished run keeps its opening position", () => {
+      const root = createRoot(pane);
+      renderEmbedded(root, 3, { live: false });
+      layout.scrollHeight = 1100;
+      renderEmbedded(root, 5, { live: false });
+      expect(pane.scrollTop).toBe(0);
+      expect(embeddedJump()).toBeNull();
+      act(() => root.unmount());
+    });
+
+    it("inline, without its own pane, it never scrolls the page", () => {
+      scrollHost.style.overflowY = "auto";
+      installLayout(scrollHost);
+      const windowScrollTo = vi.fn();
+      window.scrollTo = windowScrollTo;
+      const root = createRoot(pane);
+      renderEmbedded(root, 3, { inPane: false });
+      layout.scrollHeight = 1300;
+      renderEmbedded(root, 7, { inPane: false });
+      expect(scrollHost.scrollTop).toBe(0);
+      expect(windowScrollTo).not.toHaveBeenCalled();
+      expect(embeddedJump()).toBeNull();
+      act(() => root.unmount());
+    });
   });
 });
-
