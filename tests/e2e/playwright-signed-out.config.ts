@@ -9,8 +9,9 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { defineConfig } from "@playwright/test";
 import { resolveE2eEmbeddedPostgresPort } from "./e2e-db-port";
+import { resolveE2eServerPort } from "./e2e-port";
 
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3298);
+const PORT = resolveE2eServerPort(3298);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DB_PORT = resolveE2eEmbeddedPostgresPort(PORT);
 const CHROMIUM_CHANNEL = process.env.PLAYWRIGHT_CHROMIUM_CHANNEL?.trim();
