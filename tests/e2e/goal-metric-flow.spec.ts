@@ -10,14 +10,15 @@
 // (server/src/__tests__/verdicts.test.ts) already asserts the
 // `metric_updated` row is written by `setGoalMetricDefinition`.
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { assertSafeE2eBaseUrl, resolveE2eServerPort } from "./e2e-port";
 
 // Closes #278: this suite is part of the default `pnpm test:e2e` config,
-// which boots its own server on PAPERCLIP_E2E_PORT (default 3199). The old
+// which boots its own server on PAPERCLIP_E2E_PORT (default 3399). The old
 // hardcoded 3105 fallback meant every CI run hit ECONNREFUSED before the
 // suite even started. Honor PAPERCLIP_E2E_PORT so we talk to the same
 // server playwright.config.ts just brought up.
-const E2E_PORT = process.env.PAPERCLIP_E2E_PORT ?? "3199";
-const BASE = process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${E2E_PORT}`;
+const E2E_PORT = String(resolveE2eServerPort(3399));
+const BASE = assertSafeE2eBaseUrl(process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${E2E_PORT}`);
 
 interface BootstrapInfo {
   ready: boolean;
