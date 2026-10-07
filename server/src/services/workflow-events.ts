@@ -261,15 +261,21 @@ export function workflowEventsService(db: Db) {
     }
 
     try {
-      await db.insert(workflowEvents).values({
-        companyId: parsed.companyId,
-        pipelineId: parsed.pipelineId,
-        runId: parsed.runId,
-        stepKey: parsed.stepKey,
-        eventType: parsed.eventType,
-        actorKind: parsed.actorKind,
-        durationMs: parsed.durationMs ?? null,
-        payload: payload as Record<string, unknown>,
+      // Own savepoint (or own short transaction at top level): emit runs inside
+      // callers' transactions (approval create/decide), and a failed statement
+      // there would otherwise abort the caller's whole transaction — exactly
+      // the "measurement takes down the thing it measures" this must avoid.
+      await db.transaction(async (savepoint) => {
+        await savepoint.insert(workflowEvents).values({
+          companyId: parsed.companyId,
+          pipelineId: parsed.pipelineId,
+          runId: parsed.runId,
+          stepKey: parsed.stepKey,
+          eventType: parsed.eventType,
+          actorKind: parsed.actorKind,
+          durationMs: parsed.durationMs ?? null,
+          payload: payload as Record<string, unknown>,
+        });
       });
       return { recorded: true, rejectedBecause: null };
     } catch (error) {

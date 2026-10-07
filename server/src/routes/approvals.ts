@@ -35,6 +35,7 @@ import {
   logActivity,
   secretService,
 } from "../services/index.js";
+import { insertActivity, publishActivity } from "../services/activity-log.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   approvalVisibilityCondition,
@@ -385,7 +386,12 @@ export function approvalRoutes(
     // failure must not leave a pending approval with no links and no record.
     // Issue visibility is still checked above on the outer db (read-only);
     // linkManyForApproval re-checks existence/company inside the tx.
-    const approval = await db.transaction(async (rawTx) => {
+    // The activity row is inserted inside the tx, but its live/plugin events
+    // are published only after COMMIT: a listener that reads the approval back
+    // (live-event visibility, plugins, the UI) must find it, and a rollback
+    // must announce nothing. insertActivity also never initializes the
+    // instance-settings singleton while this tx holds domain locks.
+    const { approval, publication } = await db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as Db;
       const created = await approvalService(tx).create(companyId, {
         ...approvalInput,
@@ -407,7 +413,7 @@ export function approvalRoutes(
         });
       }
 
-      await logActivity(tx, {
+      const activityPublication = await insertActivity(tx, {
         companyId,
         actorType: actor.actorType,
         actorId: actor.actorId,
@@ -417,8 +423,9 @@ export function approvalRoutes(
         entityId: created.id,
         details: { type: created.type, issueIds: uniqueIssueIds },
       });
-      return created;
+      return { approval: created, publication: activityPublication };
     });
+    publishActivity(publication);
 
     await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
 
