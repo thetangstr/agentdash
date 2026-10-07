@@ -20,6 +20,7 @@ import { redactSensitiveText } from "../../redaction.js";
 import { logSafeError, redactRunLogText } from "../run-log-redaction.js";
 import { buildHealDiagnosisPrompt, parseHealDiagnosis, type HealDiagnosis, type DiagnosisCategory } from "./diagnosis.js";
 import { executeHealFix, type HealFixResult } from "./fixer.js";
+import { agentNotBoardAssignmentOnlySql } from "../agent-wake-policy.js";
 import { dispatchLLM } from "../dispatch-llm.js";
 
 // ---------- config ----------
@@ -232,6 +233,12 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
           // nothing should be repairing a run for an agent that is gone, or one
           // that has not been approved to run in the first place.
           notInArray(agents.status, [...HEAL_INELIGIBLE_AGENT_STATUSES]),
+          // AgentDash (wake policy): a board_assignment_only agent's runs
+          // belong to whoever assigns its work. The healer would otherwise
+          // ship their output tail to a diagnosis model and insert
+          // healer_retry / healer_session_clear wake rows directly — past
+          // the heartbeat wake-policy guard.
+          agentNotBoardAssignmentOnlySql(),
         ),
       );
 

@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import path from "node:path";
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { and, count, eq, gt, inArray, isNull, sql } from "drizzle-orm";
@@ -17,12 +18,49 @@ import { declaredOriginsEnabled, normalizeOrigin } from "../lib/declared-origins
 import { isHostedBox } from "../services/license.js";
 import { boxClaimedCached, claimStateCached } from "../lib/claim-code.js";
 import { servedRelease } from "../lib/served-release.js";
+import { resolvePaperclipHomeDir, resolvePaperclipInstanceId } from "../home-paths.js";
+import { isTrialAnonymousEnabled } from "./trial.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
 // creation + instance-admin promotion behind an env flag so existing
 // deployments are unaffected. Default OFF.
 function isSelfServeBootstrapEnabled(): boolean {
   return process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP === "true";
+}
+
+// AgentDash (instance identity): a health-only display label. It never feeds
+// PAPERCLIP_INSTANCE_ID, the data dir, JWTs or cookies — it only changes what
+// /api/health reports as `instanceId`, so an operator can name an instance
+// (e.g. "agentdash-hq") without moving its data. Anything outside a short
+// slug is ignored rather than echoed.
+const INSTANCE_LABEL_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+
+/**
+ * AgentDash (instance identity): which instance answered, on every response
+ * shape, so an external harness can prove it is talking to the box it
+ * expects — a matching port alone is not evidence. Non-sensitive by
+ * construction: a slug and a directory BASENAME, never a path.
+ */
+export function healthInstanceIdentity(): { instanceId?: string; dataDirName?: string } {
+  const identity: { instanceId?: string; dataDirName?: string } = {};
+  const label = process.env.AGENTDASH_INSTANCE_LABEL?.trim();
+  if (label && INSTANCE_LABEL_RE.test(label)) {
+    identity.instanceId = label;
+  } else {
+    try {
+      identity.instanceId = resolvePaperclipInstanceId();
+    } catch {
+      // A malformed PAPERCLIP_INSTANCE_ID is reported as "no identity", not a
+      // failed health check.
+    }
+  }
+  try {
+    const dataDirName = path.basename(resolvePaperclipHomeDir());
+    if (dataDirName) identity.dataDirName = dataDirName;
+  } catch {
+    // Same: absent beats a failed health check.
+  }
+  return identity;
 }
 
 function shouldExposeFullHealthDetails(
@@ -62,6 +100,8 @@ export function healthRoutes(
     deploymentExposure: DeploymentExposure;
     authReady: boolean;
     companyDeletionEnabled: boolean;
+    /** PAPERCLIP_AUTH_DISABLE_SIGN_UP / config auth.disableSignUp, as resolved by config.ts. */
+    authDisableSignUp?: boolean;
   } = {
     deploymentMode: "local_trusted",
     deploymentExposure: "private",
@@ -90,9 +130,17 @@ export function healthRoutes(
     // release it just switched to, so an old process still answering after a
     // restart that did nothing is not mistaken for a successful update.
     const releaseCommit = servedRelease()?.commit;
+    // AgentDash (instance identity): the instance's real identity plus whether
+    // the box is closed to sign-up and to the anonymous trial — on every
+    // response shape, so a provisioner can prove WHICH instance answered and
+    // that it is closed before trusting it with company data. Spread with
+    // the release fields so no shape can drop them.
     const release = {
       ...(releaseTag ? { releaseTag } : {}),
       ...(releaseCommit ? { releaseCommit } : {}),
+      ...healthInstanceIdentity(),
+      signUpDisabled: opts.authDisableSignUp ?? false,
+      trialAnonymousEnabled: isTrialAnonymousEnabled(),
     };
 
     if (!db) {

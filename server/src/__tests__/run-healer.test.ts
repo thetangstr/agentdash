@@ -129,6 +129,77 @@ describeEmbeddedPostgres("run-healer eligibility scan (Postgres integration)", (
     expect(eligible.map((r) => r.id)).toContain(stuckRunId);
   });
 
+  it("never scans a board_assignment_only agent's runs (runtimeConfig or legacy alias)", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const policyId = randomUUID();
+    const legacyId = randomUUID();
+    await db.insert(agents).values([
+      {
+        id: policyId,
+        companyId,
+        name: "policy-agent",
+        role: "general",
+        status: "running",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+        runtimeConfig: { wakePolicy: "board_assignment_only" },
+        permissions: {},
+      },
+      {
+        id: legacyId,
+        companyId,
+        name: "pairing-buyer",
+        role: "general",
+        status: "running",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+        metadata: { travelPairing: true },
+      },
+    ]);
+    const oldEnough = new Date(Date.now() - 60_000);
+    const policyRunning = randomUUID();
+    const policyFailed = randomUUID();
+    const legacyRunning = randomUUID();
+    const plainRunning = randomUUID();
+    await db.insert(heartbeatRuns).values([
+      { id: policyRunning, companyId, agentId: policyId, status: "running", createdAt: oldEnough },
+      { id: policyFailed, companyId, agentId: policyId, status: "failed", errorCode: "timeout", error: "Timed out", createdAt: oldEnough },
+      { id: legacyRunning, companyId, agentId: legacyId, status: "running", createdAt: oldEnough },
+      { id: plainRunning, companyId, agentId, status: "running", createdAt: oldEnough },
+    ]);
+    // A STRING "true" is not the alias (the guard requires boolean true), so
+    // that agent is not under the policy and keeps being healed.
+    const stringAliasId = randomUUID();
+    await db.insert(agents).values({
+      id: stringAliasId,
+      companyId,
+      name: "string-alias",
+      role: "general",
+      status: "running",
+      adapterType: "hermes_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+      metadata: { travelPairing: "true" },
+    });
+    const stringAliasRunning = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: stringAliasRunning,
+      companyId,
+      agentId: stringAliasId,
+      status: "running",
+      createdAt: oldEnough,
+    });
+    const ids = (await healer._scanEligibleRunsForTests()).map((r) => r.id);
+    expect(ids).toContain(plainRunning);
+    expect(ids).toContain(stringAliasRunning);
+    expect(ids).not.toContain(policyRunning);
+    expect(ids).not.toContain(policyFailed);
+    expect(ids).not.toContain(legacyRunning);
+  });
+
   it("excludes runs that have already exceeded maxHealsPerRun", async () => {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const oldEnough = new Date(Date.now() - 60_000);

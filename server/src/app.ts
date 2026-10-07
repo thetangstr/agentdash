@@ -411,6 +411,7 @@ export async function createApp(
       deploymentExposure: opts.deploymentExposure,
       authReady: opts.authReady,
       companyDeletionEnabled: opts.companyDeletionEnabled,
+      authDisableSignUp: opts.authDisableSignUp ?? false,
     }),
   );
   // AgentDash on-prem SKU: the license gate, deliberately mounted HERE.

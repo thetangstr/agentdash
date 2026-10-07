@@ -36,6 +36,17 @@ function hashClientIp(req: Request): string | undefined {
   return createHash("sha256").update(`${salt}:${ip}`).digest("hex");
 }
 
+/**
+ * Whether POST /api/trial/session can mint a company + agent with no
+ * credentials: off on a hosted box, or when AGENTDASH_TRIAL_ANONYMOUS=false.
+ * The single source for the kill-switch below and for /api/health's
+ * `trialAnonymousEnabled`, so the two can never disagree.
+ */
+export function isTrialAnonymousEnabled(): boolean {
+  if (isHostedBox()) return false;
+  return (process.env.AGENTDASH_TRIAL_ANONYMOUS ?? "true").toLowerCase() !== "false";
+}
+
 export function trialRoutes(db: Db) {
   const router = Router();
   const svc = trialService(db);
@@ -50,7 +61,7 @@ export function trialRoutes(db: Db) {
   // session creates one, so the whole trial surface is off there whatever
   // AGENTDASH_TRIAL_ANONYMOUS says (the boot guard also refuses it set true).
   router.use((_req, res, next) => {
-    if (isHostedBox() || (process.env.AGENTDASH_TRIAL_ANONYMOUS ?? "true").toLowerCase() === "false") {
+    if (!isTrialAnonymousEnabled()) {
       res.status(503).json({ error: "trial_disabled" });
       return;
     }

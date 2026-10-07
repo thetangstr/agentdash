@@ -1,3 +1,4 @@
+import { isBoardAssignmentOnlyAgent } from "../agent-wake-policy.js";
 import { workspacePersistenceHold } from "../workspace-persistence-recovery.js";
 import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -248,6 +249,15 @@ function isAgentInvokable(agent: typeof agents.$inferSelect | null | undefined) 
   return Boolean(agent && !["paused", "terminated", "pending_approval"].includes(agent.status));
 }
 
+/**
+ * AgentDash (wake policy): may recovery hand this agent work? Recovery never
+ * assigns, escalates to, or picks as an owner a board_assignment_only agent —
+ * its work only ever comes from a board member's assignment.
+ */
+function isRecoveryAssignableAgent(agent: typeof agents.$inferSelect | null | undefined) {
+  return isAgentInvokable(agent) && !isBoardAssignmentOnlyAgent(agent);
+}
+
 function isStrandedIssueRecoveryIssue(issue: Pick<typeof issues.$inferSelect, "originKind">) {
   return isStrandedIssueRecoveryOriginKind(issue.originKind);
 }
@@ -394,6 +404,20 @@ export function recoveryService(
 
   async function getAgent(agentId: string) {
     return db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * AgentDash (wake policy): every recovery wake goes through here. A
+   * board_assignment_only agent's recovery belongs to whoever assigns its
+   * work (a board member / external harness), never to these sweeps. The
+   * heartbeat guard would refuse each wake anyway, but every refusal is a
+   * skipped wake row — and a sweep re-trying every 30 s floods the agent's
+   * ledger with rows nobody asked for. So policy agents are skipped before
+   * the wake is requested, and no row is written.
+   */
+  async function enqueueRecoveryWakeup(agentId: string, opts?: RecoveryWakeupOptions) {
+    if (isBoardAssignmentOnlyAgent(await getAgent(agentId))) return null;
+    return deps.enqueueWakeup(agentId, opts);
   }
 
   async function getLatestIssueRun(companyId: string, issueId: string): Promise<LatestIssueRun> {
@@ -550,7 +574,7 @@ export function recoveryService(
     source: string;
     retryOfRunId?: string | null;
   }) {
-    const queued = await deps.enqueueWakeup(input.agentId, {
+    const queued = await enqueueRecoveryWakeup(input.agentId, {
       source: "automation",
       triggerDetail: "system",
       reason: input.reason,
@@ -586,7 +610,7 @@ export function recoveryService(
   }
 
   async function enqueueInitialAssignedTodoDispatch(issue: typeof issues.$inferSelect, agentId: string) {
-    return deps.enqueueWakeup(agentId, {
+    return enqueueRecoveryWakeup(agentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: "issue_assigned",
@@ -657,7 +681,9 @@ export function recoveryService(
         continue;
       }
       const creatorAgent = await getAgent(creatorAgentId);
-      if (!creatorAgent || creatorAgent.companyId !== candidate.companyId || !isAgentInvokable(creatorAgent)) {
+      // AgentDash (wake policy): an orphan blocker is never assigned back to a
+      // board_assignment_only creator (isRecoveryAssignableAgent).
+      if (!creatorAgent || creatorAgent.companyId !== candidate.companyId || !isRecoveryAssignableAgent(creatorAgent)) {
         skipped += 1;
         continue;
       }
@@ -702,7 +728,7 @@ export function recoveryService(
         },
       });
 
-      const queued = await deps.enqueueWakeup(creatorAgent.id, {
+      const queued = await enqueueRecoveryWakeup(creatorAgent.id, {
         source: "automation",
         triggerDetail: "system",
         reason: "issue_assigned",
@@ -898,7 +924,7 @@ export function recoveryService(
         issueId: input.sourceIssue?.id ?? null,
         projectId: input.sourceIssue?.projectId ?? null,
       });
-      if (isAgentInvokable(candidate) && !budgetBlock) return candidate.id;
+      if (isRecoveryAssignableAgent(candidate) && !budgetBlock) return candidate.id;
     }
 
     return null;
@@ -1213,7 +1239,7 @@ export function recoveryService(
       });
     }
     if (ownerAgentId) {
-      await deps.enqueueWakeup(ownerAgentId, {
+      await enqueueRecoveryWakeup(ownerAgentId, {
         source: "assignment",
         triggerDetail: "system",
         reason: "issue_assigned",
@@ -1277,6 +1303,13 @@ export function recoveryService(
       let liveness: RunLivenessEvidence | null = null;
       let activityAt: Date | null = null;
       const runAgent = await getAgent(run.agentId);
+      // AgentDash (wake policy): a board_assignment_only agent's run is never
+      // evaluated here — no evaluation issue, no blocked source issue, no
+      // comment. Whoever assigned the work owns its supervision.
+      if (isBoardAssignmentOnlyAgent(runAgent)) {
+        result.skipped += 1;
+        continue;
+      }
       if (runAgent) {
         try {
           liveness = livenessProbe(run, runAgent);
@@ -1485,7 +1518,7 @@ export function recoveryService(
         issueId: issue.id,
         projectId: issue.projectId,
       });
-      if (isAgentInvokable(candidate) && !budgetBlock) return candidate.id;
+      if (isRecoveryAssignableAgent(candidate) && !budgetBlock) return candidate.id;
     }
 
     return null;
@@ -1585,7 +1618,7 @@ export function recoveryService(
       return raced;
     }
 
-    await deps.enqueueWakeup(ownerAgentId, {
+    await enqueueRecoveryWakeup(ownerAgentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: "issue_assigned",
@@ -1830,6 +1863,15 @@ export function recoveryService(
         continue;
       }
 
+      // AgentDash (wake policy): the sweep never touches a
+      // board_assignment_only agent's issues — no wake, no comment, no
+      // escalation task. Its recovery is a fresh board-key assignment.
+      const assignedAgent = await getAgent(agentId);
+      if (isBoardAssignmentOnlyAgent(assignedAgent)) {
+        result.skipped += 1;
+        continue;
+      }
+
       // AgentDash (recovery budget remediation): an issue whose automatic
       // recovery budget is exhausted needs a human to clear it. Re-dispatching
       // only produced a refused retry, an escalation and a fresh "Recover
@@ -1854,7 +1896,7 @@ export function recoveryService(
         continue;
       }
 
-      const agent = await getAgent(agentId);
+      const agent = assignedAgent;
       if (!agent || agent.companyId !== issue.companyId || !isAgentInvokable(agent)) {
         result.skipped += 1;
         continue;
@@ -2533,6 +2575,8 @@ export function recoveryService(
     const budgetBlockedCandidateAgentIds: string[] = [];
 
     for (const candidate of candidates) {
+      // AgentDash (wake policy): never chosen as an escalation owner.
+      if (isBoardAssignmentOnlyAgent(await getAgent(candidate.agentId))) continue;
       const budgetBlock = await budgets.getInvocationBlock(issue.companyId, candidate.agentId, {
         issueId: issue.id,
         projectId: issue.projectId,
@@ -2623,6 +2667,11 @@ export function recoveryService(
       .where(eq(issues.id, input.finding.issueId))
       .then((rows) => rows[0] ?? null);
     if (!issue || issue.companyId !== input.finding.companyId) return { kind: "skipped" as const };
+    // AgentDash (wake policy): never block, comment on or escalate a
+    // board_assignment_only agent's issue.
+    if (issue.assigneeAgentId && isBoardAssignmentOnlyAgent(await getAgent(issue.assigneeAgentId))) {
+      return { kind: "skipped" as const };
+    }
     if (await workspacePersistenceHold(db, issue.companyId, issue.assigneeAgentId, issue.id)) return { kind: "skipped" as const };
     for (const member of input.finding.dependencyPath) {
       if (await workspacePersistenceHold(db, issue.companyId, null, member.issueId)) return { kind: "skipped" as const };
@@ -2746,7 +2795,7 @@ export function recoveryService(
       },
     });
 
-    const wake = await deps.enqueueWakeup(ownerSelection.agentId, {
+    const wake = await enqueueRecoveryWakeup(ownerSelection.agentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: "issue_assigned",

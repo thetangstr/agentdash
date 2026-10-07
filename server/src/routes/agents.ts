@@ -101,6 +101,8 @@ import {
   resolveAgentVisibility,
   runVisibilityCondition,
   runVisibilityParam,
+  projectScopedVisibilityCondition,
+  wakeVisibilityCondition,
   visibleAgentIdsFor,
 } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
@@ -141,6 +143,8 @@ import {
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
+import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
+import { resolveAgentWakePolicy } from "../services/agent-wake-policy.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { resolveMaxDailyTokens, tokenCeilingService } from "../services/token-ceiling.js";
@@ -1590,6 +1594,40 @@ export function agentRoutes(
     );
   }
 
+  /**
+   * AgentDash (wake policy): `runtimeConfig.wakePolicy` (and its legacy alias
+   * `metadata.travelPairing`) decides which wakes may start a run, so only a
+   * board actor may set, change or clear it. Compared on the RESOLVED policy,
+   * so an agent-authored request that resends the stored value (or touches
+   * neither field) passes, and dropping the field by omission is refused.
+   */
+  function assertNoAgentWakePolicyMutation(
+    req: Request,
+    before: { runtimeConfig?: unknown; metadata?: unknown } | null,
+    after: { runtimeConfig?: unknown; metadata?: unknown },
+  ) {
+    if (req.actor.type === "board") return;
+    if (resolveAgentWakePolicy(before) === resolveAgentWakePolicy(after)) return;
+    throw forbidden(
+      "Only a board user may set runtimeConfig.wakePolicy; agent-authored hires and updates cannot change an agent's wake policy",
+    );
+  }
+
+  /**
+   * AgentDash (wake policy): switching an agent ON to board_assignment_only
+   * also refuses the runs it already had queued or scheduled (timers, comment
+   * wakes, retries from before the switch), so none of them starts under the
+   * policy. The run-start check refuses any that slip past this.
+   */
+  async function refusePendingRunsIfWakePolicyTurnedOn(
+    before: { runtimeConfig?: unknown; metadata?: unknown },
+    after: { id: string; runtimeConfig?: unknown; metadata?: unknown },
+  ) {
+    if (resolveAgentWakePolicy(before) === "board_assignment_only") return;
+    if (resolveAgentWakePolicy(after) !== "board_assignment_only") return;
+    await heartbeat.refusePendingRunsForWakePolicy(after.id);
+  }
+
   async function assertNoAgentRuntimeConfigAdapterConfigMutation(
     req: Request,
     companyId: string,
@@ -2735,6 +2773,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Revision not found" });
       return;
     }
+    await refusePendingRunsIfWakePolicyTurnedOn(existing, updated);
 
     await logActivity(db, {
       companyId: updated.companyId,
@@ -2766,6 +2805,38 @@ export function agentRoutes(
     // `lastError`/`sessionParamsJson` can carry adapter output — redact at
     // the response boundary (GH #992).
     res.json(redactRunLogValue(state));
+  });
+
+  /**
+   * AgentDash (run window): board-only audit of one agent over [from, to] —
+   * runs, wake requests (including skipped refusals) and agent-related
+   * comments, each list capped at RUN_WINDOW_ROW_CAP with `truncated` always
+   * present. An agent key is refused: this is the ledger a harness checks the
+   * agent against. Agent visibility is enforced by the `:id` param handler;
+   * reading it also needs the agent-management permission, like the other
+   * run-internals reads (runtime-state, task-sessions).
+   */
+  router.get("/agents/:id/run-window", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertBoardCanManageAgentsForCompany(req, agent.companyId);
+    const bounds = parseRunWindowBounds(req.query.from, req.query.to);
+    if ("error" in bounds) {
+      res.status(400).json({ error: bounds.error });
+      return;
+    }
+    // A5 (GH #830): rows tied to an issue in a restricted project the caller
+    // is not listed on are absent, exactly as on every other run list.
+    res.json(await readAgentRunWindow(db, agent, bounds, {
+      runs: runVisibilityCondition(req, agent.companyId),
+      wakes: wakeVisibilityCondition(req, agent.companyId),
+      comments: projectScopedVisibilityCondition(req, agent.companyId, issuesTable.projectId),
+    }));
   });
 
   router.get("/agents/:id/task-sessions", async (req, res) => {
@@ -2927,6 +2998,7 @@ export function agentRoutes(
     await assertNoAgentAdapterConfigMutation(req, companyId, rawHireAdapterConfig);
     await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, hireInput.runtimeConfig);
     assertNoAgentRecoveryBudgetMutation(req, null, hireInput.runtimeConfig);
+    assertNoAgentWakePolicyMutation(req, null, { runtimeConfig: hireInput.runtimeConfig, metadata: hireInput.metadata });
     // AgentDash (security, #719): the binary, argv, env and cwd an agent runs
     // with are instance-admin only; see services/adapter-host-execution-policy.ts.
     assertHostExecutionConfigAllowed(req.actor, [
@@ -3191,6 +3263,7 @@ export function agentRoutes(
     await assertNoAgentAdapterConfigMutation(req, companyId, rawCreateAdapterConfig);
     await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, createInput.runtimeConfig);
     assertNoAgentRecoveryBudgetMutation(req, null, createInput.runtimeConfig);
+    assertNoAgentWakePolicyMutation(req, null, { runtimeConfig: createInput.runtimeConfig, metadata: createInput.metadata });
     // AgentDash (security, #719): the binary, argv, env and cwd an agent runs
     // with are instance-admin only; see services/adapter-host-execution-policy.ts.
     assertHostExecutionConfigAllowed(req.actor, [
@@ -4216,6 +4289,10 @@ export function agentRoutes(
       );
     }
 
+    assertNoAgentWakePolicyMutation(req, existing, {
+      runtimeConfig: hasOwn(patchData, "runtimeConfig") ? patchData.runtimeConfig : existing.runtimeConfig,
+      metadata: hasOwn(patchData, "metadata") ? patchData.metadata : existing.metadata,
+    });
     const actor = getActorInfo(req);
     const agent = await svc.update(id, patchData, {
       recordRevision: {
@@ -4228,6 +4305,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
+    await refusePendingRunsIfWakePolicyTurnedOn(existing, agent);
 
     await logActivity(db, {
       companyId: agent.companyId,
