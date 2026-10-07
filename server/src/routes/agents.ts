@@ -75,6 +75,7 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { assertNoAssistantProvenanceClaim } from "../services/assistant-provenance-claims.js";
 import {
   actorMaySetHostExecutionConfig,
   assertHostExecutionConfigAllowed,
@@ -2781,6 +2782,9 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
+    // AgentDash (GH #828): body metadata becomes the hire approval's payload
+    // metadata, which the digest reads for assistant provenance.
+    assertNoAssistantProvenanceClaim(req.actor, req.body.metadata);
     const sourceIssueIds = parseSourceIssueIds(req.body);
     // A5 (GH #830): the hire approval links these issues; they must be visible.
     for (const issueId of sourceIssueIds) {

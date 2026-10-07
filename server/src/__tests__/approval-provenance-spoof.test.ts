@@ -7,6 +7,9 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { eq } from "drizzle-orm";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
@@ -26,6 +29,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
+import { agentRoutes } from "../routes/agents.js";
 import { approvalRoutes } from "../routes/approvals.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 
@@ -68,7 +72,7 @@ async function createAgent(db: TestDb, companyId: string) {
       name: `Agent ${randomUUID()}`,
       role: "engineer",
       status: "idle",
-      adapterType: "process",
+      adapterType: "codex_local",
     })
     .returning()
     .then((rows) => rows[0]!);
@@ -110,6 +114,7 @@ async function createApp(db: TestDb, actor: Record<string, unknown>) {
     next();
   });
   app.use("/api", approvalRoutes(db, { autoDispatchQueuedRuns: false }));
+  app.use("/api", agentRoutes(db));
   app.use(errorHandler);
   return app;
 }
@@ -139,7 +144,15 @@ describeEmbeddedPostgres("approval provenance spoofing", () => {
   let db!: TestDb;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
+  let home = "";
+  const previousHome = process.env.PAPERCLIP_HOME;
+  const previousBilling = process.env.AGENTDASH_BILLING_DISABLED;
+
   beforeAll(async () => {
+    // Hires materialize an instructions bundle on disk and pass the tier gate.
+    home = await mkdtemp(path.join(tmpdir(), "approval-provenance-"));
+    process.env.PAPERCLIP_HOME = home;
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-approval-provenance-");
     db = createDb(tempDb.connectionString);
   }, 20_000);
@@ -159,6 +172,11 @@ describeEmbeddedPostgres("approval provenance spoofing", () => {
 
   afterAll(async () => {
     await tempDb?.cleanup();
+    if (home) await rm(home, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.PAPERCLIP_HOME;
+    else process.env.PAPERCLIP_HOME = previousHome;
+    if (previousBilling === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = previousBilling;
   });
 
   async function seed(productProfile: "default" | "agentdash_mk" = "agentdash_mk") {
@@ -314,5 +332,140 @@ describeEmbeddedPostgres("approval provenance spoofing", () => {
     );
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+  // Review of #1044: the tag also reached approvals through the hire route's
+  // body `metadata` and through a resubmit that replaces the payload.
+  async function requireHireApproval(companyId: string) {
+    await db
+      .update(companies)
+      .set({ requireBoardApprovalForNewAgents: true })
+      .where(eq(companies.id, companyId));
+  }
+
+  it("refuses a hire whose body metadata claims the assistant_hire_request tag", async () => {
+    const { company, owner } = await seed();
+    await requireHireApproval(company.id);
+    const before = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agent-hires`)
+        .send({
+          name: "Bea",
+          adapterType: "codex_local",
+          metadata: { source: "assistant_hire_request" },
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(await db.select().from(agents).where(eq(agents.companyId, company.id))).toHaveLength(before.length);
+    const hireApprovals = await db.select().from(approvals).where(eq(approvals.type, "hire_agent"));
+    expect(hireApprovals).toHaveLength(0);
+  });
+
+  it("refuses the tag on a hire from an agent with hiring rights", async () => {
+    const { company, agent } = await seed();
+    await requireHireApproval(company.id);
+    await db.update(agents).set({ permissions: { canCreateAgents: true } }).where(eq(agents.id, agent.id));
+    const app = await createApp(db, {
+      type: "agent",
+      agentId: agent.id,
+      companyId: company.id,
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agent-hires`)
+        .send({
+          name: "Bea",
+          adapterType: "codex_local",
+          metadata: { source: "assistant_hire_request" },
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    const hireApprovals = await db.select().from(approvals).where(eq(approvals.type, "hire_agent"));
+    expect(hireApprovals).toHaveLength(0);
+  });
+
+  it("still files a hire with ordinary metadata", async () => {
+    const { company, owner } = await seed();
+    await requireHireApproval(company.id);
+    const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agent-hires`)
+        .send({ name: "Bea", adapterType: "codex_local", metadata: { source: "board_request" } }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [hire] = await db.select().from(approvals).where(eq(approvals.type, "hire_agent"));
+    expect((hire!.payload as { metadata?: { source?: unknown } }).metadata?.source).toBe("board_request");
+  });
+
+  async function revisionRequested(approvalId: string) {
+    await db.update(approvals).set({ status: "revision_requested" }).where(eq(approvals.id, approvalId));
+  }
+
+  it("refuses an agent resubmit that stamps the assistant_hire_request tag", async () => {
+    const { company, agent, approval } = await seed();
+    await revisionRequested(approval.id);
+    const app = await createApp(db, {
+      type: "agent",
+      agentId: agent.id,
+      companyId: company.id,
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/resubmit`)
+        .send({ payload: { summary: "Ship the deck", metadata: { source: "assistant_hire_request" } } }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    const stored = await db.select().from(approvals).where(eq(approvals.id, approval.id)).then((rows) => rows[0]!);
+    expect(stored.status).toBe("revision_requested");
+    expect(stored.payload).toEqual({ summary: "Ship the board deck" });
+  });
+
+  it("refuses a board resubmit that stamps the assistant_hire_request tag", async () => {
+    const { company, steward, approval } = await seed();
+    await revisionRequested(approval.id);
+    const app = await createApp(db, makeBoardActor(company.id, steward.principalId));
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/resubmit`)
+        .send({ payload: { summary: "Ship the deck", metadata: { source: "assistant_hire_request" } } }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    const stored = await db.select().from(approvals).where(eq(approvals.id, approval.id)).then((rows) => rows[0]!);
+    expect(stored.payload).toEqual({ summary: "Ship the board deck" });
+  });
+
+  it("still lets the requesting agent resubmit an ordinary payload", async () => {
+    const { company, agent, approval } = await seed();
+    await revisionRequested(approval.id);
+    const app = await createApp(db, {
+      type: "agent",
+      agentId: agent.id,
+      companyId: company.id,
+      source: "agent_key",
+    });
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/resubmit`)
+        .send({ payload: { summary: "Ship the revised deck", metadata: { source: "agent_request" } } }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const stored = await db.select().from(approvals).where(eq(approvals.id, approval.id)).then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
   });
 });
