@@ -6,6 +6,8 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockLocation = vi.hoisted(() => ({ pathname: "/PAP/dashboard" }));
 import { SidebarAgentRows, useSidebarAgentRows } from "./SidebarAgents";
 
 // The agent rows as the Team item nests them (SidebarTeamItem), without its
@@ -55,7 +57,7 @@ vi.mock("@/lib/router", () => ({
       {children}
     </a>
   ),
-  useLocation: () => ({ pathname: "/PAP/dashboard", search: "", hash: "", state: null }),
+  useLocation: () => ({ pathname: mockLocation.pathname, search: "", hash: "", state: null }),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -158,6 +160,7 @@ describe("SidebarAgents", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    mockLocation.pathname = "/PAP/dashboard";
     localStorage.clear();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -388,6 +391,28 @@ describe("SidebarAgents", () => {
       expect(casper?.getAttribute("aria-controls")).toBe(groupOf("cos")?.id);
       // The chevron never sits inside the lead's link.
       expect(casper?.closest("a")).toBeNull();
+    });
+
+    it("shows a collapsed team open while one of its agents is being viewed, without forgetting the collapse", async () => {
+      mockAgentsApi.list.mockResolvedValue(org());
+      let currentRoot = await render();
+      await click(toggleFor("Maya"));
+      expect(agentHrefs()).not.toContain("/agents/priya");
+
+      await act(async () => currentRoot.unmount());
+      root = null;
+      mockLocation.pathname = "/PAP/agents/priya";
+      currentRoot = await render();
+      expect(agentHrefs()).toContain("/agents/priya");
+      expect(toggleFor("Maya")?.getAttribute("aria-expanded")).toBe("true");
+      // The remembered choice is untouched.
+      expect(localStorage.getItem("agentdash.sidebarTeamExpanded:company-1:user-1:eng")).toBe("false");
+
+      await act(async () => currentRoot.unmount());
+      root = null;
+      mockLocation.pathname = "/PAP/dashboard";
+      await render();
+      expect(agentHrefs()).not.toContain("/agents/priya");
     });
 
     it("collapses one team at a time and remembers it per user per company per lead", async () => {

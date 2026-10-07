@@ -296,6 +296,12 @@ function renderAgentItem(agent: Agent, rows: SidebarAgentRowsState, teamToggle?:
 // AgentDash: one team — a lead with direct reports. The lead's row stays a
 // normal agent link; the chevron beside it shows or hides the reports, and
 // that choice is remembered per user per company per lead. Expanded by default.
+function teamContainsRouteRef(node: SidebarAgentTreeNode<Agent>, routeRef: string): boolean {
+  return node.children.some(
+    (child) => agentRouteRef(child.agent) === routeRef || teamContainsRouteRef(child, routeRef),
+  );
+}
+
 function SidebarTeamGroup({
   node,
   rows,
@@ -315,18 +321,26 @@ function SidebarTeamGroup({
     setExpanded(readSidebarTeamGroupExpanded(storageKey));
   }, [storageKey]);
 
+  // The agent being viewed is never hidden: a collapsed team that contains it
+  // shows open (without changing the remembered choice).
+  const containsActive = useMemo(
+    () => rows.activeAgentId !== null && teamContainsRouteRef(node, rows.activeAgentId),
+    [node, rows.activeAgentId],
+  );
+  const open = expanded || containsActive;
+
   const toggle = (
     <CollapsibleTrigger
-      aria-label={expanded ? `Hide ${lead.name}'s team` : `Show ${lead.name}'s team`}
+      aria-label={open ? `Hide ${lead.name}'s team` : `Show ${lead.name}'s team`}
       className="absolute right-7 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:right-8 max-sm:h-11 max-sm:w-11"
     >
-      <ChevronRight className={cn("h-3 w-3 transition-transform", expanded && "rotate-90")} />
+      <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
     </CollapsibleTrigger>
   );
 
   return (
     <Collapsible
-      open={expanded}
+      open={open}
       onOpenChange={(next) => {
         setExpanded(next);
         writeSidebarTeamGroupExpanded(storageKey, next);
