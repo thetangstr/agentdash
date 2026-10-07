@@ -599,3 +599,7 @@ Run transcripts, run events, workspace-operation logs and issue comments are scr
 - Do not comment asking for a credential to be "unredacted"; there is no unredacted copy by design.
 - This redaction is not permission to print secrets carelessly — a credential shape the scrubber does not recognize could still be persisted. Keep secrets out of run output regardless.
 <!-- /AgentDash: run-log-secret-redaction -->
+
+<!-- AgentDash: agent-creation-authority — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Agent creation and hiring authority does not permit creating CEO or Chief of Staff roles, or granting `permissions.canCreateAgents: true`. This applies to agent callers of both `POST /api/companies/:companyId/agents` and `/agent-hires`, including CEO callers. A 403 leaves no hire or approval; ask a board administrator to create the privileged agent and do not retry by changing routes or disguising the role. Ordinary hires remain supported.
+<!-- /AgentDash: agent-creation-authority -->

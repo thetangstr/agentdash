@@ -103,6 +103,8 @@ export function agentCreatorFromProposal(deps: Deps) {
   };
 }
 
+// AgentDash: agent-creation-authority is inherited from the canonical default bundle;
+// proposal-created workers must escalate privileged hires to a board administrator.
 // AgentDash: accepted-hire-recovery is inherited verbatim from the canonical default
 // bundle: repair accepted IDs without replaying interview/plan confirmations.
 // AgentDash: this remains the proposal creator's agent-facing prompt surface.

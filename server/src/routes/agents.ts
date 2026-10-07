@@ -1028,6 +1028,15 @@ export function agentRoutes(
     return actorAgent;
   }
 
+  // AgentDash (#1053): hiring is not authority to delegate privileged roles
+  // or grant hiring authority, including the CEO role's inherited default.
+  function assertAgentCreationAuthority(req: Request) {
+    if (req.actor.type !== "agent") return;
+    if (req.body.role === "ceo" || req.body.role === "chief_of_staff" || req.body.permissions?.canCreateAgents === true) {
+      throw forbidden("Agents cannot create privileged roles or grant canCreateAgents. Ask a board administrator to create this agent.");
+    }
+  }
+
   /**
    * AgentDash (scan 2, E3): when the company's owner creates its first agent,
    * the owner becomes its steward, whatever the company's profile. Not an
@@ -2969,6 +2978,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    assertAgentCreationAuthority(req);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     // AgentDash (GH #828): body metadata becomes the hire approval's payload
     // metadata, which the digest reads for assistant provenance.
@@ -3228,6 +3238,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    assertAgentCreationAuthority(req);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
 
     const company = await db
