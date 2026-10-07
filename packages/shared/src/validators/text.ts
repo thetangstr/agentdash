@@ -66,6 +66,11 @@ export function normalizeEscapedLineBreaks(value: string): string {
         i = close + 1;
         continue;
       }
+      // An unclosed fence runs to the end (CommonMark), so no later opener can
+      // close either: treat the rest as prose and stop. Scanning again from
+      // every later opener made this quadratic (512 KiB of openers ≈ 66 s).
+      prose = prose.concat(lines.slice(i));
+      break;
     }
     prose.push(lines[i]!);
     i += 1;

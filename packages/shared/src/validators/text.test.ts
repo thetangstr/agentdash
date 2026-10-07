@@ -35,4 +35,13 @@ describe("normalizeEscapedLineBreaks", () => {
     // Not JSON: normalized as before.
     expect(normalizeEscapedLineBreaks("{not json\\n}")).toBe("{not json\n}");
   });
+
+  it("stays linear on many unclosed fence openers", () => {
+    const body = "```\\nx\n".repeat(64 * 1024);
+    const started = performance.now();
+    const result = normalizeEscapedLineBreaks(body);
+    expect(performance.now() - started).toBeLessThan(2000);
+    // An unclosed fence is prose, so its escaped line breaks are unescaped.
+    expect(result).not.toContain("\\n");
+  });
 });
