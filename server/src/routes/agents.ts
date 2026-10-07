@@ -75,6 +75,7 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { assertNoAssistantProvenanceClaim } from "../services/assistant-provenance-claims.js";
 import {
   actorMaySetHostExecutionConfig,
   assertHostExecutionConfigAllowed,
@@ -962,7 +963,7 @@ export function agentRoutes(
     if (!allowedByGrant && !canCreateAgents(actorAgent)) {
       throw forbidden(
         `Agent ${actorAgent.name} lacks the agents:create capability. ` +
-          "A Chief of Staff agent must enable this via PATCH /api/agents/:id/permissions { canCreateAgents: true }.",
+          "Ask an owner or administrator to enable it via PATCH /api/agents/:id/permissions { canCreateAgents: true }.",
       );
     }
     return actorAgent;
@@ -1051,8 +1052,54 @@ export function agentRoutes(
     }
   }
 
+  /**
+   * GH #886: configuration reads are the `agents:create` grant — the same
+   * question the list/detail routes ask (`actorCanReadConfigurationsForCompany`)
+   * before deciding to redact adapterConfig/runtimeConfig. These routes once
+   * delegated to `assertCanCreateAgentsForCompany`, whose every-member
+   * exception is for CREATION only (2026-08-16: "they can create their own
+   * agents"); credentials' home was readable one route over from the redacted
+   * list. Creation stays role-given; configuration reads stay a grant.
+   */
   async function assertCanReadConfigurations(req: Request, companyId: string) {
-    return assertCanCreateAgentsForCompany(req, companyId);
+    assertCompanyAccess(req, companyId);
+    if (await actorCanReadConfigurationsForCompany(req, companyId)) return;
+    if (req.actor.type === "board") {
+      throw forbidden(
+        "Missing permission: agents:create. Ask a company owner or instance admin to grant this " +
+          `permission via PATCH /api/companies/${companyId}/members/:memberId/permissions.`,
+      );
+    }
+    throw forbidden("Missing permission: agents:create");
+  }
+
+  /**
+   * GH #886 review: reading ONE agent's configuration (adapter/runtime config,
+   * config revisions, skills, instructions bundle) admits whoever may change
+   * it — `resolveConfigurationAuthority`, the same question the write routes
+   * ask through `requireAgentConfigurationAuthority`: an `agents:create`
+   * holder or instance admin, or, in an `agentdash_mk` company, the agent's
+   * steward or creator. A steward who may edit a mandate file must be able to
+   * read it. Agent keys keep the company-wide grant rule.
+   */
+  async function assertCanReadAgentConfiguration(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "board") {
+      await assertCanReadConfigurations(req, targetAgent.companyId);
+      return;
+    }
+    const authority = await governance.resolveConfigurationAuthority(
+      targetAgent.companyId,
+      targetAgent.id,
+      req.actor,
+    );
+    if (authority) return;
+    throw forbidden(
+      "Only this agent's steward or a company administrator can read its configuration",
+    );
   }
 
   async function getAccessibleAgent(req: Request, res: Response, id: string) {
@@ -1177,14 +1224,16 @@ export function agentRoutes(
   // `spentMonthlyCents` (reset its spend), `reportsTo` and `runtimeConfig`.
   // Authority-bearing fields — role, status, spend, budget, reporting line,
   // runtime and adapter configuration, autonomy, environment, metadata — need
-  // a board actor. What an agent may change on a peer is presentation plus the
-  // skill assignment that `POST /agents/:id/skills/sync` already allows.
+  // a board actor. What an agent may change on a peer is presentation only.
+  // `desiredSkills` was removed (#734): the handler never applied it (skill
+  // assignment lives in adapterConfig and is written by
+  // `POST /agents/:id/skills/sync`, which has its own allowlist), so the field
+  // answered 200 having changed nothing.
   const AGENT_PEER_PATCHABLE_FIELDS: ReadonlySet<string> = new Set([
     "name",
     "title",
     "icon",
     "capabilities",
-    "desiredSkills",
   ]);
 
   async function assertCanUpdateAgent(
@@ -1249,10 +1298,10 @@ export function agentRoutes(
     return "agent";
   }
 
-  async function assertCanReadAgent(req: Request, targetAgent: { companyId: string }) {
+  async function assertCanReadAgent(req: Request, targetAgent: { id: string; companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertCanReadConfigurations(req, targetAgent.companyId);
+      await assertCanReadAgentConfiguration(req, targetAgent);
       return;
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
@@ -2070,7 +2119,10 @@ export function agentRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const type = assertKnownAdapterType(req.params.type as string);
-      await assertCanReadConfigurations(req, companyId);
+      // GH #886 review: the create form calls this probe, so it admits
+      // everyone who may create agents (every active member, 2026-08-16).
+      // What it may run is narrowed by the host-execution guard below.
+      await assertCanCreateAgentsForCompany(req, companyId);
 
       // AgentDash (security): the environment probe spawns the adapter CLI on
       // the host — some adapters (opencode/pi model discovery) with the full
@@ -2168,7 +2220,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
 
     const adapter = findActiveServerAdapter(agent.adapterType);
     if (!adapter?.listSkills) {
@@ -2532,7 +2584,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
     res.json(redactAgentConfiguration(agent));
   });
 
@@ -2543,7 +2595,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
     const revisions = await svc.listConfigRevisions(id);
     res.json(revisions.map((revision) => redactConfigRevision(revision)));
   });
@@ -2556,7 +2608,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
     const revision = await svc.getConfigRevision(id, revisionId);
     if (!revision) {
       res.status(404).json({ error: "Revision not found" });
@@ -2781,6 +2833,9 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
+    // AgentDash (GH #828): body metadata becomes the hire approval's payload
+    // metadata, which the digest reads for assistant provenance.
+    assertNoAssistantProvenanceClaim(req.actor, req.body.metadata);
     const sourceIssueIds = parseSourceIssueIds(req.body);
     // A5 (GH #830): the hire approval links these issues; they must be visible.
     for (const issueId of sourceIssueIds) {
@@ -3311,28 +3366,33 @@ export function agentRoutes(
     assertCompanyAccess(req, existing.companyId);
 
     if (req.actor.type === "agent") {
-      const actorAgent = req.actor.agentId ? await svc.getById(req.actor.agentId) : null;
-      if (!actorAgent || actorAgent.companyId !== existing.companyId) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
-      if (actorAgent.role !== "ceo") {
-        res.status(403).json({ error: "Only CEO can manage permissions" });
-        return;
-      }
-    } else {
-      const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
-      // `agents:create` is company-wide agent administration by another name:
-      // an agent holding it can modify every agent in the company via its own
-      // key. A steward must not be able to grant it to their own agent, and the
-      // ceiling cannot be relied on to stop them because the default ceiling is
-      // deliberately unrestricted.
-      if (permissionAuthority === "steward" && req.body.canCreateAgents) {
-        throw forbidden(
-          "Stewardship does not permit granting agent-creation authority; " +
-            "an administrator with agents:create must make this change",
-        );
-      }
+      // AgentDash (security, #734): granting `canCreateAgents` mints a
+      // company-wide agent administrator and `canAssignTasks` extends task
+      // authority — both are authority-bearing in the sense of #727, where the
+      // rule is that everything outside the presentation allowlist needs a
+      // board actor. The old exception let a CEO agent pass, which made one
+      // compromised agent key enough to spread agent administration to every
+      // other agent in the company. There is no narrower safe grant on this
+      // route — the schema offers only these two fields — so agent actors are
+      // refused outright, matching `POST /agents/:id/pause` and friends.
+      res.status(403).json({
+        error:
+          "Only a human with agent-configuration authority may change agent permissions; " +
+          "ask an owner, admin or operator",
+      });
+      return;
+    }
+    const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
+    // `agents:create` is company-wide agent administration by another name:
+    // an agent holding it can modify every agent in the company via its own
+    // key. A steward must not be able to grant it to their own agent, and the
+    // ceiling cannot be relied on to stop them because the default ceiling is
+    // deliberately unrestricted.
+    if (permissionAuthority === "steward" && req.body.canCreateAgents) {
+      throw forbidden(
+        "Stewardship does not permit granting agent-creation authority; " +
+          "an administrator with agents:create must make this change",
+      );
     }
 
     // AgentDash-MK: the owner ceiling binds at the service boundary, so a
@@ -3778,6 +3838,14 @@ export function agentRoutes(
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
+      return;
+    }
+    // GH #734: `desiredSkills` is not a column — the update silently dropped it.
+    // Refuse it and name the route that actually applies a skill assignment.
+    if (hasOwn(req.body as object, "desiredSkills")) {
+      res.status(422).json({
+        error: "Skill assignment is not set here. Use POST /api/agents/:id/skills/sync to change an agent's desired skills.",
+      });
       return;
     }
     // Agent visibility (2026-09-30): who may see an agent is a company

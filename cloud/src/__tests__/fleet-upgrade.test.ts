@@ -29,11 +29,13 @@ import { judgeHealth, upgradeHandler } from "../jobs/upgrade.js";
 import { inWindow, nextWindowStart, parseWindow } from "../jobs/upgrade-window.js";
 import { createLogger } from "../logger.js";
 import { deployService } from "../railway/api.js";
+import { BackupPruneExhaustedError, BackupPruneTimeoutError, makeRoomForVolumeBackup, planBackupPrune } from "../railway/upgrade-api.js";
 import { provisionHandler } from "../railway/provisioner.js";
 import { internalRoutes } from "../routes/internal.js";
 import { parseSettingValue, SettingValidationError, settingsService } from "../settings.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 import { FAKE_WORKSPACE } from "./fake-railway.js";
+import type { BoxFakeOptions, FakeVolume } from "./fake-railway-boxes.js";
 import { digestFor, FakeRailwayUpgrade } from "./fake-railway-upgrade.js";
 
 const caps = vi.hoisted(() => ({ claimTrackingReady: true }));
@@ -80,8 +82,8 @@ beforeEach(async () => {
   await s.set("target_release", NEW, "test");
 });
 
-function setup() {
-  const fake = new FakeRailwayUpgrade({ ghcrTags: [OLD, NEW], githubTags: { [NEW]: NEW_COMMIT } });
+function setup(fakeOpts: BoxFakeOptions = {}) {
+  const fake = new FakeRailwayUpgrade({ ghcrTags: [OLD, NEW], githubTags: { [NEW]: NEW_COMMIT }, ...fakeOpts });
   const client = fake.client({ log });
   const provision = provisionHandler({
     client,
@@ -388,6 +390,214 @@ describe("upgrading one box", () => {
     expect(web.deployments).toHaveLength(deploysBefore + 1);
     expect(up.deploymentId).toBe(web.deployments.at(-1)!.id);
     expect(env.fake.backupsTaken).toHaveLength(2);
+  });
+});
+
+// ---- The Railway backup quota (P0: upgrades broke at 10 backups) -------------
+// This code deletes production backups: every test pins exactly which backups
+// were deleted (or that none were), not just the outcome.
+
+describe("the Railway backup quota", () => {
+  const day = (n: number) => new Date(Date.UTC(2026, 8, 1) - n * 86_400_000).toISOString();
+  const manual = (id: string, daysAgo: number, locked = false) => ({ id, name: "Manual", createdAt: day(daysAgo), expiresAt: null, scheduleId: null, locked });
+  const scheduled = (id: string, daysAgo: number) => ({ id, name: "Daily", createdAt: day(daysAgo), expiresAt: day(-daysAgo), scheduleId: "sched-daily" });
+  const volOf = (env: ReturnType<typeof setup>, instanceId: string | null) =>
+    [...env.fake.volumes.values()].find((v) => v.instanceId === instanceId)!;
+  /** Every volumeInstanceBackupDelete sent (refused ones included), by backup id. */
+  const deletes = (env: { fake: FakeRailwayUpgrade }) => env.fake.calls.filter((c) => c.op === "volumeInstanceBackupDelete").map((c) => String(c.variables.b));
+  const run = async (env: ReturnType<typeof setup>, slug: string) => {
+    const r = await upgradeOneBox(db, env.resolver, { slug, now: true }, "test");
+    await drain(env.runner);
+    return r;
+  };
+
+  it("does not delete anything when the volume is under the limit", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    // 9 of 10: the snapshot fits. Old manual backups are NOT pruned pre-emptively,
+    // and 9 scheduled ones do not fail an upgrade Railway would accept.
+    pg.backupRecords.push(...Array.from({ length: 5 }, (_, i) => manual(`m${i}`, 40 - i)), ...Array.from({ length: 4 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    await run(env, box.slug);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    expect(deletes(env)).toEqual([]);
+    expect(pg.backupRecords).toHaveLength(10);
+    expect(env.fake.backupsTaken.sort()).toEqual([box.pgVolumeId, box.webVolumeId].sort());
+  });
+
+  it("at the limit deletes only the oldest prunable manual backup, waits for it to go, then snapshots", async () => {
+    // The deletion is asynchronous: it is still listed for two more polls.
+    const env = setup({ backupDeleteClearsAfterLists: 3 });
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push(...Array.from({ length: 8 }, (_, i) => manual(`m${i}`, 40 - i)), scheduled("d1", 1), scheduled("w1", 3));
+    await run(env, box.slug);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    // Exactly one delete — the oldest manual — and it was never re-sent while in flight.
+    expect(deletes(env)).toEqual(["m0"]);
+    const ids = pg.backupRecords.map((b) => b.id);
+    expect(ids).toEqual(expect.arrayContaining(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "d1", "w1"]));
+    expect(pg.backupRecords).toHaveLength(10);
+    expect(pg.backupRecords.at(-1)).toMatchObject({ name: "Manual" });
+    // The create came only after the list stopped showing m0.
+    const pgCalls = env.fake.calls.filter((c) => c.variables.v === pg.instanceId).map((c) => c.op);
+    const del = pgCalls.indexOf("volumeInstanceBackupDelete");
+    const create = pgCalls.indexOf("volumeInstanceBackupCreate");
+    expect(pgCalls.slice(del + 1, create)).toEqual(["volumeInstanceBackupList", "volumeInstanceBackupList", "volumeInstanceBackupList", "volumeInstanceBackupList"]);
+    const pruned = await db.select().from(boxEvents).where(and(eq(boxEvents.boxId, box.id), eq(boxEvents.kind, "pre_upgrade_backups_pruned")));
+    expect(pruned.map((e) => (e.detail as { backupIds: string[] }).backupIds)).toEqual([["m0"]]);
+    expect(alerts).toHaveLength(0);
+  });
+
+  it("at the limit without enough prunable backups deletes nothing and fails dead, naming the volume", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    // 10 of 10: one must go. The only manual backup outside the newest two (kept) is
+    // locked, and the other 7 are scheduled: nothing is eligible.
+    pg.backupRecords.push(manual("old", 20, true), manual("keep-a", 5), manual("keep-b", 2), ...Array.from({ length: 7 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    const before = pg.backupRecords.map((b) => b.id);
+    const r = await run(env, box.slug);
+    const up = await upgradeOf(box.id);
+    expect(up.state).toBe("failed");
+    expect(up.error).toContain(pg.instanceId);
+    expect(up.error).toMatch(/none was deleted/);
+    expect(deletes(env)).toEqual([]);
+    expect(pg.backupRecords.map((b) => b.id)).toEqual(before);
+    expect(env.fake.backupsTaken).toEqual([]);
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, String(r.jobId)));
+    expect(job!.state).toBe("dead");
+    expect(alerts.map((a) => a.kind)).toContain("job_dead");
+    expect((await boxRow(box.id)).holdUpgrades).toBe(true);
+  });
+
+  it("over the limit with fewer prunable backups than needed deletes nothing", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    // 11 of 10 (a plan downgrade): two must go, only one ("old") may. Do not delete it.
+    pg.backupRecords.push(manual("old", 20), manual("keep-a", 5), manual("keep-b", 2), ...Array.from({ length: 8 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    await run(env, box.slug);
+    expect((await upgradeOf(box.id)).state).toBe("failed");
+    expect(deletes(env)).toEqual([]);
+    expect(pg.backupRecords.map((b) => b.id)).toContain("old");
+    expect(pg.backupRecords).toHaveLength(11);
+  });
+
+  it("never prunes a locked backup, whether the schema exposes the lock or only Railway refuses", async () => {
+    for (const backupLockField of ["locked", null] as const) {
+      const env = setup({ backupLockField });
+      const box = await activeBox(env);
+      const pg = volOf(env, box.pgVolumeId);
+      pg.backupRecords.push(manual("m0", 40, true), ...Array.from({ length: 7 }, (_, i) => manual(`m${i + 1}`, 30 - i)), scheduled("d1", 1), scheduled("w1", 3));
+      await run(env, box.slug);
+      const up = await upgradeOf(box.id);
+      expect(up.state, `${backupLockField}: ${up.error ?? ""}`).toBe("succeeded");
+      expect(pg.backupRecords.map((b) => b.id)).toContain("m0");
+      expect(pg.backupRecords.map((b) => b.id)).not.toContain("m1");
+      // With the field selected, the locked backup is never even asked for.
+      expect(deletes(env)).toEqual(backupLockField ? ["m1"] : ["m0", "m1"]);
+    }
+  });
+
+  it("never deletes a backup named \"Manual\" that a schedule took (it has a scheduleId), even with no expiry", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    // The oldest "Manual" is really a scheduled backup: no expiresAt, but a scheduleId.
+    pg.backupRecords.push({ ...manual("m0", 40), scheduleId: "sched-x" }, ...Array.from({ length: 7 }, (_, i) => manual(`m${i + 1}`, 30 - i)), scheduled("d1", 1), scheduled("w1", 3));
+    await run(env, box.slug);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    expect(deletes(env)).toEqual(["m1"]);
+    expect(pg.backupRecords.map((b) => b.id)).toContain("m0");
+  });
+
+  it("fails without deleting when the only old \"Manual\" backup has a scheduleId", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push({ ...manual("old", 20), scheduleId: "sched-x" }, manual("keep-a", 5), manual("keep-b", 2), ...Array.from({ length: 7 }, (_, i) => scheduled(`s${i}`, i + 1)));
+    await run(env, box.slug);
+    expect((await upgradeOf(box.id)).state).toBe("failed");
+    expect(deletes(env)).toEqual([]);
+    expect(pg.backupRecords).toHaveLength(10);
+  });
+
+  it("waits out another actor's deletion and re-plans, so it deletes nothing once there is room", async () => {
+    const env = setup();
+    const box = await activeBox(env);
+    const pg = volOf(env, box.pgVolumeId);
+    pg.backupRecords.push(...Array.from({ length: 10 }, (_, i) => manual(`m${i}`, 30 - i)));
+    // Someone is already deleting m5 in Railway; it clears after three list polls.
+    pg.deleting = { backupId: "m5", clearsAfterLists: 3 };
+    await run(env, box.slug);
+    const up = await upgradeOf(box.id);
+    expect(up.state, up.error ?? "").toBe("succeeded");
+    // Our delete of m0 was refused ("in progress") and, once m5 went, never needed again.
+    expect(pg.backupRecords.map((b) => b.id)).toContain("m0");
+    expect(pg.backupRecords.map((b) => b.id)).not.toContain("m5");
+    expect(env.fake.backupsTaken).toContain(box.pgVolumeId);
+  });
+
+  it("the snapshot step's budget covers both volumes' prune windows", () => {
+    const env = setup();
+    const snapshot = env.upgrade.steps.find((s) => s.name === "snapshot")!;
+    // Default 5-minute prune window per volume; two volumes, plus room for the creates.
+    expect(snapshot.timeoutMs).toBeGreaterThan(2 * 5 * 60_000);
+  });
+
+  describe("makeRoomForVolumeBackup (bounded waits)", () => {
+    function volume(fake: FakeRailwayUpgrade): FakeVolume {
+      const vol: FakeVolume = { id: "vol-x", instanceId: "volinst-x", projectId: "p", serviceId: "s", mountPath: "/data", backups: [], backupRecords: [], deleting: null, hiddenReads: 0 };
+      fake.volumes.set(vol.id, vol);
+      return vol;
+    }
+    function clock() {
+      let t = 0;
+      return { now: () => t, sleep: async (ms: number) => void (t += ms) };
+    }
+
+    it("gives up with a retryable timeout when its own deletion never finishes, without re-sending the delete", async () => {
+      const fake = new FakeRailwayUpgrade({ backupDeleteClearsAfterLists: 1_000_000 });
+      const vol = volume(fake);
+      vol.backupRecords.push(...Array.from({ length: 10 }, (_, i) => manual(`m${i}`, 30 - i)));
+      const c = clock();
+      const err = await makeRoomForVolumeBackup(fake.client({ log }), vol.instanceId, { pollMs: 1_000, waitMs: 60_000, ...c }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BackupPruneTimeoutError);
+      expect(String((err as Error).message)).toContain(vol.instanceId);
+      expect(deletes({ fake })).toEqual(["m0"]);
+      expect(c.now()).toBeLessThanOrEqual(61_000);
+    });
+
+    it("gives up with a retryable timeout when another deletion never finishes", async () => {
+      const fake = new FakeRailwayUpgrade();
+      const vol = volume(fake);
+      vol.backupRecords.push(...Array.from({ length: 10 }, (_, i) => manual(`m${i}`, 30 - i)));
+      vol.deleting = { backupId: "elsewhere", clearsAfterLists: 1_000_000 };
+      const c = clock();
+      const err = await makeRoomForVolumeBackup(fake.client({ log }), vol.instanceId, { pollMs: 1_000, waitMs: 60_000, ...c }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BackupPruneTimeoutError);
+      expect(c.now()).toBeLessThanOrEqual(61_000);
+      expect(vol.backupRecords).toHaveLength(10);
+    });
+
+    it("refuses a limit that leaves nothing prunable", async () => {
+      const fake = new FakeRailwayUpgrade();
+      const vol = volume(fake);
+      await expect(makeRoomForVolumeBackup(fake.client({ log }), vol.instanceId, { limit: 3 })).rejects.toBeInstanceOf(BackupPruneExhaustedError);
+      expect(deletes({ fake })).toEqual([]);
+    });
+
+    it("plans: scheduled (expiry or scheduleId), locked and the newest two manual backups are never eligible", () => {
+      const all = [manual("a", 9), manual("b", 8, true), manual("c", 7), manual("d", 2), manual("e", 1), { ...scheduled("s", 3), locked: false }, { id: "x", name: "Manual", createdAt: day(10), expiresAt: day(-1), scheduleId: null, locked: false }, { id: "y", name: "Manual", createdAt: day(11), expiresAt: null, scheduleId: "sched-y", locked: false }];
+      const plan = planBackupPrune(all, { limit: 6, keepManual: 2 });
+      expect(plan.need).toBe(3);
+      expect(plan.eligible.map((b) => b.id)).toEqual(["a", "c"]);
+      expect(planBackupPrune(all, { limit: 10, keepManual: 2 }).need).toBe(0);
+    });
   });
 });
 

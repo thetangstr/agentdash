@@ -103,6 +103,21 @@ export function approvalAuthorityService(db: Db) {
     }
   }
 
+  /**
+   * `channel: "assistant"` is provenance, not a transport detail (GH #828):
+   * it exists so a decision taken through a person's assistant records itself
+   * as one. Only an assistant grant may claim it — anything else is a board
+   * or agent action wearing assistant clothing, so it is refused.
+   */
+  function assertDecisionChannelAllowed(
+    actor: ApprovalDecisionActor,
+    channel: ApprovalDecisionChannel | undefined,
+  ) {
+    if (channel === "assistant" && actor.source !== "assistant_grant") {
+      throw forbidden('channel "assistant" may only be recorded for an assistant grant');
+    }
+  }
+
   /** A decision must name the revision it was shown; a stale card fails closed. */
   function assertRevisionMatches(approval: ApprovalRow, revision: number | undefined) {
     if (revision === undefined) return;
@@ -230,6 +245,7 @@ export function approvalAuthorityService(db: Db) {
     actor: ApprovalDecisionActor,
     body: ApprovalDecisionRequest,
   ): Promise<ApprovalDecisionContext> {
+    assertDecisionChannelAllowed(actor, body.channel);
     if (!(await isProfileCompany(approval.companyId))) {
       return {
         role: "board",
@@ -261,6 +277,7 @@ export function approvalAuthorityService(db: Db) {
     actor: ApprovalDecisionActor,
     body: ApprovalDecisionRequest & { overrideReason?: string },
   ): Promise<ApprovalDecisionContext> {
+    assertDecisionChannelAllowed(actor, body.channel);
     if (!(await isAdministrator(approval.companyId, actor))) {
       throw forbidden("Only a company owner or administrator can override an approval decision");
     }
