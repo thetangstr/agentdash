@@ -1,3 +1,4 @@
+import { companyLockQuery, observeExpectedWaiter } from './helpers/observed-lock-wait.js';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -73,18 +74,13 @@ describe('workspace writers on actual PostgreSQL', () => {
       audit: await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)),
     };
   }
-  async function blockedBy(ownerPid: number, label: string) {
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline) {
-      const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
-      if (row) {
-        expect(Number(row.pid)).not.toBe(ownerPid);
-        console.log(JSON.stringify({ label, ownerPid, waiter: row }));
-        return row;
-      }
-      await new Promise(resolve => setImmediate(resolve));
-    }
-    throw new Error(`No observed PostgreSQL blocking: ${label}`);
+  async function blockedBy(ownerPid: number, label: string, contender: Promise<unknown>) {
+    const row = await observeExpectedWaiter({
+      sample: () => db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`),
+      ownerPid, label, contender, timeoutMs: 3000, expectedQuery: companyLockQuery,
+    });
+    console.log(JSON.stringify({ label, ownerPid, waiter: row }));
+    return row;
   }
 
   it.each(['create-foreign', 'create-missing', 'update-foreign', 'update-missing', 'transfer'] as const)('%s refuses privately before mutation', async kind => {
@@ -183,9 +179,9 @@ describe('workspace writers on actual PostgreSQL', () => {
       // Attach handlers before inspecting locks, so failures cannot become unhandled rejections.
       const results = Promise.allSettled([writing, accepting]);
       try {
-        const wait = await blockedBy(ownerPid, `${operation}/${order}`);
+        const wait = await blockedBy(ownerPid, `${operation}/${order}`, order === 'writer-first' ? accepting : writing);
         expect(String(wait.query)).toMatch(/companies.*for (?:no key )?update/i);
-      } finally { release.open(); }
+      } finally { release.open(); await results; }
       expect((await results).map(r => r.status)).toEqual(['fulfilled', 'fulfilled']);
       const state = await snapshot(f);
       expect(state.issues.find(i => i.id === f.issue.id)?.title).toBe('Accepted');
@@ -207,7 +203,7 @@ describe('workspace writers on actual PostgreSQL', () => {
     });
     await held.promise;
     const pending = executionWorkspaceService(db).update(f.workspace.id, { name: 'Must not write' }).then(value => ({ value }), error => ({ error }));
-    try { await blockedBy(ownerPid, `workspace-refresh/${change}`); } finally { release.open(); }
+    try { await blockedBy(ownerPid, `workspace-refresh/${change}`, pending); } finally { release.open(); await Promise.allSettled([owner, pending]); }
     await owner;
     expect(await pending).toMatchObject({ error: { status: 409 } });
     const rows = await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.id, f.workspace.id));
