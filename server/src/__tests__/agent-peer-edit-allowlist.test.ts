@@ -323,4 +323,122 @@ describeEmbeddedPostgres("agent peer-edit allowlist (#727)", () => {
       expect((await readAgent(db, worker.id)).status).not.toBe("paused");
     });
   });
+
+  /**
+   * AgentDash (security, #734). The permissions route is the grant surface for
+   * `agents:create` and `tasks:assign` — minting a company-wide agent
+   * administrator is authority-bearing in exactly the way #727's peer allowlist
+   * is not, so every agent actor is refused and only the board path remains.
+   */
+  describe("permission grants are board-only (#734)", () => {
+    it("refuses a CEO agent granting agents:create and tasks:assign to a peer", async () => {
+      const { company, ceo, worker } = await seed();
+      const before = await readAgent(db, worker.id);
+
+      const res = await requestApp(createApp(db, agentActor(company.id, ceo.id)), (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${worker.id}/permissions`)
+          .send({ canCreateAgents: true, canAssignTasks: true }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      const after = await readAgent(db, worker.id);
+      expect(after.permissions).toEqual(before.permissions);
+    });
+
+    it("refuses an agents:create holder granting permissions to a peer", async () => {
+      const { company, hiringManager, worker } = await seed();
+      const before = await readAgent(db, worker.id);
+
+      const res = await requestApp(createApp(db, agentActor(company.id, hiringManager.id)), (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${worker.id}/permissions`)
+          .send({ canCreateAgents: true, canAssignTasks: false }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      const after = await readAgent(db, worker.id);
+      expect(after.permissions).toEqual(before.permissions);
+    });
+
+    it("refuses a CEO agent changing even its own permissions", async () => {
+      const { company, ceo } = await seed();
+
+      const res = await requestApp(createApp(db, agentActor(company.id, ceo.id)), (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${ceo.id}/permissions`)
+          .send({ canCreateAgents: false, canAssignTasks: true }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+    });
+
+    it("refuses an ordinary agent touching a peer's permissions", async () => {
+      const { company, peer, worker } = await seed();
+
+      const res = await requestApp(createApp(db, agentActor(company.id, peer.id)), (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${worker.id}/permissions`)
+          .send({ canCreateAgents: true, canAssignTasks: true }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+    });
+
+    it("lets a board admin grant and revoke agent-creation authority", async () => {
+      const { company, adminUserId, worker } = await seed();
+      const app = createApp(db, boardActor(company.id, adminUserId));
+
+      const grant = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${worker.id}/permissions`)
+          .send({ canCreateAgents: true, canAssignTasks: true }));
+      expect(grant.status, JSON.stringify(grant.body)).toBe(200);
+      expect((await readAgent(db, worker.id)).permissions).toEqual(
+        expect.objectContaining({ canCreateAgents: true }),
+      );
+
+      const revoke = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${worker.id}/permissions`)
+          .send({ canCreateAgents: false, canAssignTasks: false }));
+      expect(revoke.status, JSON.stringify(revoke.body)).toBe(200);
+      expect((await readAgent(db, worker.id)).permissions).toEqual(
+        expect.objectContaining({ canCreateAgents: false }),
+      );
+    });
+  });
+
+  /**
+   * AgentDash (security, #734, second half). `desiredSkills` sat on the peer
+   * allowlist, but the generic PATCH never applied it — the agents table has
+   * no such column; skill assignment lives in adapterConfig and is written by
+   * POST /agents/:id/skills/sync. The field is refused everywhere on PATCH so
+   * the response names the route that actually does it instead of answering
+   * 200 having changed nothing.
+   */
+  describe("desiredSkills is refused on the generic PATCH (#734)", () => {
+    it("refuses a CEO agent changing a peer's desiredSkills", async () => {
+      const { company, ceo, peer } = await seed();
+
+      const res = await requestApp(createApp(db, agentActor(company.id, ceo.id)), (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${peer.id}`)
+          .send({ desiredSkills: ["paperclip"] }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("An agent cannot change another agent's desiredSkills");
+    });
+
+    it("refuses a board PATCH carrying desiredSkills and names the skills route", async () => {
+      const { company, adminUserId, worker } = await seed();
+      const before = await readAgent(db, worker.id);
+
+      const res = await requestApp(createApp(db, boardActor(company.id, adminUserId)), (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${worker.id}`)
+          .send({ desiredSkills: ["paperclip"] }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toContain("/skills/sync");
+      const after = await readAgent(db, worker.id);
+      expect(after.adapterConfig).toEqual(before.adapterConfig);
+    });
+  });
 });

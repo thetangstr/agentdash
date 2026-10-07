@@ -4,6 +4,7 @@
 import { BlockList, isIP } from "node:net";
 import { type DataKeyring, parseKeyring } from "./crypto.js";
 import { parseEscrowPublicKey } from "./railway/secrets.js";
+import { MIN_VOLUME_BACKUP_LIMIT } from "./railway/upgrade-api.js";
 import { Secret } from "./secret.js";
 import { type BillingConfig, BillingConfigError, loadBillingConfig } from "./stripe/config.js";
 
@@ -54,6 +55,8 @@ export interface CloudConfig {
   boxSourceRepo: string;
   /** The edge router serves the slug hosts (SC-4 and DNS #758); until then health is checked on the Railway host only. */
   edgeLive: boolean;
+  /** Railway's per-volume backup cap; pre-upgrade snapshots prune the oldest manual backups to stay under it. */
+  volumeBackupLimit: number;
   /** SC-7 (GH #768): the public front door. See ./front-door/. */
   frontDoor: FrontDoorConfig;
   /** SC-8 (GH #769): Stripe forwarding and per-box Stripe/Resend. Optional so hand-built test configs stay valid. */
@@ -165,6 +168,13 @@ function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): nu
   return n;
 }
 
+/** Below the minimum, every upgrade at the limit would have nothing prunable (the newest manual backups are kept). */
+function volumeBackupLimit(env: NodeJS.ProcessEnv): number {
+  const n = positiveInt(env, "CLOUD_VOLUME_BACKUP_LIMIT", 10);
+  if (n < MIN_VOLUME_BACKUP_LIMIT) throw new ConfigError(`CLOUD_VOLUME_BACKUP_LIMIT must be at least ${MIN_VOLUME_BACKUP_LIMIT}`);
+  return n;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
   const adminToken = required(env, "CLOUD_ADMIN_TOKEN");
   const weak = checkAdminTokenStrength(adminToken);
@@ -244,6 +254,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     boxImageRepo: imageRepo,
     boxSourceRepo: sourceRepo,
     edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
+    volumeBackupLimit: volumeBackupLimit(env),
     frontDoor: loadFrontDoorConfig(env),
     billing: (() => {
       try {
