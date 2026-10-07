@@ -284,6 +284,31 @@ describeEmbeddedPostgres("GitHub connection routes", () => {
     expect(await observable(refused, listed, deleted)).not.toContain(CANARY);
   });
 
+  it("GH #1052: a connection into a restricted project is absent for an off-list member", async () => {
+    const { company, owner, member } = await seedCompany();
+    await request(buildApp(owner, fakeGitHub().fn))
+      .put(`/api/companies/${company.id}/github-connections`)
+      .send({ repoUrl: "acme/app", githubToken: CANARY })
+      .expect(201);
+    const [connection] = await db.select().from(githubRepoConnections);
+    await db
+      .update(projects)
+      .set({ visibility: "restricted", createdByUserId: owner.userId })
+      .where(eq(projects.id, connection!.projectId));
+
+    const memberList = await request(buildApp(member, fakeGitHub().fn)).get(
+      `/api/companies/${company.id}/github-connections`,
+    );
+    expect(memberList.status).toBe(200);
+    expect(memberList.body.connections).toEqual([]);
+    expect(JSON.stringify(memberList.body)).not.toContain("Acme/App");
+
+    const ownerList = await request(buildApp(owner, fakeGitHub().fn)).get(
+      `/api/companies/${company.id}/github-connections`,
+    );
+    expect(ownerList.body.connections.map((c: { repo: string }) => c.repo)).toEqual(["Acme/App"]);
+  });
+
   it("is company-scoped: another company's owner can neither read nor set it", async () => {
     const a = await seedCompany();
     const b = await seedCompany();

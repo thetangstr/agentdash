@@ -12,9 +12,10 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { defineConfig } from "@playwright/test";
 import { resolveE2eEmbeddedPostgresPort } from "./e2e-db-port";
+import { resolveE2eServerPort } from "./e2e-port";
 
 const external = process.env.CLAIM_E2E_BASE_URL?.trim();
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3299);
+const PORT = resolveE2eServerPort(3299);
 const DB_PORT = external ? null : resolveE2eEmbeddedPostgresPort(PORT);
 const BASE_URL = external || `http://127.0.0.1:${PORT}`;
 if (!external) {
