@@ -22,7 +22,7 @@ import { setupBackups, startBackupScheduler } from "./backups/setup.js";
 import { billingAndMailExtras } from "./railway/box-extras.js";
 import { resendKeysClient } from "./email/resend-keys.js";
 import { loadBillingConfig } from "./stripe/config.js";
-import { promoteDeployedBillingRevs } from "./stripe/box-billing.js";
+import { startBillingPromotionPass } from "./stripe/box-billing.js";
 import { fleetSecretStore } from "./stripe/fleet-secrets.js";
 import { stripeForwarder } from "./stripe/forwarder.js";
 
@@ -159,12 +159,13 @@ async function main() {
     setInterval(() => void pruneRateEvents(db).catch((err: unknown) => log.error("rate_events prune failed", { err })), PRUNE_MS),
     // AgentDash (SC-8, GH #769): retries and parked Stripe events.
     setInterval(() => void forwarder.deliverDue().catch((err: unknown) => log.error("Stripe delivery pass failed", { err })), STRIPE_DELIVERY_MS),
-    // AgentDash (GH #923): a box adopts the billing config it was sent once a
-    // deploy after the send succeeds. This used to run inside GET
-    // /internal/stripe/status — a read that wrote — so it is a background
-    // pass now; the status endpoint stays read-only and reports the count.
-    setInterval(() => void promoteDeployedBillingRevs({ db, client: stripeRailway, log }).catch((err: unknown) => log.error("billing rev promotion pass failed", { err })), STRIPE_DELIVERY_MS),
   ];
+  // AgentDash (GH #923): a box adopts the billing config it was sent once a
+  // deploy after the send succeeds. This used to run inside GET
+  // /internal/stripe/status — a read that wrote — so it is a background pass
+  // now (once a minute, never overlapping; see BILLING_PROMOTION_MS); the
+  // status endpoint stays read-only and reports the count.
+  const billingPromotion = startBillingPromotionPass({ db, client: stripeRailway, log });
   for (const t of passes) t.unref();
 
   // AgentDash (SC-10, GH #771): fleet health, alerts, the Free idle policy and the spend alarm.
@@ -186,6 +187,7 @@ async function main() {
     if (rolloutTimer) clearInterval(rolloutTimer);
     stopBackups?.();
     for (const t of passes) clearInterval(t);
+    billingPromotion.stop();
     monitor.stop();
     void (runner?.stop() ?? Promise.resolve()).finally(() => {
       server.close(() => void close().finally(() => process.exit(0)));

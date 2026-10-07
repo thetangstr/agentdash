@@ -174,7 +174,14 @@ export async function assertBoxProject(client: RailwayClient, workspaceId: strin
  */
 export async function promoteDeployedBillingRevs(deps: Pick<SyncDeps, "db" | "client" | "log" | "signal">): Promise<number> {
   if (!deps.client) return 0;
-  const waiting = await deps.db.select().from(boxes).where(and(isNotNull(boxes.stripeConfigPendingRev), isNotNull(boxes.webServiceId)));
+  // AgentDash (GH #923 review): only boxes billing sync still serves. A deleted or
+  // failed box keeps its pending rev (cleanup flips only `state`), and its Railway
+  // project is gone, so without this filter the background pass would call Railway
+  // and log a warning for it on every run, for ever.
+  const waiting = await deps.db
+    .select()
+    .from(boxes)
+    .where(and(inArray(boxes.state, [...BILLING_SYNC_STATES]), isNotNull(boxes.stripeConfigPendingRev), isNotNull(boxes.webServiceId)));
   let promoted = 0;
   for (const box of waiting) {
     try {
@@ -195,6 +202,60 @@ export async function promoteDeployedBillingRevs(deps: Pick<SyncDeps, "db" | "cl
     }
   }
   return promoted;
+}
+
+/**
+ * How often the background pass promotes billing revs (GH #923 review): once a
+ * minute, not the 15 s Stripe delivery cadence. It makes one Railway call per
+ * box with a pending rev, and right after a key rotation or a price change that
+ * is every box, on the same token the provisioner, upgrades and backups use
+ * (Railway rate-limits per token). Nothing waits on it but a human watching
+ * `admin stripe status` reach boxesPendingDeploy: 0 after redeploys that
+ * themselves take minutes, so a minute of extra latency costs nothing and cuts
+ * the call rate to a quarter.
+ */
+export const BILLING_PROMOTION_MS = 60_000;
+
+export interface BillingPromotionPass {
+  /** One pass now; resolves to null when the previous pass is still running (skipped). */
+  runOnce(): Promise<number | null>;
+  stop(): void;
+}
+
+/**
+ * Run promoteDeployedBillingRevs every `intervalMs`, never two at once: a pass
+ * still running when the next tick fires (many pending boxes, slow Railway)
+ * makes that tick a no-op instead of doubling the call rate. Failures of a
+ * whole pass are logged, never thrown. stop() clears the timer and aborts a
+ * pass in flight.
+ */
+export function startBillingPromotionPass(deps: Pick<SyncDeps, "db" | "client" | "log"> & { intervalMs?: number }): BillingPromotionPass {
+  const abort = new AbortController();
+  let running = false;
+  const runOnce = async (): Promise<number | null> => {
+    if (running) {
+      deps.log.debug("billing rev promotion pass still running; skipping this tick");
+      return null;
+    }
+    running = true;
+    try {
+      return await promoteDeployedBillingRevs({ db: deps.db, client: deps.client, log: deps.log, signal: abort.signal });
+    } catch (err) {
+      if (!abort.signal.aborted) deps.log.error("billing rev promotion pass failed", { err });
+      return 0;
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void runOnce(), deps.intervalMs ?? BILLING_PROMOTION_MS);
+  timer.unref();
+  return {
+    runOnce,
+    stop() {
+      clearInterval(timer);
+      abort.abort();
+    },
+  };
 }
 
 export interface SyncResult {
