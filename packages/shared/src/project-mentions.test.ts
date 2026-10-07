@@ -49,4 +49,21 @@ describe("project-mentions", () => {
     });
     expect(extractSkillMentionIds(`[/release-changelog](${href})`)).toEqual(["skill-123"]);
   });
+
+  it("keeps a run of unclosed brackets linear", () => {
+    // UltraQA-B: `[^\]]*` allowed `[`, so a blob of open brackets backtracked
+    // one char at a time per start position — 200KB of `[` took ~21s per
+    // regex and the four mention extractors run on every comment body.
+    const blob = "[".repeat(200_000);
+    const started = Date.now();
+    for (const extract of [
+      extractProjectMentionIds,
+      extractAgentMentionIds,
+      extractUserMentionIds,
+      extractSkillMentionIds,
+    ]) {
+      expect(extract(blob)).toEqual([]);
+    }
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });

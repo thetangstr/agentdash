@@ -1,5 +1,6 @@
 import { isPrivateHumanInputRoute, redactHumanRequestBody } from "./redact-sensitive.js";
 import type { Request, Response, NextFunction } from "express";
+import { STATUS_CODES } from "node:http";
 import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
 import { trackErrorHandlerCrash } from "@paperclipai/shared/telemetry";
@@ -10,6 +11,9 @@ import { logger } from "./logger.js";
 
 /** SQLSTATE invalid_text_representation — a value Postgres could not cast. */
 const PG_INVALID_TEXT_REPRESENTATION = "22P02";
+
+/** SQLSTATE character_not_in_repertoire — a byte sequence (e.g. NUL) Postgres cannot store in text. */
+const PG_CHARACTER_NOT_IN_REPERTOIRE = "22021";
 
 /**
  * AgentDash: a malformed id that reached a uuid column is the caller's error.
@@ -27,11 +31,30 @@ function isInvalidUuidInput(err: unknown): boolean {
   );
 }
 
-/** SQLSTATE foreign_key_violation — the write named a row that does not exist. */
-const PG_FOREIGN_KEY_VIOLATION = "23503";
+/**
+ * UltraQA-B: a byte sequence Postgres cannot store in a text column — the
+ * common case is an embedded NUL — is the caller's bad input, not a server
+ * crash. Answered 400 without recording, matching the uuid-cast mapping.
+ */
+function isCharacterNotInRepertoire(err: unknown): boolean {
+  return unwrapPgError(err).code === PG_CHARACTER_NOT_IN_REPERTOIRE;
+}
 
-function isForeignKeyViolation(err: unknown): boolean {
-  return unwrapPgError(err).code === PG_FOREIGN_KEY_VIOLATION;
+/**
+ * UltraQA-B: body-parser raises http-errors objects — malformed JSON
+ * (entity.parse.failed), oversized bodies (entity.too.large) — carrying a
+ * numeric `status`/`statusCode` plus `expose: true`, not an HttpError
+ * instance. Honour Express's own convention and answer the status they
+ * carry. The `expose` requirement keeps server-thrown lookalikes (an error
+ * carrying a `status` field) on the recorded-500 path, and the response uses
+ * the standard reason phrase so a raw parse message can never echo request
+ * bytes back to the caller.
+ */
+function exposedClientErrorStatus(err: unknown): number | null {
+  if (!err || typeof err !== "object" || (err as { expose?: unknown }).expose !== true) return null;
+  const status =
+    (err as { status?: unknown }).status ?? (err as { statusCode?: unknown }).statusCode;
+  return typeof status === "number" && status >= 400 && status < 500 ? status : null;
 }
 
 const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -60,6 +83,16 @@ export function invalidUuidLogFields(req: Request) {
     path: redactPathForLog(req.originalUrl ?? ""),
     nonUuidParams: nonUuidParamNames(req.params),
     nonUuidQuery: nonUuidParamNames(req.query),
+  };
+}
+
+export function characterNotInRepertoireLogFields(req: Request) {
+  const routePath = (req as Request & { route?: { path?: unknown } }).route?.path;
+  return {
+    method: req.method,
+    route: typeof routePath === "string" ? `${req.baseUrl ?? ""}${routePath}` : null,
+    path: redactPathForLog(req.originalUrl ?? ""),
+    code: PG_CHARACTER_NOT_IN_REPERTOIRE,
   };
 }
 
@@ -102,6 +135,40 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ) {
+  // UltraQA-B: http-errors client errors answer their own status before the
+  // private-route rewrite below strips the status fields off non-HttpError
+  // errors. The response is only a reason phrase — nothing private can leak.
+  const clientErrorStatus = exposedClientErrorStatus(err);
+  if (clientErrorStatus !== null) {
+    res.status(clientErrorStatus).json({ error: STATUS_CODES[clientErrorStatus] ?? "Bad Request" });
+    return;
+  }
+
+  // These Postgres mappings run on the original error, before the
+  // private-route rewrite below, so private routes answer the same 400s.
+  // Both responses are fixed strings: nothing from the request or the
+  // driver message reaches the caller.
+  if (isInvalidUuidInput(err)) {
+    logger.warn(
+      invalidUuidLogFields(req),
+      "invalid uuid reached the database; answered 400 (caller error, or a server bug if no listed parameter explains it)",
+    );
+    res.status(400).json({ error: "Invalid identifier" });
+    return;
+  }
+
+  if (isCharacterNotInRepertoire(err)) {
+    // A NUL can also come from server-originated text (adapter output,
+    // imports, plugins), so keep a warn trail like the uuid mapping. Route
+    // and method only: never the driver message or any value.
+    logger.warn(
+      characterNotInRepertoireLogFields(req),
+      "text Postgres cannot store (e.g. NUL) reached the database; answered 400 (caller error, or a server bug if the route persists server-originated text)",
+    );
+    res.status(400).json({ error: "Text contains a byte sequence Postgres cannot store" });
+    return;
+  }
+
   // AgentDash: database/adapter exceptions can embed source text in their
   // message or query. The error sink receives only a safe error on private paths.
   if (isPrivateHumanInputRoute(req.originalUrl) && !(err instanceof ZodError)) {
@@ -133,45 +200,6 @@ export function errorHandler(
 
   if (err instanceof ZodError) {
     res.status(400).json({ error: "Validation error", details: err.errors });
-    return;
-  }
-
-  if (isInvalidUuidInput(err)) {
-    logger.warn(
-      invalidUuidLogFields(req),
-      "invalid uuid reached the database; answered 400 (caller error, or a server bug if no listed parameter explains it)",
-    );
-    res.status(400).json({ error: "Invalid identifier" });
-    return;
-  }
-
-  // AgentDash (GH #921): a foreign-key violation means the write referenced a
-  // row that does not exist or cannot hold the reference — a client error on
-  // any public route, never a recorded 500. Warn-logged for the same reason
-  // as the uuid case: an FK failure the route did not expect is often a server
-  // bug and should leave a trail.
-  if (isForeignKeyViolation(err)) {
-    logger.warn(
-      invalidUuidLogFields(req),
-      "foreign-key violation reached the error handler; answered 422 (caller referenced a missing row, or a server bug)",
-    );
-    res.status(422).json({ error: "Request references a resource that does not exist" });
-    return;
-  }
-
-  // AgentDash (GH #921): express's body parsers (and other upstream
-  // middleware) reject bad requests with an error that already carries a 4xx
-  // status — `entity.parse.failed` for malformed JSON, `entity.too.large` for
-  // an over-limit body. These used to fall through to a recorded 500. Any
-  // error that arrives pre-tagged with a 4xx status is a client error and
-  // answers that status; `expose` (body-parser's own marker for
-  // client-safe text) decides whether the message goes out.
-  const upstreamStatus = (err as { status?: unknown }).status ?? (err as { statusCode?: unknown }).statusCode;
-  if (typeof upstreamStatus === "number" && upstreamStatus >= 400 && upstreamStatus < 500) {
-    const expose = (err as { expose?: unknown }).expose;
-    res.status(upstreamStatus).json({
-      error: expose === true && err instanceof Error ? err.message : "Request failed",
-    });
     return;
   }
 
