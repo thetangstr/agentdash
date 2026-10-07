@@ -48,7 +48,7 @@
     "@anthropic-ai/sdk": "^0.92.0",
     "@aws-sdk/client-s3": "^3.888.0",
     "@microsoft/teams.apps": "^2.0.14",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@paperclipai/adapter-acpx-local": "workspace:*",
     "@paperclipai/adapter-claude-local": "workspace:*",
     "@paperclipai/adapter-codex-local": "workspace:*",
@@ -85,7 +85,7 @@
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
     "pino-pretty": "^13.1.3",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "stripe": "^22.1.0",
     "ws": "^8.21.0",
     "zod": "^3.24.2"
