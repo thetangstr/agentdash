@@ -15,6 +15,7 @@ import { budgetsApi } from "../api/budgets";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
+import { AgentConfigAccessNotice, isAgentConfigForbidden } from "../components/agent/AgentConfigAccessNotice";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
@@ -2435,7 +2436,7 @@ function AgentConfigurePage({
   const queryClient = useQueryClient();
   const [revisionsOpen, setRevisionsOpen] = useState(false);
 
-  const { data: configRevisions } = useQuery({
+  const { data: configRevisions, error: configRevisionsError } = useQuery({
     queryKey: queryKeys.agents.configRevisions(agent.id),
     queryFn: () => agentsApi.listConfigRevisions(agent.id, companyId),
   });
@@ -2478,11 +2479,15 @@ function AgentConfigurePage({
             : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
           }
           Configuration Revisions
-          <span className="text-xs font-normal text-muted-foreground">{configRevisions?.length ?? 0}</span>
+          {isAgentConfigForbidden(configRevisionsError) ? null : (
+            <span className="text-xs font-normal text-muted-foreground">{configRevisions?.length ?? 0}</span>
+          )}
         </button>
         {revisionsOpen && (
           <div className="mt-3">
-            {(configRevisions ?? []).length === 0 ? (
+            {isAgentConfigForbidden(configRevisionsError) ? (
+              <AgentConfigAccessNotice what="configuration history" />
+            ) : (configRevisions ?? []).length === 0 ? (
               <p className="text-sm text-muted-foreground">No configuration revisions yet.</p>
             ) : (
               <div className="space-y-2">
@@ -2730,7 +2735,7 @@ function PromptsTab({
   const getCapabilities = useAdapterCapabilities();
   const isLocal = getCapabilities(agent.adapterType).supportsInstructionsBundle;
 
-  const { data: bundle, isLoading: bundleLoading } = useQuery({
+  const { data: bundle, isLoading: bundleLoading, error: bundleError } = useQuery({
     queryKey: queryKeys.agents.instructionsBundle(agent.id),
     queryFn: () => agentsApi.instructionsBundle(agent.id, companyId),
     enabled: Boolean(companyId && isLocal),
@@ -2999,6 +3004,10 @@ function PromptsTab({
         </p>
       </div>
     );
+  }
+
+  if (isAgentConfigForbidden(bundleError)) {
+    return <AgentConfigAccessNotice what="instructions" />;
   }
 
   if (bundleLoading && !bundle) {
@@ -3493,7 +3502,7 @@ export function AgentSkillsTab({
   const hasHydratedSkillSnapshotRef = useRef(false);
   const skipNextSkillAutosaveRef = useRef(true);
 
-  const { data: skillSnapshot, isLoading } = useQuery({
+  const { data: skillSnapshot, isLoading, error: skillSnapshotError } = useQuery({
     queryKey: queryKeys.agents.skills(agent.id),
     queryFn: () => agentsApi.skills(agent.id, companyId),
     enabled: Boolean(companyId),
@@ -3666,6 +3675,10 @@ export function AgentSkillsTab({
     : hasUnsavedChanges
       ? "Saving soon..."
       : null;
+
+  if (isAgentConfigForbidden(skillSnapshotError)) {
+    return <AgentConfigAccessNotice what="skills" />;
+  }
 
   return (
     <div className="max-w-4xl space-y-5">

@@ -328,3 +328,5 @@ The complete schema is in [the reference](/api/reference#tag/agents/getAgent).
 ## Everything else
 
 Any operation can also answer 401 when no credential resolves and 429 when rate limited — see [Conventions](/api/conventions). Other routes on this resource (create, hire, approve, terminate and delete, permissions, instructions, configuration and revisions, skills, runtime state, connect codes, wakeup and heartbeat, org chart, adapter models, runs) are internal — see [the route index](/api/route-index), under `agents`.
+
+Of those, reading one agent's configuration, configuration revisions, skills or instructions bundle needs the same authority as changing it: a person with `agents:create`, an instance admin, or — where stewardship is enabled — the agent's steward or creator; anyone else gets 403. Agent keys need the `canCreateAgents` permission or an `agents:create` grant. The company-wide `GET /api/companies/{companyId}/agent-configurations` stays limited to `agents:create` holders. The adapter environment probe the create form uses (`POST /api/companies/{companyId}/adapters/{type}/test-environment`) is open to everyone who may create agents.
