@@ -97,6 +97,9 @@ import { Landing as MarketingLanding } from "./marketing/pages/Landing";
 import { Demo as MarketingDemo } from "./marketing/pages/Demo";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
 import { About as MarketingAbout } from "./marketing/pages/About";
+import { WhatsNew as MarketingWhatsNew } from "./marketing/pages/WhatsNew";
+import { LaunchWeek as MarketingLaunchWeek } from "./marketing/pages/LaunchWeek";
+import { isMarketingPath } from "./marketing/marketing-path";
 // AgentDash (SC-7, GH #768): the self-serve front door on www.
 import { Start as MarketingStart } from "./marketing/pages/Start";
 import { StartVerify as MarketingStartVerify } from "./marketing/pages/StartVerify";
@@ -380,6 +383,8 @@ export function App() {
         <Route path="demo" element={<MarketingDemo />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
+        <Route path="whats-new" element={<MarketingWhatsNew />} />
+        <Route path="whats-new/launch-week" element={<MarketingLaunchWeek />} />
         {/* AgentDash (SC-7, GH #768): signup, magic-link landing, progress and returning users. */}
         {/* AgentDash: www-only (they call /api/cloud); a hosted box sends them to its own sign-in. */}
         <Route path="start" element={<WwwOnlyRoute><MarketingStart /></WwwOnlyRoute>} />
@@ -521,13 +526,9 @@ export function App() {
 // AgentDash: the public marketing surface does not depend on the API, so a
 // server outage must not blur the homepage with the dashboard's
 // "Connection Lost" overlay. Marketing routes render MarketingShell.
-function isDocsPath(pathname: string): boolean {
-  return pathname === "/docs" || pathname.startsWith("/docs/");
-}
-const MARKETING_PATHS = new Set(["/", "/demo", "/about", "/consulting", "/mcp", "/start", "/start/verify", "/start/progress", "/find"]);
 function ProductOnlyOverlay() {
   const location = useLocation();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
-  if (MARKETING_PATHS.has(pathname) || isDocsPath(pathname)) return null;
+  if (isMarketingPath(pathname)) return null;
   return <ServerUnreachableOverlay />;
 }

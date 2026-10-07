@@ -1,0 +1,31 @@
+.mkt-release-demo { margin: 0; min-width: 0; overflow: hidden; background: var(--mkt-surface-card); border: 1px solid var(--mkt-rule-strong); border-radius: var(--mkt-radius-lg); box-shadow: var(--mkt-shadow-card); }
+.mkt-release-demo figcaption { padding: 16px 24px; font: 11px var(--mkt-font-mono); text-transform: uppercase; letter-spacing: .07em; color: var(--mkt-ink-soft); border-bottom: 1px solid var(--mkt-rule); background: var(--mkt-surface-cream-2); }
+.mkt-release-demo__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 24px 24px; }
+.mkt-release-demo__controls button { border: 1px solid var(--mkt-rule-strong); border-radius: var(--mkt-radius-sm); padding: 9px 12px; background: var(--mkt-surface-cream); color: var(--mkt-ink); cursor: pointer; font: 13px var(--mkt-font-sans); min-height: 40px; }
+.mkt-release-demo__controls button:hover { background: var(--mkt-accent-tint); }
+.mkt-release-demo__controls > span, .mkt-release-demo__hint { color: var(--mkt-ink-soft); font-size: 12px; }
+.mkt-release-demo__hint { padding: 0 24px 24px; margin: 0; }
+.mkt-team-example { padding: 24px; }
+.mkt-team-example__heading, .mkt-team-example__selected { display: flex; align-items: center; gap: 12px; font-size: 14px; padding: 12px; }
+.mkt-team-example__heading > span:last-child, .mkt-team-example__selected > span:last-child { margin-left: auto; color: var(--mkt-ink-soft); font-size: 11px; }
+.mkt-team-example__avatar { display: grid; place-items: center; width: 30px; height: 30px; background: var(--mkt-accent-tint); border-radius: 8px; font: 12px var(--mkt-font-mono); }
+.mkt-team-example details { padding: 16px 12px; border-top: 1px solid var(--mkt-rule); }
+.mkt-team-example summary { cursor: pointer; font-size: 14px; }
+.mkt-team-example summary span { float: right; color: var(--mkt-ink-soft); font-size: 11px; }
+.mkt-team-example details[open] > ul, .mkt-team-example details[open] > p { animation: mkt-team-reveal .25s var(--mkt-ease); }
+.mkt-team-example ul { display: grid; gap: 12px; list-style: none; margin: 16px 0 0; padding-left: 16px; font-size: 13px; }
+.mkt-team-example__dot { display: inline-block; width: 7px; height: 7px; background: var(--mkt-success); border-radius: 50%; margin-right: 10px; }
+.mkt-team-example__note { font-size: 12px; color: var(--mkt-ink-soft); margin: 12px 0 0 16px; }
+.mkt-team-example__selected { background: var(--mkt-teal-tint); border-radius: var(--mkt-radius-sm); }
+.mkt-team-example__selected .mkt-team-example__avatar { background: #fff; }
+.mkt-release-demo--transcript { background: var(--mkt-term-bg); color: var(--mkt-term-fg); }
+.mkt-release-demo--transcript figcaption { background: var(--mkt-term-bg-2); border-color: var(--mkt-term-rule); color: var(--mkt-term-dim); }
+.mkt-transcript-example__status { display: flex; gap: 12px; justify-content: space-between; padding: 16px 24px; color: var(--mkt-term-teal); font: 11px var(--mkt-font-mono); }
+.mkt-transcript-example__status span { color: var(--mkt-term-dim); }
+.mkt-transcript-example__pane { height: 184px; overflow-y: auto; overscroll-behavior: contain; margin: 0 24px 24px; scrollbar-color: var(--mkt-term-rule) transparent; }
+.mkt-transcript-example__pane p { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid var(--mkt-term-rule); font-size: 13px; margin: 0; animation: mkt-team-reveal .25s var(--mkt-ease); }
+.mkt-transcript-example__pane time { color: var(--mkt-term-dim); font: 11px var(--mkt-font-mono); padding-top: 3px; }
+.mkt-release-demo--transcript .mkt-release-demo__hint { color: var(--mkt-term-dim); }
+@keyframes mkt-team-reveal { from { opacity: .4; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .mkt-release-demo *, .mkt-release-demo *::before, .mkt-release-demo *::after { animation: none !important; transition: none !important; } }
+@media (max-width: 400px) { .mkt-release-demo figcaption { padding-inline: 16px; } .mkt-team-example { padding: 16px; } .mkt-transcript-example__status { padding-inline: 16px; font-size: 10px; } }

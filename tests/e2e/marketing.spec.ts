@@ -70,11 +70,69 @@ test.describe("marketing site", () => {
   });
 
   test("secondary pages render on the marketing shell", async ({ page }) => {
-    for (const path of ["/about", "/consulting", "/mcp"]) {
+    for (const path of ["/about", "/consulting", "/mcp", "/whats-new", "/whats-new/launch-week"]) {
       await page.goto(path);
       await expect(page.locator(".mkt-root")).toBeVisible();
       await expect(page.locator("h1")).toBeVisible();
       await expect(page.locator("body")).not.toContainText(/\[Founder|Placeholder/);
     }
+  });
+});
+
+
+test.describe("What's new launch update", () => {
+  test("is discoverable, links its source notes, and lets readers use the illustrations", async ({ page }) => {
+    await page.goto("/whats-new");
+    await expect(page).toHaveTitle(/What's new/);
+    await expect(page.locator(".mkt-header__nav").getByRole("link", { name: "What’s new" })).toHaveAttribute("href", "/whats-new");
+    await page.getByRole("link", { name: "Read the update" }).click();
+    await expect(page).toHaveURL(/\/whats-new\/launch-week$/);
+    await expect(page.locator("h1")).toContainText("Find your team");
+    await expect(page.locator("figure figcaption")).toHaveCount(2);
+    for (const caption of await page.locator("figure figcaption").allTextContents()) expect(caption).toContain("Simulated illustration");
+    await expect(page.getByRole("link", { name: "v2026.1007.1 release notes" })).toHaveAttribute("href", /\/blob\/main\/releases\/v2026.1007.1.md$/);
+
+    const teams = page.getByRole("figure", { name: "Team sidebar example" });
+    const team = teams.locator("details").first();
+    await team.locator("summary").focus();
+    await page.keyboard.press("Enter");
+    await expect(team).not.toHaveAttribute("open");
+    await expect(teams.locator('[aria-current="true"]')).toBeVisible();
+
+    const transcript = page.getByRole("figure", { name: "Transcript following example" });
+    await transcript.scrollIntoViewIfNeeded();
+    await transcript.getByRole("button", { name: "Play output" }).click();
+    await transcript.getByRole("button", { name: "Read earlier" }).click();
+    await expect(transcript.getByRole("status")).toContainText("Following paused");
+    const pane = transcript.getByRole("region");
+    const heldTop = await pane.evaluate((element) => element.scrollTop);
+    await expect(pane).toContainText("Draft prepared");
+    expect(await pane.evaluate((element) => element.scrollTop)).toBe(heldTop);
+    await expect(pane).toContainText("Update ready to read");
+    await transcript.getByRole("button", { name: "Jump to latest" }).click();
+    await expect(transcript.getByRole("status")).toContainText("Following latest");
+    await expect.poll(() => pane.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+    // Browser wheel input releases follow without using the helper button.
+    await pane.hover();
+    await page.mouse.wheel(0, -200);
+    await expect(transcript.getByRole("status")).toContainText("Following paused");
+  });
+
+  test("supports reduced motion, keyboard controls, and phone/tablet layouts", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    for (const width of [390, 900, 1024]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/whats-new/launch-week");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+      await expect(page.locator(".mkt-header__toggle")).toBeVisible();
+      await page.getByRole("button", { name: "Open menu" }).click();
+      await expect(page.locator(".mkt-header__sheet").getByRole("link", { name: "What’s new" })).toBeVisible();
+      await page.keyboard.press("Escape");
+    }
+    const transcript = page.getByRole("figure", { name: "Transcript following example" });
+    await transcript.getByRole("button", { name: "Next output" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(transcript).toContainText("Draft prepared");
+    await expect(transcript.getByRole("button", { name: "Play output" })).toHaveCount(0);
   });
 });
