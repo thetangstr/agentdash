@@ -7,7 +7,9 @@
 //
 //   prepare          eligibility (held, state, secrets present), what runs now
 //                    (tag, digest, the current SUCCESS deployment to roll back to)
-//   snapshot         a pre-upgrade snapshot of both volumes (database and /paperclip)
+//   snapshot         a pre-upgrade snapshot of both volumes (database and /paperclip);
+//                    at Railway's per-volume backup limit only, the oldest prunable
+//                    "Manual" backups are deleted first (bounded, see upgrade-api.ts)
 //   point            the web service's source → the release's GHCR image BY DIGEST
 //   variables        AGENTDASH_RELEASE_TAG → the release; variables already
 //                    upserted with skipDeploys (close-signup, the edge secret) ride
@@ -328,7 +330,11 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
         await event(ctx.db, box.id, "upgrade_started", { upgradeId: up.id, rolloutId: up.rolloutId, fromTag: box.releaseTag, toTag: up.toTag, toDigest: up.toDigest });
       }),
 
-      step("snapshot", 2 * 60_000, ["running"], async (ctx, up, box) => {
+      // AgentDash: the budget covers the backup prune. Each volume's prune is bounded
+      // by backupPruneWaitMs (BackupPruneTimeoutError, retried), so Railway's slow
+      // deletions end in that clear error rather than this step's timeout. Pruning
+      // and the snapshot share one step so a retry re-plans the prune too.
+      step("snapshot", 2 * backupPruneWaitMs + 2 * 60_000, ["running"], async (ctx, up, box) => {
         const snaps = { ...(up.snapshots ?? {}) } as Record<string, unknown>;
         if (snaps.pg && snaps.web) return;
         const p = await project(box, ctx.signal);
@@ -341,16 +347,19 @@ export function upgradeHandler(deps: UpgradeDeps): JobHandler {
           if (!vol) throw new Error(`the ${key} volume is not listed; retrying`);
           let workflowId: string;
           try {
-            // Railway caps a volume at 10 backups; accumulated "Manual" snapshots
-            // used to fail every eleventh upgrade. Prune the oldest ones first.
-            await makeRoomForVolumeBackup(client, vol.id, { signal: ctx.signal, limit: backupLimit, pollMs, waitMs: backupPruneWaitMs, log: ctx.log, sleep: (ms) => sleep(ms, ctx.signal) });
+            // Railway caps a volume at 10 backups; accumulated "Manual" snapshots used to
+            // fail every eleventh upgrade. At the limit only, prune the oldest prunable ones.
+            const pruned = await makeRoomForVolumeBackup(client, vol.id, { signal: ctx.signal, limit: backupLimit, pollMs, waitMs: backupPruneWaitMs, log: ctx.log, sleep: (ms) => sleep(ms, ctx.signal) });
+            if (pruned.length) await event(ctx.db, box.id, "pre_upgrade_backups_pruned", { upgradeId: up.id, volume: key, volumeInstanceId: vol.id, backupIds: pruned });
             workflowId = await createVolumeBackup(client, vol.id, { signal: ctx.signal });
           } catch (err) {
-            // Nothing prunable — or Railway still refuses the create — can never
-            // heal by retrying: fail dead so ops is paged once, not after 5 tries.
+            // Too few prunable backups never heals by retrying: fail dead so ops is paged
+            // once. Nothing was deleted on the pass that decided it. A slow deletion
+            // (BackupPruneTimeoutError) is transient and retries, as does a create refused
+            // because a scheduled backup landed after the prune (the retry prunes again).
             if (err instanceof BackupPruneExhaustedError) throw new FatalJobError(`cannot take the pre-upgrade ${key} snapshot: ${err.message}`);
             if (err instanceof RailwayApiError && err.messages.some((m) => /limit.*backup|backup.*limit/i.test(m))) {
-              throw new FatalJobError(`cannot take the pre-upgrade ${key} snapshot on volume instance ${vol.id}: ${err.messages.join("; ")}`);
+              throw new Error(`the pre-upgrade ${key} snapshot on volume instance ${vol.id} hit Railway's backup limit after pruning; retrying: ${err.messages.join("; ")}`);
             }
             throw err;
           }

@@ -64,6 +64,8 @@ export interface BoxFakeOptions {
   backupLimit?: number;
   /** List polls before a backup deletion completes (models the async workflow). */
   backupDeleteClearsAfterLists?: number;
+  /** The lock field VolumeInstanceBackup exposes to introspection (default "locked"; null = none). */
+  backupLockField?: string | null;
 }
 
 export class FakeRailwayBoxes extends FakeRailway {

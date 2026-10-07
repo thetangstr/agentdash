@@ -60,27 +60,37 @@ export async function createVolumeBackup(client: RailwayClient, volumeInstanceId
 // backups expire on their own, but pre-upgrade snapshots are "Manual" backups
 // that never expire, so the eleventh upgrade's snapshot was refused and the
 // upgrade retried until it died (seen live 2026-10-05). Before each snapshot
-// the upgrade prunes the oldest manual backups — never scheduled ones, never
-// a locked one, and never the newest KEEP_MANUAL_BACKUPS — until one slot is
-// free. Railway also runs only one deletion per volume at a time, so deletions
-// are waited out by polling the list, inside a bounded window.
+// the upgrade frees exactly the slots the new snapshot needs, and only when
+// the volume is at the limit. This deletes PRODUCTION backups, so it is
+// deliberately narrow:
+//   - it plans before it deletes: when too few backups are eligible to make
+//     room, it fails without deleting anything;
+//   - eligible = named "Manual", no expiry (scheduled ones expire), not
+//     locked, and not among the newest KEEP_MANUAL_BACKUPS manual ones;
+//   - Railway runs one deletion per volume at a time, so after each delete it
+//     polls the backup LIST until that backup is gone (never re-sending the
+//     delete), inside one bounded window per volume.
 
 export interface VolumeBackup {
   id: string;
   name: string | null;
   createdAt: string;
   expiresAt: string | null;
+  /** True when Railway reports the backup locked (see backupLockField). Never pruned. */
+  locked: boolean;
 }
 
 export const DEFAULT_VOLUME_BACKUP_LIMIT = 10;
-/** The name Railway gives a backup taken through volumeInstanceBackupCreate. */
+/** The name Railway gives a backup taken through volumeInstanceBackupCreate without a name. */
 export const MANUAL_BACKUP_NAME = "Manual";
 /** The newest manual backups a prune will not touch. */
 export const KEEP_MANUAL_BACKUPS = 2;
-/** How long to keep waiting for deletions Railway is still running. */
+/** The smallest workable limit: the kept manual backups, one prunable, and the new snapshot. */
+export const MIN_VOLUME_BACKUP_LIMIT = KEEP_MANUAL_BACKUPS + 2;
+/** How long one volume's prune may wait on Railway's deletions in total. */
 export const BACKUP_PRUNE_WAIT_MS = 5 * 60_000;
 
-/** Pruning cannot free a slot: scheduled, kept, or locked backups fill the volume. Never retried. */
+/** Too few backups can be pruned to free a slot. Nothing was deleted on the pass that decided this. Never retried. */
 export class BackupPruneExhaustedError extends Error {
   constructor(message: string) {
     super(message);
@@ -88,15 +98,65 @@ export class BackupPruneExhaustedError extends Error {
   }
 }
 
+/** Railway's deletion did not finish inside the prune window. Transient: the job retries. */
+export class BackupPruneTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackupPruneTimeoutError";
+  }
+}
+
+// Railway's VolumeInstanceBackup type is not documented. Rather than guess a
+// lock field's name (selecting a field that does not exist fails the whole
+// query), read the type once per client and select any scalar field whose
+// name mentions "lock". Without one, Railway's own refusal ("locked") is the
+// backstop, and that backup is skipped.
+type IntrospectedType = { kind: string; ofType?: IntrospectedType | null } | null;
+const lockFields = new WeakMap<RailwayClient, string | null>();
+
+/** The name of VolumeInstanceBackup's lock field, or null when Railway exposes none (or the schema cannot be read). */
+export async function backupLockField(client: RailwayClient, o: Opt & { log?: Logger } = {}): Promise<string | null> {
+  if (lockFields.has(client)) return lockFields.get(client)!;
+  try {
+    const d = await client.request<{ __type: { fields: Array<{ name: string; type: IntrospectedType }> | null } | null }>(
+      "backupSchema",
+      `query{ __type(name:"VolumeInstanceBackup"){ fields{ name type{ kind ofType{ kind } } } } }`,
+      {},
+      o,
+    );
+    const scalar = (t: IntrospectedType) => t?.kind === "SCALAR" || (t?.kind === "NON_NULL" && t.ofType?.kind === "SCALAR");
+    const field = (d.__type?.fields ?? []).find((f) => /lock/i.test(f.name) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(f.name) && scalar(f.type));
+    const name = field?.name ?? null;
+    lockFields.set(client, name);
+    return name;
+  } catch (err) {
+    if (o.signal?.aborted) throw err;
+    // Not cached: the next prune asks again.
+    o.log?.warn("could not read Railway's backup schema; relying on Railway to refuse locked backups", { error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
 /** Every backup on one volume instance, manual and scheduled. */
-export async function listVolumeBackups(client: RailwayClient, volumeInstanceId: string, o: Opt = {}): Promise<VolumeBackup[]> {
-  const d = await client.request<{ volumeInstanceBackupList: VolumeBackup[] | null }>(
+export async function listVolumeBackups(client: RailwayClient, volumeInstanceId: string, o: Opt & { lockField?: string | null } = {}): Promise<VolumeBackup[]> {
+  const lock = o.lockField && /^[A-Za-z_][A-Za-z0-9_]*$/.test(o.lockField) ? o.lockField : null;
+  const d = await client.request<{ volumeInstanceBackupList: Array<Record<string, unknown>> | null }>(
     "volumeInstanceBackupList",
-    `query($v:String!){ volumeInstanceBackupList(volumeInstanceId:$v){ id name createdAt expiresAt } }`,
+    `query($v:String!){ volumeInstanceBackupList(volumeInstanceId:$v){ id name createdAt expiresAt${lock ? ` ${lock}` : ""} } }`,
     { v: volumeInstanceId },
-    o,
+    { signal: o.signal },
   );
-  return d.volumeInstanceBackupList ?? [];
+  return (d.volumeInstanceBackupList ?? []).map((b) => {
+    const l = lock ? b[lock] : undefined;
+    return {
+      id: String(b.id),
+      name: typeof b.name === "string" ? b.name : null,
+      createdAt: String(b.createdAt),
+      expiresAt: typeof b.expiresAt === "string" ? b.expiresAt : null,
+      // Anything but an explicit "not locked" counts as locked.
+      locked: l !== undefined && l !== null && l !== false && l !== "",
+    };
+  });
 }
 
 /** Delete one backup from a volume instance; returns Railway's workflow id. */
@@ -110,76 +170,113 @@ export async function deleteVolumeBackup(client: RailwayClient, volumeInstanceId
   return d.volumeInstanceBackupDelete?.workflowId ?? "requested";
 }
 
+export interface BackupPrunePlan {
+  /** Backups that must go before one more fits (0 when the volume is under the limit). */
+  need: number;
+  /** Prunable backups, oldest first. */
+  eligible: VolumeBackup[];
+  manual: number;
+  locked: number;
+}
+
+/** Decide, without touching Railway, how many backups must go and which may. */
+export function planBackupPrune(backups: VolumeBackup[], o: { limit: number; keepManual: number; skip?: ReadonlySet<string> }): BackupPrunePlan {
+  const need = Math.max(0, backups.length - (o.limit - 1));
+  const byAge = (a: VolumeBackup, b: VolumeBackup) => Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  const manual = backups.filter((b) => b.name === MANUAL_BACKUP_NAME).sort(byAge);
+  // The newest manual backups are kept whatever their lock state.
+  const kept = new Set(manual.slice(Math.max(0, manual.length - o.keepManual)).map((b) => b.id));
+  const eligible = manual.filter((b) => !kept.has(b.id) && b.expiresAt === null && !b.locked && !o.skip?.has(b.id));
+  return { need, eligible, manual: manual.length, locked: backups.filter((b) => b.locked).length };
+}
+
 export interface PruneBackupOptions {
   signal?: AbortSignal;
   /** Railway's per-volume backup cap. */
   limit?: number;
   /** The newest manual backups never pruned. */
   keepManual?: number;
-  /** Between delete attempts while a deletion is in flight. */
+  /** Between list polls while a deletion runs. */
   pollMs?: number;
-  /** Give up waiting when no deletion has completed for this long. */
+  /** The whole prune of this volume, including every wait, must finish inside this. */
   waitMs?: number;
   log?: Logger;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 /**
- * Delete the oldest eligible manual backups until createVolumeBackup has a
- * free slot. A backup is eligible when it is named "Manual" and is not among
- * the newest `keepManual` manual ones. Refusals (locked, already gone) skip
- * that backup; a deletion Railway is still running is waited out; when no
- * eligible backup is left — or waiting outran `waitMs` without progress —
- * BackupPruneExhaustedError names the volume so the caller fails the job.
+ * Make room for one more backup on a volume instance. Under the limit it
+ * deletes nothing. At the limit it deletes the oldest eligible manual
+ * backups, one at a time, waiting (by listing) for each to disappear, and
+ * re-plans from a fresh list before every delete. Returns the pruned ids.
+ * Throws BackupPruneExhaustedError (before deleting anything on that pass)
+ * when too few backups are eligible, and BackupPruneTimeoutError when
+ * Railway's deletions outrun `waitMs`.
  */
-export async function makeRoomForVolumeBackup(client: RailwayClient, volumeInstanceId: string, o: PruneBackupOptions = {}): Promise<void> {
+export async function makeRoomForVolumeBackup(client: RailwayClient, volumeInstanceId: string, o: PruneBackupOptions = {}): Promise<string[]> {
   const limit = o.limit ?? DEFAULT_VOLUME_BACKUP_LIMIT;
   const keepManual = o.keepManual ?? KEEP_MANUAL_BACKUPS;
+  if (!Number.isInteger(limit) || limit < keepManual + 2) {
+    throw new BackupPruneExhaustedError(`backup limit ${limit} is too small: it must be at least ${keepManual + 2} (the ${keepManual} kept manual backups, one to prune, and the new snapshot)`);
+  }
   const pollMs = o.pollMs ?? 10_000;
   const waitMs = o.waitMs ?? BACKUP_PRUNE_WAIT_MS;
+  const now = o.now ?? Date.now;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const deadline = now() + waitMs;
+  const minutes = `${Math.round(waitMs / 6_000) / 10} min`;
+  const lockField = await backupLockField(client, { signal: o.signal, log: o.log });
+  const list = () => listVolumeBackups(client, volumeInstanceId, { signal: o.signal, lockField });
   const skipped = new Set<string>();
-  let lastProgress = Date.now();
+  const pruned: string[] = [];
 
   for (;;) {
     if (o.signal?.aborted) throw o.signal.reason;
-    const backups = await listVolumeBackups(client, volumeInstanceId, { signal: o.signal });
-    // One free slot after the new snapshot is taken: prune only at limit - 1.
-    if (backups.length < limit - 1) return;
-    const candidates = backups
-      .filter((b) => b.name === MANUAL_BACKUP_NAME && !skipped.has(b.id))
-      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-    const eligible = candidates.slice(0, Math.max(0, candidates.length - keepManual));
-    if (eligible.length === 0) {
-      const manual = backups.filter((b) => b.name === MANUAL_BACKUP_NAME).length;
+    const backups = await list();
+    const plan = planBackupPrune(backups, { limit, keepManual, skip: skipped });
+    if (plan.need === 0) return pruned;
+    if (plan.eligible.length < plan.need) {
       throw new BackupPruneExhaustedError(
-        `volume instance ${volumeInstanceId} holds ${backups.length} backups at the ${limit}-backup limit and none can be pruned ` +
-          `(${manual} manual, of which the newest ${keepManual} are always kept${manual ? "" : "; the rest are scheduled"}) — delete one in Railway, then retry the upgrade`,
+        `volume instance ${volumeInstanceId} holds ${backups.length} backups at the ${limit}-backup limit; ${plan.need} must go but only ` +
+          `${plan.eligible.length} can be pruned (${plan.manual} manual, the newest ${keepManual} always kept, ${plan.locked} locked, the rest scheduled), ` +
+          `so none was deleted${pruned.length ? ` on this pass (${pruned.length} pruned earlier: ${pruned.join(", ")})` : ""} — delete one in Railway, then retry the upgrade`,
       );
     }
-    const target = eligible[0]!;
+    const target = plan.eligible[0]!;
+    let workflowId: string;
     try {
-      const workflowId = await deleteVolumeBackup(client, volumeInstanceId, target.id, { signal: o.signal });
-      lastProgress = Date.now();
-      o.log?.info("pruned an old pre-upgrade backup", { volumeInstanceId, backupId: target.id, createdAt: target.createdAt, workflowId });
-      await sleep(pollMs);
+      workflowId = await deleteVolumeBackup(client, volumeInstanceId, target.id, { signal: o.signal });
     } catch (err) {
+      if (o.signal?.aborted) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       if (/deletion.*in progress|already.*in progress/i.test(msg)) {
-        if (Date.now() - lastProgress > waitMs) {
-          throw new BackupPruneExhaustedError(
-            `volume instance ${volumeInstanceId}: a backup deletion has been in progress for over ${Math.round(waitMs / 60_000)} min without completing — check the volume in Railway, then retry the upgrade`,
-          );
+        // Someone else's deletion (Railway runs one per volume): wait, then re-plan,
+        // because once it finishes the volume may already have room.
+        if (now() >= deadline) {
+          throw new BackupPruneTimeoutError(`volume instance ${volumeInstanceId}: another backup deletion was still in progress after ${minutes}; the upgrade will retry`);
         }
+        o.log?.info("waiting for a backup deletion already in progress", { volumeInstanceId });
         await sleep(pollMs);
         continue;
       }
-      if (/locked|not found|does not exist/i.test(msg)) {
+      if (/locked/i.test(msg) || (/backup/i.test(msg) && /not found|does not exist/i.test(msg) && !/volume/i.test(msg))) {
         skipped.add(target.id);
         o.log?.warn("a backup could not be pruned; leaving it alone", { volumeInstanceId, backupId: target.id, error: msg });
         continue;
       }
       throw err;
+    }
+    pruned.push(target.id);
+    o.log?.info("pruned an old pre-upgrade backup", { volumeInstanceId, backupId: target.id, createdAt: target.createdAt, workflowId });
+    // Railway deletes asynchronously: watch the list, never re-send the delete.
+    for (;;) {
+      if (now() >= deadline) {
+        throw new BackupPruneTimeoutError(`volume instance ${volumeInstanceId}: the deletion of backup ${target.id} had not finished after ${minutes}; the upgrade will retry`);
+      }
+      await sleep(pollMs);
+      if (o.signal?.aborted) throw o.signal.reason;
+      if (!(await list()).some((b) => b.id === target.id)) break;
     }
   }
 }

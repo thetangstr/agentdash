@@ -63,9 +63,18 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
         },
       },
       {
+        match: /__type\(name:"VolumeInstanceBackup"\)/,
+        op: "backupSchema",
+        resolve: () => {
+          const scalar = (name: string) => ({ name, type: { kind: "NON_NULL", ofType: { kind: "SCALAR" } } });
+          const lock = this.backupLockField();
+          return { __type: { fields: [scalar("id"), scalar("name"), scalar("createdAt"), { name: "expiresAt", type: { kind: "SCALAR", ofType: null } }, ...(lock ? [{ name: lock, type: { kind: "SCALAR", ofType: null } }] : [])] } };
+        },
+      },
+      {
         match: /volumeInstanceBackupList\(/,
         op: "volumeInstanceBackupList",
-        resolve: (v) => {
+        resolve: (v, _fake, query) => {
           const vol = this.volOfInstance(v.v);
           // A deletion in flight completes once the volume has been polled enough.
           if (vol.deleting && --vol.deleting.clearsAfterLists <= 0) {
@@ -73,7 +82,11 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
             vol.backupRecords = vol.backupRecords.filter((b) => b.id !== backupId);
             vol.deleting = null;
           }
-          return { volumeInstanceBackupList: vol.backupRecords.map((b) => ({ id: b.id, name: b.name, createdAt: b.createdAt, expiresAt: b.expiresAt })) };
+          const lock = this.backupLockField();
+          const selectsLock = lock !== null && new RegExp(`\\b${lock}\\b`).test(String(query));
+          return {
+            volumeInstanceBackupList: vol.backupRecords.map((b) => ({ id: b.id, name: b.name, createdAt: b.createdAt, expiresAt: b.expiresAt, ...(selectsLock ? { [lock]: b.locked ?? false } : {}) })),
+          };
         },
       },
       {
@@ -103,6 +116,11 @@ export class FakeRailwayUpgrade extends FakeRailwayBoxes {
         },
       },
     );
+  }
+
+  /** The lock field the fake's VolumeInstanceBackup schema exposes (null: none, so Railway's refusal is the only guard). */
+  backupLockField(): string | null {
+    return this.opts.backupLockField === undefined ? "locked" : this.opts.backupLockField;
   }
 
   volOfInstance(instanceId: unknown): FakeVolume {
