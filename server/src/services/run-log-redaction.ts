@@ -15,7 +15,9 @@
 // add run-scoped values (the run's injected JWT, resolved secret_ref env
 // values). Stored agent API keys and board tokens are hashed at rest and so
 // cannot be matched verbatim; they are covered by the `pcp_` shape instead.
+import { createHash } from "node:crypto";
 import {
+  REDACTION_RULES_VERSION,
   createSecretStreamRedactor,
   redactSecrets,
   redactSecretsInValue,
@@ -46,6 +48,25 @@ export function instanceKnownSecrets(env: NodeJS.ProcessEnv = process.env): stri
 /** Tests only: drop the cached instance secrets after env/profile fixtures change. */
 export function resetInstanceSecretsCacheForTests(): void {
   cachedInstanceSecrets = null;
+}
+
+let redactionEpochCache: { keys: string[]; epoch: string } | null = null;
+
+/**
+ * Fingerprint of what the run-log redactor hides right now: the shared rules
+ * version plus a hash of the sorted, de-duplicated instance known-secret set
+ * (never the secrets themselves). A written-redacted mark is only trusted
+ * while this is unchanged — a provider key added or rotated at runtime makes
+ * every earlier "already redacted" byte go through the serve pass again.
+ */
+export function runLogRedactionEpoch(): string {
+  const keys = instanceKnownSecrets();
+  if (redactionEpochCache && redactionEpochCache.keys === keys) return redactionEpochCache.epoch;
+  const hash = createHash("sha256").update(`rules:${REDACTION_RULES_VERSION}\u0000`);
+  for (const key of [...new Set(keys)].sort()) hash.update(`${key.length}:${key}\u0000`);
+  const epoch = hash.digest("hex");
+  redactionEpochCache = { keys, epoch };
+  return epoch;
 }
 
 function mergeSecrets(extra?: KnownSecrets): string[] {
@@ -105,7 +126,7 @@ function yieldToEventLoop(): Promise<void> {
 export async function redactRunLogNdjsonAsync(
   content: string,
   extraSecrets?: KnownSecrets,
-  opts?: { sliceMs?: number },
+  opts?: { sliceMs?: number; signal?: AbortSignal },
 ): Promise<string> {
   if (!content) return content;
   const sliceMs = opts?.sliceMs ?? NDJSON_YIELD_SLICE_MS;
@@ -116,6 +137,8 @@ export async function redactRunLogNdjsonAsync(
     lines[i] = redactRunLogNdjsonLine(lines[i]!, secrets);
     if (performance.now() - sliceStart >= sliceMs && i + 1 < lines.length) {
       await yieldToEventLoop();
+      // The client went away: stop spending CPU on a response nobody reads.
+      opts?.signal?.throwIfAborted();
       sliceStart = performance.now();
     }
   }
@@ -133,44 +156,56 @@ export const RUN_LOG_SERVE_MAX_UNVERIFIED_BYTES = 256_000;
 const NEWLINE = 0x0a;
 
 /**
- * Serve a run-log read: bytes the store vouches for (redacted at write time)
- * pass through; the rest gets the serve-time NDJSON pass, chunked so it
- * yields, and capped at `maxUnverifiedBytes` per request.
+ * Serve a run-log read: bytes the store vouches for (redacted at write time,
+ * in this process, under the current redaction epoch) pass through; the rest
+ * gets the serve-time NDJSON pass, chunked so it yields, and capped at
+ * `maxUnverifiedBytes` per request. Paging offsets are computed on the raw
+ * file bytes (`buffer`), never on re-encoded text.
  */
 export async function redactRunLogReadForServe(
   result: {
     content: string;
     nextOffset?: number;
     redactedAtPersist?: boolean;
-    verifiedChars?: number;
+    buffer?: Buffer;
+    verifiedBytes?: number;
     startOffset?: number;
   },
-  opts?: { maxUnverifiedBytes?: number; extraSecrets?: KnownSecrets },
+  opts?: { maxUnverifiedBytes?: number; extraSecrets?: KnownSecrets; signal?: AbortSignal },
 ): Promise<{ content: string; nextOffset?: number; redactedAtPersist: boolean }> {
-  const { content } = result;
   if (result.redactedAtPersist) {
-    return { content, nextOffset: result.nextOffset, redactedAtPersist: true };
+    return { content: result.content, nextOffset: result.nextOffset, redactedAtPersist: true };
   }
-  const verifiedChars = Math.max(0, Math.min(result.verifiedChars ?? 0, content.length));
-  const head = content.slice(0, verifiedChars);
-  let tail = content.slice(verifiedChars);
+  const { buffer } = result;
+  if (!buffer) {
+    // No raw bytes to page on (a caller-built result): whole-content pass.
+    return {
+      content: await redactRunLogNdjsonAsync(result.content, opts?.extraSecrets, { signal: opts?.signal }),
+      nextOffset: result.nextOffset,
+      redactedAtPersist: false,
+    };
+  }
+  const verifiedBytes = Math.max(0, Math.min(result.verifiedBytes ?? 0, buffer.length));
+  let tailBytes = buffer.subarray(verifiedBytes);
   let nextOffset = result.nextOffset;
   const cap = Math.max(1, opts?.maxUnverifiedBytes ?? RUN_LOG_SERVE_MAX_UNVERIFIED_BYTES);
-  if (typeof result.startOffset === "number" && tail.length > 0) {
-    const tailBytes = Buffer.from(tail, "utf8");
-    if (tailBytes.length > cap) {
-      // Cut after the last newline inside the cap so the next page starts a
-      // whole line (a secret is never split across two redaction passes). A
-      // single line longer than the cap is kept whole.
-      let cut = tailBytes.lastIndexOf(NEWLINE, cap - 1) + 1;
-      if (cut <= 0) cut = tailBytes.indexOf(NEWLINE, cap) + 1;
-      if (cut > 0 && cut < tailBytes.length) {
-        tail = tailBytes.subarray(0, cut).toString("utf8");
-        nextOffset = result.startOffset + Buffer.byteLength(head, "utf8") + cut;
-      }
+  if (typeof result.startOffset === "number" && tailBytes.length > cap) {
+    // Cut just after the last newline inside the cap — on the raw file bytes
+    // — so the next page starts a whole line (a secret is never split across
+    // two redaction passes). A single line longer than the cap is kept whole.
+    let cut = tailBytes.lastIndexOf(NEWLINE, cap - 1) + 1;
+    if (cut <= 0) cut = tailBytes.indexOf(NEWLINE, cap) + 1;
+    if (cut > 0 && cut < tailBytes.length) {
+      tailBytes = tailBytes.subarray(0, cut);
+      nextOffset = result.startOffset + verifiedBytes + cut;
     }
   }
-  const redactedTail = await redactRunLogNdjsonAsync(tail, opts?.extraSecrets);
+  // The verified boundary sits just after a newline (or at 0), so decoding
+  // the two halves separately equals decoding the range as one.
+  const head = buffer.subarray(0, verifiedBytes).toString("utf8");
+  const redactedTail = await redactRunLogNdjsonAsync(tailBytes.toString("utf8"), opts?.extraSecrets, {
+    signal: opts?.signal,
+  });
   return { content: head + redactedTail, nextOffset, redactedAtPersist: false };
 }
 

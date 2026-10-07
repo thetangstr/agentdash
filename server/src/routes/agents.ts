@@ -5069,10 +5069,26 @@ export function agentRoutes(
 
     const offset = Number(req.query.offset ?? 0);
     const limitBytes = readRunLogLimitBytes(req.query.limitBytes);
-    const result = await heartbeat.readLog(run, {
-      offset: Number.isFinite(offset) ? offset : 0,
-      limitBytes,
-    });
+    // AgentDash: stop the serve-time redaction pass if the client disconnects
+    // before the response is written.
+    const abort = new AbortController();
+    const onClose = () => {
+      if (!res.writableFinished) abort.abort();
+    };
+    res.on("close", onClose);
+    let result: Awaited<ReturnType<typeof heartbeat.readLog>>;
+    try {
+      result = await heartbeat.readLog(run, {
+        offset: Number.isFinite(offset) ? offset : 0,
+        limitBytes,
+        signal: abort.signal,
+      });
+    } catch (err) {
+      if (abort.signal.aborted) return;
+      throw err;
+    } finally {
+      res.off("close", onClose);
+    }
 
     res.set("Cache-Control", "no-cache, no-store");
     res.json(result);

@@ -64,7 +64,8 @@ describe("heartbeat readLog", () => {
       content,
       nextOffset: undefined,
       redactedAtPersist: false,
-      verifiedChars: 0,
+      buffer: Buffer.from(content),
+      verifiedBytes: 0,
       startOffset: 0,
     });
 
@@ -86,7 +87,8 @@ describe("heartbeat readLog", () => {
     mockRunLogStoreRead.mockResolvedValueOnce({
       content,
       redactedAtPersist: true,
-      verifiedChars: content.length,
+      buffer: Buffer.from(content),
+      verifiedBytes: Buffer.byteLength(content),
       startOffset: 0,
     });
     const result = await heartbeat.readLog(

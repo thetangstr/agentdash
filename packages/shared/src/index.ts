@@ -274,6 +274,7 @@ export {
 // and the server run-log persist/serve paths.
 export {
   REDACTED,
+  REDACTION_RULES_VERSION,
   CREDENTIALS_HIDDEN_NOTE,
   isSecretName,
   isSecretValueKey,

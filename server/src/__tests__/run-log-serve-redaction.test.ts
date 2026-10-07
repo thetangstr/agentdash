@@ -2,6 +2,9 @@
 // never block the event loop for long. It runs in yielding slices, is capped
 // per request for bytes the store does not vouch for (the client pages with
 // nextOffset), and produces exactly the output of the synchronous pass.
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REDACTED } from "@paperclipai/shared";
 import {
@@ -10,6 +13,7 @@ import {
   redactRunLogNdjsonAsync,
   redactRunLogReadForServe,
 } from "../services/run-log-redaction.ts";
+import { getRunLogStore, resetRunLogStoreForTests } from "../services/run-log-store.ts";
 
 const SECRET_VALUE = "Zq8Rk2Vm7Tn4Wb9Xc3Ls";
 
@@ -73,12 +77,12 @@ describe("run-log serve-time redaction", () => {
       // Same shape the store returns for an unmarked (legacy) file read with
       // the API's 1 MB max limitBytes.
       const slice = Buffer.from(log).subarray(offset, offset + 1024 * 1024);
-      const raw = slice.toString("utf8");
       const served = await redactRunLogReadForServe({
-        content: raw,
+        content: slice.toString("utf8"),
         nextOffset: offset + slice.length < total ? offset + slice.length : undefined,
         redactedAtPersist: false,
-        verifiedChars: 0,
+        buffer: slice,
+        verifiedBytes: 0,
         startOffset: offset,
       });
       pages++;
@@ -104,7 +108,7 @@ describe("run-log serve-time redaction", () => {
     const longLine = JSON.stringify({ ts: "t", stream: "stdout", chunk: `${"x".repeat(5000)} API_KEY=${SECRET_VALUE}` });
     const content = `${longLine}\n${longLine}\n`;
     const served = await redactRunLogReadForServe(
-      { content, redactedAtPersist: false, verifiedChars: 0, startOffset: 0 },
+      { content, redactedAtPersist: false, buffer: Buffer.from(content), verifiedBytes: 0, startOffset: 0 },
       { maxUnverifiedBytes: 100 },
     );
     expect(served.content).toBe(redactRunLogNdjson(`${longLine}\n`));
@@ -117,7 +121,8 @@ describe("run-log serve-time redaction", () => {
     const served = await redactRunLogReadForServe({
       content: head + tail,
       redactedAtPersist: false,
-      verifiedChars: head.length,
+      buffer: Buffer.from(head + tail),
+      verifiedBytes: Buffer.byteLength(head),
       startOffset: 0,
     });
     expect(served.content).toBe(head + redactRunLogNdjson(tail));
@@ -131,9 +136,59 @@ describe("run-log serve-time redaction", () => {
       content,
       nextOffset: 99,
       redactedAtPersist: true,
-      verifiedChars: content.length,
+      buffer: Buffer.from(content),
+      verifiedBytes: Buffer.byteLength(content),
       startOffset: 0,
     });
     expect(served).toEqual({ content, nextOffset: 99, redactedAtPersist: true });
   });
+
+  it("pages on raw file bytes when a page starts inside a multi-byte UTF-8 character", async () => {
+    const base = await mkdtemp(join(tmpdir(), "run-log-utf8-"));
+    const prevBase = process.env.RUN_LOG_BASE_PATH;
+    process.env.RUN_LOG_BASE_PATH = base;
+    resetRunLogStoreForTests();
+    try {
+      const logRef = join("c1", "a1", "utf8.ndjson");
+      await mkdir(join(base, "c1", "a1"), { recursive: true });
+      let log = "";
+      for (let i = 0; i < 400; i++) {
+        log += `${JSON.stringify({ ts: "t", stream: "stdout", chunk: `€€€ price ${i} ✓ 日本語 ${i % 25 === 0 ? `API_KEY=${SECRET_VALUE}` : ""}\n` })}\n`;
+      }
+      // JSON.stringify keeps non-ASCII raw, so the file holds multi-byte runs.
+      const fileBytes = Buffer.from(log, "utf8");
+      await writeFile(join(base, logRef), fileBytes);
+      const euro = fileBytes.indexOf(Buffer.from("€"));
+      const start = euro + 1; // inside the 3-byte "€"
+      const store = getRunLogStore();
+      let offset = start;
+      let pages = 0;
+      while (offset < fileBytes.length && pages < 1000) {
+        const read = await store.read({ store: "local_file", logRef }, { offset, limitBytes: 64 * 1024 });
+        const served = await redactRunLogReadForServe(read, { maxUnverifiedBytes: 500 });
+        pages++;
+        expect(served.content).not.toContain(SECRET_VALUE);
+        if (served.nextOffset === undefined) break;
+        expect(served.nextOffset).toBeGreaterThan(offset);
+        // The cut lands right after a newline in the FILE, so no byte is
+        // skipped or repeated between pages.
+        expect(fileBytes[served.nextOffset - 1]).toBe(0x0a);
+        offset = served.nextOffset;
+      }
+      expect(pages).toBeGreaterThan(10);
+    } finally {
+      if (prevBase === undefined) delete process.env.RUN_LOG_BASE_PATH;
+      else process.env.RUN_LOG_BASE_PATH = prevBase;
+      resetRunLogStoreForTests();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it("stops redacting when the request is aborted", async () => {
+    const log = buildLog(1_500_000);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 0);
+    await expect(redactRunLogNdjsonAsync(log, [], { sliceMs: 1, signal: controller.signal })).rejects.toThrow();
+  });
 });
+

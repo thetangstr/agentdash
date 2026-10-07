@@ -10178,7 +10178,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         logStore: string | null;
         logRef: string | null;
       },
-      opts?: { offset?: number; limitBytes?: number },
+      opts?: { offset?: number; limitBytes?: number; signal?: AbortSignal },
     ) => {
       const run = typeof runOrLookup === "string" ? await getRunLogAccess(runOrLookup) : runOrLookup;
       const runId = typeof runOrLookup === "string" ? runOrLookup : runOrLookup.id;
@@ -10195,7 +10195,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           store: run.logStore as "local_file",
           logRef: run.logRef,
         },
-        opts,
+        opts ? { offset: opts.offset, limitBytes: opts.limitBytes } : opts,
       );
 
       return {
@@ -10210,7 +10210,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // truncated first/last lines handled as plain text. Bytes the store
         // marks as written-redacted skip the pass; the rest is redacted in
         // event-loop-yielding slices and capped per request (nextOffset pages).
-        ...(await redactRunLogReadForServe(result)),
+        ...(await redactRunLogReadForServe(result, { signal: opts?.signal })),
       };
     },
 

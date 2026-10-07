@@ -3,7 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { notFound } from "../errors.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
-import { redactRunLogText } from "./run-log-redaction.js";
+import { redactRunLogText, runLogRedactionEpoch } from "./run-log-redaction.js";
 
 export type RunLogStoreType = "local_file";
 
@@ -28,13 +28,19 @@ export interface RunLogReadResult {
    */
   redactedAtPersist?: boolean;
   /**
-   * Number of leading UTF-16 chars of `content` covered by the redacting
-   * writer's mark. Equals `content.length` when `redactedAtPersist` is true,
-   * 0 when nothing in the range is covered. The boundary always falls on a
-   * line end, so the uncovered tail starts a fresh NDJSON line.
+   * Raw file bytes of this range — `content` is their UTF-8 decoding.
+   * Offsets for paging are always computed on these, never on re-encoded
+   * text (a range starting inside a multi-byte character decodes to U+FFFD,
+   * which re-encodes to a different length).
    */
-  verifiedChars?: number;
-  /** Byte offset in the file at which `content` starts. */
+  buffer?: Buffer;
+  /**
+   * Leading bytes of `buffer` covered by the written-redacted mark. Equals
+   * `buffer.length` when `redactedAtPersist` is true, 0 when nothing in the
+   * range is covered. The boundary always falls just after a newline.
+   */
+  verifiedBytes?: number;
+  /** Byte offset in the file at which `buffer` starts. */
   startOffset?: number;
 }
 
@@ -68,54 +74,43 @@ function resolveWithin(basePath: string, relativePath: string) {
 }
 
 /**
- * AgentDash: "written redacted" mark for a log file. `size` is the length of
- * the file prefix whose every byte came through the redacting append() path
- * of a file begin() created. `frozen` means a byte NOT written by append()
- * was seen after that prefix (an external writer): the prefix stays trusted,
- * nothing after it ever is.
+ * AgentDash: "written redacted" mark for a log file, held in memory only.
+ * `size` is the exact length of the file prefix whose every byte came through
+ * the redacting append() path of a file begin() created in THIS process,
+ * under redaction epoch `epoch` (rules version + instance known-secret set).
+ * It is never persisted: a restart, a redactor upgrade or a change to the
+ * known-secret set sends every byte back through the serve-time pass, and no
+ * file on disk can switch that pass off.
  */
 interface RedactedMark {
-  ino: number;
+  ino: bigint;
   size: number;
   /**
    * Last bytes of the trusted prefix (up to MARK_TAIL_BYTES), re-read and
-   * compared on every read so a file truncated and rewritten in place (same
-   * inode, size grown past the mark) never has its new bytes trusted.
+   * compared on every read and append so an in-place rewrite of the prefix
+   * is caught.
    */
   tail: Buffer;
-  frozen: boolean;
-  persistedAt: number;
+  epoch: string;
 }
 
 const MARK_TAIL_BYTES = 64;
+const MAX_MARKS = 100_000;
 
 function nextTail(previous: Buffer, appended: Buffer): Buffer {
   const joined = appended.length >= MARK_TAIL_BYTES ? appended : Buffer.concat([previous, appended]);
   return Buffer.from(joined.subarray(Math.max(0, joined.length - MARK_TAIL_BYTES)));
 }
 
-/** Sidecar next to the log that carries the mark across restarts. */
-export const RUN_LOG_REDACTED_MARK_SUFFIX = ".redacted-mark.json";
-const MARK_SIDECAR_VERSION = 1;
-// A live run rewrites its sidecar at most this often; a lagging sidecar only
-// means a restart re-redacts the few bytes written since the last write.
-const MARK_PERSIST_INTERVAL_MS = 2_000;
-const MAX_MARKS = 100_000;
-
-function sidecarPath(absPath: string) {
-  return `${absPath}${RUN_LOG_REDACTED_MARK_SUFFIX}`;
-}
-
 function createLocalFileRunLogStore(basePath: string): RunLogStore {
-  // Files created by begin() — every byte in them arrived through the
-  // redacting append() path. The mark is recorded at begin() (never at a bare
-  // append(): appending to a pre-existing file must not mark its legacy
-  // content safe) and verified on read against the file's inode/size, so a
-  // restored or externally-written file never has its foreign bytes trusted.
-  // It is persisted to a sidecar so a restart does not make every existing
-  // log pay the serve-time redaction pass again. Capped: if it ever fills,
-  // entries are dropped and reloaded from the sidecar on demand — the mark is
-  // an optimization, not a safety boundary.
+  // Files created by begin() in this process — every byte in them arrived
+  // through the redacting append() path. The mark is recorded at begin()
+  // (never at a bare append(): appending to a pre-existing file must not mark
+  // its legacy content safe) and verified on read against the file's inode,
+  // exact size and prefix tail, so a restored or externally-written file
+  // loses it. Capped: if it ever fills, entries are dropped and those files
+  // simply get the serve-time pass again — the mark is an optimization, not
+  // a safety boundary.
   const marks = new Map<string, RedactedMark>();
   // Per-file append chain: appends to one log run strictly in order, so the
   // mark's size always equals the bytes this store has finished writing.
@@ -138,62 +133,6 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
   function rememberMark(absPath: string, mark: RedactedMark) {
     if (marks.size >= MAX_MARKS && !marks.has(absPath)) marks.clear();
     marks.set(absPath, mark);
-  }
-
-  async function writeSidecar(absPath: string, mark: RedactedMark) {
-    const target = sidecarPath(absPath);
-    const tmp = `${target}.${process.pid}.tmp`;
-    const body = JSON.stringify({
-      v: MARK_SIDECAR_VERSION,
-      ino: String(mark.ino),
-      size: mark.size,
-      tail: mark.tail.toString("base64"),
-      frozen: mark.frozen,
-    });
-    try {
-      await fs.writeFile(tmp, body, "utf8");
-      await fs.rename(tmp, target);
-      mark.persistedAt = Date.now();
-    } catch {
-      // Best effort: without a sidecar the file is simply re-redacted on read
-      // after a restart.
-      await fs.rm(tmp, { force: true }).catch(() => undefined);
-    }
-  }
-
-  async function dropMark(absPath: string) {
-    marks.delete(absPath);
-    await fs.rm(sidecarPath(absPath), { force: true }).catch(() => undefined);
-  }
-
-  /** In-memory mark, else the persisted sidecar (after a restart). */
-  async function loadMark(absPath: string): Promise<RedactedMark | null> {
-    const inMemory = marks.get(absPath);
-    if (inMemory) return inMemory;
-    const raw = await fs.readFile(sidecarPath(absPath), "utf8").catch(() => null);
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as { v?: unknown; ino?: unknown; size?: unknown; tail?: unknown; frozen?: unknown };
-      const ino = Number(parsed.ino);
-      if (
-        parsed.v !== MARK_SIDECAR_VERSION ||
-        typeof parsed.ino !== "string" ||
-        !Number.isFinite(ino) ||
-        typeof parsed.size !== "number" ||
-        !Number.isSafeInteger(parsed.size) ||
-        parsed.size < 0 ||
-        typeof parsed.tail !== "string"
-      ) {
-        return null;
-      }
-      const tail = Buffer.from(parsed.tail, "base64");
-      if (tail.length !== Math.min(MARK_TAIL_BYTES, parsed.size)) return null;
-      const mark: RedactedMark = { ino, size: parsed.size, tail, frozen: parsed.frozen === true, persistedAt: Date.now() };
-      rememberMark(absPath, mark);
-      return mark;
-    } catch {
-      return null;
-    }
   }
 
   /** The bytes just before `mark.size` are still the ones the store wrote. */
@@ -219,15 +158,16 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
     filePath: string,
     offset: number,
     limitBytes: number,
-  ): Promise<{ buffer: Buffer; start: number; nextOffset?: number; ino: number; size: number }> {
-    const stat = await fs.stat(filePath).catch(() => null);
+  ): Promise<{ buffer: Buffer; start: number; nextOffset?: number; ino: bigint; size: number }> {
+    const stat = await fs.stat(filePath, { bigint: true }).catch(() => null);
     if (!stat) throw notFound("Run log not found");
+    const size = Number(stat.size);
 
-    const start = Math.max(0, Math.min(offset, stat.size));
-    const end = Math.max(start, Math.min(start + limitBytes - 1, stat.size - 1));
+    const start = Math.max(0, Math.min(offset, size));
+    const end = Math.max(start, Math.min(start + limitBytes - 1, size - 1));
 
     if (start > end) {
-      return { buffer: Buffer.alloc(0), start, nextOffset: start, ino: stat.ino, size: stat.size };
+      return { buffer: Buffer.alloc(0), start, nextOffset: start, ino: stat.ino, size };
     }
 
     const chunks: Buffer[] = [];
@@ -240,8 +180,8 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       stream.on("end", () => resolve());
     });
 
-    const nextOffset = end + 1 < stat.size ? end + 1 : undefined;
-    return { buffer: Buffer.concat(chunks), start, nextOffset, ino: stat.ino, size: stat.size };
+    const nextOffset = end + 1 < size ? end + 1 : undefined;
+    return { buffer: Buffer.concat(chunks), start, nextOffset, ino: stat.ino, size };
   }
 
   async function sha256File(filePath: string): Promise<string> {
@@ -264,18 +204,14 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
 
       const absPath = resolveWithin(basePath, relPath);
       await serializePerFile(absPath, async () => {
-        // Clear any stale mark first so a crash between the truncate and the
-        // new sidecar can never leave an old mark describing new content.
-        await dropMark(absPath);
+        marks.delete(absPath);
         await fs.writeFile(absPath, "", "utf8");
         // The file is fresh and empty; from here on every append goes through
         // the redacting path, so the whole file is safe to serve without the
-        // read pass. Record identity+size so a later mismatch is detected.
-        const created = await fs.stat(absPath).catch(() => null);
-        if (created && created.size === 0) {
-          const mark: RedactedMark = { ino: created.ino, size: 0, tail: Buffer.alloc(0), frozen: false, persistedAt: 0 };
-          rememberMark(absPath, mark);
-          await writeSidecar(absPath, mark);
+        // read pass. Record identity+size so a later mismatch drops the mark.
+        const created = await fs.stat(absPath, { bigint: true }).catch(() => null);
+        if (created && created.size === 0n) {
+          rememberMark(absPath, { ino: created.ino, size: 0, tail: Buffer.alloc(0), epoch: runLogRedactionEpoch() });
         }
       });
 
@@ -285,6 +221,10 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
     async append(handle, event) {
       if (handle.store !== "local_file") return 0;
       const absPath = resolveWithin(basePath, handle.logRef);
+      // Epoch the line is redacted under — the mark only grows while it
+      // still matches, so a key added mid-run never leaves earlier-redacted
+      // bytes trusted.
+      const epoch = runLogRedactionEpoch();
       // AgentDash (GH #992): defense in depth — callers redact before append
       // (with a stateful stream redactor for chunk boundaries), and the store
       // runs the stateless pass again so a forgotten call site still cannot
@@ -301,35 +241,36 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       const persisted = Buffer.from(`${line}\n`, "utf8");
       const persistedBytes = persisted.length;
       return serializePerFile(absPath, async () => {
-        const mark = await loadMark(absPath);
-        // The trusted prefix must still hold the bytes this store wrote — a
-        // same-inode truncate-and-rewrite would otherwise slip under it.
-        const prefixIntact = mark && !mark.frozen ? await prefixTailMatches(absPath, mark) : false;
+        const mark = marks.get(absPath);
+        const prefixIntact = mark ? await prefixTailMatches(absPath, mark) : false;
         const fh = await fs.open(absPath, "a");
-        let before: { ino: number; size: number };
-        let after: { size: number };
+        let before: { ino: bigint; size: bigint };
+        let after: { size: bigint };
         try {
-          before = await fh.stat();
+          before = await fh.stat({ bigint: true });
           await fh.appendFile(persisted);
-          after = await fh.stat();
+          after = await fh.stat({ bigint: true });
         } finally {
           await fh.close();
         }
         // Keep the mark honest. Appending to a file that was not created by
         // begin() never earns one — its earlier content may be legacy raw
-        // output. The mark only grows when the file was exactly the verified
-        // prefix before this write and exactly prefix+line after it, so no
-        // foreign byte can ever land inside the trusted prefix.
-        if (mark && !mark.frozen) {
-          if (before.ino !== mark.ino || before.size < mark.size || !prefixIntact) {
-            await dropMark(absPath);
-          } else if (before.size === mark.size && after.size === before.size + persistedBytes) {
-            mark.size = after.size;
+        // output. The mark grows only when the file was exactly the trusted
+        // prefix before this write and exactly prefix+line after it, under
+        // an unchanged redaction epoch; anything else drops it for good.
+        if (mark && marks.get(absPath) === mark) {
+          const intact =
+            prefixIntact &&
+            mark.epoch === epoch &&
+            runLogRedactionEpoch() === epoch &&
+            before.ino === mark.ino &&
+            Number(before.size) === mark.size &&
+            Number(after.size) === mark.size + persistedBytes;
+          if (intact) {
+            mark.size += persistedBytes;
             mark.tail = nextTail(mark.tail, persisted);
-            if (Date.now() - mark.persistedAt >= MARK_PERSIST_INTERVAL_MS) await writeSidecar(absPath, mark);
           } else {
-            mark.frozen = true;
-            await writeSidecar(absPath, mark);
+            marks.delete(absPath);
           }
         }
         return persistedBytes;
@@ -341,12 +282,6 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
         return { bytes: 0, compressed: false };
       }
       const absPath = resolveWithin(basePath, handle.logRef);
-      // Flush the mark once the run's appends have drained so a restart
-      // trusts the whole finished file.
-      await serializePerFile(absPath, async () => {
-        const mark = marks.get(absPath);
-        if (mark) await writeSidecar(absPath, mark);
-      });
       const stat = await fs.stat(absPath).catch(() => null);
       if (!stat) throw notFound("Run log not found");
 
@@ -368,41 +303,46 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       // Snapshot the mark BEFORE reading: appends only ever grow the file, so
       // the bytes it vouched for at this instant are still there when the
       // range is read, whatever appends land in between.
-      const mark = await loadMark(absPath);
-      const snapshot = mark ? { ino: mark.ino, size: mark.size, tail: mark.tail } : null;
+      const mark = marks.get(absPath) ?? null;
+      const snapshot = mark ? { ino: mark.ino, size: mark.size, tail: mark.tail, epoch: mark.epoch } : null;
       const range = await readFileRange(absPath, offset, limitBytes);
-      // Length of the trusted prefix. A size above the mark is an append in
-      // flight (or a foreign write after the prefix): only the bytes beyond
-      // the prefix lose trust, never the prefix itself. A different inode, a
-      // file shorter than the prefix, or prefix bytes that no longer match
-      // mean the prefix itself changed — nothing is trusted, the mark drops.
+      // The prefix is trusted only when the file is the same inode, its
+      // prefix tail is unchanged, the redaction epoch is unchanged, and its
+      // size is exactly what this store wrote: the snapshot size, or a larger
+      // size explained by this store's own appends (one in flight, or one that
+      // completed while the range was read). Any other size means bytes were
+      // written behind the store's back — the mark is dropped for good. Bytes
+      // past the snapshot are never trusted in this read; they get the pass.
       let verifiedPrefix = 0;
       let markValid = false;
       if (mark && snapshot) {
-        if (range.ino === snapshot.ino && range.size >= snapshot.size && (await prefixTailMatches(absPath, snapshot))) {
+        const current = marks.get(absPath);
+        const sizeExplained =
+          range.size === snapshot.size ||
+          (current === mark && (range.size === mark.size || appendChains.has(absPath)));
+        if (
+          range.ino === snapshot.ino &&
+          snapshot.epoch === runLogRedactionEpoch() &&
+          sizeExplained &&
+          range.size >= snapshot.size &&
+          (await prefixTailMatches(absPath, snapshot))
+        ) {
           verifiedPrefix = snapshot.size;
           markValid = true;
         } else {
           await serializePerFile(absPath, async () => {
             // Re-check inside the chain: begin() may have just recreated it.
-            const current = marks.get(absPath);
-            if (current === mark) await dropMark(absPath);
+            if (marks.get(absPath) === mark) marks.delete(absPath);
           });
         }
       }
-      const coveredBytes = Math.max(0, Math.min(range.buffer.length, verifiedPrefix - range.start));
-      const content = range.buffer.toString("utf8");
-      const verifiedChars =
-        coveredBytes >= range.buffer.length
-          ? content.length
-          : coveredBytes === 0
-            ? 0
-            : range.buffer.subarray(0, coveredBytes).toString("utf8").length;
+      const verifiedBytes = Math.max(0, Math.min(range.buffer.length, verifiedPrefix - range.start));
       return {
-        content,
+        content: range.buffer.toString("utf8"),
         nextOffset: range.nextOffset,
-        redactedAtPersist: markValid && coveredBytes >= range.buffer.length,
-        verifiedChars,
+        redactedAtPersist: markValid && verifiedBytes >= range.buffer.length,
+        buffer: range.buffer,
+        verifiedBytes,
         startOffset: range.start,
       };
     },

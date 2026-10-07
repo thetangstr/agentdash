@@ -5,12 +5,12 @@ import { mkdtemp, mkdir, rm, writeFile, appendFile, readFile, rename, stat, trun
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getRunLogStore, resetRunLogStoreForTests } from "../services/run-log-store.js";
 import {
-  getRunLogStore,
-  resetRunLogStoreForTests,
-  RUN_LOG_REDACTED_MARK_SUFFIX,
-} from "../services/run-log-store.js";
-import { redactRunLogNdjson, redactRunLogReadForServe } from "../services/run-log-redaction.js";
+  redactRunLogNdjson,
+  redactRunLogReadForServe,
+  resetInstanceSecretsCacheForTests,
+} from "../services/run-log-redaction.js";
 
 describe("run-log store redactedAtPersist mark", () => {
   let base: string;
@@ -67,27 +67,23 @@ describe("run-log store redactedAtPersist mark", () => {
     expect(after.redactedAtPersist).not.toBe(true);
   });
 
-  it("keeps the trusted prefix (not the whole mark) when bytes are written behind its back", async () => {
+  it("drops the mark for good when bytes are written behind its back", async () => {
     const store = getRunLogStore();
     const handle = await store.begin({ companyId: "c1", agentId: "a1", runId: "r3" });
     await store.append(handle, { stream: "stdout", chunk: "first\n", ts: "t" });
-    const prefix = (await store.read(handle)).content;
     await appendFile(join(base, handle.logRef), "external raw line\n");
     await store.append(handle, { stream: "stdout", chunk: "second\n", ts: "t" });
 
     const after = await store.read(handle);
     expect(after.redactedAtPersist).not.toBe(true);
-    // Only the bytes the redacting writer produced before the foreign write
-    // stay trusted; the foreign line and everything after it are not.
-    expect(after.verifiedChars).toBe(prefix.length);
-    expect(after.content.slice(0, after.verifiedChars)).toBe(prefix);
+    expect(after.verifiedBytes).toBe(0);
   });
 
   it("serializes concurrent appends and never drops the mark when reads race them", async () => {
     const store = getRunLogStore();
     const handle = await store.begin({ companyId: "c1", agentId: "a1", runId: "r4" });
     const pending: Promise<unknown>[] = [];
-    const reads: Promise<{ redactedAtPersist?: boolean; content: string; verifiedChars?: number }>[] = [];
+    const reads: Promise<{ redactedAtPersist?: boolean; buffer?: Buffer; verifiedBytes?: number }>[] = [];
     for (let seq = 0; seq < 300; seq++) {
       pending.push(store.append(handle, { stream: "stdout", chunk: `line ${seq} ${"x".repeat(seq % 50)}\n`, ts: "t", seq }));
       reads.push(store.read(handle));
@@ -96,92 +92,118 @@ describe("run-log store redactedAtPersist mark", () => {
     // A read racing an append may see a partly-written tail, but the bytes it
     // does trust always form whole, complete lines from the redacting writer.
     for (const read of await Promise.all(reads)) {
-      const trusted = read.content.slice(0, read.verifiedChars ?? 0);
+      const trusted = read.buffer!.subarray(0, read.verifiedBytes ?? 0).toString("utf8");
       expect(trusted === "" || trusted.endsWith("\n")).toBe(true);
     }
     const final = await store.read(handle);
     expect(final.redactedAtPersist).toBe(true);
-    const finalBytes = Buffer.byteLength(final.content);
-    expect(Buffer.byteLength(final.content.slice(0, final.verifiedChars ?? 0))).toBe(finalBytes);
+    expect(final.verifiedBytes).toBe(final.buffer!.length);
     const seqs = final.content.trim().split("\n").map((line) => (JSON.parse(line) as { seq: number }).seq);
     expect(seqs).toEqual(Array.from({ length: 300 }, (_, i) => i));
   });
 
-  it("persists the mark across a restart for a finalized log", async () => {
+  it("carries no trust across a restart: the log is fully re-redacted", async () => {
     const store = getRunLogStore();
     const handle = await store.begin({ companyId: "c1", agentId: "a1", runId: "r5" });
     for (let i = 0; i < 20; i++) await store.append(handle, { stream: "stdout", chunk: `ok ${i}\n`, ts: "t" });
     await store.finalize(handle);
+    expect((await store.read(handle)).redactedAtPersist).toBe(true);
 
     resetRunLogStoreForTests(); // a new process: in-memory marks are gone
     const restarted = getRunLogStore();
     const read = await restarted.read(handle);
-    expect(read.redactedAtPersist).toBe(true);
-    expect(read.verifiedChars).toBe(read.content.length);
+    expect(read.redactedAtPersist).not.toBe(true);
+    expect(read.verifiedBytes).toBe(0);
+    expect((await redactRunLogReadForServe(read)).content).toBe(redactRunLogNdjson(read.content));
 
-    // Appending after the restart keeps extending the trusted prefix.
+    // Appending after the restart never re-earns trust for the old bytes.
     await restarted.append(handle, { stream: "stdout", chunk: "after restart\n", ts: "t" });
-    expect((await restarted.read(handle)).redactedAtPersist).toBe(true);
+    expect((await restarted.read(handle)).verifiedBytes).toBe(0);
   });
 
-  it("after a restart trusts only the persisted prefix of a live log", async () => {
-    const store = getRunLogStore();
-    const handle = await store.begin({ companyId: "c1", agentId: "a1", runId: "r6" });
-    await store.append(handle, { stream: "stdout", chunk: "one\n", ts: "t" });
-    // No finalize: the sidecar may lag the file. Whatever it does not cover
-    // must come back untrusted.
+  it("ignores a forged or leftover .redacted-mark.json sidecar on a raw file", async () => {
+    const logRef = join("c1", "a1", "forged.ndjson");
+    await mkdir(join(base, "c1", "a1"), { recursive: true });
+    const raw = JSON.stringify({ ts: "t", stream: "stdout", chunk: "export API_KEY=Zq8Rk2Vm7Tn4Wb9Xc3Ls\n" }) + "\n";
+    const abs = join(base, logRef);
+    await writeFile(abs, raw);
+    const st = await stat(abs, { bigint: true });
+    const bytes = Buffer.from(raw);
+    await writeFile(
+      `${abs}.redacted-mark.json`,
+      JSON.stringify({ v: 1, ino: String(st.ino), size: bytes.length, tail: bytes.subarray(-64).toString("base64"), frozen: false }),
+    );
     resetRunLogStoreForTests();
-    const read = await getRunLogStore().read(handle);
-    const sidecar = JSON.parse(await readFile(join(base, handle.logRef + RUN_LOG_REDACTED_MARK_SUFFIX), "utf8")) as {
-      size: number;
-    };
-    const trustedBytes = Buffer.byteLength(read.content.slice(0, read.verifiedChars ?? 0));
-    expect(trustedBytes).toBe(Math.min(sidecar.size, Buffer.byteLength(read.content)));
-    expect(read.redactedAtPersist).toBe(sidecar.size >= Buffer.byteLength(read.content));
+    const read = await getRunLogStore().read({ store: "local_file", logRef });
+    expect(read.redactedAtPersist).not.toBe(true);
+    expect(read.verifiedBytes).toBe(0);
+    expect((await redactRunLogReadForServe(read)).content).not.toContain("Zq8Rk2Vm7Tn4Wb9Xc3Ls");
   });
 
-  it("does not trust a legacy file (no mark) after a restart, and serves it redacted", async () => {
+  it("re-redacts marked bytes once a secret is added to the instance set at runtime", async () => {
+    const lateSecret = "late-added-provider-key-7f3a9c2d4e5a";
+    const prev = process.env.RUNLOG_TEST_PROVIDER_API_KEY;
+    try {
+      delete process.env.RUNLOG_TEST_PROVIDER_API_KEY;
+      resetInstanceSecretsCacheForTests();
+      const store = getRunLogStore();
+      const handle = await store.begin({ companyId: "c1", agentId: "a1", runId: "r9" });
+      // Not a known secret yet and shapeless — written as-is.
+      await store.append(handle, { stream: "stdout", chunk: `value ${lateSecret}\n`, ts: "t" });
+      const before = await store.read(handle);
+      expect(before.redactedAtPersist).toBe(true);
+      expect(before.content).toContain(lateSecret);
+
+      // The operator configures it as a key; the instance cache refreshes.
+      process.env.RUNLOG_TEST_PROVIDER_API_KEY = lateSecret;
+      resetInstanceSecretsCacheForTests();
+      const after = await store.read(handle);
+      expect(after.redactedAtPersist).not.toBe(true);
+      expect(after.verifiedBytes).toBe(0);
+      const served = await redactRunLogReadForServe(after);
+      expect(served.content).not.toContain(lateSecret);
+    } finally {
+      if (prev === undefined) delete process.env.RUNLOG_TEST_PROVIDER_API_KEY;
+      else process.env.RUNLOG_TEST_PROVIDER_API_KEY = prev;
+      resetInstanceSecretsCacheForTests();
+    }
+  });
+
+  it("does not trust a legacy file (no mark) and serves it redacted", async () => {
     const logRef = join("c1", "a1", "legacy.ndjson");
     await mkdir(join(base, "c1", "a1"), { recursive: true });
     const raw = JSON.stringify({ ts: "t", stream: "stdout", chunk: "export API_KEY=Zq8Rk2Vm7Tn4Wb9Xc3Ls\n" }) + "\n";
     await writeFile(join(base, logRef), raw);
-    resetRunLogStoreForTests();
     const read = await getRunLogStore().read({ store: "local_file", logRef });
     expect(read.redactedAtPersist).not.toBe(true);
-    expect(read.verifiedChars).toBe(0);
+    expect(read.verifiedBytes).toBe(0);
     const served = await redactRunLogReadForServe(read);
     expect(served.content).not.toContain("Zq8Rk2Vm7Tn4Wb9Xc3Ls");
     expect(served.content).toBe(redactRunLogNdjson(raw));
   });
 
-  it("drops the mark when the file is replaced (new inode) or truncated", async () => {
+  it("drops the mark when the file is replaced (new inode) or truncated and rewritten", async () => {
     const store = getRunLogStore();
     const replaced = await store.begin({ companyId: "c1", agentId: "a1", runId: "r7" });
     await store.append(replaced, { stream: "stdout", chunk: "fine\n", ts: "t" });
-    await store.finalize(replaced);
     const abs = join(base, replaced.logRef);
     const inoBefore = (await stat(abs)).ino;
-    // A restored copy: same bytes, new inode, stale sidecar alongside.
+    // Same bytes, new inode.
     await writeFile(`${abs}.restore`, await readFile(abs));
     await rename(`${abs}.restore`, abs);
     expect((await stat(abs)).ino).not.toBe(inoBefore);
-    resetRunLogStoreForTests();
-    const afterRestore = await getRunLogStore().read(replaced);
+    const afterRestore = await store.read(replaced);
     expect(afterRestore.redactedAtPersist).not.toBe(true);
-    expect(afterRestore.verifiedChars).toBe(0);
+    expect(afterRestore.verifiedBytes).toBe(0);
 
-    const truncated = await getRunLogStore().begin({ companyId: "c1", agentId: "a1", runId: "r8" });
-    await getRunLogStore().append(truncated, { stream: "stdout", chunk: "aaaaaaaaaa\n", ts: "t" });
+    const truncated = await store.begin({ companyId: "c1", agentId: "a1", runId: "r8" });
+    await store.append(truncated, { stream: "stdout", chunk: "aaaaaaaaaa\n", ts: "t" });
     await truncate(join(base, truncated.logRef), 5);
     await appendFile(join(base, truncated.logRef), "raw tail that is longer than before\n");
-    // Same inode, size grown past the mark: the prefix fingerprint no longer
-    // matches, so none of it is trusted.
-    const afterTruncate = await getRunLogStore().read(truncated);
+    const afterTruncate = await store.read(truncated);
     expect(afterTruncate.redactedAtPersist).not.toBe(true);
-    expect(afterTruncate.verifiedChars).toBe(0);
-    await getRunLogStore().append(truncated, { stream: "stdout", chunk: "next\n", ts: "t" });
-    const afterAppend = await getRunLogStore().read(truncated);
-    expect(afterAppend.verifiedChars).toBe(0);
-    expect(afterAppend.redactedAtPersist).not.toBe(true);
+    expect(afterTruncate.verifiedBytes).toBe(0);
+    await store.append(truncated, { stream: "stdout", chunk: "next\n", ts: "t" });
+    expect((await store.read(truncated)).verifiedBytes).toBe(0);
   });
 });

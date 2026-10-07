@@ -18,6 +18,14 @@
 
 export const REDACTED = "***REDACTED***";
 
+/**
+ * Version of the redaction rules below. Bump it with ANY change to what gets
+ * redacted (patterns, known-secret forms, normalization): anything that
+ * trusted output as "already redacted" under an older version must redact it
+ * again. The server's written-redacted run-log mark is bound to it.
+ */
+export const REDACTION_RULES_VERSION = 1;
+
 export type KnownSecrets = readonly (string | null | undefined)[];
 
 const MIN_KNOWN_SECRET_LENGTH = 6;
