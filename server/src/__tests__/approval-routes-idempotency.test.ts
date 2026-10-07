@@ -42,6 +42,11 @@ const mockSecretService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
+// GH #919: the create route inserts its activity row inside the transaction
+// (insertActivity) and publishes it after COMMIT (publishActivity).
+const mockActivityPublication = vi.hoisted(() => ({ liveEvent: { marker: "approval.created" }, pluginEvent: null }));
+const mockInsertActivity = vi.hoisted(() => vi.fn(async () => mockActivityPublication));
+const mockPublishActivity = vi.hoisted(() => vi.fn());
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
@@ -64,6 +69,11 @@ function registerModuleMocks() {
     issueApprovalService: () => mockIssueApprovalService,
     logActivity: mockLogActivity,
     secretService: () => mockSecretService,
+  }));
+  vi.doMock("../services/activity-log.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../services/activity-log.js")>()),
+    insertActivity: mockInsertActivity,
+    publishActivity: mockPublishActivity,
   }));
 }
 
@@ -195,6 +205,7 @@ describe("approval routes idempotent retries", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("../services/index.js");
+    vi.doUnmock("../services/activity-log.js");
     vi.doUnmock("../routes/approvals.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
@@ -525,7 +536,7 @@ describe("approval routes idempotent retries", () => {
       ["00000000-0000-0000-0000-000000000001"],
       { agentId: "agent-1", userId: null },
     );
-    expect(mockLogActivity).toHaveBeenCalledWith(
+    expect(mockInsertActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         companyId: "company-1",
@@ -534,6 +545,7 @@ describe("approval routes idempotent retries", () => {
         action: "approval.created",
       }),
     );
+    expect(mockPublishActivity).toHaveBeenCalledWith(mockActivityPublication);
   });
 
   it("rejects hire_agent payloads that set the removed autoProvisionDefaultKey flag", async () => {
