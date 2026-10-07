@@ -1485,3 +1485,6 @@ export * from './human-control.js';
 export * from './validators/human-control.js';
 // AgentDash (Scan 4 lane M): issue prefixes that collide with page routes.
 export * from './reserved-company-prefixes.js';
+// AgentDash (PR #1059): the markdown line-break normalizer every multiline
+// write uses; exported so the run page's tests can run a document through it.
+export { normalizeEscapedLineBreaks } from './validators/text.js';

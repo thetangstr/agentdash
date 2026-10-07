@@ -1,0 +1,1369 @@
+{
+  "schema": "ac.milestone-timeline/v1",
+  "label": "p9-at-2026-10-06-4",
+  "runId": "02401267-045f-486b-ac58-9906fec97f75",
+  "pairingId": "P9",
+  "level": "L",
+  "terminal": "settled",
+  "traveler": {
+    "kind": "agent-traveler",
+    "runtime": "claude-code-cli",
+    "modelId": "claude-opus-5-5",
+    "mode": "rehearsal"
+  },
+  "agency": {
+    "runtime": "hermes",
+    "modelId": "deepseek-v4.1-flash",
+    "company": "Roma Travel (Track C)",
+    "agent": "pairing-rome-a",
+    "agentdash": {
+      "companyId": "0008870a-4a07-4e09-9a3e-1998f4c7d640",
+      "agentId": "85a3ee48-bb9f-4e57-881d-fb575e86fa57",
+      "heartbeatRunId": "7ac8c8db-e41d-4683-9ab1-95db37811e8e",
+      "issueId": "01e19be5-20f6-460a-bcec-13d98eed4a43",
+      "issueIdentifier": "ROM-2"
+    }
+  },
+  "startedAt": "2026-10-07T00:01:09.616Z",
+  "endedAt": "2026-10-07T00:07:25.465Z",
+  "milestones": [
+    {
+      "milestone": "discover",
+      "label": "Discover",
+      "firstTs": "2026-10-07T00:01:09.616Z",
+      "lastTs": "2026-10-07T00:06:15.012Z",
+      "counts": {
+        "traveler": {
+          "narration": 1,
+          "tool-call": 11,
+          "server-receipt": 29,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        },
+        "agency": {
+          "narration": 47,
+          "tool-call": 48,
+          "server-receipt": 14,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        }
+      },
+      "total": 150,
+      "log": {
+        "status": "not-yet-logged",
+        "assetReferenceId": "ac-milestone:02401267-045f-486b-ac58-9906fec97f75:1-discover",
+        "subjectDigest": "0xaeae833fdef8e0ceb94565302f7cf6d20564c81505463e71e803e7a5ad77f7c3",
+        "payload": {
+          "schema": "ac.milestone-log/v1",
+          "runId": "02401267-045f-486b-ac58-9906fec97f75",
+          "milestone": "discover",
+          "index": 1,
+          "firstTs": "2026-10-07T00:01:09.616Z",
+          "lastTs": "2026-10-07T00:06:15.012Z",
+          "receiptIds": [
+            "0x003510d611bae3b57d919b6644d18030cb548318115539dd2ec5d6e8f4906954",
+            "0x0810a1f9cc62b28b128c333c25bd9e1ba8260b24728022ae995f9c74175a13da"
+          ],
+          "approvalDigests": [],
+          "prevEntryDigest": null
+        },
+        "coveredBy": [
+          "ledger:4911ec53-f97f-4501-9e45-629abf063336",
+          "ledger:37ac98c4-b604-4075-85ac-9724caedfb1f",
+          "ledger:b8ef3ba8-f190-478e-af35-de1c6fd98933"
+        ]
+      }
+    },
+    {
+      "milestone": "proposal",
+      "label": "Proposal",
+      "firstTs": "2026-10-07T00:02:00.731Z",
+      "lastTs": "2026-10-07T00:06:39.385Z",
+      "counts": {
+        "traveler": {
+          "narration": 1,
+          "tool-call": 4,
+          "server-receipt": 10,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        },
+        "agency": {
+          "narration": 4,
+          "tool-call": 3,
+          "server-receipt": 4,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        }
+      },
+      "total": 26,
+      "log": {
+        "status": "not-yet-logged",
+        "assetReferenceId": "ac-milestone:02401267-045f-486b-ac58-9906fec97f75:2-proposal",
+        "subjectDigest": "0x20773c0364c7d7f9149ba1b8a64956d37c1a351517ea9b728295a4313439d063",
+        "payload": {
+          "schema": "ac.milestone-log/v1",
+          "runId": "02401267-045f-486b-ac58-9906fec97f75",
+          "milestone": "proposal",
+          "index": 2,
+          "firstTs": "2026-10-07T00:02:00.731Z",
+          "lastTs": "2026-10-07T00:06:39.385Z",
+          "receiptIds": [
+            "0x11d5254fbd6c9a5d2eddaeda4f97ea96c2468a11b0b3d9e7560231fbcac2ef62",
+            "0x339d6c0ee44ec1a5c782615bd1dd7ed12dfffbb74ffc422ab6b8c0aec7e4448a"
+          ],
+          "approvalDigests": [],
+          "prevEntryDigest": "0xaeae833fdef8e0ceb94565302f7cf6d20564c81505463e71e803e7a5ad77f7c3"
+        },
+        "coveredBy": []
+      }
+    },
+    {
+      "milestone": "negotiation",
+      "label": "Negotiation",
+      "firstTs": null,
+      "lastTs": null,
+      "counts": {
+        "traveler": {
+          "narration": 0,
+          "tool-call": 0,
+          "server-receipt": 0,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        },
+        "agency": {
+          "narration": 0,
+          "tool-call": 0,
+          "server-receipt": 0,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        }
+      },
+      "total": 0,
+      "log": {
+        "status": "not-yet-logged",
+        "assetReferenceId": "ac-milestone:02401267-045f-486b-ac58-9906fec97f75:3-negotiation",
+        "subjectDigest": "0x2d68306817b3fb3b6060f20e5afb531e5f23f59a037013022e8e4bb6a9773f2d",
+        "payload": {
+          "schema": "ac.milestone-log/v1",
+          "runId": "02401267-045f-486b-ac58-9906fec97f75",
+          "milestone": "negotiation",
+          "index": 3,
+          "firstTs": null,
+          "lastTs": null,
+          "receiptIds": [],
+          "approvalDigests": [],
+          "prevEntryDigest": "0x20773c0364c7d7f9149ba1b8a64956d37c1a351517ea9b728295a4313439d063"
+        },
+        "coveredBy": []
+      }
+    },
+    {
+      "milestone": "agreement",
+      "label": "Agreement",
+      "firstTs": "2026-10-07T00:06:40.713Z",
+      "lastTs": "2026-10-07T00:06:58.385Z",
+      "counts": {
+        "traveler": {
+          "narration": 1,
+          "tool-call": 2,
+          "server-receipt": 8,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        },
+        "agency": {
+          "narration": 1,
+          "tool-call": 1,
+          "server-receipt": 1,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        }
+      },
+      "total": 14,
+      "log": {
+        "status": "not-yet-logged",
+        "assetReferenceId": "ac-milestone:02401267-045f-486b-ac58-9906fec97f75:4-agreement",
+        "subjectDigest": "0xc7b37fe96f50dfbaf6656d4a5f580a6d994bd45d85a0bafa6031c009e0c28a9d",
+        "payload": {
+          "schema": "ac.milestone-log/v1",
+          "runId": "02401267-045f-486b-ac58-9906fec97f75",
+          "milestone": "agreement",
+          "index": 4,
+          "firstTs": "2026-10-07T00:06:40.713Z",
+          "lastTs": "2026-10-07T00:06:58.385Z",
+          "receiptIds": [
+            "0x3013b0198f87aee17689245492a84e9b6b3313f68f21f48a75b24f6dea6cb22b",
+            "0x40a569c6e0c32a4d8cf9eeee941e461e8ce2eefb25de784f765e8519b3083bee"
+          ],
+          "approvalDigests": [],
+          "prevEntryDigest": "0x2d68306817b3fb3b6060f20e5afb531e5f23f59a037013022e8e4bb6a9773f2d"
+        },
+        "coveredBy": []
+      }
+    },
+    {
+      "milestone": "execution",
+      "label": "Execution",
+      "firstTs": "2026-10-07T00:06:46.213Z",
+      "lastTs": "2026-10-07T00:07:05.860Z",
+      "counts": {
+        "traveler": {
+          "narration": 1,
+          "tool-call": 3,
+          "server-receipt": 5,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        },
+        "agency": {
+          "narration": 2,
+          "tool-call": 1,
+          "server-receipt": 2,
+          "signer-decision": 1,
+          "clockchain-anchor": 0
+        }
+      },
+      "total": 15,
+      "log": {
+        "status": "not-yet-logged",
+        "assetReferenceId": "ac-milestone:02401267-045f-486b-ac58-9906fec97f75:5-execution",
+        "subjectDigest": "0x1e686d7fed37ad7431643bad97e4af7ce1654802dba69a1927a15a624238f2ec",
+        "payload": {
+          "schema": "ac.milestone-log/v1",
+          "runId": "02401267-045f-486b-ac58-9906fec97f75",
+          "milestone": "execution",
+          "index": 5,
+          "firstTs": "2026-10-07T00:06:46.213Z",
+          "lastTs": "2026-10-07T00:07:05.860Z",
+          "receiptIds": [
+            "0x0b2d7b23f1c13fc7b07d3592acd3f9868c3cd2f8ebbbfb206e1c39f4017277c8",
+            "0x1bf4b5a4f2a2c421fd7c1a9f1fb2399d2bbb173430ddbb6f5505c53058500513"
+          ],
+          "approvalDigests": [
+            "0xc0e2f61be14c62df289d2d646928f23eb662ea71cb2f572d1f8a6d72dda41f96"
+          ],
+          "prevEntryDigest": "0xc7b37fe96f50dfbaf6656d4a5f580a6d994bd45d85a0bafa6031c009e0c28a9d"
+        },
+        "coveredBy": []
+      }
+    },
+    {
+      "milestone": "settlement",
+      "label": "Settlement",
+      "firstTs": "2026-10-07T00:07:04.577Z",
+      "lastTs": "2026-10-07T00:07:25.465Z",
+      "counts": {
+        "traveler": {
+          "narration": 1,
+          "tool-call": 1,
+          "server-receipt": 3,
+          "signer-decision": 1,
+          "clockchain-anchor": 0
+        },
+        "agency": {
+          "narration": 6,
+          "tool-call": 5,
+          "server-receipt": 4,
+          "signer-decision": 0,
+          "clockchain-anchor": 0
+        }
+      },
+      "total": 21,
+      "log": {
+        "status": "not-yet-logged",
+        "assetReferenceId": "ac-milestone:02401267-045f-486b-ac58-9906fec97f75:6-settlement",
+        "subjectDigest": "0x3fa88c7203e3b25fe6056614a9ec585b432beb35a2fa66c6493705da534c9eaa",
+        "payload": {
+          "schema": "ac.milestone-log/v1",
+          "runId": "02401267-045f-486b-ac58-9906fec97f75",
+          "milestone": "settlement",
+          "index": 6,
+          "firstTs": "2026-10-07T00:07:04.577Z",
+          "lastTs": "2026-10-07T00:07:25.465Z",
+          "receiptIds": [
+            "0x2f3f9275a8c4c069233e9a0c7bf0fe75ea30e36f69c7731ab6f0398141d9b746",
+            "0x6df59c5b47335d16b3e18d8a9340dcd9343c84342d2b37b6b1702fb1808fb65d"
+          ],
+          "approvalDigests": [
+            "0xf7e482fc2ea66c419ae10e2223ad53601cdc96922e3b2d179c691defbcef67e5"
+          ],
+          "prevEntryDigest": "0x1e686d7fed37ad7431643bad97e4af7ce1654802dba69a1927a15a624238f2ec"
+        },
+        "coveredBy": []
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "an-0",
+      "ts": "2026-10-07T00:01:09.616Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "discover",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Let me start by understanding the environment. I need to look at the MCP tools available and figure out the workflow.",
+      "detail": "Let me start by understanding the environment. I need to look at the MCP tools available and\n figure out the workflow.\n\nLet me check environment variables and the workspace first.\n\nLet me start by exploring what's available. I'll list the tool schemas for the MCP tools.\n\nLet me first check the environment: PAPERCLIP_API_URL, PAPERCLIP_API_KEY, PAPERCLIP\n_TASK_ID, PAPERCLIP_RUN_ID, and the workspace directory.\n\nActually, I'm a Hermes agent, so I have bash? Hmm, the system prompt says I'm in a plain terminal (\nCLI) with tools... Actually I have `tool_search`, `tool_describe`, `tool_call` \u2014 deferred\n tools. Do I have bash? Not listed. Let me check \u2014 the available tools are only those three\n. So I need to use MCP tools only.\n\nWait, but I need to read files (like the handshake helper). Hmm. Let me look at what\n tools exist. The deferred catalog lists mcp-contract, mcp-handshake, mcp-signer t\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=9"
+      }
+    },
+    {
+      "id": "an-1",
+      "ts": "2026-10-07T00:01:14.705Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "discover",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "I'll start by loading the schemas for the tools I'll need to run this provider-side pairing.",
+      "detail": "I'll start by loading the schemas for the tools I'll need to run this provider-side pairing.",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=67"
+      }
+    },
+    {
+      "id": "an-2",
+      "ts": "2026-10-07T00:01:19.542Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "discover",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Need batches of \u226410. Let me batch into groups of 10.",
+      "detail": "Need batches of \u226410. Let me batch into groups of 10.",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=72"
+      }
+    },
+    {
+      "id": "an-3",
+      "ts": "2026-10-07T00:01:24.988Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "discover",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Now I understand the surface. Let me start working. First, let's check the current state: contract_status, rendezvous_inbox, policy_summary, agent _handshake_s\u2026",
+      "detail": "Now I understand the surface. Let me start working.\n\nFirst, let's check the current state: contract_status, rendezvous_inbox, policy_summary, agent\n_handshake_status.\n\nBut wait - I'm the provider agent. Let me re-read the task. \"You are the provider\n agent for principal principal-a.\" So my role is provider (Roma Travel, Track C).\n\nSteps:\n1. Publish listing via signer (`mcp__mcp_signer__publish_listing`) with exact title/s\nummary/origin/destination. Actually the task says \"publish its title, summary and terms\n exactly as given, byte for byte (your signer pins the listing id derived from that\n title), with your signer's rendezvous seal public key as the listing's sealed-box key\".\n\nThe signer's publish_listing takes title, summary, origin, destination. It adds the company\n's rendezvous key itself. So use signer publish_listing with title/summary from JSON\n, origin=SFO, destination=FCO.\n\nAlter\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=79"
+      }
+    },
+    {
+      "id": "fd-1",
+      "ts": "2026-10-07T00:01:42.148Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "discover",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "get_spending_limit",
+      "summary": "Read the family's signed limit: $6,800 for 4 travellers, $0 spent",
+      "outcome": "ok",
+      "stage": null,
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=1 callId=fd-aa587bc18c03f57b"
+      },
+      "ids": {
+        "callId": "fd-aa587bc18c03f57b",
+        "lineHash": "0xdc9912682512ccca2a7b6cc47b00018ac37be57c635e4244308e308427485a71"
+      }
+    },
+    {
+      "id": "fd-2",
+      "ts": "2026-10-07T00:01:43.688Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "discover",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "search_agencies",
+      "summary": "Searched agencies for Rome: 1 listing(s) \u2014 \"Rome family round-trip concierge \u2014 SFO\u2192FCO, four travellers\"",
+      "outcome": "ok",
+      "stage": null,
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=2 callId=fd-19db297f01719aa1"
+      },
+      "ids": {
+        "callId": "fd-19db297f01719aa1",
+        "lineHash": "0xf5c84b02ff18cb9873a74c9551541d30ee7e4413c8f044139248ee15e1072357"
+      }
+    },
+    {
+      "id": "fd-3",
+      "ts": "2026-10-07T00:01:45.526Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "discover",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "start_deal",
+      "summary": "Started deal deal-610064 with listing lst-cafe103b38e2: invitation sent",
+      "outcome": "ok",
+      "stage": null,
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=3 callId=fd-af8d442b75c3bd13"
+      },
+      "ids": {
+        "callId": "fd-af8d442b75c3bd13",
+        "lineHash": "0xc8164ef9a117df8689d08043c9778ec310753b44572f980a6a6788c362249f84"
+      },
+      "related": [
+        "hs-0"
+      ]
+    },
+    {
+      "id": "an-23",
+      "ts": "2026-10-07T00:02:00.731Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "proposal",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "The signer MCP server paused ~51s due to repeated calls. I'll wait by doing other useful work, then poll again.",
+      "detail": "The signer MCP server paused ~51s due to repeated calls. I'll wait by doing other useful\n work, then poll again.\n\nMeanwhile, let me think about what else I can prepare. I could read the catalog quote (but the SOP\n says read quote after bind \u2014 a quote read before the bind isn't part of the contract\n run; but reading it early just for info is harmless though it says choose from the bound quote. Better\n to just read after bind.)\n\nI can check the handshake status? Needs access.\n\nLet me wait. Since there's no sleep tool, I'll do a low-value call to burn time, e\n.g., contract_status after a bit, then retry receive_invitation. Actually the pause is ~\n51s enforced by the server. Let me do a couple of contract_status calls spaced out, then retry.\n\nActually, let me just retry receive_invitation now \u2014 the server pause may cause an\n error again. Hmm risky: another failed call could extend the pause\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=229"
+      }
+    },
+    {
+      "id": "hs-0",
+      "ts": "2026-10-07T00:02:03.160Z",
+      "lane": "traveler",
+      "actor": "handshake-host",
+      "kind": "server-receipt",
+      "milestone": "discover",
+      "basis": "exact",
+      "surface": "handshake",
+      "tool": "agent_handshake_invite",
+      "summary": "Handshake host signed agent_handshake_invite for buyer hs-initiator: ok",
+      "outcome": "ok",
+      "stage": null,
+      "source": {
+        "file": "bundle.json#handshakeReceipts",
+        "ref": "receiptId=0xda2f29c159ad9be90dc2e362ad6176c145f23de813508bddee8b39e397b232db"
+      },
+      "ids": {
+        "receiptId": "0xda2f29c159ad9be90dc2e362ad6176c145f23de813508bddee8b39e397b232db",
+        "serverNonce": "0xe973c4401e7f5757875b91731912769b",
+        "argsDigest": "0xe25f0da08907ee8a3b3e2a2d316eea3413effb60eb74d196a4f63c8d8a5f56d9",
+        "principal": "hs-initiator"
+      }
+    },
+    {
+      "id": "an-24",
+      "ts": "2026-10-07T00:02:04.341Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "proposal",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "The signer paused briefly after repeated polls. Let me wait it out with other checks, then resume polling.",
+      "detail": "The signer paused briefly after repeated polls. Let me wait it out with other checks, then resume polling.",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=258"
+      }
+    },
+    {
+      "id": "ag-25",
+      "ts": "2026-10-07T00:02:05.510Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "tool-call",
+      "milestone": "proposal",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "catalog_quote",
+      "summary": "Mcp Contract \u00b7 catalog quote (0.3s) \u2192 {\"error\":\"STATE_REFUSED\",\"retryable\":false,\"s...",
+      "outcome": "refused",
+      "simulated": "SIMULATED (fares/ticketing)",
+      "stage": "handshaking",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=261"
+      }
+    },
+    {
+      "id": "ag-33",
+      "ts": "2026-10-07T00:02:18.807Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "tool-call",
+      "milestone": "discover",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "settlement_status",
+      "summary": "Mcp Contract \u00b7 settlement status (0.1s) \u2192 {\"error\":\"STATE_REFUSED\",\"retryable\":false,\"s...",
+      "outcome": "refused",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "stage": "handshaking",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=300"
+      }
+    },
+    {
+      "id": "rc-8",
+      "ts": "2026-10-07T00:06:14.992Z",
+      "lane": "agency",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "proposal",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Contract server signed contract_status for provider rome-agency-tc: ok",
+      "outcome": "ok",
+      "stage": "bound",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x54dce145f48f999126afee1231874016a8b63916a2b95eb93a5a885c3e9ec872"
+      },
+      "ids": {
+        "receiptId": "0x54dce145f48f999126afee1231874016a8b63916a2b95eb93a5a885c3e9ec872",
+        "serverNonce": "0x709be8f8fc33628a7875af0d1b588f0d",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "rome-agency-tc"
+      }
+    },
+    {
+      "id": "rc-9",
+      "ts": "2026-10-07T00:06:15.102Z",
+      "lane": "agency",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "proposal",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "catalog_quote",
+      "summary": "Contract server signed catalog_quote for provider rome-agency-tc: ok",
+      "outcome": "ok",
+      "simulated": "SIMULATED",
+      "stage": "bound",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x4c7a42d18caeff1cceb6c64fd125a8ee0624e1b23e3c9d83258ca3cd691fa0e1"
+      },
+      "ids": {
+        "receiptId": "0x4c7a42d18caeff1cceb6c64fd125a8ee0624e1b23e3c9d83258ca3cd691fa0e1",
+        "serverNonce": "0xfd4492a46c81dd8e45f9748553caff82",
+        "argsDigest": "0xe1104305541c8a8efb2d66e9e7319e214f4a3cc0c7b11dc2b0777397fe16b4c8",
+        "principal": "rome-agency-tc"
+      }
+    },
+    {
+      "id": "tn-12",
+      "ts": "2026-10-07T00:06:16.201Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "narration",
+      "milestone": "proposal",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "Session verified and limit bound; now checking the agency's offers.",
+      "detail": "Session verified and limit bound; now checking the agency's offers.",
+      "source": {
+        "file": "agent-trace.ndjson",
+        "ref": "line=33"
+      }
+    },
+    {
+      "id": "fd-12",
+      "ts": "2026-10-07T00:06:16.273Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "proposal",
+      "basis": "stage",
+      "surface": "front-door",
+      "tool": "check_deal",
+      "summary": "Checked the deal: stage bound",
+      "outcome": "ok",
+      "stage": "bound",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=12 callId=fd-d8a6d497675d8007"
+      },
+      "ids": {
+        "callId": "fd-d8a6d497675d8007",
+        "lineHash": "0x433e393ea5835ab485c16b498e2073e7816cffcaf756194f25a7ed975c8216c5"
+      },
+      "related": [
+        "rc-10"
+      ]
+    },
+    {
+      "id": "rc-10",
+      "ts": "2026-10-07T00:06:16.371Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "proposal",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Contract server signed contract_status for buyer family-travel-tc: ok",
+      "outcome": "ok",
+      "stage": "bound",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0xdf2816f7f814d326b479150b37f8703cb79ac310e7991699b926591264e836fa"
+      },
+      "ids": {
+        "receiptId": "0xdf2816f7f814d326b479150b37f8703cb79ac310e7991699b926591264e836fa",
+        "serverNonce": "0xe82f019b69a8e1d43d2d58d2f0380fa5",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "fd-13",
+      "ts": "2026-10-07T00:06:17.891Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "proposal",
+      "basis": "stage",
+      "surface": "front-door",
+      "tool": "wait_for_agency",
+      "summary": "Waited for the agency: stage bound",
+      "outcome": "ok",
+      "stage": "bound",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=13 callId=fd-078c57c4c4d2bc93"
+      },
+      "ids": {
+        "callId": "fd-078c57c4c4d2bc93",
+        "lineHash": "0x5c977ccc60c456df75ac9710aae6428c75245903ec05ade50bfa8eed50440f2e"
+      },
+      "related": [
+        "rc-11"
+      ]
+    },
+    {
+      "id": "an-99",
+      "ts": "2026-10-07T00:06:17.970Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "proposal",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Stage: \"mandated\". Interesting \u2014 the buyer has already submitted their mandate (the family principal's mandate). The buyer is the initiator presumably.",
+      "detail": "Stage: \"mandated\". Interesting \u2014 the buyer has already submitted their mandate (the\n family principal's mandate). The buyer is the initiator presumably.\n\nNegotiation: offers empty, acceptable null.\n\nNow I'm the provider: I need to make an offer on an itinerary with a service fee,\n not below my floor. The task says \"fee floor configured for this run\". I don't know the floor value\n... \"negotiate offers without dropping below your floor\". Where do I learn the floor? Maybe the\n signer enforces it (make_offer \"only inside this company's policy\"). So the sign\ner will refuse if below floor.\n\nHmm, but I need to pick a fee. Let me think: The buyer has a mandate with a cap. The itinerary\n choice matters. The buyer probably will make an offer or expect me to.\n\nActually as provider, typically I make the first offer. Let's see the state: stage\n \"mandated\" means the buyer's mandate is in. Next step i\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=649"
+      }
+    },
+    {
+      "id": "fd-15",
+      "ts": "2026-10-07T00:06:39.357Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "proposal",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "get_itineraries",
+      "summary": "Itineraries in the deal: IT-ROME-ZX118-ECON $4,818",
+      "outcome": "ok",
+      "simulated": "SIMULATED (fares/ticketing)",
+      "stage": "negotiating",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=15 callId=fd-a1c5531c5d4ec4c8"
+      },
+      "ids": {
+        "callId": "fd-a1c5531c5d4ec4c8",
+        "lineHash": "0x4a5753e57e142c3a66fd587bb1be296b63e224bf47776ea8f71e664a56f344c6"
+      },
+      "related": [
+        "rc-21"
+      ]
+    },
+    {
+      "id": "an-102",
+      "ts": "2026-10-07T00:06:40.713Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "agreement",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Uh oh \u2014 the offer of $10 was accepted by the signer and submitted live as off-0001. So the signer's policy allowed $10?!",
+      "detail": "Uh oh \u2014 the offer of $10 was accepted by the signer and submitted live as off-0001.\n So the signer's policy allowed $10?! That means either the floor is very low or the floor isn\n't enforced by the signer, or my floor is 0.\n\nHmm. The task said \"negotiate offers without dropping below your floor\" and \"with\n a fee floor configured for this run\". So the floor is mine to respect. But I just\n submitted $10 which may be below floor. Oops.\n\nWait \u2014 maybe the floor is configured and the signer would have refused. It didn't refuse\n. Hmm. Maybe the floor is 1000 exactly? Unlikely.\n\nAnyway, off-0001 is live at fee 1000, total 482800. Now the buyer may counter.\n\nBut I shouldn't have gone below my floor. What is my floor? I need to find out. Maybe\n there's a tool... The provider floor isn't exposed via a tool I've seen. Hmm.\n\nWait, maybe I'm overthinking: maybe the \"fee floor\" for the provider is enf\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=793"
+      }
+    },
+    {
+      "id": "tn-17",
+      "ts": "2026-10-07T00:06:41.847Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "narration",
+      "milestone": "agreement",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "The offer is $4,828: the $4,818 fare plus a $10 agency fee. That's well under the limit and very little above the fare, so I'll accept it.",
+      "detail": "The offer is $4,828: the $4,818 fare plus a $10 agency fee. That's well under the limit and very little above the fare, so I'll accept it.",
+      "source": {
+        "file": "agent-trace.ndjson",
+        "ref": "line=46"
+      }
+    },
+    {
+      "id": "fd-16",
+      "ts": "2026-10-07T00:06:42.282Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "agreement",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "accept_offer",
+      "summary": "Accepted off-0001 at $4,828 \u2192 agreement agr-0001",
+      "outcome": "ok",
+      "stage": "negotiating",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=16 callId=fd-4ea8de1507ffb54e"
+      },
+      "ids": {
+        "callId": "fd-4ea8de1507ffb54e",
+        "lineHash": "0x0a9b606d0755fa0637b6532aed13005eedb5b03ef8817a1753503b093984e44c"
+      },
+      "related": [
+        "rc-22",
+        "rc-23"
+      ]
+    },
+    {
+      "id": "rc-22",
+      "ts": "2026-10-07T00:06:42.513Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "agreement",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "offer_accept_prepare",
+      "summary": "Contract server signed offer_accept_prepare for buyer family-travel-tc: ok (signer composite accept_offer)",
+      "outcome": "ok",
+      "stage": "negotiating",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x641104df1c4b72b448c661360230aca8ebdc360944ed1146186f4285fc9bc126"
+      },
+      "ids": {
+        "receiptId": "0x641104df1c4b72b448c661360230aca8ebdc360944ed1146186f4285fc9bc126",
+        "serverNonce": "0x8de4029011489948f3eaf85cf82d3c30",
+        "argsDigest": "0xc8246571986cc2b16632cf6a13a45de82a4fda884b124c97d04522ea2a70866f",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "rc-23",
+      "ts": "2026-10-07T00:06:42.897Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "agreement",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "offer_accept_submit",
+      "summary": "Contract server signed offer_accept_submit for buyer family-travel-tc: ok (signer composite accept_offer)",
+      "outcome": "ok",
+      "stage": "negotiating",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x3013b0198f87aee17689245492a84e9b6b3313f68f21f48a75b24f6dea6cb22b"
+      },
+      "ids": {
+        "receiptId": "0x3013b0198f87aee17689245492a84e9b6b3313f68f21f48a75b24f6dea6cb22b",
+        "serverNonce": "0x2dbe7aa23406bbb1568550290a69d78f",
+        "argsDigest": "0xc857ddfb4288d500b599f7263f370ba9ea2c663babc1c2726178159a02a9a01d",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "fd-18",
+      "ts": "2026-10-07T00:06:46.213Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "execution",
+      "basis": "stage",
+      "surface": "front-door",
+      "tool": "wait_for_agency",
+      "summary": "Waited for the agency: stage booked, 1 offer(s)",
+      "outcome": "ok",
+      "stage": "booked",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=18 callId=fd-8f087a307b354560"
+      },
+      "ids": {
+        "callId": "fd-8f087a307b354560",
+        "lineHash": "0xbb6fb9e6f8c12f82dd904de955ef0bcc1696633a0a2d161a078ffb760932b60e"
+      },
+      "related": [
+        "rc-25",
+        "rc-27",
+        "rc-28",
+        "rc-29",
+        "rc-30",
+        "rc-33"
+      ]
+    },
+    {
+      "id": "rc-26",
+      "ts": "2026-10-07T00:06:46.742Z",
+      "lane": "agency",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "agreement",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Contract server signed contract_status for provider rome-agency-tc: ok",
+      "outcome": "ok",
+      "stage": "agreed",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x833c4a8f1a5651f6a5d2404c7e7a13eb4620f79ea4709e69b6b1c51a659caa23"
+      },
+      "ids": {
+        "receiptId": "0x833c4a8f1a5651f6a5d2404c7e7a13eb4620f79ea4709e69b6b1c51a659caa23",
+        "serverNonce": "0x7dfb649441269b1bbfa70efd6d9e26b4",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "rome-agency-tc"
+      }
+    },
+    {
+      "id": "ag-103",
+      "ts": "2026-10-07T00:06:46.779Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "tool-call",
+      "milestone": "agreement",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Mcp Contract \u00b7 contract status (0.1s)",
+      "outcome": "ok",
+      "stage": "agreed",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=847"
+      }
+    },
+    {
+      "id": "an-104",
+      "ts": "2026-10-07T00:06:49.308Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "execution",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Wow \u2014 the buyer immediately accepted off-0001, forming agreement agr-0001 for total 482800 (fare 481800 + fee 1000). Hmm. So the buyer accepted a $10 fee.",
+      "detail": "Wow \u2014 the buyer immediately accepted off-0001, forming agreement agr-0001 for total\n 482800 (fare 481800 + fee 1000).\n\nHmm. So the buyer accepted a $10 fee. That means the buyer is happy. But did I violate my\n floor? The signer allowed it, so policy-wise it's fine.\n\nHmm wait, but this makes me suspicious: the \"fee floor\" \u2014 maybe the floor is enforced\n by the signer and it allowed 1000, so floor \u2264 1000. Fine. So no violation.\n\nHmm, but actually \u2014 maybe I've been too hasty. The buyer accepted instantly, which suggests the setup\n expects a specific negotiation. But the outcome is a valid agreement. \n\nActually hold on. Is accepting a $10 fee a problem for \"negotiate offers without dropping below your\n floor\"? If my floor were, say, 20000, the signer should have refused. It didn't. So either\n floor \u22641000 or no floor enforced.\n\nHmm, but wait \u2014 maybe the provider's floor IS enforced and equals\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=848"
+      }
+    },
+    {
+      "id": "an-105",
+      "ts": "2026-10-07T00:06:57.824Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "execution",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "The buyer accepted immediately \u2014 agreement agr-0001 formed (fare 481,800 + fee 1,000 = 482,800 USD). Now carrying it through booking.",
+      "detail": "The buyer accepted immediately \u2014 agreement agr-0001 formed (fare 481,800 + fee 1,000 = 482,800 USD). Now carrying it through booking.",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=922"
+      }
+    },
+    {
+      "id": "rc-31",
+      "ts": "2026-10-07T00:06:58.500Z",
+      "lane": "agency",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "execution",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "booking_prepare",
+      "summary": "Contract server signed booking_prepare for provider rome-agency-tc: ok (signer composite book)",
+      "outcome": "ok",
+      "simulated": "SIMULATED",
+      "stage": "agreed",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x25218ec5111ea79484ef744f7cb04950752a0212af578de5950382b39424e5eb"
+      },
+      "ids": {
+        "receiptId": "0x25218ec5111ea79484ef744f7cb04950752a0212af578de5950382b39424e5eb",
+        "serverNonce": "0x763188a1452d2688001c1fc8bbde0c30",
+        "argsDigest": "0x0bfb999084a378307da8ac71d237e84a21adf23e287691d1fddb1473ed4ffdf9",
+        "principal": "rome-agency-tc"
+      }
+    },
+    {
+      "id": "ap-0",
+      "ts": "2026-10-07T00:06:58.517Z",
+      "lane": "agency",
+      "actor": "signer",
+      "kind": "signer-decision",
+      "milestone": "execution",
+      "basis": "exact",
+      "subtype": "booking",
+      "summary": "Agency signer approval for booking: allow",
+      "outcome": "ok",
+      "simulated": "SIMULATED (fares/ticketing)",
+      "source": {
+        "file": "bundle.json#approvalRecords",
+        "ref": "digest=0xc0e2f61be14c62df289d2d646928f23eb662ea71cb2f572d1f8a6d72dda41f96"
+      },
+      "ids": {
+        "approvalDigest": "0xc0e2f61be14c62df289d2d646928f23eb662ea71cb2f572d1f8a6d72dda41f96"
+      }
+    },
+    {
+      "id": "rc-33",
+      "ts": "2026-10-07T00:07:01.428Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "execution",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Contract server signed contract_status for buyer family-travel-tc: ok",
+      "outcome": "ok",
+      "stage": "booked",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x6547b970864f2b71f30c64c9b7aef5b42b4deca8da12336f021e32fec899fc77"
+      },
+      "ids": {
+        "receiptId": "0x6547b970864f2b71f30c64c9b7aef5b42b4deca8da12336f021e32fec899fc77",
+        "serverNonce": "0x8e36074c78bea8f1b5e5d689ce259abc",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "fd-19",
+      "ts": "2026-10-07T00:07:03.056Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "execution",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "look_up_booking",
+      "summary": "Looked up booking ORD-1F6AZSDE: ISSUED, 4 tickets for 4, $4,828",
+      "outcome": "ok",
+      "simulated": "SIMULATED (fares/ticketing)",
+      "stage": "booked",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=19 callId=fd-cf7af9235744d9df"
+      },
+      "ids": {
+        "callId": "fd-cf7af9235744d9df",
+        "lineHash": "0xbe2eb3fb00ed79511b60d64325ef8b47ee0a851fde929b8c74a924f651ae4203"
+      },
+      "related": [
+        "rc-34"
+      ]
+    },
+    {
+      "id": "rc-34",
+      "ts": "2026-10-07T00:07:03.092Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "execution",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "booking_lookup",
+      "summary": "Contract server signed booking_lookup for buyer family-travel-tc: ok",
+      "outcome": "ok",
+      "simulated": "SIMULATED",
+      "stage": "booked",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0xe9150c56a2585e689a35143a1ff5b01bb1221072e7f5bbce57ea116094f7adc2"
+      },
+      "ids": {
+        "receiptId": "0xe9150c56a2585e689a35143a1ff5b01bb1221072e7f5bbce57ea116094f7adc2",
+        "serverNonce": "0xb14121fd6b0e03f69c13048350bf2622",
+        "argsDigest": "0x702625d28827673743d83e6ed68e10bde75f2f5997a747c64b196e854f9de7ba",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "an-107",
+      "ts": "2026-10-07T00:07:04.577Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "settlement",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Booked: orderRef ORD-1F6AZSDE, PNR KANSR2, 4 tickets. Now settlement: the buyer settles (pays).",
+      "detail": "Booked: orderRef ORD-1F6AZSDE, PNR KANSR2, 4 tickets.\n\nNow settlement: the buyer settles (pays). The provider's settle is \"Pays for the agreement you\n name\" \u2014 likely buyer-only (NOT_FOR_ROLE for provider). Let me check settlement_status.\n\nActually as provider, my role now: wait for buyer to verify booking and settle. Or\n the provider may need to verify? The task says \"carry an agreed contract through booking\n on the simulated ticketing surface\". We've booked.\n\nLet me read contract_status to see the state.\n\nThen check settlement_status.\n\nThe buyer will verify the booking (verify_booking) and settle. As provider, I should confirm\n the booking details are correct per agreement: itinerary IT-ROME-ZX118-ECON, 4 tickets\n, total 482800 \u2014 matches.\n\nHmm \u2014 but wait: is the booking supposed to be verified by the buyer against what the provider booked\n? The provider's book produced ORD-1F6AZSDE wit\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=926"
+      }
+    },
+    {
+      "id": "fd-21",
+      "ts": "2026-10-07T00:07:05.922Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "tool-call",
+      "milestone": "settlement",
+      "basis": "exact",
+      "surface": "front-door",
+      "tool": "pay",
+      "summary": "Paid $4,828 for agr-0001: released on stripe-test",
+      "outcome": "ok",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "stage": "verified",
+      "source": {
+        "file": "frontdoor.jsonl",
+        "ref": "seq=21 callId=fd-d2fb2c1433bf606c"
+      },
+      "ids": {
+        "callId": "fd-d2fb2c1433bf606c",
+        "lineHash": "0x883e13df33799b289754f77c1e46729e0dd46ff608982e12170d5ed2872225c8"
+      },
+      "related": [
+        "rc-38",
+        "rc-41"
+      ]
+    },
+    {
+      "id": "an-108",
+      "ts": "2026-10-07T00:07:06.453Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "settlement",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "Booked \u2014 order ORD-1F6AZSDE, PNR KANSR2, 4 tickets. Checking contract and settlement state.",
+      "detail": "Booked \u2014 order ORD-1F6AZSDE, PNR KANSR2, 4 tickets. Checking contract and settlement state.",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=947"
+      }
+    },
+    {
+      "id": "rc-38",
+      "ts": "2026-10-07T00:07:06.571Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "settlement",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "settlement_prepare",
+      "summary": "Contract server signed settlement_prepare for buyer family-travel-tc: ok (signer composite settle)",
+      "outcome": "ok",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "stage": "verified",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x6df59c5b47335d16b3e18d8a9340dcd9343c84342d2b37b6b1702fb1808fb65d"
+      },
+      "ids": {
+        "receiptId": "0x6df59c5b47335d16b3e18d8a9340dcd9343c84342d2b37b6b1702fb1808fb65d",
+        "serverNonce": "0x79ff13ba8c7cf0d2648c610003d1b095",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "ap-1",
+      "ts": "2026-10-07T00:07:06.586Z",
+      "lane": "traveler",
+      "actor": "signer",
+      "kind": "signer-decision",
+      "milestone": "settlement",
+      "basis": "exact",
+      "subtype": "settlement",
+      "summary": "Family signer approval for settlement: allow",
+      "outcome": "ok",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "source": {
+        "file": "bundle.json#approvalRecords",
+        "ref": "digest=0xf7e482fc2ea66c419ae10e2223ad53601cdc96922e3b2d179c691defbcef67e5"
+      },
+      "ids": {
+        "approvalDigest": "0xf7e482fc2ea66c419ae10e2223ad53601cdc96922e3b2d179c691defbcef67e5"
+      }
+    },
+    {
+      "id": "rc-39",
+      "ts": "2026-10-07T00:07:07.396Z",
+      "lane": "agency",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "settlement",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Contract server signed contract_status for provider rome-agency-tc: ok",
+      "outcome": "ok",
+      "stage": "verified",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x8b8d377538b9e16a6a38fe1e680cdeec6dddb30c655e854b50d32e81e51a856b"
+      },
+      "ids": {
+        "receiptId": "0x8b8d377538b9e16a6a38fe1e680cdeec6dddb30c655e854b50d32e81e51a856b",
+        "serverNonce": "0xf5783186f0e21b4666a87336feb30521",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "rome-agency-tc"
+      }
+    },
+    {
+      "id": "ag-109",
+      "ts": "2026-10-07T00:07:07.421Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "tool-call",
+      "milestone": "settlement",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "contract_status",
+      "summary": "Mcp Contract \u00b7 contract status (0.4s)",
+      "outcome": "ok",
+      "stage": "verified",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=950"
+      }
+    },
+    {
+      "id": "rc-40",
+      "ts": "2026-10-07T00:07:07.519Z",
+      "lane": "agency",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "settlement",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "settlement_status",
+      "summary": "Contract server signed settlement_status for provider rome-agency-tc: ok",
+      "outcome": "ok",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "stage": "verified",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x9f84811eba126adb9ec6dcbf0f54a9e9d20e90e8068d893b44a19d22180c8baa"
+      },
+      "ids": {
+        "receiptId": "0x9f84811eba126adb9ec6dcbf0f54a9e9d20e90e8068d893b44a19d22180c8baa",
+        "serverNonce": "0x4abbaa271ed19638c7aac1c82de1dc55",
+        "argsDigest": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "principal": "rome-agency-tc"
+      }
+    },
+    {
+      "id": "ag-110",
+      "ts": "2026-10-07T00:07:07.540Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "tool-call",
+      "milestone": "settlement",
+      "basis": "stage",
+      "surface": "contract",
+      "tool": "settlement_status",
+      "summary": "Mcp Contract \u00b7 settlement status (0.1s)",
+      "outcome": "ok",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "stage": "verified",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=951"
+      }
+    },
+    {
+      "id": "rc-41",
+      "ts": "2026-10-07T00:07:08.046Z",
+      "lane": "traveler",
+      "actor": "contract-server",
+      "kind": "server-receipt",
+      "milestone": "settlement",
+      "basis": "exact",
+      "surface": "contract",
+      "tool": "settlement_authorize",
+      "summary": "Contract server signed settlement_authorize for buyer family-travel-tc: ok (signer composite settle)",
+      "outcome": "ok",
+      "simulated": "Stripe TEST mode \u2014 no real money",
+      "stage": "verified",
+      "source": {
+        "file": "bundle.json#receipts",
+        "ref": "receiptId=0x8ae2c546d1fc4379f9e2c97ec111e33d2f4ef0e862ce9ff4a6c6f562e5dc45cd"
+      },
+      "ids": {
+        "receiptId": "0x8ae2c546d1fc4379f9e2c97ec111e33d2f4ef0e862ce9ff4a6c6f562e5dc45cd",
+        "serverNonce": "0xab3beadd02f3ab2f3a791074c139d5b7",
+        "argsDigest": "0xabdeeb63f1b68bd7c40c9a7e99a067107be25e26eb682edfe01d9887f648cb84",
+        "principal": "family-travel-tc"
+      }
+    },
+    {
+      "id": "tn-25",
+      "ts": "2026-10-07T00:07:13.216Z",
+      "lane": "traveler",
+      "actor": "traveler",
+      "kind": "narration",
+      "milestone": "settlement",
+      "basis": "inferred",
+      "subtype": "message",
+      "summary": "The family's Rome trip for 4 is booked and paid at **$4,828**, which is $1,972 under the $6,800 limit.",
+      "detail": "The family's Rome trip for 4 is booked and paid at **$4,828**, which is $1,972 under the $6,800 limit. Ticketing and payment ran in test mode, so no real money moved and the tickets are simulated.\n\n- **Agency:** Rome family round-trip concierge. It was the only agency listing Rome, and its route is San Francisco (SFO) to Rome (FCO).\n- **Itinerary:** IT-ROME-ZX118-ECON, the economy fare on ZX118. The family's signed limit allows this itinerary. The agency only gave a price for this one, not the premium or one-stop options.\n- **Price:** the $4,818 fare plus a $10 agency fee. I accepted the agency's first offer without countering. The fee was the only part I could have pushed on, and the agency's listing said its fee had a set minimum.\n- **Booking:** PNR KANSR2, order ORD-1F6AZSDE, status issued. I checked it against the agreement before paying: same itinerary, 4 travellers, 4 tickets and\u2026",
+      "source": {
+        "file": "agent-trace.ndjson",
+        "ref": "line=61"
+      }
+    },
+    {
+      "id": "an-111",
+      "ts": "2026-10-07T00:07:13.597Z",
+      "lane": "agency",
+      "actor": "agency",
+      "kind": "narration",
+      "milestone": "settlement",
+      "basis": "inferred",
+      "subtype": "reasoning",
+      "summary": "Stage \"verified\" \u2014 the buyer verified the booking. Settlement is \"prepared\" (payment intent created, requires_payment_method). The buyer will settle (pay).",
+      "detail": "Stage \"verified\" \u2014 the buyer verified the booking. Settlement is \"prepared\" (payment\n intent created, requires_payment_method). The buyer will settle (pay).\n\nAs provider, my part ends at booking; the buyer settles and verifies.\n\nNow \u2014 is there anything left for the provider? Possibly the agreement/ledger anchor\n. anchor: \"disabled\".\n\nLet me think about the task goal: \"carry an agreed contract through booking on the simulated\n ticketing surface.\" Done. And settlement is the buyer's action.\n\nShould I wait for the settlement to complete? The provider might want to confirm settlement\n reached \"settled\". Let me poll contract_status/settlement_status a bit to see if the buyer settles\n.\n\nAlso, is there a provider-side verification step? verify_booking is buyer-side (\"your\n verdict on the provider's booking\"). So no.\n\nLet me wait for settlement. Poll settlement_status.\n\nAlso consider: maybe I s\u2026",
+      "source": {
+        "file": "agency-run-log.ndjson",
+        "ref": "seq=952"
+      }
+    }
+  ],
+  "clockchain": {
+    "milestoneLog": "not-yet-logged",
+    "existingAnchors": [
+      {
+        "id": "cc-0",
+        "ts": "2026-10-07T00:05:34.287Z",
+        "lane": "traveler",
+        "actor": "clockchain",
+        "kind": "clockchain-anchor",
+        "milestone": "discover",
+        "basis": "exact",
+        "subtype": "proposal",
+        "summary": "Handshake host anchored the handshake proposal (block 110219)",
+        "source": {
+          "file": "bundle.json#handshakeCertificate.result.anchors",
+          "ref": "ledgerId=4911ec53-f97f-4501-9e45-629abf063336"
+        },
+        "ids": {
+          "ledgerId": "4911ec53-f97f-4501-9e45-629abf063336",
+          "digest": "69c32f2a563e9d4c6a66d60627bfdc667d5144975cd15e7e8b12b3f57ecaf4aa",
+          "blockHeight": "110219"
+        }
+      },
+      {
+        "id": "cc-1",
+        "ts": "2026-10-07T00:05:37.255Z",
+        "lane": "traveler",
+        "actor": "clockchain",
+        "kind": "clockchain-anchor",
+        "milestone": "discover",
+        "basis": "exact",
+        "subtype": "acceptance",
+        "summary": "Handshake host anchored the handshake acceptance (block 110220)",
+        "source": {
+          "file": "bundle.json#handshakeCertificate.result.anchors",
+          "ref": "ledgerId=37ac98c4-b604-4075-85ac-9724caedfb1f"
+        },
+        "ids": {
+          "ledgerId": "37ac98c4-b604-4075-85ac-9724caedfb1f",
+          "digest": "5f0fe62fab3ddc4d1f47b1b3640e3ad005da30369d235e8ae5ff87b1dab4e620",
+          "blockHeight": "110220"
+        }
+      },
+      {
+        "id": "cc-2",
+        "ts": "2026-10-07T00:05:39.048Z",
+        "lane": "traveler",
+        "actor": "clockchain",
+        "kind": "clockchain-anchor",
+        "milestone": "discover",
+        "basis": "exact",
+        "subtype": "acknowledgment",
+        "summary": "Handshake host anchored the handshake acknowledgment (block 110221)",
+        "source": {
+          "file": "bundle.json#handshakeCertificate.result.anchors",
+          "ref": "ledgerId=b8ef3ba8-f190-478e-af35-de1c6fd98933"
+        },
+        "ids": {
+          "ledgerId": "b8ef3ba8-f190-478e-af35-de1c6fd98933",
+          "digest": "fb9ca0b9c28552d041e581d2706336a558942a548418366a7a905eb8e2294b85",
+          "blockHeight": "110221"
+        }
+      }
+    ],
+    "identityRegistrations": [
+      {
+        "party": "initiator",
+        "agentId": "10692",
+        "chainId": "eip155:11155111",
+        "registrationTx": "0xd89a2070378d4050bab8ff0b3b6e680122069dcfad0d1eb03d6f85b736ee70ca",
+        "registrationBlock": "11859275"
+      },
+      {
+        "party": "responder",
+        "agentId": "10693",
+        "chainId": "eip155:11155111",
+        "registrationTx": "0xc1335a3241b650c4bfd00da4229ebf6eb2ce3f0d310fe7dd6fb05900f806b236",
+        "registrationBlock": "11859276"
+      }
+    ]
+  },
+  "honesty": [
+    "Ticketing and fares are SIMULATED; payment runs on Stripe TEST mode (no real money).",
+    "Level L: every Track C run is capped at L (operator uid), so its verdict is UNVERIFIED-L.",
+    "Narration milestones are inferred from the agent's nearest tool call; tool, receipt and decision milestones are exact or follow the server-derived deal stage.",
+    "Agency tool rows are Hermes's own completion lines: no arguments, a result preview of at most ~40 characters.",
+    "Clockchain milestone log: not yet logged. Only the handshake host's own anchors exist for this run."
+  ]
+}

@@ -119,7 +119,7 @@ import type { TranscriptEntry } from "../adapters";
 import { summarizeToolCall } from "../lib/readableTranscript";
 import { CREDENTIALS_HIDDEN_NOTE, redactSecrets, redactSecretsInValue } from "../lib/redactSecrets";
 import { shortenInstancePaths } from "../lib/instancePaths";
-import { useTranscriptModePreference } from "../lib/transcriptModePreference";
+import { chatTranscriptMode, useTranscriptModePreference, type TranscriptViewMode } from "../lib/transcriptModePreference";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -796,6 +796,26 @@ function useIssueChatRunStoppedReason(message: ThreadMessage): string | null {
   return (runId ? stoppedReasonByRun?.get(runId) : undefined) ?? null;
 }
 
+// AgentDash: the chat's run blocks offer Readable/Raw; Business lives on the run page.
+const CHAT_TRANSCRIPT_MODES: readonly TranscriptViewMode[] = ["readable", "raw"];
+
+/**
+ * The chat shows a Business preference as Readable. Clicking the option that
+ * is already shown does nothing, so pressing "Readable" here never quietly
+ * replaces the run page's Business default (PR #1059 review).
+ */
+function useChatTranscriptMode(): [TranscriptViewMode, (mode: TranscriptViewMode) => void] {
+  const [preferredTranscriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const transcriptMode = chatTranscriptMode(preferredTranscriptMode);
+  const setChatMode = useCallback(
+    (mode: TranscriptViewMode) => {
+      if (mode !== transcriptMode) setTranscriptMode(mode);
+    },
+    [transcriptMode, setTranscriptMode],
+  );
+  return [transcriptMode, setChatMode];
+}
+
 function IssueChatReadableErrors({ lines }: { lines: string[] }) {
   if (lines.length === 0) return null;
   return (
@@ -815,7 +835,7 @@ function IssueChatRunReadableSummary({ message, streaming }: { message: ThreadMe
   const entries = useIssueChatRunTranscript(message);
   const usage = useIssueChatRunUsage(message);
   const stoppedReason = useIssueChatRunStoppedReason(message);
-  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const [transcriptMode, setTranscriptMode] = useChatTranscriptMode();
   if (!entries) return null;
   return (
     <div className="flex items-start gap-2">
@@ -829,7 +849,7 @@ function IssueChatRunReadableSummary({ message, streaming }: { message: ThreadMe
           />
         ) : null}
       </div>
-      <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
+      <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} options={CHAT_TRANSCRIPT_MODES} className="shrink-0" />
     </div>
   );
 }
@@ -876,7 +896,7 @@ function IssueChatChainOfThought({
   }, [isActive]);
 
   // AgentDash: Readable mode (default) shares AgentDetail's presentation.
-  const [transcriptMode, setTranscriptMode] = useTranscriptModePreference();
+  const [transcriptMode, setTranscriptMode] = useChatTranscriptMode();
   const runEntries = useIssueChatRunTranscript(message);
   const readableTools = useMemo(
     () => toolParts.map((tool) => toReadableToolRowItem(tool, isMessageRunning)),
@@ -933,7 +953,7 @@ function IssueChatChainOfThought({
             <div className="min-w-0 flex-1">
               {detailLines.length > 0 ? <ReadableDetails lines={detailLines} density="compact" /> : null}
             </div>
-            <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
+            <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} options={CHAT_TRANSCRIPT_MODES} className="shrink-0" />
           </div>
         ) : null}
       </div>
@@ -978,7 +998,7 @@ function IssueChatChainOfThought({
         ) : null}
       </button>
       {expanded && hasContent && !runEntries ? (
-        <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} className="shrink-0" />
+        <TranscriptModeToggle mode={transcriptMode} onChange={setTranscriptMode} options={CHAT_TRANSCRIPT_MODES} className="shrink-0" />
       ) : null}
       </div>
       {expanded && hasContent ? (

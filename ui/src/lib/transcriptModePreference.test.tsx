@@ -4,7 +4,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LEGACY_TRANSCRIPT_MODE_STORAGE_KEY,
   TRANSCRIPT_MODE_STORAGE_KEY,
+  chatTranscriptMode,
   readTranscriptModePreference,
   useTranscriptModePreference,
   writeTranscriptModePreference,
@@ -37,17 +39,33 @@ describe("transcript mode preference", () => {
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
-    writeTranscriptModePreference("readable");
+    writeTranscriptModePreference("business");
     window.localStorage.clear();
   });
 
-  it("defaults to readable", () => {
-    expect(readTranscriptModePreference()).toBe("readable");
+  it("defaults a first-time viewer to business, under agentdash.runTranscriptMode", () => {
+    expect(TRANSCRIPT_MODE_STORAGE_KEY).toBe("agentdash.runTranscriptMode");
+    expect(readTranscriptModePreference()).toBe("business");
   });
 
   it("migrates a stored legacy 'nice' value to readable", () => {
     window.localStorage.setItem(TRANSCRIPT_MODE_STORAGE_KEY, "nice");
     expect(readTranscriptModePreference()).toBe("readable");
+  });
+
+  it("carries an explicit legacy 'raw' choice over, but not the old readable default", () => {
+    window.localStorage.setItem(LEGACY_TRANSCRIPT_MODE_STORAGE_KEY, "readable");
+    expect(readTranscriptModePreference()).toBe("business");
+    window.localStorage.setItem(LEGACY_TRANSCRIPT_MODE_STORAGE_KEY, "raw");
+    expect(readTranscriptModePreference()).toBe("raw");
+    writeTranscriptModePreference("business");
+    expect(readTranscriptModePreference()).toBe("business");
+  });
+
+  it("shows business as readable in the issue chat", () => {
+    expect(chatTranscriptMode("business")).toBe("readable");
+    expect(chatTranscriptMode("readable")).toBe("readable");
+    expect(chatTranscriptMode("raw")).toBe("raw");
   });
 
   it("persists the toggle under an agentdash.* key and syncs every toggle on the page", () => {
@@ -60,7 +78,8 @@ describe("transcript mode preference", () => {
       );
     });
     const probes = () => Array.from(container.querySelectorAll<HTMLElement>("[data-probe]")).map((el) => el.dataset.mode);
-    expect(probes()).toEqual(["readable", "readable"]);
+    expect(probes()).toEqual(["business", "business"]);
+    expect(container.querySelector('[data-probe="a"] [data-transcript-mode="business"]')?.textContent).toBe("Business");
 
     const rawButton = container.querySelector<HTMLButtonElement>('[data-probe="a"] [data-transcript-mode="raw"]')!;
     act(() => rawButton.click());
@@ -69,6 +88,12 @@ describe("transcript mode preference", () => {
     expect(window.localStorage.getItem(TRANSCRIPT_MODE_STORAGE_KEY)).toBe("raw");
     expect(probes()).toEqual(["raw", "raw"]);
     expect(rawButton.getAttribute("aria-pressed")).toBe("true");
+
+    // The choice survives a reload (a fresh read from storage).
+    const readableButton = container.querySelector<HTMLButtonElement>('[data-probe="b"] [data-transcript-mode="readable"]')!;
+    act(() => readableButton.click());
+    expect(window.localStorage.getItem(TRANSCRIPT_MODE_STORAGE_KEY)).toBe("readable");
+    expect(readTranscriptModePreference()).toBe("readable");
   });
 
   it("still toggles in memory when localStorage throws", () => {
@@ -80,7 +105,7 @@ describe("transcript mode preference", () => {
     });
     expect(() => writeTranscriptModePreference("raw")).not.toThrow();
     expect(readTranscriptModePreference()).toBe("raw");
-    writeTranscriptModePreference("readable");
-    expect(readTranscriptModePreference()).toBe("readable");
+    writeTranscriptModePreference("business");
+    expect(readTranscriptModePreference()).toBe("business");
   });
 });

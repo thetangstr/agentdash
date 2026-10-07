@@ -16,6 +16,12 @@ import {
 // AgentDash: the lab uses the same persisted Readable/Raw toggle as the app.
 import { TranscriptModeToggle } from "../components/transcript/ReadableTranscript";
 import { useTranscriptModePreference } from "../lib/transcriptModePreference";
+import { parseMilestoneTimeline, type MilestoneTimeline } from "../lib/milestoneTimeline";
+import { SAMPLE_MILESTONE_TIMELINE } from "../fixtures/milestoneTimelineFixture";
+
+// AgentDash: the Business view's harness timeline, from the sample fixture.
+const sampleTimelineResult = parseMilestoneTimeline(SAMPLE_MILESTONE_TIMELINE);
+const sampleTimeline: MilestoneTimeline | null = sampleTimelineResult.ok ? sampleTimelineResult.timeline : null;
 
 type FixtureId = "claude" | "codex";
 
@@ -102,11 +108,13 @@ function RunDetailPreview({
   mode,
   streaming,
   density,
+  timeline,
 }: {
   entries: TranscriptEntry[];
   mode: TranscriptMode;
   streaming: boolean;
   density: TranscriptDensity;
+  timeline: MilestoneTimeline | null;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-border/70 bg-background/80 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
@@ -130,6 +138,7 @@ function RunDetailPreview({
           mode={mode}
           density={density}
           streaming={streaming}
+          timeline={timeline}
         />
       </div>
     </div>
@@ -250,6 +259,7 @@ export function RunTranscriptUxLab() {
   const entries = (fixtureOptions.find((option) => option.id === fixtureId) ?? fixtureOptions[0]).entries;
   const [streaming, setStreaming] = useState(true);
   const [density, setDensity] = useState<TranscriptDensity>("comfortable");
+  const [withTimeline, setWithTimeline] = useState(false);
 
   const selected = surfaceOptions.find((option) => option.id === selectedSurface) ?? surfaceOptions[0];
 
@@ -369,11 +379,26 @@ export function RunTranscriptUxLab() {
               >
                 {streaming ? "Show settled state" : "Show streaming state"}
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                aria-pressed={withTimeline}
+                onClick={() => setWithTimeline((value) => !value)}
+              >
+                {withTimeline ? "Without business log" : "With business log"}
+              </Button>
             </div>
 
             {selectedSurface === "detail" ? (
               <div className={cn(density === "compact" && "max-w-5xl")}>
-                <RunDetailPreview entries={entries} mode={detailMode} streaming={streaming} density={density} />
+                <RunDetailPreview
+                  entries={entries}
+                  mode={detailMode}
+                  streaming={streaming}
+                  density={density}
+                  timeline={withTimeline ? sampleTimeline : null}
+                />
               </div>
             ) : selectedSurface === "live" ? (
               <div className={cn(density === "compact" && "max-w-4xl")}>
