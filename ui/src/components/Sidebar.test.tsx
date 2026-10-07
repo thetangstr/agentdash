@@ -238,7 +238,9 @@ describe("Sidebar", () => {
     mockCompany.current = MK_COMPANY;
     const root = await renderSidebar();
     const primaryBlock = container.querySelector("nav > div");
-    const primaryHrefs = [...primaryBlock!.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    const primaryHrefs = [...primaryBlock!.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => !h?.startsWith("/agents/"));
     expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents"]);
     const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     expect(hrefs).not.toContain("/inbox");
@@ -307,15 +309,18 @@ describe("Sidebar", () => {
     expect(linkTexts).not.toContain("Evaluation");
     expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
 
-    // The agent list nests under Team, so the primary block's links are still
-    // exactly the six primary destinations (Settings sits in the footer).
+    // The agent list nests under Team (expanded by default), so apart from the
+    // per-agent rows the primary block's links are still exactly the six
+    // primary destinations (Settings sits in the footer).
     const primaryBlock = container.querySelector("nav > div");
-    const primaryHrefs = [...primaryBlock!.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    const primaryHrefs = [...primaryBlock!.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => !h?.startsWith("/agents/"));
     expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents"]);
     await act(async () => root.unmount());
   });
 
-  // UX-6 follow-up: the per-agent list returns under Team, collapsed by default.
+  // UX-6 follow-up: the per-agent list sits under Team, expanded by default.
   describe("Agents list under Team", () => {
     const findToggle = () =>
       [...container.querySelectorAll("button")].find((b) =>
@@ -336,53 +341,74 @@ describe("Sidebar", () => {
       mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
     });
 
-    it("hides the agent list by default behind an accessible toggle", async () => {
+    it("shows the agent list by default behind an accessible toggle", async () => {
       const root = await renderSidebar();
       const toggle = findToggle();
       expect(toggle).toBeDefined();
       expect(toggle?.getAttribute("type")).toBe("button");
-      expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle?.getAttribute("aria-label")).toBe("Hide agents");
       expect(toggle?.getAttribute("aria-controls")).toBeTruthy();
       // The chevron is a sibling of the Team link, never inside it, so
       // clicking it cannot navigate.
       expect(toggle?.closest("a")).toBeNull();
-      expect(agentHrefs()).toEqual([]);
-      const team = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/agents");
-      expect(team?.textContent).toContain("Team");
-      await act(async () => root.unmount());
-    });
-
-    it("shows the agents when toggled and remembers it per user per company", async () => {
-      let root = await renderSidebar();
-      await clickToggle();
-
-      const toggle = findToggle();
-      expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-      expect(toggle?.getAttribute("aria-label")).toBe("Hide agents");
       expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
       const contentId = toggle?.getAttribute("aria-controls");
       expect(contentId && document.getElementById(contentId)?.textContent).toContain("Maya");
-      expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBe("true");
-      await act(async () => root.unmount());
-
-      // Re-mount: the remembered state is honoured.
-      root = await renderSidebar();
-      expect(findToggle()?.getAttribute("aria-expanded")).toBe("true");
-      expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
-
-      // Collapsing forgets it again.
-      await clickToggle();
-      expect(agentHrefs()).toEqual([]);
+      const team = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/agents");
+      expect(team?.textContent).toContain("Team");
+      // Nothing is written until the viewer chooses.
       expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBeNull();
       await act(async () => root.unmount());
     });
 
-    it("does not apply another user's remembered state", async () => {
-      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-2", "true");
-      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-2:user-1", "true");
-      const root = await renderSidebar();
+    it("remembers a collapse per user per company, and expanding again", async () => {
+      let root = await renderSidebar();
+      await clickToggle();
+
+      const toggle = findToggle();
+      expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle?.getAttribute("aria-label")).toBe("Show agents");
+      expect(agentHrefs()).toEqual([]);
+      expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBe("false");
+      await act(async () => root.unmount());
+
+      // Re-mount: the remembered collapse is honoured.
+      root = await renderSidebar();
       expect(findToggle()?.getAttribute("aria-expanded")).toBe("false");
       expect(agentHrefs()).toEqual([]);
+
+      // Expanding again is remembered too.
+      await clickToggle();
+      expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
+      expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBe("true");
+      await act(async () => root.unmount());
+    });
+
+    it("still honours the expanded value older builds stored", async () => {
+      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1", "true");
+      const root = await renderSidebar();
+      expect(findToggle()?.getAttribute("aria-expanded")).toBe("true");
+      expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
+      await act(async () => root.unmount());
+    });
+
+    it("does not apply another user's remembered collapse", async () => {
+      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-2", "false");
+      localStorage.setItem("agentdash.sidebarTeamAgentsExpanded:company-2:user-1", "false");
+      const root = await renderSidebar();
+      expect(findToggle()?.getAttribute("aria-expanded")).toBe("true");
+      expect(agentHrefs()).toEqual(["/agents/maya", "/agents/priya"]);
+      await act(async () => root.unmount());
+    });
+
+    it("falls back to expanded when storage throws", async () => {
+      const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("blocked");
+      });
+      const root = await renderSidebar();
+      expect(findToggle()?.getAttribute("aria-expanded")).toBe("true");
+      getItem.mockRestore();
       await act(async () => root.unmount());
     });
 
@@ -500,8 +526,8 @@ describe("Sidebar", () => {
     }
     expect(hrefs.some((h) => h?.startsWith("/instance/"))).toBe(false);
     expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
-    // Six primary + four More + Settings.
-    expect(hrefs).toEqual([
+    // Six primary + four More + Settings (plus the per-agent rows under Team).
+    expect(hrefs.filter((h) => !h?.startsWith("/agents/"))).toEqual([
       "/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents",
       "/goals", "/routines", "/costs", "/activity",
       "/company/settings",

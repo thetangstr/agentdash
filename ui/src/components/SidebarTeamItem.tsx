@@ -12,8 +12,9 @@ import { cn } from "../lib/utils";
 import { SidebarAgentRows, useSidebarAgentRows } from "./SidebarAgents";
 import { SidebarNavItem } from "./SidebarNavItem";
 
-// AgentDash: UX-6 follow-up — the default profile's "Team" item with the
-// per-agent list nested under it, collapsed by default. The Team link still
+// AgentDash: UX-6 follow-up — the "Team" item with the per-agent list nested
+// under it, grouped by reporting line and expanded by default so agents are
+// visible in the left bar; a collapse is remembered. The Team link still
 // navigates to /agents; only the chevron toggles the list. With no agents
 // there is nothing to disclose, so the chevron is not rendered.
 export function SidebarTeamItem() {
