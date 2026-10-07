@@ -38,3 +38,7 @@ lint (`pnpm check:architecture`), the `new-loop` + `setup-codebase-harness` skil
 MAW agents to read/append this LOG and file signals. Loop runs now compound instead of resetting.
 Refs: loops/ARCHITECTURE.md (new), scripts/check-architecture.mjs (new),
 .claude/skills/{new-loop,setup-codebase-harness} (new), .claude/commands/{builder,tester,workon}.md (updated).
+
+## 2026-10-07 · Public product updates · #maw #feature
+What: Added a public update index and a launch-week post about sidebar teams, transcript following, responsiveness and scoped security; excluded Travel MVP integration highlights by founder direction. Global route reservation prevents company-prefix collisions. Local verification and screenshots are recorded separately from publication.
+Refs: feat/www-whats-new; doc/qa/2026-10-07-whats-new.md; releases/v2026.1007.0.md; releases/v2026.1007.1.md.

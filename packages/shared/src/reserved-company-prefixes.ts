@@ -45,6 +45,7 @@ export const RESERVED_COMPANY_PREFIXES = [
   "terms",
   "tests",
   "trial",
+  "whats-new",
   // Company (board) pages, which also answer unprefixed.
   "activity",
   "agents",
