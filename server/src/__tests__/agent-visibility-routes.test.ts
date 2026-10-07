@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // These fixtures inject req.actor without running the auth middleware, so no
@@ -14,6 +14,8 @@ import {
   agentStewardships,
   agents,
   approvals,
+  assistantActionHandles,
+  assistantGrants,
   companies,
   companyMemberships,
   createDb,
@@ -34,6 +36,7 @@ import { dashboardRoutes } from "../routes/dashboard.js";
 import { agentStewardshipRoutes } from "../routes/agent-stewardships.js";
 import { agentMemoryRoutes } from "../routes/agent-memory.js";
 import { companyRoutes } from "../routes/companies.js";
+import { assistantRoutes } from "../routes/assistant.js";
 import { logActivity } from "../services/activity-log.js";
 import { errorHandler } from "../middleware/index.js";
 
@@ -78,6 +81,15 @@ describeEmbeddedPostgres("agent visibility routes", () => {
   const RUN_OTHER = randomUUID();
   const APPROVAL_CASPER = randomUUID();
   const APPROVAL_OTHER = randomUUID();
+  // GH #916 follow-ups: dedicated rows for the routes that mutate, so no case
+  // changes a fixture another case reads.
+  const APPROVAL_CASPER_DECIDE = randomUUID();
+  const APPROVAL_CASPER_REVISION = randomUUID();
+  const APPROVAL_OTHER_REVISION = randomUUID();
+  const APPROVAL_CASPER_ASSIST = randomUUID();
+  const APPROVAL_OTHER_ASSIST = randomUUID();
+  const GRANT_TITUS = randomUUID();
+  const GRANT_ADMIN = randomUUID();
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-agent-vis-routes-");
@@ -136,6 +148,15 @@ describeEmbeddedPostgres("agent visibility routes", () => {
     await db.insert(approvals).values([
       { id: APPROVAL_CASPER, companyId: COMPANY, type: "generic", status: "pending", requestedByAgentId: CASPER, payload: { note: "casper" } },
       { id: APPROVAL_OTHER, companyId: COMPANY, type: "generic", status: "pending", requestedByAgentId: OTHER, payload: { note: "other secret" } },
+      { id: APPROVAL_CASPER_DECIDE, companyId: COMPANY, type: "generic", status: "pending", requestedByAgentId: CASPER, payload: { note: "casper decide" } },
+      { id: APPROVAL_CASPER_REVISION, companyId: COMPANY, type: "generic", status: "revision_requested", requestedByAgentId: CASPER, payload: { note: "casper revision" } },
+      { id: APPROVAL_OTHER_REVISION, companyId: COMPANY, type: "generic", status: "revision_requested", requestedByAgentId: OTHER, payload: { note: "other secret revision" } },
+      { id: APPROVAL_CASPER_ASSIST, companyId: COMPANY, type: "generic", status: "pending", requestedByAgentId: CASPER, payload: { note: "casper assist" } },
+      { id: APPROVAL_OTHER_ASSIST, companyId: COMPANY, type: "generic", status: "pending", requestedByAgentId: OTHER, payload: { note: "other secret assist" } },
+    ]);
+    await db.insert(assistantGrants).values([
+      { id: GRANT_TITUS, companyId: COMPANY, userId: TITUS, clientId: "client-titus", clientName: "Assistant", redirectHost: "assistant.example", scopes: ["agentdash:read", "agentdash:work", "agentdash:decide"] },
+      { id: GRANT_ADMIN, companyId: COMPANY, userId: ADMIN, clientId: "client-admin", clientName: "Assistant", redirectHost: "assistant.example", scopes: ["agentdash:read", "agentdash:work", "agentdash:decide"] },
     ]);
     await logActivity(db, {
       companyId: COMPANY,
@@ -178,6 +199,7 @@ describeEmbeddedPostgres("agent visibility routes", () => {
     app.use("/api", agentStewardshipRoutes(db));
     app.use("/api", agentMemoryRoutes(db));
     app.use("/api/companies", companyRoutes(db));
+    app.use("/api", assistantRoutes(db, { autoDispatchQueuedRuns: false }));
     app.use(errorHandler);
     return app;
   }
@@ -195,6 +217,13 @@ describeEmbeddedPostgres("agent visibility routes", () => {
     companyId: COMPANY,
     source: "agent_key",
     companyIds: [COMPANY],
+  });
+  // An assistant connection resolves to the person behind the grant.
+  const asAssistant = (userId: string, role: string, grantId: string) => ({
+    ...asUser(userId, role),
+    source: "assistant_grant",
+    assistantGrantId: grantId,
+    assistantClientName: "Assistant",
   });
   const titus = () => appAs(asUser(TITUS, "member"));
   const sam = () => appAs(asUser(SAM, "member"));
@@ -299,7 +328,9 @@ describeEmbeddedPostgres("agent visibility routes", () => {
   describe("approvals, activity, dashboard", () => {
     it("approvals raised by an invisible agent are absent and 404", async () => {
       const list = (await request(titus()).get(`/api/companies/${COMPANY}/approvals`)).body as Array<{ id: string }>;
-      expect(list.map((row) => row.id)).toEqual([APPROVAL_CASPER]);
+      expect(list.map((row) => row.id).sort()).toEqual(
+        [APPROVAL_CASPER, APPROVAL_CASPER_DECIDE, APPROVAL_CASPER_REVISION, APPROVAL_CASPER_ASSIST].sort(),
+      );
       expect((await request(titus()).get(`/api/approvals/${APPROVAL_OTHER}`)).status).toBe(404);
       expect((await request(admin()).get(`/api/approvals/${APPROVAL_OTHER}`)).status).toBe(200);
     });
@@ -326,14 +357,108 @@ describeEmbeddedPostgres("agent visibility routes", () => {
     });
 
     it("GH #916: a member can still decide a VISIBLE agent's approval", async () => {
-      const res = await request(titus()).post(`/api/approvals/${APPROVAL_CASPER}/approve`).send({});
+      const res = await request(titus()).post(`/api/approvals/${APPROVAL_CASPER_DECIDE}/approve`).send({});
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("approved");
       const [row] = await db
         .select({ status: approvals.status })
         .from(approvals)
-        .where(eq(approvals.id, APPROVAL_CASPER));
+        .where(eq(approvals.id, APPROVAL_CASPER_DECIDE));
       expect(row.status).toBe("approved");
+    });
+
+    it("GH #916: resubmit is 404 on an invisible agent's approval and changes nothing; the steward and an admin still resubmit", async () => {
+      const refused = await request(titus()).post(`/api/approvals/${APPROVAL_OTHER_REVISION}/resubmit`).send({});
+      expect(refused.status).toBe(404);
+      expect(JSON.stringify(refused.body)).not.toMatch(/secret/);
+      const [untouched] = await db
+        .select({ status: approvals.status, revision: approvals.revision })
+        .from(approvals)
+        .where(eq(approvals.id, APPROVAL_OTHER_REVISION));
+      expect(untouched.status).toBe("revision_requested");
+      expect(untouched.revision).toBe(1);
+
+      const steward = await request(titus()).post(`/api/approvals/${APPROVAL_CASPER_REVISION}/resubmit`).send({});
+      expect(steward.status).toBe(200);
+      expect(steward.body.status).toBe("pending");
+      const owner = await request(admin()).post(`/api/approvals/${APPROVAL_OTHER_REVISION}/resubmit`).send({});
+      expect(owner.status).toBe(200);
+      expect(owner.body.status).toBe("pending");
+    });
+
+    it("GH #916: comments and linked issues are 404 on an invisible agent's approval; the steward and an admin still reach them", async () => {
+      const app = titus();
+      for (const path of [`/api/approvals/${APPROVAL_OTHER}/comments`, `/api/approvals/${APPROVAL_OTHER}/issues`]) {
+        const res = await request(app).get(path);
+        expect(res.status, path).toBe(404);
+      }
+      const posted = await request(app).post(`/api/approvals/${APPROVAL_OTHER}/comments`).send({ body: "probe" });
+      expect(posted.status).toBe(404);
+      expect(
+        (await request(admin()).get(`/api/approvals/${APPROVAL_OTHER}/comments`)).body as unknown[],
+      ).toHaveLength(0);
+
+      expect((await request(app).get(`/api/approvals/${APPROVAL_CASPER}/comments`)).status).toBe(200);
+      expect((await request(app).get(`/api/approvals/${APPROVAL_CASPER}/issues`)).status).toBe(200);
+      expect((await request(app).post(`/api/approvals/${APPROVAL_CASPER}/comments`).send({ body: "steward note" })).status).toBe(201);
+      expect((await request(admin()).get(`/api/approvals/${APPROVAL_OTHER}/issues`)).status).toBe(200);
+      expect((await request(admin()).post(`/api/approvals/${APPROVAL_OTHER}/comments`).send({ body: "admin note" })).status).toBe(201);
+    });
+
+    it("GH #916: the assistant's prepare-decision is 404 on an invisible agent's approval (body-supplied id), names nobody, and the steward and an admin still prepare", async () => {
+      const prepare = (actor: Record<string, unknown>, approvalId: string) =>
+        request(appAs(actor))
+          .post(`/api/companies/${COMPANY}/assistant/actions/prepare-decision`)
+          .send({ approvalId, decision: "approve" });
+
+      const refused = await prepare(asAssistant(TITUS, "member", GRANT_TITUS), APPROVAL_OTHER_ASSIST);
+      expect(refused.status).toBe(404);
+      expect(refused.body.code).toBe("approval_not_found");
+      expect(JSON.stringify(refused.body)).not.toMatch(/Other|secret/);
+      expect(refused.body.handle).toBeUndefined();
+
+      const owner = await prepare(asAssistant(ADMIN, "admin", GRANT_ADMIN), APPROVAL_OTHER_ASSIST);
+      expect(owner.status).toBe(200);
+      expect(typeof owner.body.handle).toBe("string");
+
+      const steward = await prepare(asAssistant(TITUS, "member", GRANT_TITUS), APPROVAL_CASPER_ASSIST);
+      expect(steward.status).toBe(200);
+      const confirmed = await request(appAs(asAssistant(TITUS, "member", GRANT_TITUS)))
+        .post(`/api/companies/${COMPANY}/assistant/actions/confirm`)
+        .send({ handle: steward.body.handle });
+      expect(confirmed.status).toBe(200);
+      const [decided] = await db
+        .select({ status: approvals.status })
+        .from(approvals)
+        .where(eq(approvals.id, APPROVAL_CASPER_ASSIST));
+      expect(decided.status).toBe("approved");
+    });
+
+    it("GH #916: the assistant's confirm re-checks visibility — a handle for an approval the person cannot see decides nothing", async () => {
+      // A handle minted while the person could see the agent (stewardship
+      // since removed, say): confirm resolves the approval again and must
+      // refuse it the same way prepare would.
+      const token = `aah_${randomUUID()}`;
+      await db.insert(assistantActionHandles).values({
+        token: createHash("sha256").update(token).digest("hex"),
+        companyId: COMPANY,
+        grantId: GRANT_TITUS,
+        actorUserId: TITUS,
+        kind: "approval_decision",
+        payload: { approvalId: APPROVAL_OTHER_ASSIST, revision: 1, decision: "approve", note: null },
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+      });
+      const res = await request(appAs(asAssistant(TITUS, "member", GRANT_TITUS)))
+        .post(`/api/companies/${COMPANY}/assistant/actions/confirm`)
+        .send({ handle: token });
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe("approval_not_found");
+      expect(JSON.stringify(res.body)).not.toMatch(/Other|secret/);
+      const [row] = await db
+        .select({ status: approvals.status })
+        .from(approvals)
+        .where(eq(approvals.id, APPROVAL_OTHER_ASSIST));
+      expect(row.status).toBe("pending");
     });
 
     it("the activity feed omits rows about an invisible agent", async () => {
@@ -346,8 +471,10 @@ describeEmbeddedPostgres("agent visibility routes", () => {
     it("the dashboard counts what the member can see", async () => {
       const mine = (await request(titus()).get(`/api/companies/${COMPANY}/dashboard`)).body;
       const all = (await request(admin()).get(`/api/companies/${COMPANY}/dashboard`)).body;
-      expect(mine.agents.active).toBe(4);
-      expect(all.agents.active).toBe(5);
+      // Approved decisions above wake the requesting agent, so count every
+      // operational agent (idle is reported as active, plus running).
+      expect(mine.agents.active + mine.agents.running).toBe(4);
+      expect(all.agents.active + all.agents.running).toBe(5);
       expect(mine.tasks.open).toBeLessThan(all.tasks.open);
     });
   });

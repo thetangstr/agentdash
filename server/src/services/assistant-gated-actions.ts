@@ -84,6 +84,19 @@ export interface AssistantGatedActor {
   membershipRole: string | null;
 }
 
+/**
+ * GH #916: may the person behind the grant see this approval? The service has
+ * no request, so the route supplies the check (requesting-agent visibility and
+ * GH #902 project visibility). An approval that fails it is answered exactly
+ * like a missing one. Omitted = no extra restriction (service-level callers).
+ */
+export type AssistantApprovalVisibility = (approval: {
+  companyId: string;
+  type: string;
+  payload: unknown;
+  requestedByAgentId: string | null;
+}) => Promise<boolean>;
+
 /** AgentDash consolidation PR-A (H2): the `details.via` every gated write carries. */
 function gatedVia(actor: AssistantGatedActor) {
   return `assistant_grant ${actor.grantId} (${actor.clientName})`;
@@ -277,6 +290,7 @@ export function assistantGatedActionsService(
     companyId: string,
     actor: AssistantGatedActor,
     input: { approvalId: string; decision: AssistantDecision; note?: string | null },
+    options: { approvalVisible?: AssistantApprovalVisibility } = {},
   ): Promise<
     GatedResult<{
       readBack: string;
@@ -287,7 +301,11 @@ export function assistantGatedActionsService(
     }>
   > {
     const approval = await approvalsSvc.getById(input.approvalId);
-    if (!approval || approval.companyId !== companyId) {
+    if (
+      !approval
+      || approval.companyId !== companyId
+      || (options.approvalVisible && !(await options.approvalVisible(approval)))
+    ) {
       return { ok: false, code: "approval_not_found", reason: "I couldn't find that approval — it may have been removed.", status: 404 };
     }
     if (!DECIDABLE_STATUSES.has(approval.status)) {
@@ -580,6 +598,7 @@ export function assistantGatedActionsService(
     companyId: string,
     actor: AssistantGatedActor,
     input: { handle: string; personSaid?: string | null },
+    options: { approvalVisible?: AssistantApprovalVisibility } = {},
   ): Promise<
     GatedResult<{
       outcome: string;
@@ -638,7 +657,7 @@ export function assistantGatedActionsService(
     if (record.kind === "hire_request") {
       return confirmHire(companyId, actor, record, personSaid, grant.decisionsNeedTap);
     }
-    return confirmDecision(companyId, actor, record, personSaid, grant.decisionsNeedTap);
+    return confirmDecision(companyId, actor, record, personSaid, grant.decisionsNeedTap, options.approvalVisible);
   }
 
   /**
@@ -668,10 +687,17 @@ export function assistantGatedActionsService(
     record: HandleRow,
     personSaid: string | null,
     decisionsNeedTap: boolean,
+    approvalVisible?: AssistantApprovalVisibility,
   ): ReturnType<typeof confirm> {
     const payload = record.payload as unknown as DecisionHandlePayload;
     const approval = await approvalsSvc.getById(payload.approvalId);
-    if (!approval || approval.companyId !== companyId) {
+    // GH #916: visibility is re-checked at confirm, against current data —
+    // a stewardship removed after prepare refuses here like a deleted row.
+    if (
+      !approval
+      || approval.companyId !== companyId
+      || (approvalVisible && !(await approvalVisible(approval)))
+    ) {
       return {
         ok: false,
         code: "approval_not_found",
