@@ -28,7 +28,7 @@ interface Failure {
   times: number;
 }
 
-export type Resolver = (variables: Record<string, unknown>, fake: FakeRailway) => unknown;
+export type Resolver = (variables: Record<string, unknown>, fake: FakeRailway, query: string) => unknown;
 
 export class FakeRailway {
   readonly projects = new Map<string, FakeProject>();
@@ -73,7 +73,7 @@ export class FakeRailway {
       const custom = this.resolvers.find((r) => r.match.test(query));
       if (custom) {
         this.calls.push({ op: custom.op, variables });
-        return json(200, { data: custom.resolve(variables, this) });
+        return json(200, { data: custom.resolve(variables, this, query) });
       }
       const data = this.#builtin(query, variables);
       return json(200, { data });

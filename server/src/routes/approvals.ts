@@ -45,6 +45,7 @@ import {
   visibleAgentIdsFor,
 } from "./visibility.js";
 import { badRequest, forbidden, unprocessable } from "../errors.js";
+import { assertNoAssistantProvenanceClaimInPayload } from "../services/assistant-provenance-claims.js";
 import { redactEventPayload } from "../redaction.js";
 import { approvalUrl } from "../lib/public-base-url.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -372,6 +373,12 @@ export function approvalRoutes(
         hostExecutionContextForCompany(companyId),
       );
     }
+    // GH #828 (provenance spoof): `payload.metadata.source ===
+    // "assistant_hire_request"` is stamped server-side by the gated-action
+    // hire path and read back by the digest to render the request as
+    // assistant-made. A caller writing the tag into a free-form payload is
+    // claiming provenance they did not earn — only an assistant grant may.
+    assertNoAssistantProvenanceClaimInPayload(req.actor, approvalInput.payload);
     const normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
@@ -645,6 +652,9 @@ export function approvalRoutes(
       await authority.requireDecisionActor(existing, req.actor);
     }
 
+    // AgentDash (GH #828): a resubmit replaces the stored payload, so it may not
+    // claim assistant provenance either.
+    assertNoAssistantProvenanceClaimInPayload(req.actor, req.body.payload);
     // Resubmitting without a payload re-opens the stored one, so that is what
     // must be executable.
     if (existing.type === "connector_send") {

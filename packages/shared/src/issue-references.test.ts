@@ -65,4 +65,35 @@ describe("issue references", () => {
 
     expect(extractIssueReferenceIdentifiers(markdown)).toEqual(["PAP-1", "PAP-5"]);
   });
+
+  it("keeps long alphabetic runs linear instead of backtracking", () => {
+    // UltraQA-B: `[A-Z]+-\d+` under the `i` flag went quadratic on a plain
+    // alphabetic blob — every start position scanned the whole remaining run
+    // looking for `-\d+`. A ~1MB issue description or comment pinned the
+    // server event loop for minutes.
+    const blob = "x".repeat(200_000);
+    const started = Date.now();
+    expect(findIssueReferenceMatches(blob)).toEqual([]);
+    expect(extractIssueReferenceIdentifiers(`prelude ${blob} tail PAP-9`)).toEqual(["PAP-9"]);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("ignores oversize identifier-shaped tokens instead of matching their tail", () => {
+    const longPrefix = "A".repeat(65);
+    expect(findIssueReferenceMatches(`${longPrefix}-1`)).toEqual([]);
+    expect(findIssueReferenceMatches("PAP-1234567890123456")).toEqual([]);
+    expect(extractIssueReferenceIdentifiers(`see ${"A".repeat(64)}-1 and PAP-123456789012345`)).toEqual([
+      `${"A".repeat(64)}-1`,
+      "PAP-123456789012345",
+    ]);
+  });
+
+  it("keeps long unbalanced bracket tails linear", () => {
+    // trimTrailingPunctuation recounted brackets over the whole remaining
+    // token per trimmed character — a `/x]]]]…` token was O(n²).
+    const tail = "/x" + "]".repeat(200_000);
+    const started = Date.now();
+    findIssueReferenceMatches(tail);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });

@@ -765,7 +765,7 @@ Terminal states: `done`, `cancelled`
 | GET    | `/api/agents/:agentId`             | Agent details + chain of command     |
 | GET    | `/api/companies/:companyId/agents` | List all agents in company           |
 | POST   | `/api/companies/:companyId/agents` | Create agent directly (no approval)  |
-| PATCH  | `/api/agents/:agentId`             | Update agent config or budget. With an agent key, only `name`, `title`, `icon`, `capabilities` (plus `desiredSkills` on another agent); role, status, budget, spend, reporting line and runtime/adapter config need a board user |
+| PATCH  | `/api/agents/:agentId`             | Update agent config or budget. With an agent key, only `name`, `title`, `icon`, `capabilities`; role, status, budget, spend, reporting line and runtime/adapter config need a board user. `desiredSkills` here returns 422: change another agent's skills with `POST /api/agents/:agentId/skills/sync` |
 | POST   | `/api/agents/:agentId/pause`       | Temporarily stop heartbeats (board user only) |
 | POST   | `/api/agents/:agentId/resume`      | Resume a paused agent (board user only) |
 | POST   | `/api/agents/:agentId/terminate`   | Permanently deactivate agent (irreversible) |

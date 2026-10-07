@@ -1,8 +1,8 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { companies, goals } from "@paperclipai/db";
+import { agents, companies, goals } from "@paperclipai/db";
 
-import { conflict } from "../errors.js";
+import { conflict, notFound, unprocessable } from "../errors.js";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 
 type GoalReader = Pick<Db, "select">;
@@ -63,6 +63,51 @@ export function goalService(db: Db) {
     if (current.companyId !== before.companyId) throw conflict("Goal company changed before acceptance");
     return current;
   }
+  // AgentDash (GH #921): parentId and ownerAgentId are foreign keys the schema
+  // enforces at the database, not the company boundary. Writing a reference to
+  // another company's row used to succeed, and an id matching nothing surfaced
+  // the raw 23503 as a 500. Validate inside the locked transaction and answer
+  // 404 on a miss, the visibility rule's convention.
+  async function assertReferences(tx: Db, companyId: string, data: { parentId?: string | null; ownerAgentId?: string | null }) {
+    if (data.parentId) {
+      const parent = await tx
+        .select({ id: goals.id })
+        .from(goals)
+        .where(and(eq(goals.id, data.parentId), eq(goals.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!parent) throw notFound("Parent goal not found");
+    }
+    if (data.ownerAgentId) {
+      const owner = await tx
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.id, data.ownerAgentId), eq(agents.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!owner) throw notFound("Owner agent not found");
+    }
+  }
+  // AgentDash (GH #921 review): a goal may not sit under itself or under one of
+  // its own descendants — tree walkers loop on a cycle. Walk the proposed
+  // parent's ancestors inside the same transaction; the company row lock taken
+  // by create/update serialises goal writes in this company, so the chain
+  // cannot change under the walk. 422 matches the "Parent issue is
+  // unavailable" convention. Bounded by a visited set so a pre-existing cycle
+  // cannot loop here either.
+  async function assertNoParentCycle(tx: Db, goalId: string, parentId: string) {
+    if (parentId === goalId) throw unprocessable("A goal cannot be its own parent");
+    const visited = new Set<string>();
+    let cursor: string | null = parentId;
+    while (cursor && !visited.has(cursor)) {
+      if (cursor === goalId) throw unprocessable("A goal cannot be placed under its own descendant");
+      visited.add(cursor);
+      const row: { parentId: string | null } | null = await tx
+        .select({ parentId: goals.parentId })
+        .from(goals)
+        .where(eq(goals.id, cursor))
+        .then((rows) => rows[0] ?? null);
+      cursor = row?.parentId ?? null;
+    }
+  }
   return {
     list: (companyId: string) => db.select().from(goals).where(eq(goals.companyId, companyId)),
 
@@ -79,6 +124,7 @@ export function goalService(db: Db) {
     create: (companyId: string, data: Omit<typeof goals.$inferInsert, "companyId">, acceptance?: ActivityAcceptance) =>
       accept(acceptance, async tx => {
         await lockCompanies(tx, [companyId]);
+        await assertReferences(tx, companyId, data);
         return (await tx.insert(goals).values({ ...data, companyId }).returning())[0];
       }),
 
@@ -86,6 +132,8 @@ export function goalService(db: Db) {
       accept(acceptance, async tx => {
         const current = await lockGoalCompanies(tx, id, data.companyId);
         if (!current) return null;
+        await assertReferences(tx, data.companyId ?? current.companyId, data);
+        if (data.parentId) await assertNoParentCycle(tx, id, data.parentId);
         return (await tx.update(goals).set({ ...data, updatedAt: new Date() }).where(eq(goals.id, id)).returning())[0] ?? null;
       }),
 

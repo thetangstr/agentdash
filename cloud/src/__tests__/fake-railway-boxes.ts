@@ -16,13 +16,35 @@ export interface FakeService {
   triggers: string[];
 }
 
+export interface FakeVolumeBackup {
+  id: string;
+  /** Pre-upgrade snapshots are "Manual"; scheduled ones carry their schedule's name. */
+  name: string;
+  createdAt: string;
+  expiresAt: string | null;
+  /** Set on backups a schedule took (Daily/Weekly). */
+  scheduleId?: string | null;
+  /** Railway refuses to delete a locked backup. */
+  locked?: boolean;
+}
+
+/** A backup deletion Railway is still running on a volume (it allows only one at a time). */
+export interface FakeBackupDeletion {
+  backupId: string;
+  /** volumeInstanceBackupList reads remaining before this deletion completes. */
+  clearsAfterLists: number;
+}
+
 export interface FakeVolume {
   id: string;
   instanceId: string;
   projectId: string;
   serviceId: string;
   mountPath: string;
+  /** The configured schedule kinds (DAILY/WEEKLY), not the backups themselves. */
   backups: string[];
+  backupRecords: FakeVolumeBackup[];
+  deleting: FakeBackupDeletion | null;
   /** Project reads that still do not list this volume (Railway's listing lag, seen live). */
   hiddenReads: number;
 }
@@ -40,6 +62,12 @@ export interface BoxFakeOptions {
   health?: Record<string, unknown>;
   /** A new volume stays out of the project listing for this many reads. */
   volumeListLag?: number;
+  /** Railway's per-volume backup cap (the plan limit that broke upgrades). */
+  backupLimit?: number;
+  /** List polls before a backup deletion completes (models the async workflow). */
+  backupDeleteClearsAfterLists?: number;
+  /** The lock field VolumeInstanceBackup exposes to introspection (default "locked"; null = none). */
+  backupLockField?: string | null;
 }
 
 export class FakeRailwayBoxes extends FakeRailway {
@@ -70,7 +98,7 @@ export class FakeRailwayBoxes extends FakeRailway {
     });
     on(/volumeCreate\(/, "volumeCreate", (v) => {
       const i = v.i as { projectId: string; serviceId: string; mountPath: string };
-      const vol: FakeVolume = { id: this.nextId("vol"), instanceId: this.nextId("volinst"), projectId: i.projectId, serviceId: i.serviceId, mountPath: i.mountPath, backups: [], hiddenReads: this.opts.volumeListLag ?? 0 };
+      const vol: FakeVolume = { id: this.nextId("vol"), instanceId: this.nextId("volinst"), projectId: i.projectId, serviceId: i.serviceId, mountPath: i.mountPath, backups: [], backupRecords: [], deleting: null, hiddenReads: this.opts.volumeListLag ?? 0 };
       this.volumes.set(vol.id, vol);
       return { volumeCreate: { id: vol.id } };
     });
