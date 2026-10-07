@@ -36,30 +36,21 @@ describe("environment config helpers", () => {
     });
   });
 
-  it("keeps absolute identityFile/knownHostsFile paths and rejects relative ones", () => {
+  it("never accepts key or known_hosts file paths from a company's SSH environment", () => {
+    // Hermes-over-SSH key and known_hosts paths are operator config
+    // (AGENTDASH_HERMES_SSH_ALLOWLIST); a tenant environment cannot name them.
     const base = {
       host: "127.0.0.1",
       username: "ac-provider",
       remoteWorkspacePath: "/Users/ac-provider/agentdash",
     };
-    const config = normalizeEnvironmentConfig({
-      driver: "ssh",
-      config: {
-        ...base,
-        identityFile: "/etc/agentdash/ssh/ac-provider_ed25519",
-        knownHostsFile: "/etc/agentdash/ssh/known_hosts",
-      },
-    });
-    expect(config).toMatchObject({
-      identityFile: "/etc/agentdash/ssh/ac-provider_ed25519",
-      knownHostsFile: "/etc/agentdash/ssh/known_hosts",
-    });
-    expect(() =>
-      normalizeEnvironmentConfig({ driver: "ssh", config: { ...base, identityFile: "keys/id_ed25519" } }),
-    ).toThrow(/must be absolute/);
-    expect(() =>
-      normalizeEnvironmentConfig({ driver: "ssh", config: { ...base, knownHostsFile: "known_hosts" } }),
-    ).toThrow(/must be absolute/);
+    for (const extra of [
+      { identityFile: "/etc/agentdash/ssh/ac-provider_ed25519" },
+      { knownHostsFile: "/etc/agentdash/ssh/known_hosts" },
+    ]) {
+      expect(() => normalizeEnvironmentConfig({ driver: "ssh", config: { ...base, ...extra } })).toThrow();
+      expect(() => parseEnvironmentDriverConfig({ driver: "ssh", config: { ...base, ...extra } })).toThrow();
+    }
   });
 
   it("rejects raw SSH private keys in the stored config shape", () => {

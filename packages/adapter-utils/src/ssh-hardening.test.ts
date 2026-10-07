@@ -53,6 +53,7 @@ describe("ssh argv hardening", () => {
     await target.cleanup();
     expect(target.command).toBe("ssh");
     expect(target.args.slice(0, -1)).toEqual([
+      "-F", "/dev/null",
       "-o", "BatchMode=yes",
       "-o", "ConnectTimeout=10",
       "-o", "StrictHostKeyChecking=yes",
@@ -61,7 +62,11 @@ describe("ssh argv hardening", () => {
       "-i", "/etc/agentdash/ssh/ac-provider_ed25519",
       "-o", "IdentitiesOnly=yes",
       "-o", "ForwardAgent=no",
+      "-o", "ForwardX11=no",
       "-o", "ClearAllForwardings=yes",
+      "-o", "ControlMaster=no",
+      "-o", "ControlPath=none",
+      "-o", "PermitLocalCommand=no",
       "-p", "22",
       "ac-provider@127.0.0.1",
     ]);

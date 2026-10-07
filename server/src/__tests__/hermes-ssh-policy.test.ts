@@ -7,12 +7,19 @@ import {
   HERMES_SSH_ENABLED_ENV,
   assertHermesSshLaunchReady,
   evaluateHermesSshEnvironment,
+  hermesSshConnectionFor,
   hermesSshEnabled,
   readHermesSshAllowlist,
 } from "../services/hermes-ssh-policy.js";
 
 const FOUNDER_COMPANY = "0008870a-4a07-4e09-9a3e-1998f4c7d640";
 const OTHER_COMPANY = "22222222-2222-4222-8222-222222222222";
+const KEY = "/etc/agentdash/ssh/ac-provider_ed25519";
+const KNOWN_HOSTS = "/etc/agentdash/ssh/known_hosts";
+
+function entry(companies: string[], extra: Record<string, unknown> = {}) {
+  return { companies, identityFile: KEY, knownHostsFile: KNOWN_HOSTS, ...extra };
+}
 
 function envWith(allowlist: unknown, enabled = "true"): NodeJS.ProcessEnv {
   return {
@@ -21,14 +28,13 @@ function envWith(allowlist: unknown, enabled = "true"): NodeJS.ProcessEnv {
   };
 }
 
-const hardenedConfig = {
+// A company's SSH environment only NAMES the target; it carries no key paths.
+const environmentConfig = {
   host: "127.0.0.1",
   port: 22,
   username: "ac-provider",
   remoteWorkspacePath: "/Users/ac-provider/agentdash",
   strictHostKeyChecking: true,
-  identityFile: "/etc/agentdash/ssh/ac-provider_ed25519",
-  knownHostsFile: "/etc/agentdash/ssh/known_hosts",
 };
 
 describe("hermes SSH policy", () => {
@@ -39,22 +45,28 @@ describe("hermes SSH policy", () => {
     expect(hermesSshEnabled({ [HERMES_SSH_ENABLED_ENV]: "true" })).toBe(true);
   });
 
-  it("parses the allowlist map and rejects malformed entries instead of guessing", () => {
+  it("parses operator entries (key paths and port included) and rejects malformed ones instead of guessing", () => {
     const parsed = readHermesSshAllowlist(envWith({
-      "ac-provider@127.0.0.1": [FOUNDER_COMPANY],
-      "ac-prov-b@mini.local": [FOUNDER_COMPANY, OTHER_COMPANY],
-      "root;rm -rf /@127.0.0.1": [FOUNDER_COMPANY],
-      "-oProxyCommand=evil@127.0.0.1": [FOUNDER_COMPANY],
-      "ac-provider@-oProxyCommand=x": [FOUNDER_COMPANY],
-      "ac-provider@127.0.0.1:22": [FOUNDER_COMPANY],
-      "ac-prov-c@127.0.0.1": ["not-a-uuid"],
+      "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY]),
+      "ac-prov-b@mini.local": entry([FOUNDER_COMPANY, OTHER_COMPANY], { port: 2222 }),
+      "root;rm -rf /@127.0.0.1": entry([FOUNDER_COMPANY]),
+      "-oProxyCommand=evil@127.0.0.1": entry([FOUNDER_COMPANY]),
+      "ac-provider@-oProxyCommand=x": entry([FOUNDER_COMPANY]),
+      "ac-provider@127.0.0.1:22": entry([FOUNDER_COMPANY]),
+      "ac-prov-c@127.0.0.1": entry(["not-a-uuid"]),
+      "ac-prov-d@127.0.0.1": [FOUNDER_COMPANY],
+      "ac-prov-e@127.0.0.1": entry([FOUNDER_COMPANY], { identityFile: "keys/id_ed25519" }),
+      "ac-prov-f@127.0.0.1": entry([FOUNDER_COMPANY], { knownHostsFile: undefined }),
+      "ac-prov-g@127.0.0.1": entry([FOUNDER_COMPANY], { port: 70000 }),
+      "ac-prov-h@127.0.0.1": entry([FOUNDER_COMPANY], { port: "22" }),
     }));
-    expect(parsed.entries.map((entry) => entry.target)).toEqual([
-      "ac-provider@127.0.0.1",
-      "ac-prov-b@mini.local",
+    expect(parsed.entries.map((e) => `${e.target}:${e.port}`)).toEqual([
+      "ac-provider@127.0.0.1:22",
+      "ac-prov-b@mini.local:2222",
     ]);
     expect(parsed.entries[1]?.companyIds).toEqual([FOUNDER_COMPANY, OTHER_COMPANY]);
-    expect(parsed.problems.length).toBe(5);
+    expect(parsed.entries[0]).toMatchObject({ identityFile: KEY, knownHostsFile: KNOWN_HOSTS });
+    expect(parsed.problems.length).toBe(10);
   });
 
   it("treats unparseable allowlist JSON as an empty list", () => {
@@ -64,18 +76,43 @@ describe("hermes SSH policy", () => {
     expect(readHermesSshAllowlist({}).entries).toEqual([]);
   });
 
-  it("allows an allowlisted target for its company", () => {
+  it("allows an allowlisted target for its company and connects only with operator values", () => {
     const decision = evaluateHermesSshEnvironment(
-      { companyId: FOUNDER_COMPANY, config: hardenedConfig },
-      envWith({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] }),
+      // Even if a stored config somehow carried paths, they are never read.
+      { companyId: FOUNDER_COMPANY, config: { ...environmentConfig, identityFile: "/tmp/evil", knownHostsFile: "/tmp/evil" } },
+      envWith({ "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY]) }),
     );
-    expect(decision).toEqual({ ok: true, target: "ac-provider@127.0.0.1" });
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) return;
+    expect(decision.target).toBe("ac-provider@127.0.0.1");
+    expect(hermesSshConnectionFor(decision.entry)).toEqual({
+      host: "127.0.0.1",
+      port: 22,
+      username: "ac-provider",
+      privateKey: null,
+      knownHosts: null,
+      strictHostKeyChecking: true,
+      identityFile: KEY,
+      knownHostsFile: KNOWN_HOSTS,
+    });
+  });
+
+  it("pins the port: an environment on another port is refused with 403", () => {
+    const allow = envWith({ "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY], { port: 2222 }) });
+    expect(evaluateHermesSshEnvironment({ companyId: FOUNDER_COMPANY, config: environmentConfig }, allow))
+      .toMatchObject({ ok: false, status: 403 });
+    const decision = evaluateHermesSshEnvironment(
+      { companyId: FOUNDER_COMPANY, config: { ...environmentConfig, port: 2222 } },
+      allow,
+    );
+    expect(decision.ok).toBe(true);
+    if (decision.ok) expect(hermesSshConnectionFor(decision.entry).port).toBe(2222);
   });
 
   it("refuses an allowlisted target for a different company with 403", () => {
     const decision = evaluateHermesSshEnvironment(
-      { companyId: OTHER_COMPANY, config: hardenedConfig },
-      envWith({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] }),
+      { companyId: OTHER_COMPANY, config: environmentConfig },
+      envWith({ "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY]) }),
     );
     expect(decision.ok).toBe(false);
     if (decision.ok) return;
@@ -86,8 +123,8 @@ describe("hermes SSH policy", () => {
 
   it("refuses a target that is not on the list with 403", () => {
     const decision = evaluateHermesSshEnvironment(
-      { companyId: FOUNDER_COMPANY, config: { ...hardenedConfig, username: "ac-buyer" } },
-      envWith({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] }),
+      { companyId: FOUNDER_COMPANY, config: { ...environmentConfig, username: "ac-buyer" } },
+      envWith({ "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY]) }),
     );
     expect(decision).toMatchObject({ ok: false, status: 403 });
     if (decision.ok) return;
@@ -97,10 +134,11 @@ describe("hermes SSH policy", () => {
 
   it("refuses everything while the flag is off", () => {
     const decision = evaluateHermesSshEnvironment(
-      { companyId: FOUNDER_COMPANY, config: hardenedConfig },
-      envWith({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] }, "false"),
+      { companyId: FOUNDER_COMPANY, config: environmentConfig },
+      envWith({ "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY]) }, "false"),
     );
     expect(decision).toMatchObject({ ok: false, status: 422 });
+    if (!decision.ok) expect(decision.message).toContain("turned off");
   });
 
   it("refuses malformed user or host with 422", () => {
@@ -111,31 +149,14 @@ describe("hermes SSH policy", () => {
       { host: "127.0.0.1;id" },
     ]) {
       const decision = evaluateHermesSshEnvironment(
-        { companyId: FOUNDER_COMPANY, config: { ...hardenedConfig, ...patch } },
-        envWith({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] }),
+        { companyId: FOUNDER_COMPANY, config: { ...environmentConfig, ...patch } },
+        envWith({ "ac-provider@127.0.0.1": entry([FOUNDER_COMPANY]) }),
       );
       expect(decision, JSON.stringify(patch)).toMatchObject({ ok: false, status: 422 });
     }
   });
 
-  it("requires the hardened ssh settings with 422", () => {
-    const allow = envWith({ "ac-provider@127.0.0.1": [FOUNDER_COMPANY] });
-    for (const patch of [
-      { strictHostKeyChecking: false },
-      { identityFile: undefined },
-      { identityFile: "relative/key" },
-      { knownHostsFile: undefined },
-      { knownHostsFile: "known_hosts" },
-    ]) {
-      const decision = evaluateHermesSshEnvironment(
-        { companyId: FOUNDER_COMPANY, config: { ...hardenedConfig, ...patch } },
-        allow,
-      );
-      expect(decision, JSON.stringify(patch)).toMatchObject({ ok: false, status: 422 });
-    }
-  });
-
-  it("checks the identity is ed25519 and the known_hosts file pins a key before launch", async () => {
+  it("checks the operator's identity is ed25519 and its known_hosts pins a key before launch", async () => {
     const dir = await mkdtemp(join(tmpdir(), "hermes-ssh-policy-"));
     const identityFile = join(dir, "id_ed25519");
     const knownHostsFile = join(dir, "known_hosts");

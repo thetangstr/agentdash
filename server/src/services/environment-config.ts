@@ -33,16 +33,6 @@ const secretRefSchema = z.object({
   version: z.union([z.literal("latest"), z.number().int().positive()]).optional().default("latest"),
 }).strict();
 
-function absolutePathSchema(message: string) {
-  return z
-    .string()
-    .trim()
-    .refine((value) => value.length === 0 || value.startsWith("/"), message)
-    .optional()
-    .nullable()
-    .transform((value) => (value && value.length > 0 ? value : undefined));
-}
-
 const sshEnvironmentConfigSchema = z.object({
   host: z.string({ required_error: "SSH environments require a host." }).trim().min(1, "SSH environments require a host."),
   port: z.coerce.number().int().min(1).max(65535).default(22),
@@ -61,12 +51,6 @@ const sshEnvironmentConfigSchema = z.object({
     .nullable()
     .transform((value) => (value && value.length > 0 ? value : null)),
   strictHostKeyChecking: z.boolean().optional().default(true),
-  // AgentDash: absolute paths on this server of a dedicated identity file and
-  // a pinned known_hosts file. Optional; absent keys stay absent so stored
-  // configs parse to the same shape. Required for hermes_local over SSH
-  // (services/hermes-ssh-policy.ts).
-  identityFile: absolutePathSchema("SSH identity file path must be absolute."),
-  knownHostsFile: absolutePathSchema("SSH known_hosts file path must be absolute."),
 }).strict();
 
 const sshEnvironmentConfigProbeSchema = sshEnvironmentConfigSchema.extend({

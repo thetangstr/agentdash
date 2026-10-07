@@ -291,6 +291,24 @@ export function agentRoutes(
   }
 
   /**
+   * AgentDash: only a person who administers agents may put a Hermes agent on
+   * an SSH environment (it runs as another OS user). Agents never may, not even
+   * a CEO or agent-creator agent; members need the agents:create grant.
+   */
+  async function assertCanPinHermesSsh(req: Request, companyId: string) {
+    if (req.actor.type !== "board") {
+      throw forbidden("Only a person who manages agents can put a Hermes agent on an SSH environment; agents can't.");
+    }
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    const allowed = req.actor.userId ? await access.canUser(companyId, req.actor.userId, "agents:create") : false;
+    if (!allowed) {
+      throw forbidden(
+        "Only a company owner, an instance admin or someone with the agents:create permission can put a Hermes agent on an SSH environment.",
+      );
+    }
+  }
+
+  /**
    * AgentDash: audit a hermes agent being pinned to an SSH environment. Only
    * the target and ids are recorded — never key material or env values.
    */
@@ -1314,7 +1332,7 @@ export function agentRoutes(
   async function assertAgentDefaultEnvironmentSelection(
     companyId: string,
     environmentId: string | null | undefined,
-    options?: { allowedDrivers?: string[]; allowedSandboxProviders?: string[]; adapterType?: string },
+    options?: { allowedDrivers?: string[]; allowedSandboxProviders?: string[]; adapterType?: string; req?: Request },
   ): Promise<{ environmentId: string; sshTarget: string } | null> {
     if (environmentId === undefined || environmentId === null) return null;
     const environment = await environmentsSvc.getById(environmentId);
@@ -1343,6 +1361,7 @@ export function agentRoutes(
     // AgentDash: hermes_local over SSH. Only reachable with the flag on — with
     // it off the driver check above already refused "ssh" for hermes.
     if (options?.adapterType === "hermes_local" && environment.driver === "ssh") {
+      if (options.req) await assertCanPinHermesSsh(options.req, companyId);
       const { target } = assertHermesSshEnvironmentPermitted({
         companyId,
         config: environment.config as Record<string, unknown> | null,
@@ -2917,14 +2936,19 @@ export function agentRoutes(
       return;
     }
 
-    // AgentDash: hermes_local over SSH (flag on only) — the hire path pins an
-    // environment too, so it gets the same company/allowlist/hardening check.
-    const hermesSshHirePin = normalizedHireInput.adapterType === "hermes_local" && hermesSshEnabled()
-      ? await assertAgentDefaultEnvironmentSelection(companyId, normalizedHireInput.defaultEnvironmentId, {
-          allowedDrivers: allowedEnvironmentDriversForAgent(normalizedHireInput.adapterType),
-          adapterType: normalizedHireInput.adapterType,
-        })
-      : null;
+    // AgentDash: the hire path pins an environment too, so it gets the same
+    // company, driver, allowlist and permission checks as create. A no-op for
+    // a valid request (or none); it refuses another company's environment id.
+    const hermesSshHirePin = await assertAgentDefaultEnvironmentSelection(
+      companyId,
+      normalizedHireInput.defaultEnvironmentId,
+      {
+        allowedDrivers: allowedEnvironmentDriversForAgent(normalizedHireInput.adapterType),
+        allowedSandboxProviders: allowedSandboxProvidersForAgent(normalizedHireInput.adapterType),
+        adapterType: normalizedHireInput.adapterType,
+        req,
+      },
+    );
 
     const harnessPreflightResult = requireHarnessPreflight
       ? await runRequiredHarnessPreflight({
@@ -3148,6 +3172,7 @@ export function agentRoutes(
       allowedDrivers: allowedEnvironmentDriversForAgent(createInput.adapterType),
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
       adapterType: createInput.adapterType,
+      req,
     });
 
     // Which kind of agent this is, and who answers for it.
@@ -4118,6 +4143,7 @@ export function agentRoutes(
           allowedDrivers: allowedEnvironmentDriversForAgent(requestedAdapterType),
           allowedSandboxProviders: allowedSandboxProvidersForAgent(requestedAdapterType),
           adapterType: requestedAdapterType,
+          req,
         },
       );
     }

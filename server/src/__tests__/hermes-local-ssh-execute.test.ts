@@ -124,6 +124,7 @@ describe("hermes_local over an SSH execution target", () => {
     expect(calls).toHaveLength(3);
     for (const call of calls) {
       expect(call.argv.slice(0, -1)).toEqual([
+        "-F", "/dev/null",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=yes",
@@ -132,7 +133,11 @@ describe("hermes_local over an SSH execution target", () => {
         "-i", "/etc/agentdash/ssh/ac-provider_ed25519",
         "-o", "IdentitiesOnly=yes",
         "-o", "ForwardAgent=no",
+        "-o", "ForwardX11=no",
         "-o", "ClearAllForwardings=yes",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        "-o", "PermitLocalCommand=no",
         "-p", "22",
         "ac-provider@127.0.0.1",
       ]);

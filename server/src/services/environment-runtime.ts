@@ -98,6 +98,23 @@ function stripSecretRefValuesFromPluginLeaseMetadata(input: {
   return sanitized;
 }
 
+/**
+ * AgentDash: an operator-resolved SSH connection (Hermes over SSH). When set,
+ * the SSH driver connects with exactly these values instead of the company
+ * environment's credentials and host-key settings. Only the run orchestrator
+ * sets it, and only for a target the operator allowlist approved.
+ */
+export interface OperatorSshConnection {
+  host: string;
+  port: number;
+  username: string;
+  privateKey: null;
+  knownHosts: null;
+  strictHostKeyChecking: true;
+  identityFile: string;
+  knownHostsFile: string;
+}
+
 export interface EnvironmentDriverAcquireInput {
   companyId: string;
   environment: Environment;
@@ -105,6 +122,7 @@ export interface EnvironmentDriverAcquireInput {
   heartbeatRunId: string;
   executionWorkspaceId: string | null;
   executionWorkspaceMode: ExecutionWorkspace["mode"] | null;
+  operatorSshConnection?: OperatorSshConnection | null;
 }
 
 export interface EnvironmentDriverReleaseInput {
@@ -226,7 +244,11 @@ function createSshEnvironmentDriver(db: Db): EnvironmentRuntimeDriver {
         throw new Error(`Expected SSH environment config for driver "${input.environment.driver}".`);
       }
 
-      const { remoteCwd } = await ensureSshWorkspaceReady(parsed.config);
+      // AgentDash: an approved Hermes target connects with operator values only.
+      const sshConfig = input.operatorSshConnection
+        ? { ...parsed.config, ...input.operatorSshConnection }
+        : parsed.config;
+      const { remoteCwd } = await ensureSshWorkspaceReady(sshConfig);
       const candidateUrls = (() => {
         const raw = process.env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON;
         if (!raw) return [];
@@ -240,12 +262,12 @@ function createSshEnvironmentDriver(db: Db): EnvironmentRuntimeDriver {
         }
       })();
       const paperclipApiUrl = await findReachablePaperclipApiUrlOverSsh({
-        config: parsed.config,
+        config: sshConfig,
         candidates: candidateUrls,
       });
       if (!paperclipApiUrl) {
         throw new Error(
-          `SSH environment ${parsed.config.username}@${parsed.config.host} could not reach any Paperclip API candidates.`,
+          `SSH environment ${sshConfig.username}@${sshConfig.host} could not reach any Paperclip API candidates.`,
         );
       }
       return await environmentsSvc.acquireLease({
@@ -256,13 +278,13 @@ function createSshEnvironmentDriver(db: Db): EnvironmentRuntimeDriver {
         heartbeatRunId: input.heartbeatRunId,
         leasePolicy: "ephemeral",
         provider: "ssh",
-        providerLeaseId: `ssh://${parsed.config.username}@${parsed.config.host}:${parsed.config.port}${remoteCwd}`,
+        providerLeaseId: `ssh://${sshConfig.username}@${sshConfig.host}:${sshConfig.port}${remoteCwd}`,
         metadata: {
           driver: input.environment.driver,
           executionWorkspaceMode: input.executionWorkspaceMode,
-          host: parsed.config.host,
-          port: parsed.config.port,
-          username: parsed.config.username,
+          host: sshConfig.host,
+          port: sshConfig.port,
+          username: sshConfig.username,
           remoteWorkspacePath: parsed.config.remoteWorkspacePath,
           remoteCwd,
           paperclipApiUrl,
@@ -1063,6 +1085,7 @@ export function environmentRuntimeService(
       issueId: string | null;
       heartbeatRunId: string;
       persistedExecutionWorkspace: Pick<ExecutionWorkspace, "id" | "mode"> | null;
+      operatorSshConnection?: OperatorSshConnection | null;
     }): Promise<EnvironmentRuntimeLeaseRecord> {
       if (input.environment.status !== "active") {
         throw new Error(`Environment "${input.environment.name}" is not active.`);
@@ -1079,6 +1102,7 @@ export function environmentRuntimeService(
         heartbeatRunId: input.heartbeatRunId,
         executionWorkspaceId: leaseContext.executionWorkspaceId,
         executionWorkspaceMode: leaseContext.executionWorkspaceMode,
+        ...(input.operatorSshConnection ? { operatorSshConnection: input.operatorSshConnection } : {}),
       });
 
       return {

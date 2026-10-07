@@ -1476,14 +1476,26 @@ describe.sequential("agent permission routes", () => {
 
   describe("hermes_local SSH environments (AGENTDASH_HERMES_SSH_ENABLED)", () => {
     const environmentId = "33333333-3333-4333-8333-333333333333";
-    const hardenedSshConfig = {
+    // A company environment only names the target. Key, known_hosts and port
+    // pinning live in the operator allowlist.
+    const sshConfig = {
       host: "127.0.0.1",
       port: 22,
       username: "ac-provider",
       remoteWorkspacePath: "/Users/ac-provider/agentdash",
       strictHostKeyChecking: true,
+    };
+    const operatorEntry = (companies: string[], extra: Record<string, unknown> = {}) => ({
+      companies,
       identityFile: "/etc/agentdash/ssh/ac-provider_ed25519",
       knownHostsFile: "/etc/agentdash/ssh/known_hosts",
+      ...extra,
+    });
+    const allowFor = (companies: string[], extra: Record<string, unknown> = {}) => {
+      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
+      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({
+        "ac-provider@127.0.0.1": operatorEntry(companies, extra),
+      });
     };
     const boardActor = {
       type: "board",
@@ -1492,13 +1504,30 @@ describe.sequential("agent permission routes", () => {
       isInstanceAdmin: true,
       companyIds: [companyId],
     };
+    // An active member: may create ordinary agents (role-given), but not put
+    // a Hermes agent on SSH without the agents:create grant.
+    const memberActor = {
+      type: "board",
+      userId: "member-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+      memberships: [{ companyId, status: "active", membershipRole: "member" }],
+    };
+    const hermesBody = {
+      name: "Rome Provider",
+      role: "engineer",
+      adapterType: "hermes_local",
+      adapterConfig: {},
+      defaultEnvironmentId: environmentId,
+    };
 
     function mockSshEnvironment(overrides: Record<string, unknown> = {}) {
       mockEnvironmentService.getById.mockResolvedValue({
         id: environmentId,
         companyId,
         driver: "ssh",
-        config: hardenedSshConfig,
+        config: sshConfig,
         ...overrides,
       });
     }
@@ -1506,13 +1535,13 @@ describe.sequential("agent permission routes", () => {
     function createHermes(app: Awaited<ReturnType<typeof createApp>>) {
       return requestApp(app, (baseUrl) => request(baseUrl)
         .post(`/api/companies/${companyId}/agents`)
-        .send({
-          name: "Rome Provider",
-          role: "engineer",
-          adapterType: "hermes_local",
-          adapterConfig: {},
-          defaultEnvironmentId: environmentId,
-        }));
+        .send(hermesBody));
+    }
+
+    function hireHermes(app: Awaited<ReturnType<typeof createApp>>) {
+      return requestApp(app, (baseUrl) => request(baseUrl)
+        .post(`/api/companies/${companyId}/agent-hires`)
+        .send(hermesBody));
     }
 
     function pinHermes(app: Awaited<ReturnType<typeof createApp>>) {
@@ -1555,14 +1584,17 @@ describe.sequential("agent permission routes", () => {
       delete process.env.AGENTDASH_HERMES_SSH_ALLOWLIST;
     });
 
-    it("keeps today's 422 when the flag is off, even with an allowlist present", async () => {
-      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [companyId] });
+    it("keeps today's 422 when the flag is off, even with an allowlist present (create, hire, PATCH)", async () => {
+      allowFor([companyId]);
+      delete process.env.AGENTDASH_HERMES_SSH_ENABLED;
       mockSshEnvironment();
       const app = await createApp(boardActor);
 
-      const created = await createHermes(app);
-      expect(created.status).toBe(422);
-      expect(created.body.error).toContain('Environment driver "ssh" is not allowed here');
+      for (const send of [createHermes, hireHermes]) {
+        const res = await send(app);
+        expect(res.status).toBe(422);
+        expect(res.body.error).toContain('Environment driver "ssh" is not allowed here');
+      }
       expect(mockAgentService.create).not.toHaveBeenCalled();
 
       const patched = await pinHermes(app);
@@ -1572,9 +1604,8 @@ describe.sequential("agent permission routes", () => {
       expect(pinnedActivityCalls()).toHaveLength(0);
     });
 
-    it("accepts an allowlisted target for an allowlisted company and audits the pin", async () => {
-      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
-      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [companyId] });
+    it("accepts an allowlisted target for an allowlisted company and audits each pin (create, hire, PATCH)", async () => {
+      allowFor([companyId]);
       mockSshEnvironment();
       const app = await createApp(boardActor);
 
@@ -1585,11 +1616,14 @@ describe.sequential("agent permission routes", () => {
         expect.objectContaining({ adapterType: "hermes_local", defaultEnvironmentId: environmentId }),
       );
 
+      const hired = await hireHermes(app);
+      expect(hired.status, JSON.stringify(hired.body)).toBe(201);
+
       const patched = await pinHermes(app);
       expect(patched.status, JSON.stringify(patched.body)).toBe(200);
 
       const audits = pinnedActivityCalls();
-      expect(audits).toHaveLength(2);
+      expect(audits).toHaveLength(3);
       for (const [, entry] of audits) {
         expect(entry).toMatchObject({
           companyId,
@@ -1601,22 +1635,22 @@ describe.sequential("agent permission routes", () => {
             sshTarget: "ac-provider@127.0.0.1",
           }),
         });
-        expect(JSON.stringify(entry)).not.toContain("privateKey");
+        expect(JSON.stringify(entry)).not.toContain("identityFile");
+        expect(JSON.stringify(entry)).not.toContain("/etc/agentdash/ssh");
       }
     });
 
-    it("refuses an allowlisted target for a company it is not scoped to", async () => {
-      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
-      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({
-        "ac-provider@127.0.0.1": ["0008870a-4a07-4e09-9a3e-1998f4c7d640"],
-      });
+    it("refuses an allowlisted target for a company it is not scoped to (create, hire, PATCH)", async () => {
+      allowFor(["0008870a-4a07-4e09-9a3e-1998f4c7d640"]);
       mockSshEnvironment();
       const app = await createApp(boardActor);
 
-      const created = await createHermes(app);
-      expect(created.status).toBe(403);
-      expect(created.body.error).toContain("ac-provider@127.0.0.1");
-      expect(created.body.error).toContain("this company");
+      for (const send of [createHermes, hireHermes]) {
+        const res = await send(app);
+        expect(res.status).toBe(403);
+        expect(res.body.error).toContain("ac-provider@127.0.0.1");
+        expect(res.body.error).toContain("this company");
+      }
       expect(mockAgentService.create).not.toHaveBeenCalled();
 
       const patched = await pinHermes(app);
@@ -1625,39 +1659,93 @@ describe.sequential("agent permission routes", () => {
       expect(pinnedActivityCalls()).toHaveLength(0);
     });
 
-    it("refuses a target that is not on the allowlist", async () => {
-      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
-      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [companyId] });
-      mockSshEnvironment({ config: { ...hardenedSshConfig, username: "ac-buyer" } });
+    it("refuses a target that is not on the allowlist (create, hire)", async () => {
+      allowFor([companyId]);
+      mockSshEnvironment({ config: { ...sshConfig, username: "ac-buyer" } });
+      const app = await createApp(boardActor);
+
+      for (const send of [createHermes, hireHermes]) {
+        const res = await send(app);
+        expect(res.status).toBe(403);
+        expect(res.body.error).toContain("ac-buyer@127.0.0.1");
+      }
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses an environment on a port the operator did not pin", async () => {
+      allowFor([companyId], { port: 2222 });
+      mockSshEnvironment();
       const app = await createApp(boardActor);
 
       const created = await createHermes(app);
       expect(created.status).toBe(403);
-      expect(created.body.error).toContain("ac-buyer@127.0.0.1");
+      expect(created.body.error).toContain("port 2222");
       expect(mockAgentService.create).not.toHaveBeenCalled();
     });
 
-    it("refuses an environment id from the body that belongs to another company", async () => {
-      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
-      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [companyId] });
+    it("refuses an environment id from the body that belongs to another company (create, hire)", async () => {
+      allowFor([companyId]);
       mockSshEnvironment({ companyId: "44444444-4444-4444-8444-444444444444" });
       const app = await createApp(boardActor);
 
-      const created = await createHermes(app);
-      expect(created.status).toBe(422);
+      for (const send of [createHermes, hireHermes]) {
+        const res = await send(app);
+        expect(res.status).toBe(422);
+      }
       expect(mockAgentService.create).not.toHaveBeenCalled();
     });
 
-    it("refuses an allowlisted environment that is missing the hardened ssh settings", async () => {
-      process.env.AGENTDASH_HERMES_SSH_ENABLED = "true";
-      process.env.AGENTDASH_HERMES_SSH_ALLOWLIST = JSON.stringify({ "ac-provider@127.0.0.1": [companyId] });
-      mockSshEnvironment({ config: { ...hardenedSshConfig, identityFile: undefined } });
-      const app = await createApp(boardActor);
+    it("refuses a member without agents:create, and allows one with it", async () => {
+      allowFor([companyId]);
+      mockSshEnvironment();
+      const app = await createApp(memberActor);
 
-      const created = await createHermes(app);
-      expect(created.status).toBe(422);
-      expect(created.body.error).toContain("identityFile");
+      mockAccessService.canUser.mockResolvedValue(false);
+      const refused = await createHermes(app);
+      expect(refused.status).toBe(403);
+      expect(refused.body.error).toContain("SSH environment");
       expect(mockAgentService.create).not.toHaveBeenCalled();
+
+      const refusedHire = await hireHermes(app);
+      expect(refusedHire.status).toBe(403);
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+      expect(pinnedActivityCalls()).toHaveLength(0);
+
+      mockAccessService.canUser.mockImplementation(
+        async (_companyId: string, _userId: string, key: string) => key === "agents:create",
+      );
+      const allowed = await createHermes(app);
+      expect(allowed.status, JSON.stringify(allowed.body)).toBe(201);
+      expect(pinnedActivityCalls()).toHaveLength(1);
+    });
+
+    it("refuses an agent (even a CEO with canCreateAgents) pinning a Hermes agent to SSH", async () => {
+      allowFor([companyId]);
+      mockSshEnvironment();
+      const ceoAgentId = "44444444-4444-4444-8444-444444444444";
+      mockAgentService.getById.mockResolvedValue({
+        ...baseAgent,
+        id: ceoAgentId,
+        name: "CEO",
+        urlKey: "ceo",
+        role: "ceo",
+        permissions: { canCreateAgents: true },
+      });
+      mockAccessService.hasPermission.mockResolvedValue(true);
+      const app = await createApp({
+        type: "agent",
+        agentId: ceoAgentId,
+        companyId,
+        source: "agent_key",
+        runId: "run-1",
+      });
+
+      for (const send of [createHermes, hireHermes]) {
+        const res = await send(app);
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+      }
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+      expect(pinnedActivityCalls()).toHaveLength(0);
     });
   });
 

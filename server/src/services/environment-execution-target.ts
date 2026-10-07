@@ -10,6 +10,7 @@ import type { EnvironmentRuntimeService } from "./environment-runtime.js";
 import {
   assertHermesSshLaunchReady,
   evaluateHermesSshEnvironment,
+  hermesSshConnectionFor,
   hermesSshEnabled,
 } from "./hermes-ssh-policy.js";
 
@@ -146,15 +147,16 @@ export async function resolveEnvironmentExecutionTarget(input: {
       : parsed.config.remoteWorkspacePath;
 
   if (hermesOverSsh) {
-    // Never fall back to a local run: a refusal here fails the run.
+    // Never fall back to a local run: a refusal here fails the run. The
+    // environment only names user@host:port; how to connect (key file,
+    // known_hosts file, port) comes from the operator's allowlist entry.
     const decision = evaluateHermesSshEnvironment({
       companyId: input.companyId,
       config: parsed.config as unknown as Record<string, unknown>,
     });
     if (!decision.ok) throw new Error(decision.message);
-    const identityFile = parsed.config.identityFile!;
-    const knownHostsFile = parsed.config.knownHostsFile!;
-    await assertHermesSshLaunchReady({ identityFile, knownHostsFile });
+    const connection = hermesSshConnectionFor(decision.entry);
+    await assertHermesSshLaunchReady(connection);
     const paperclipApiUrl =
       typeof input.leaseMetadata?.paperclipApiUrl === "string" && input.leaseMetadata.paperclipApiUrl.trim().length > 0
         ? input.leaseMetadata.paperclipApiUrl.trim()
@@ -167,17 +169,8 @@ export async function resolveEnvironmentExecutionTarget(input: {
       remoteCwd,
       paperclipApiUrl,
       spec: {
-        host: parsed.config.host,
-        port: parsed.config.port,
-        username: parsed.config.username,
+        ...connection,
         remoteWorkspacePath: parsed.config.remoteWorkspacePath,
-        // The dedicated identity file and pinned known_hosts replace any
-        // stored key material or inline host keys.
-        privateKey: null,
-        knownHosts: null,
-        strictHostKeyChecking: true,
-        identityFile,
-        knownHostsFile,
         remoteCwd,
         paperclipApiUrl,
       },

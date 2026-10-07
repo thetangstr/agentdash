@@ -15,7 +15,8 @@ export interface SshConnectionConfig {
   /**
    * AgentDash: absolute path of a dedicated identity file on this host. When
    * set it is the only key offered (IdentitiesOnly=yes) and takes precedence
-   * over `privateKey`.
+   * over `privateKey`. Server-resolved from operator config only (Hermes over
+   * SSH); a company's environment config cannot set it.
    */
   identityFile?: string | null;
   /**
@@ -243,7 +244,18 @@ async function createSshAuthArgs(
   >,
 ): Promise<{ args: string[]; cleanup: () => Promise<void> }> {
   const tempFiles: Array<() => Promise<void>> = [];
+  const identityFile = typeof config.identityFile === "string" && config.identityFile.length > 0
+    ? config.identityFile
+    : null;
+  const knownHostsFile = typeof config.knownHostsFile === "string" && config.knownHostsFile.length > 0
+    ? config.knownHostsFile
+    : null;
+  const hardened = Boolean(identityFile || knownHostsFile);
   const sshArgs = [
+    // AgentDash: a hardened (operator-pinned) connection ignores the server
+    // user's ~/.ssh/config entirely, so no Host * block can add a
+    // ProxyCommand, LocalCommand, SendEnv or ControlMaster reuse.
+    ...(hardened ? ["-F", "/dev/null"] : []),
     "-o",
     "BatchMode=yes",
     "-o",
@@ -251,12 +263,6 @@ async function createSshAuthArgs(
     "-o",
     `StrictHostKeyChecking=${config.strictHostKeyChecking ? "yes" : "no"}`,
   ];
-  const identityFile = typeof config.identityFile === "string" && config.identityFile.length > 0
-    ? config.identityFile
-    : null;
-  const knownHostsFile = typeof config.knownHostsFile === "string" && config.knownHostsFile.length > 0
-    ? config.knownHostsFile
-    : null;
 
   if (config.strictHostKeyChecking) {
     if (knownHostsFile) {
@@ -280,9 +286,17 @@ async function createSshAuthArgs(
     sshArgs.push("-i", privateKey.path);
   }
 
-  if (identityFile || knownHostsFile) {
-    // AgentDash: hardened environments never forward the operator's agent or ports.
-    sshArgs.push("-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes");
+  if (hardened) {
+    // AgentDash: hardened connections never forward the operator's agent,
+    // ports or X11, never share a multiplexed master, never run a local command.
+    sshArgs.push(
+      "-o", "ForwardAgent=no",
+      "-o", "ForwardX11=no",
+      "-o", "ClearAllForwardings=yes",
+      "-o", "ControlMaster=no",
+      "-o", "ControlPath=none",
+      "-o", "PermitLocalCommand=no",
+    );
   }
 
   return {

@@ -1,18 +1,20 @@
 // AgentDash: who may run a hermes_local agent over an SSH execution
-// environment, and with which SSH settings.
+// environment, and how AgentDash connects when it does.
 //
 // Off by default. Two instance-level settings, both plain environment
 // variables so an operator changes them by editing config, never code:
 //
 //   AGENTDASH_HERMES_SSH_ENABLED=true
-//   AGENTDASH_HERMES_SSH_ALLOWLIST={"ac-provider@127.0.0.1":["<company uuid>", ...], ...}
+//   AGENTDASH_HERMES_SSH_ALLOWLIST={"ac-provider@127.0.0.1":{"companies":["<uuid>"],
+//     "identityFile":"/abs/key","knownHostsFile":"/abs/known_hosts","port":22}}
 //
-// With the flag off nothing in this module is consulted on any path that
-// existed before it, so behaviour is unchanged. With it on, a hermes agent
-// may be pinned to — and launched on — an SSH environment only when the
-// environment's `username@host` is on the allowlist for the agent's company
-// and the environment carries the hardened settings below. Provisioning the
-// OS user on the far side is the operator's job (doc/HERMES-SSH-ENVIRONMENTS.md).
+// A hermes agent may be pinned to, and launched on, an SSH environment only
+// when the environment names a user@host:port that is on the allowlist for the
+// agent's company. The key file, known_hosts file and port come from the
+// allowlist entry, never from the company's environment. With the flag off a
+// Hermes agent on any SSH environment is refused (never run locally instead).
+// Provisioning the OS user on the far side is the operator's job
+// (doc/HERMES-SSH-ENVIRONMENTS.md).
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 import { forbidden, unprocessable } from "../errors.js";
@@ -45,9 +47,15 @@ export function isValidSshHost(value: string): boolean {
 export interface HermesSshAllowlistEntry {
   username: string;
   host: string;
+  /** Operator-chosen; the environment's port must match. Defaults to 22. */
+  port: number;
   /** `username@host`, as written in config. */
   target: string;
   companyIds: string[];
+  /** Operator-chosen absolute path of the dedicated ed25519 key on this server. */
+  identityFile: string;
+  /** Operator-chosen absolute path of the pinned known_hosts file on this server. */
+  knownHostsFile: string;
 }
 
 export interface HermesSshAllowlist {
@@ -65,6 +73,19 @@ function parseTarget(target: string): { username: string; host: string } | null 
   return { username, host };
 }
 
+function readAbsolutePath(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || !path.isAbsolute(trimmed) || trimmed.includes("\0") || trimmed.includes("\n")) return null;
+  return path.normalize(trimmed);
+}
+
+/**
+ * The allowlist is operator config, never tenant data. Shape:
+ *   {"user@host": {"companies": ["<uuid>"], "identityFile": "/abs", "knownHostsFile": "/abs", "port": 22}}
+ * The key file, known_hosts file, user, host and port all come from here; a
+ * company's SSH environment can only NAME an allowlisted user@host:port.
+ */
 export function readHermesSshAllowlist(env: NodeJS.ProcessEnv = process.env): HermesSshAllowlist {
   const raw = env[HERMES_SSH_ALLOWLIST_ENV];
   if (typeof raw !== "string" || raw.trim().length === 0) return { entries: [], problems: [] };
@@ -80,53 +101,74 @@ export function readHermesSshAllowlist(env: NodeJS.ProcessEnv = process.env): He
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {
       entries: [],
-      problems: [`${HERMES_SSH_ALLOWLIST_ENV} must be a JSON object of "user@host": [company ids].`],
+      problems: [`${HERMES_SSH_ALLOWLIST_ENV} must be a JSON object keyed by "user@host".`],
     };
   }
   const entries: HermesSshAllowlistEntry[] = [];
   const problems: string[] = [];
-  for (const [target, companyIdsValue] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [target, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const skip = (why: string) => problems.push(`Skipped allowlist entry ${JSON.stringify(target)}: ${why}`);
     const parsedTarget = parseTarget(target.trim());
     if (!parsedTarget) {
-      problems.push(`Skipped allowlist entry ${JSON.stringify(target)}: expected user@host.`);
+      skip("expected user@host.");
       continue;
     }
-    const companyIds = Array.isArray(companyIdsValue) ? companyIdsValue : null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      skip("expected an object with companies, identityFile and knownHostsFile.");
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    const companyIds = Array.isArray(record.companies) ? record.companies : null;
     if (!companyIds || companyIds.length === 0 || !companyIds.every((id) => typeof id === "string" && UUID_RE.test(id))) {
-      problems.push(`Skipped allowlist entry ${JSON.stringify(target)}: expected a list of company ids.`);
+      skip("expected companies to be a list of company ids.");
+      continue;
+    }
+    const identityFile = readAbsolutePath(record.identityFile);
+    const knownHostsFile = readAbsolutePath(record.knownHostsFile);
+    if (!identityFile || !knownHostsFile) {
+      skip("expected identityFile and knownHostsFile as absolute paths.");
+      continue;
+    }
+    const port = record.port === undefined ? 22 : record.port;
+    if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+      skip("expected port to be a whole number from 1 to 65535.");
       continue;
     }
     entries.push({
       ...parsedTarget,
+      port,
       target: `${parsedTarget.username}@${parsedTarget.host}`,
       companyIds: (companyIds as string[]).map((id) => id.toLowerCase()),
+      identityFile,
+      knownHostsFile,
     });
   }
   return { entries, problems };
 }
 
 export type HermesSshDecision =
-  | { ok: true; target: string }
+  | { ok: true; target: string; entry: HermesSshAllowlistEntry }
   | { ok: false; status: 403 | 422; message: string };
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+export const HERMES_SSH_DISABLED_MESSAGE =
+  "Hermes over SSH is turned off on this server, so this agent's SSH environment can't be used. Nothing was run.";
+
 /**
- * Decide whether a hermes agent in `companyId` may use an SSH environment with
- * this config. Pure: reads only the given env (defaults to process.env).
+ * Decide whether a hermes agent in `companyId` may use an SSH environment that
+ * names this user@host:port. Pure: reads only the given env (defaults to
+ * process.env). The environment supplies the target NAME only; everything
+ * used to connect comes from the matching allowlist entry.
  */
 export function evaluateHermesSshEnvironment(
   input: { companyId: string; config: Record<string, unknown> | null | undefined },
   env: NodeJS.ProcessEnv = process.env,
 ): HermesSshDecision {
   if (!hermesSshEnabled(env)) {
-    return {
-      ok: false,
-      status: 422,
-      message: "Hermes agents can't use SSH environments on this server.",
-    };
+    return { ok: false, status: 422, message: HERMES_SSH_DISABLED_MESSAGE };
   }
   const config = input.config ?? {};
   const username = readString(config.username) ?? "";
@@ -162,24 +204,32 @@ export function evaluateHermesSshEnvironment(
         "Ask whoever runs this server to allow it for this company.",
     };
   }
-  const identityFile = readString(config.identityFile);
-  const knownHostsFile = readString(config.knownHostsFile);
-  if (
-    config.strictHostKeyChecking === false ||
-    !identityFile ||
-    !path.isAbsolute(identityFile) ||
-    !knownHostsFile ||
-    !path.isAbsolute(knownHostsFile)
-  ) {
+  const rawPort = config.port === undefined || config.port === null || config.port === "" ? 22 : Number(config.port);
+  if (rawPort !== entry.port) {
     return {
       ok: false,
-      status: 422,
-      message:
-        "Hermes over SSH needs this environment to name its own key file (identityFile) and a pinned " +
-        "known_hosts file (knownHostsFile), both as full paths, with strict host key checking left on.",
+      status: 403,
+      message: `Hermes agents may run as ${target} only on SSH port ${entry.port}; this environment uses port ${String(config.port)}.`,
     };
   }
-  return { ok: true, target };
+  return { ok: true, target, entry };
+}
+
+/**
+ * The connection AgentDash uses for an approved target: every credential and
+ * pinning input from operator config, nothing from the company's environment.
+ */
+export function hermesSshConnectionFor(entry: HermesSshAllowlistEntry) {
+  return {
+    host: entry.host,
+    port: entry.port,
+    username: entry.username,
+    privateKey: null,
+    knownHosts: null,
+    strictHostKeyChecking: true as const,
+    identityFile: entry.identityFile,
+    knownHostsFile: entry.knownHostsFile,
+  };
 }
 
 /** Route guard: throws the decision as an HTTP error. Returns the `user@host` it allowed. */
@@ -205,14 +255,14 @@ export async function assertHermesSshLaunchReady(input: {
     const keyStat = await fs.stat(input.identityFile);
     if (!keyStat.isFile()) throw new Error("not a file");
   } catch {
-    throw new Error(`The SSH key file for this environment (${input.identityFile}) isn't there.`);
+    throw new Error("The SSH key file the server's allowlist names for this target isn't there.");
   }
   let publicKey: string;
   try {
     publicKey = await fs.readFile(`${input.identityFile}.pub`, "utf8");
   } catch {
     throw new Error(
-      `Hermes over SSH needs the public half of the key next to it (${input.identityFile}.pub) to confirm it is ed25519.`,
+      "Hermes over SSH needs the public half of the key (the .pub file) next to the key file to confirm it is ed25519.",
     );
   }
   if (!publicKey.trimStart().startsWith("ssh-ed25519 ")) {
@@ -223,13 +273,13 @@ export async function assertHermesSshLaunchReady(input: {
     await fs.access(input.knownHostsFile, fsConstants.R_OK);
     knownHosts = await fs.readFile(input.knownHostsFile, "utf8");
   } catch {
-    throw new Error(`The pinned known_hosts file for this environment (${input.knownHostsFile}) can't be read.`);
+    throw new Error("The pinned known_hosts file the server's allowlist names for this target can't be read.");
   }
   const pinned = knownHosts
     .split("\n")
     .map((line) => line.trim())
     .some((line) => line.length > 0 && !line.startsWith("#"));
   if (!pinned) {
-    throw new Error(`The known_hosts file for this environment (${input.knownHostsFile}) doesn't pin any host key.`);
+    throw new Error("The known_hosts file the server's allowlist names for this target doesn't pin any host key.");
   }
 }
