@@ -30,6 +30,7 @@ import {
   buildEnvironmentLeaseContext,
   type EnvironmentRuntimeLeaseRecord,
   type EnvironmentRuntimeService,
+  type OperatorSshConnection,
 } from "./environment-runtime.js";
 import {
   resolveEnvironmentExecutionTarget,
@@ -43,6 +44,13 @@ import {
 import { buildWorkspaceRealizationRequest } from "./workspace-realization.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
 import { logActivity } from "./activity-log.js";
+import {
+  HERMES_SSH_DISABLED_MESSAGE,
+  assertHermesSshLaunchReady,
+  evaluateHermesSshEnvironment,
+  hermesSshConnectionFor,
+  hermesSshEnabled,
+} from "./hermes-ssh-policy.js";
 import { parseObject } from "../adapters/utils.js";
 import type { RealizedExecutionWorkspace } from "./workspace-runtime.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
@@ -208,6 +216,7 @@ export function environmentRunOrchestrator(
     issueId: string | null;
     heartbeatRunId: string;
     persistedExecutionWorkspace: Pick<ExecutionWorkspace, "id" | "mode"> | null;
+    operatorSshConnection?: OperatorSshConnection | null;
   }): Promise<EnvironmentRuntimeLeaseRecord> {
     try {
       return await environmentRuntime.acquireRunLease(input);
@@ -266,6 +275,8 @@ export function environmentRunOrchestrator(
     issueId: string | null;
     heartbeatRunId: string;
     agentId: string;
+    /** AgentDash: the agent's own (admin-set) default environment, if any. */
+    agentDefaultEnvironmentId?: string | null;
     persistedExecutionWorkspace: Pick<ExecutionWorkspace, "id" | "mode"> | null;
   }): Promise<EnvironmentAcquisitionResult> {
     // Step 1: Resolve environment
@@ -275,6 +286,76 @@ export function environmentRunOrchestrator(
       defaultEnvironmentId: input.defaultEnvironmentId,
     });
 
+    // AgentDash: hermes_local outside the local environment. Every check runs
+    // before the lease, so a refused host is never connected to, and a refusal
+    // fails the run: Hermes is never quietly run locally as the server user.
+    let hermesSshTarget: string | null = null;
+    let operatorSshConnection: ReturnType<typeof hermesSshConnectionFor> | null = null;
+    if (input.adapterType === "hermes_local") {
+      const refuse = async (message: string): Promise<never> => {
+        await logActivity(db, {
+          companyId: input.companyId,
+          actorType: "agent",
+          actorId: input.agentId,
+          agentId: input.agentId,
+          runId: input.heartbeatRunId,
+          action: "agent.ssh_run_refused",
+          entityType: "heartbeat_run",
+          entityId: input.heartbeatRunId,
+          details: {
+            environmentId: environment.id,
+            driver: environment.driver,
+            adapterType: input.adapterType,
+            issueId: input.issueId,
+            reason: message,
+          },
+        });
+        throw new EnvironmentRunError("unsupported_adapter_environment", message, {
+          environmentId: environment.id,
+          driver: environment.driver,
+        });
+      };
+      const pinnedEnvironmentId = input.agentDefaultEnvironmentId ?? null;
+      // An admin's SSH pin can't be overridden by an issue or project picking
+      // another environment (local included).
+      if (pinnedEnvironmentId && pinnedEnvironmentId !== environment.id) {
+        const pinned = await environmentsSvc.getById(pinnedEnvironmentId);
+        if (pinned?.driver === "ssh") {
+          await refuse(
+            "This Hermes agent is pinned to an SSH environment by an admin; an issue or project can't move its runs to a different environment. Nothing was run.",
+          );
+        }
+      }
+      if (environment.driver !== "local") {
+        if (environment.driver !== "ssh") {
+          await refuse(
+            "Hermes agents run only on this server or on an allowlisted SSH environment pinned by an admin. Nothing was run.",
+          );
+        }
+        if (!hermesSshEnabled()) await refuse(HERMES_SSH_DISABLED_MESSAGE);
+        // Issue- and project-level selection can't put a Hermes run on SSH;
+        // only the agent's own admin-set pin can.
+        if (environment.id !== pinnedEnvironmentId) {
+          await refuse(
+            "Hermes agents run over SSH only on the environment an admin pinned to the agent; an issue or project can't choose one. Nothing was run.",
+          );
+        }
+        const decision = evaluateHermesSshEnvironment({
+          companyId: input.companyId,
+          config: parseObject(environment.config),
+        });
+        if (!decision.ok) return await refuse(decision.message);
+        const connection = hermesSshConnectionFor(decision.entry);
+        try {
+          await assertHermesSshLaunchReady(connection);
+        } catch (err) {
+          await refuse(err instanceof Error ? err.message : String(err));
+        }
+        hermesSshTarget = decision.target;
+        operatorSshConnection = connection;
+      }
+    }
+
     // Step 2: Acquire lease
     const leaseRecord = await acquireLease({
       companyId: input.companyId,
@@ -282,6 +363,7 @@ export function environmentRunOrchestrator(
       issueId: input.issueId,
       heartbeatRunId: input.heartbeatRunId,
       persistedExecutionWorkspace: input.persistedExecutionWorkspace,
+      ...(operatorSshConnection ? { operatorSshConnection } : {}),
     });
 
     // Step 3: Log lease acquisition activity
@@ -303,6 +385,27 @@ export function environmentRunOrchestrator(
         issueId: input.issueId,
       },
     });
+
+    if (hermesSshTarget) {
+      // AgentDash: audit every hermes run launched over SSH (target and ids only).
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: "agent",
+        actorId: input.agentId,
+        agentId: input.agentId,
+        runId: input.heartbeatRunId,
+        action: "agent.ssh_run_launched",
+        entityType: "heartbeat_run",
+        entityId: input.heartbeatRunId,
+        details: {
+          environmentId: environment.id,
+          adapterType: input.adapterType,
+          sshTarget: hermesSshTarget,
+          leaseId: leaseRecord.lease.id,
+          issueId: input.issueId,
+        },
+      });
+    }
 
     // Step 4: Resolve execution transport
     const executionTransport = await resolveTransport({

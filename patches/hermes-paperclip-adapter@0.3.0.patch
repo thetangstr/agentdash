@@ -1,17 +1,18 @@
 diff --git a/dist/server/execute.js b/dist/server/execute.js
-index e96d5c9c0d175a06c668406ba57ac8f5ba750901..bbecad669ef4b195395c98a5efd0b73ebcf00186 100644
+index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62ae40751d9 100644
 --- a/dist/server/execute.js
 +++ b/dist/server/execute.js
-@@ -18,7 +18,7 @@
+@@ -18,7 +18,8 @@
   *   --source           session source tag for filtering
   */
  import { runChildProcess, buildPaperclipEnv, renderTemplate, ensureAbsoluteDirectory, } from "@paperclipai/adapter-utils/server-utils";
 -import { HERMES_CLI, DEFAULT_TIMEOUT_SEC, DEFAULT_GRACE_SEC, DEFAULT_MODEL, } from "../shared/constants.js";
++import { readAdapterExecutionTarget, describeAdapterExecutionTarget, runAdapterExecutionTargetProcessWithStagedEnv, } from "@paperclipai/adapter-utils/execution-target";
 +import { HERMES_CLI, DEFAULT_TIMEOUT_SEC, DEFAULT_GRACE_SEC, } from "../shared/constants.js";
  import { detectModel, resolveProvider, } from "./detect-model.js";
  // ---------------------------------------------------------------------------
  // Config helpers
-@@ -247,7 +247,7 @@ export async function execute(ctx) {
+@@ -247,7 +248,7 @@ export async function execute(ctx) {
      const config = (ctx.agent?.adapterConfig ?? {});
      // ── Resolve configuration ──────────────────────────────────────────────
      const hermesCmd = cfgString(config.hermesCommand) || HERMES_CLI;
@@ -20,11 +21,67 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..bbecad669ef4b195395c98a5efd0b73e
      const timeoutSec = cfgNumber(config.timeoutSec) || DEFAULT_TIMEOUT_SEC;
      const graceSec = cfgNumber(config.graceSec) || DEFAULT_GRACE_SEC;
      const maxTurns = cfgNumber(config.maxTurnsPerRun);
-@@ -342,7 +342,32 @@ export async function execute(ctx) {
+@@ -256,6 +257,17 @@ export async function execute(ctx) {
+     const persistSession = cfgBoolean(config.persistSession) !== false;
+     const worktreeMode = cfgBoolean(config.worktreeMode) === true;
+     const checkpoints = cfgBoolean(config.checkpoints) === true;
++    // ── Resolve execution target ───────────────────────────────────────────
++    // AgentDash patch: SSH execution targets. The server only hands hermes an
++    // SSH target when AGENTDASH_HERMES_SSH_ENABLED is on and the environment's
++    // user@host is allowlisted for the company; with no remote target this
++    // function behaves exactly as before. A remote target of any other kind is
++    // refused rather than silently run on the server host.
++    const executionTarget = readAdapterExecutionTarget({ executionTarget: ctx.executionTarget });
++    const sshTarget = executionTarget?.kind === "remote" && executionTarget.transport === "ssh" ? executionTarget : null;
++    if (executionTarget?.kind === "remote" && !sshTarget) {
++        throw new Error("hermes_local runs locally or over SSH only; this execution target is not supported.");
++    }
+     // ── Resolve provider (defense in depth) ────────────────────────────────
+     // Priority chain:
+     //   1. Explicit provider in adapterConfig (user override)
+@@ -268,7 +280,9 @@ export async function execute(ctx) {
+     // correct provider is still used.
+     let detectedConfig = null;
+     const explicitProvider = cfgString(config.provider);
+-    if (!explicitProvider) {
++    // AgentDash patch: detection reads the SERVER user's ~/.hermes; for an SSH
++    // target the remote user's Hermes decides instead.
++    if (!explicitProvider && !sshTarget) {
+         try {
+             detectedConfig = await detectModel();
+         }
+@@ -341,16 +355,65 @@ export async function execute(ctx) {
+     if (userEnv && typeof userEnv === "object") {
          Object.assign(env, userEnv);
      }
-     // ── Resolve working directory ──────────────────────────────────────────
+-    // ── Resolve working directory ──────────────────────────────────────────
 -    const cwd = cfgString(config.cwd) || cfgString(ctx.config?.workspaceDir) || ".";
+-    try {
+-        await ensureAbsoluteDirectory(cwd);
++    // AgentDash patch: the env an SSH-run hermes receives is ONLY the paperclip
++    // env, the run ids and the agent's configured env — never the server's
++    // process.env. It is staged in a 0600 file, not rendered onto the remote
++    // command line (runAdapterExecutionTargetProcessWithStagedEnv).
++    let remoteEnv = null;
++    if (sshTarget) {
++        remoteEnv = { ...buildPaperclipEnv(ctx.agent) };
++        if (ctx.runId)
++            remoteEnv.PAPERCLIP_RUN_ID = ctx.runId;
++        if (taskId)
++            remoteEnv.PAPERCLIP_TASK_ID = taskId;
++        if (userEnv && typeof userEnv === "object") {
++            for (const [key, value] of Object.entries(userEnv)) {
++                if (typeof value === "string")
++                    remoteEnv[key] = value;
++            }
++        }
++        const targetApiUrl = sshTarget.paperclipApiUrl ?? sshTarget.spec.paperclipApiUrl ?? null;
++        if (targetApiUrl)
++            remoteEnv.PAPERCLIP_API_URL = targetApiUrl;
+     }
+-    catch {
+-        // Non-fatal
++    // ── Resolve working directory ──────────────────────────────────────────
 +    // AgentDash patch: honour the workspace the runtime already resolved.
 +    //
 +    // Upstream fell straight through to ".", which is the AgentDash server's own
@@ -51,20 +108,52 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..bbecad669ef4b195395c98a5efd0b73e
 +        && (configuredCwd ?? "").length > 0;
 +    const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : cfgString(workspaceContext.cwd);
 +    const cwd = effectiveWorkspaceCwd || configuredCwd || cfgString(ctx.config?.workspaceDir) || ".";
-     try {
-         await ensureAbsoluteDirectory(cwd);
-     }
-@@ -350,7 +375,8 @@ export async function execute(ctx) {
-         // Non-fatal
++    if (!sshTarget) {
++        try {
++            await ensureAbsoluteDirectory(cwd);
++        }
++        catch {
++            // Non-fatal
++        }
      }
      // ── Log start ──────────────────────────────────────────────────────────
 -    await ctx.onLog("stdout", `[hermes] Starting Hermes Agent (model=${model}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""})\n`);
 +    const modelLabel = model || detectedConfig?.model || "Hermes configured default";
-+    await ctx.onLog("stdout", `[hermes] Starting Hermes Agent (model=${modelLabel}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""})\n`);
++    await ctx.onLog("stdout", `[hermes] Starting Hermes Agent (model=${modelLabel}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""}${sshTarget ? `, target=${describeAdapterExecutionTarget(sshTarget)}` : ""})\n`);
      if (prevSessionId) {
          await ctx.onLog("stdout", `[hermes] Resuming session: ${prevSessionId}\n`);
      }
-@@ -396,7 +422,7 @@ export async function execute(ctx) {
+@@ -377,13 +440,22 @@ export async function execute(ctx) {
+         }
+         return ctx.onLog(stream, chunk);
+     };
+-    const result = await runChildProcess(ctx.runId, hermesCmd, args, {
+-        cwd,
+-        env,
+-        timeoutSec,
+-        graceSec,
+-        onLog: wrappedOnLog,
+-    });
++    const result = sshTarget
++        ? await runAdapterExecutionTargetProcessWithStagedEnv(ctx.runId, sshTarget, hermesCmd, args, {
++            cwd: sshTarget.remoteCwd,
++            env: remoteEnv,
++            timeoutSec,
++            graceSec,
++            onLog: wrappedOnLog,
++            onSpawn: ctx.onSpawn,
++        })
++        : await runChildProcess(ctx.runId, hermesCmd, args, {
++            cwd,
++            env,
++            timeoutSec,
++            graceSec,
++            onLog: wrappedOnLog,
++        });
+     // ── Parse output ───────────────────────────────────────────────────────
+     const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");
+     await ctx.onLog("stdout", `[hermes] Exit code: ${result.exitCode ?? "null"}, timed out: ${result.timedOut}\n`);
+@@ -396,7 +468,7 @@ export async function execute(ctx) {
          signal: result.signal,
          timedOut: result.timedOut,
          provider: resolvedProvider,
@@ -151,9 +240,10 @@ index d440427d7df7703dfd469675a2cadfca413e2df1..38f8b39aa4c2511dc82267cb3d0efdf8
          checks.push(pythonCheck);
      // 4. Model config
 diff --git a/dist/shared/constants.d.ts b/dist/shared/constants.d.ts
+index 82365b3f8f5379998ba619d63046c4158068bf85..63c8c55951d6acf7544239acee9eb2759103a3b4 100644
 --- a/dist/shared/constants.d.ts
 +++ b/dist/shared/constants.d.ts
-@@ -17,7 +17,7 @@
+@@ -17,7 +17,7 @@ export declare const DEFAULT_MODEL = "anthropic/claude-sonnet-4";
   * Valid --provider choices for the hermes CLI.
   * Must stay in sync with `hermes chat --help`.
   */
@@ -163,7 +253,7 @@ diff --git a/dist/shared/constants.d.ts b/dist/shared/constants.d.ts
   * Model-name prefix → provider hint mapping.
   * Used when no explicit provider is configured and we need to infer
 diff --git a/dist/shared/constants.js b/dist/shared/constants.js
-index c8be1d158bee16f0f383d8300ae806f2d5d00e53..4f4deaecc670044e852fe4f60bef84ad348b7c3d 100644
+index c8be1d158bee16f0f383d8300ae806f2d5d00e53..ce8eea9aab6ef7974001fe4f878571ce84bfb9ae 100644
 --- a/dist/shared/constants.js
 +++ b/dist/shared/constants.js
 @@ -12,7 +12,7 @@ export const DEFAULT_TIMEOUT_SEC = 1800;
@@ -175,13 +265,15 @@ index c8be1d158bee16f0f383d8300ae806f2d5d00e53..4f4deaecc670044e852fe4f60bef84ad
  /**
   * Valid --provider choices for the hermes CLI.
   * Must stay in sync with `hermes chat --help`.
-@@ -31,4 +31,5 @@
+@@ -31,6 +31,7 @@ export const VALID_PROVIDERS = [
      "minimax",
      "minimax-cn",
      "kilocode",
 +    "alibaba-token-plan-cn",
  ];
-@@ -59,6 +59,10 @@ export const MODEL_PREFIX_PROVIDER_HINTS = [
+ /**
+  * Model-name prefix → provider hint mapping.
+@@ -59,8 +60,12 @@ export const MODEL_PREFIX_PROVIDER_HINTS = [
      ["moonshot", "kimi-coding"],
      ["kimi", "kimi-coding"],
      // MiniMax
@@ -192,3 +284,5 @@ index c8be1d158bee16f0f383d8300ae806f2d5d00e53..4f4deaecc670044e852fe4f60bef84ad
 +    ["qwen3.8-max", "alibaba-token-plan-cn"],
 +    ["deepseek-v4", "alibaba-token-plan-cn"],
      ["deepseek", "auto"],
+     // Meta Llama
+     ["llama", "auto"],

@@ -44,10 +44,32 @@ export function adapterSupportsRemoteManagedEnvironments(adapterType: string): b
   return REMOTE_MANAGED_ADAPTERS.has(adapterType as AgentAdapterType);
 }
 
-export function supportedEnvironmentDriversForAdapter(adapterType: string): EnvironmentDriver[] {
-  return adapterSupportsRemoteManagedEnvironments(adapterType)
-    ? ["local", "ssh", "sandbox"]
-    : ["local"];
+/**
+ * AgentDash: instance-level switches that widen the matrix. Every field is
+ * optional and defaults to off, so callers that pass nothing get exactly the
+ * pre-existing matrix.
+ */
+export interface EnvironmentSupportOptions {
+  /**
+   * AGENTDASH_HERMES_SSH_ENABLED. When on, hermes_local may target SSH
+   * environments (never sandboxes). Which ssh targets and companies are
+   * permitted is decided server-side by the allowlist, not here.
+   */
+  hermesSshEnabled?: boolean;
+}
+
+export function supportedEnvironmentDriversForAdapter(
+  adapterType: string,
+  options: EnvironmentSupportOptions = {},
+): EnvironmentDriver[] {
+  if (adapterSupportsRemoteManagedEnvironments(adapterType)) {
+    return ["local", "ssh", "sandbox"];
+  }
+  // AgentDash: hermes_local over SSH is opt-in per instance.
+  if (adapterType === "hermes_local" && options.hermesSshEnabled === true) {
+    return ["local", "ssh"];
+  }
+  return ["local"];
 }
 
 export function supportedSandboxProvidersForAdapter(
@@ -62,8 +84,9 @@ export function supportedSandboxProvidersForAdapter(
 export function isEnvironmentDriverSupportedForAdapter(
   adapterType: string,
   driver: string,
+  options: EnvironmentSupportOptions = {},
 ): boolean {
-  return supportedEnvironmentDriversForAdapter(adapterType).includes(driver as EnvironmentDriver);
+  return supportedEnvironmentDriversForAdapter(adapterType, options).includes(driver as EnvironmentDriver);
 }
 
 export function isSandboxProviderSupportedForAdapter(
@@ -80,8 +103,9 @@ export function isSandboxProviderSupportedForAdapter(
 export function getAdapterEnvironmentSupport(
   adapterType: AgentAdapterType,
   additionalSandboxProviders: readonly string[] = [],
+  options: EnvironmentSupportOptions = {},
 ): AdapterEnvironmentSupport {
-  const supportedDrivers = new Set(supportedEnvironmentDriversForAdapter(adapterType));
+  const supportedDrivers = new Set(supportedEnvironmentDriversForAdapter(adapterType, options));
   const supportedProviders = new Set(supportedSandboxProvidersForAdapter(adapterType, additionalSandboxProviders));
   const sandboxProviders: Record<SandboxEnvironmentProvider, EnvironmentSupportStatus> = {
     fake: "unsupported",
@@ -107,7 +131,7 @@ export function getEnvironmentCapabilities(
   adapterTypes: readonly AgentAdapterType[],
   options: {
     sandboxProviders?: Record<string, Partial<EnvironmentProviderCapability>>;
-  } = {},
+  } & EnvironmentSupportOptions = {},
 ): EnvironmentCapabilities {
   const pluginProviderKeys = Object.keys(options.sandboxProviders ?? {});
   const sandboxProviders: Record<SandboxEnvironmentProvider, EnvironmentProviderCapability> = {
@@ -137,7 +161,9 @@ export function getEnvironmentCapabilities(
     };
   }
   return {
-    adapters: adapterTypes.map((adapterType) => getAdapterEnvironmentSupport(adapterType, pluginProviderKeys)),
+    adapters: adapterTypes.map((adapterType) => getAdapterEnvironmentSupport(adapterType, pluginProviderKeys, {
+      hermesSshEnabled: options.hermesSshEnabled,
+    })),
     drivers: {
       local: "supported",
       ssh: "supported",

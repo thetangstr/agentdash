@@ -1,9 +1,10 @@
 import type { Request } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { companyMemberships, heartbeatRuns, instanceUserRoles, issues, projects } from "@paperclipai/db";
+import { approvals, companyMemberships, heartbeatRuns, instanceUserRoles, issues, projects } from "@paperclipai/db";
 import type { LiveEvent } from "@paperclipai/shared";
 import {
+  approvalBudgetProjectId,
   isCanonicalUuid,
   isProjectVisible,
   pruneRelatedIssuesInActivityDetails,
@@ -69,6 +70,8 @@ export type LiveEventRefs = {
   projectIds: string[];
   /** Agent visibility (2026-09-30): agents the event is about; delivery needs each to be visible. */
   agentIds: string[];
+  /** GH #933: approval.* rows name only the approval; its budget scope resolves to a project. */
+  approvalIds: string[];
   /** A reference that is not a canonical UUID: cannot be resolved, fail closed. */
   malformed: boolean;
 };
@@ -124,7 +127,7 @@ function deletedIssueProjectOf(event: LiveEvent): string | null | undefined {
 
 /** Which issues, runs and projects does this event carry content about? */
 export function liveEventRefs(event: LiveEvent): LiveEventRefs {
-  const refs: LiveEventRefs = { issueIds: [], runIds: [], projectIds: [], agentIds: [], malformed: false };
+  const refs: LiveEventRefs = { issueIds: [], runIds: [], projectIds: [], agentIds: [], approvalIds: [], malformed: false };
   const payload = asRecord(event.payload) ?? {};
   const add = (list: string[], value: unknown, strict: boolean) => {
     if (typeof value !== "string" || value.length === 0) return;
@@ -150,6 +153,11 @@ export function liveEventRefs(event: LiveEvent): LiveEventRefs {
     } else if (entityType === "issue") add(refs.issueIds, payload.entityId, true);
     else if (entityType === "project") add(refs.projectIds, payload.entityId, true);
     else if (entityType === "heartbeat_run" || entityType === "run") add(refs.runIds, payload.entityId, true);
+    // AgentDash (GH #933): an approval.* row names only the approval. A
+    // budget_override_required approval's payload scopes it to a project —
+    // resolved against the table below, the same rule the feed's SQL
+    // subquery applies. A malformed id fails closed like the other entities.
+    else if (entityType === "approval") add(refs.approvalIds, payload.entityId, true);
     add(refs.runIds, payload.runId, false);
     const details = asRecord(payload.details);
     if (details) {
@@ -181,6 +189,9 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
   // failing closed.
   const deletedIssueProject = new TtlCache<string | null>(RUN_TTL_MS, now);
   const runIssue = new TtlCache<string | null>(RUN_TTL_MS, now);
+  // GH #933: an approval's budget scope is written at creation and never
+  // moves, so the id -> project lookup can share the run TTL.
+  const approvalProject = new TtlCache<string | null>(RUN_TTL_MS, now);
   const companyProjects = new TtlCache<Promise<Map<string, ProjectRow>>>(PROJECTS_TTL_MS, now);
   const projectGeneration = new Map<string, number>();
   // AgentDash (GH #937 review): the agent-visibility scope's inputs —
@@ -290,10 +301,42 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     return out;
   }
 
+  /**
+   * Approval id -> project id from a `budget_override_required` payload's
+   * scope; null when the approval is not project-scoped or is gone — the
+   * feed's SQL subquery yields NULL in exactly those cases, so the channels
+   * agree instead of the socket guessing stricter or looser.
+   */
+  async function projectsOfApprovals(approvalIds: string[]): Promise<Map<string, string | null>> {
+    const out = new Map<string, string | null>();
+    const missing: string[] = [];
+    for (const id of approvalIds) {
+      const hit = approvalProject.get(id);
+      if (hit !== undefined) out.set(id, hit);
+      else missing.push(id);
+    }
+    if (missing.length > 0) {
+      const rows = await db
+        .select({ id: approvals.id, type: approvals.type, payload: approvals.payload })
+        .from(approvals)
+        .where(inArray(approvals.id, missing));
+      for (const row of rows) {
+        const projectId = approvalBudgetProjectId(row);
+        // The feed's SQL only accepts a canonical scope id; a malformed one
+        // names no project rather than failing closed.
+        const value = projectId !== null && isCanonicalUuid(projectId) ? projectId : null;
+        approvalProject.set(row.id, value);
+        out.set(row.id, value);
+      }
+      for (const id of missing) if (!out.has(id)) out.set(id, null);
+    }
+    return out;
+  }
+
   async function resolveUncached(event: LiveEvent): Promise<LiveEventProjectRef> {
     const refs = liveEventRefs(event);
     if (refs.malformed) return { kind: "unresolved" };
-    if (refs.issueIds.length === 0 && refs.runIds.length === 0 && refs.projectIds.length === 0) {
+    if (refs.issueIds.length === 0 && refs.runIds.length === 0 && refs.projectIds.length === 0 && refs.approvalIds.length === 0) {
       return { kind: "none" };
     }
     const projectIds = new Set(refs.projectIds);
@@ -309,6 +352,12 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       const issueProjects = await projectsOfIssues([...issueIds]);
       for (const projectId of issueProjects.values()) {
         if (projectId === undefined) return { kind: "unresolved" };
+        if (projectId) projectIds.add(projectId);
+      }
+    }
+    if (refs.approvalIds.length > 0) {
+      const approvalProjects = await projectsOfApprovals(refs.approvalIds);
+      for (const projectId of approvalProjects.values()) {
         if (projectId) projectIds.add(projectId);
       }
     }
