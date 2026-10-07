@@ -257,6 +257,106 @@ describe("errorHandler", () => {
     expect(res.json).toHaveBeenCalledWith({ error: expected });
     expect(recordServerError).not.toHaveBeenCalled();
   });
+
+  // AgentDash (GH #921): the two 23503 shapes mean different things.
+  it("maps an insert-side 23503 (referenced row is not present) to 422 with a warn log, not a recorded 500", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+    vi.mocked(logger.warn).mockClear();
+    const err = drizzleWrapped(
+      "23503",
+      'insert or update on table "goals" violates foreign key constraint "goals_parent_id_goals_id_fk"',
+    );
+    Object.assign((err as Error & { cause: object }).cause, {
+      detail: 'Key (parent_id)=(00000000-0000-0000-0000-000000000000) is not present in table "goals".',
+      constraint: "goals_parent_id_goals_id_fk",
+    });
+
+    errorHandler(err, req, res, vi.fn() as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({ error: "Request references a resource that does not exist" });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [fields] = vi.mocked(logger.warn).mock.calls[0]! as unknown as [Record<string, unknown>];
+    expect(fields).toMatchObject({ code: "23503", kind: "referenced-missing", constraint: "goals_parent_id_goals_id_fk" });
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls[0])).not.toContain("00000000-0000");
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("maps a delete-side 23503 (row is still referenced) to 409, not 422", () => {
+    const req = makeReq();
+    req.method = "DELETE";
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+    vi.mocked(logger.warn).mockClear();
+    const err = drizzleWrapped(
+      "23503",
+      'update or delete on table "goals" violates foreign key constraint "issues_goal_id_goals_id_fk" on table "issues"',
+    );
+    Object.assign((err as Error & { cause: object }).cause, {
+      detail: 'Key (id)=(11111111-1111-1111-1111-111111111111) is still referenced from table "issues".',
+    });
+
+    errorHandler(err, req, res, vi.fn() as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ error: "Resource is still referenced by other records" });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("treats a delete-side 23503 without detail as still-referenced from its message", () => {
+    const res = makeRes() as any;
+    errorHandler(
+      drizzleWrapped("23503", 'update or delete on table "goals" violates foreign key constraint "projects_goal_id_goals_id_fk" on table "projects"'),
+      makeReq(),
+      res,
+      vi.fn() as unknown as NextFunction,
+    );
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  // GH #921 review: an SDK error (Anthropic APIError, Stripe, Octokit) carries
+  // a 4xx status but no `expose`. It is a server-side failure and must stay a
+  // recorded 500 — a client 401 would read as "signed out" in the UI.
+  it("keeps an SDK-style 401/429 without expose a recorded 500", () => {
+    for (const status of [401, 429]) {
+      const res = makeRes() as any;
+      vi.mocked(recordServerError).mockClear();
+      errorHandler(Object.assign(new Error("x"), { status }), makeReq(), res, vi.fn() as unknown as NextFunction);
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(recordServerError).toHaveBeenCalledTimes(1);
+    }
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+    errorHandler(Object.assign(new Error("stripe"), { statusCode: 401, type: "StripeAuthenticationError" }), makeReq(), res, vi.fn() as unknown as NextFunction);
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(recordServerError).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a real malformed JSON POST with 400 through an express app", async () => {
+    vi.mocked(recordServerError).mockClear();
+    const app = express();
+    app.use(express.json());
+    app.post("/api/goals", (_req, res) => res.json({ ok: true }));
+    app.use(errorHandler);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const response = await fetch(`http://127.0.0.1:${port}/api/goals`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"title": ',
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Bad Request" });
+      expect(vi.mocked(recordServerError)).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 describe('private human failure diagnostics', () => {

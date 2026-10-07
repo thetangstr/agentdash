@@ -57,6 +57,29 @@ function exposedClientErrorStatus(err: unknown): number | null {
   return typeof status === "number" && status >= 400 && status < 500 ? status : null;
 }
 
+/** SQLSTATE foreign_key_violation. */
+const PG_FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * AgentDash (GH #921): a foreign-key violation has two shapes, and they mean
+ * different things to the caller.
+ * - "referenced-missing": an insert/update named a parent row that does not
+ *   exist (`Key (x)=(…) is not present in table "y"`) — 422.
+ * - "still-referenced": a delete (or key update) of a row other rows still
+ *   point at (`update or delete on table "y" violates …`, detail `… is still
+ *   referenced from table "z"`) — 409, the resource is in use.
+ */
+function foreignKeyViolationKind(err: unknown): "still-referenced" | "referenced-missing" | null {
+  const pg = unwrapPgError(err);
+  if (pg.code !== PG_FOREIGN_KEY_VIOLATION) return null;
+  const detail = typeof pg.detail === "string" ? pg.detail : "";
+  const message = typeof pg.message === "string" ? pg.message : "";
+  if (/is still referenced/i.test(detail) || /^update or delete on table/i.test(message)) {
+    return "still-referenced";
+  }
+  return "referenced-missing";
+}
+
 const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -93,6 +116,20 @@ export function characterNotInRepertoireLogFields(req: Request) {
     route: typeof routePath === "string" ? `${req.baseUrl ?? ""}${routePath}` : null,
     path: redactPathForLog(req.originalUrl ?? ""),
     code: PG_CHARACTER_NOT_IN_REPERTOIRE,
+  };
+}
+
+export function foreignKeyViolationLogFields(req: Request, err: unknown, kind: string) {
+  const routePath = (req as Request & { route?: { path?: unknown } }).route?.path;
+  const pg = unwrapPgError(err);
+  return {
+    method: req.method,
+    route: typeof routePath === "string" ? `${req.baseUrl ?? ""}${routePath}` : null,
+    path: redactPathForLog(req.originalUrl ?? ""),
+    code: PG_FOREIGN_KEY_VIOLATION,
+    kind,
+    // A schema name, never a value.
+    constraint: pg.constraint ?? pg.constraint_name ?? null,
   };
 }
 
@@ -166,6 +203,28 @@ export function errorHandler(
       "text Postgres cannot store (e.g. NUL) reached the database; answered 400 (caller error, or a server bug if the route persists server-originated text)",
     );
     res.status(400).json({ error: "Text contains a byte sequence Postgres cannot store" });
+    return;
+  }
+
+  // AgentDash (GH #921): a foreign-key violation is a client error, answered
+  // with a fixed string (nothing from the driver message or detail reaches
+  // the caller). Warn-logged like the uuid case: an FK failure the route did
+  // not expect can be a server bug and should leave a trail.
+  const fkKind = foreignKeyViolationKind(err);
+  if (fkKind !== null) {
+    if (fkKind === "still-referenced") {
+      logger.warn(
+        foreignKeyViolationLogFields(req, err, fkKind),
+        "foreign-key violation: the row is still referenced; answered 409 (caller tried to remove an in-use record, or a server bug)",
+      );
+      res.status(409).json({ error: "Resource is still referenced by other records" });
+    } else {
+      logger.warn(
+        foreignKeyViolationLogFields(req, err, fkKind),
+        "foreign-key violation: referenced row is missing; answered 422 (caller referenced a missing row, or a server bug)",
+      );
+      res.status(422).json({ error: "Request references a resource that does not exist" });
+    }
     return;
   }
 
