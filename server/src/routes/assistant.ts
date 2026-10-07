@@ -9,11 +9,20 @@ import {
 import { assistantDigestService } from "../services/assistant-digest.js";
 import { assistantOAuthService } from "../services/assistant-oauth.js";
 import { waitingOnYouService } from "../services/waiting-on-you.js";
-import { assistantGatedActionsService } from "../services/assistant-gated-actions.js";
+import {
+  assistantGatedActionsService,
+  type AssistantApprovalVisibility,
+} from "../services/assistant-gated-actions.js";
 import { validate } from "../middleware/validate.js";
-import { forbidden, notFound } from "../errors.js";
+import { forbidden, HttpError, notFound } from "../errors.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess } from "./authz.js";
-import { listVisibleIssueIds, projectVisibilityCondition, resolveAgentVisibility } from "./visibility.js";
+import {
+  assertAgentIdVisible,
+  assertApprovalProjectVisible,
+  listVisibleIssueIds,
+  projectVisibilityCondition,
+  resolveAgentVisibility,
+} from "./visibility.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 /**
@@ -216,6 +225,28 @@ export function assistantRoutes(
     };
   }
 
+  /**
+   * GH #916: the assistant decision surface follows the same visibility rule
+   * as GET /approvals/:id — an approval raised by an agent the person cannot
+   * see, or a budget override on a project they are off the list for (GH
+   * #902), does not exist. The approval id arrives in the body (prepare) or
+   * inside the handle (confirm), so the check is handed to the service.
+   */
+  function approvalVisibleTo(req: Parameters<typeof assertBoard>[0]): AssistantApprovalVisibility {
+    return async (approval) => {
+      try {
+        if (approval.requestedByAgentId) {
+          await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
+        }
+        await assertApprovalProjectVisible(db, req, approval);
+        return true;
+      } catch (err) {
+        if (err instanceof HttpError && err.status === 404) return false;
+        throw err;
+      }
+    };
+  }
+
   router.post(
     "/companies/:companyId/assistant/actions/prepare-decision",
     validate(assistantPrepareDecisionSchema),
@@ -223,7 +254,9 @@ export function assistantRoutes(
       const companyId = req.params.companyId as string;
       const actor = requireAssistantGrantActor(req, companyId);
       assertCompanyAccess(req, companyId);
-      const result = await gated().prepareDecision(companyId, actor, req.body);
+      const result = await gated().prepareDecision(companyId, actor, req.body, {
+        approvalVisible: approvalVisibleTo(req),
+      });
       res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
     },
   );
@@ -247,7 +280,9 @@ export function assistantRoutes(
       const companyId = req.params.companyId as string;
       const actor = requireAssistantGrantActor(req, companyId);
       assertCompanyAccess(req, companyId);
-      const result = await gated().confirm(companyId, actor, req.body);
+      const result = await gated().confirm(companyId, actor, req.body, {
+        approvalVisible: approvalVisibleTo(req),
+      });
       res.status(result.ok ? 200 : (result.status ?? 422)).json(result);
     },
   );

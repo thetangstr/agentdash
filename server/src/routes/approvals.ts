@@ -247,6 +247,11 @@ export function approvalRoutes(
       return null;
     }
     assertCompanyAccess(req, approval.companyId);
+    // Agent visibility (GH #916): a request raised by an agent the actor
+    // cannot see is not theirs to decide — 404, exactly as GET /approvals/:id.
+    if (approval.requestedByAgentId) {
+      await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
+    }
     // AgentDash (GH #902): a budget override for a hidden project does not exist.
     await assertApprovalProjectVisible(db, req, approval);
     return approval;
@@ -432,13 +437,12 @@ export function approvalRoutes(
 
   router.get("/approvals/:id/issues", async (req, res) => {
     const id = req.params.id as string;
-    const approval = await svc.getById(id);
+    // GH #916: company, requesting-agent and project visibility (GH #902).
+    const approval = await requireApprovalAccess(req, id);
     if (!approval) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
-    await assertApprovalProjectVisible(db, req, approval); // AgentDash (GH #902)
     // A5 (GH #830): linked issues in a project the actor cannot see are absent.
     const issues = await filterVisibleByProject(db, req, await issueApprovalsSvc.listIssuesForApproval(id));
     res.json(issues);
@@ -628,12 +632,14 @@ export function approvalRoutes(
 
   router.post("/approvals/:id/resubmit", validate(resubmitApprovalSchema), async (req, res) => {
     const id = req.params.id as string;
-    const existing = await svc.getById(id);
+    // GH #916: an approval the actor cannot see (hidden requesting agent or
+    // hidden project) is 404 here too — resubmitting it would kill every
+    // in-flight card and echo back the payload GET answers 404 for.
+    const existing = await requireApprovalAccess(req, id);
     if (!existing) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
 
     if (req.actor.type === "agent" && req.actor.agentId !== existing.requestedByAgentId) {
       res.status(403).json({ error: "Only requesting agent can resubmit this approval" });
@@ -697,26 +703,24 @@ export function approvalRoutes(
 
   router.get("/approvals/:id/comments", async (req, res) => {
     const id = req.params.id as string;
-    const approval = await svc.getById(id);
+    // GH #916: same visibility rule as GET /approvals/:id (GH #902 included).
+    const approval = await requireApprovalAccess(req, id);
     if (!approval) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
-    await assertApprovalProjectVisible(db, req, approval); // AgentDash (GH #902)
     const comments = await svc.listComments(id);
     res.json(comments);
   });
 
   router.post("/approvals/:id/comments", validate(addApprovalCommentSchema), async (req, res) => {
     const id = req.params.id as string;
-    const approval = await svc.getById(id);
+    // GH #916: same visibility rule as GET /approvals/:id (GH #902 included).
+    const approval = await requireApprovalAccess(req, id);
     if (!approval) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
-    await assertApprovalProjectVisible(db, req, approval); // AgentDash (GH #902)
     const actor = getActorInfo(req);
     const comment = await svc.addComment(id, req.body.body, {
       agentId: actor.agentId ?? undefined,
