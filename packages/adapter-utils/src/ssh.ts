@@ -12,6 +12,19 @@ export interface SshConnectionConfig {
   privateKey: string | null;
   knownHosts: string | null;
   strictHostKeyChecking: boolean;
+  /**
+   * AgentDash: absolute path of a dedicated identity file on this host. When
+   * set it is the only key offered (IdentitiesOnly=yes) and takes precedence
+   * over `privateKey`. Server-resolved from operator config only (Hermes over
+   * SSH); a company's environment config cannot set it.
+   */
+  identityFile?: string | null;
+  /**
+   * AgentDash: absolute path of a pinned known_hosts file. When set it is the
+   * only host-key source (global known_hosts is ignored) and takes precedence
+   * over `knownHosts`.
+   */
+  knownHostsFile?: string | null;
 }
 
 export interface SshCommandResult {
@@ -95,6 +108,13 @@ export function parseSshRemoteExecutionSpec(value: unknown): SshRemoteExecutionS
     knownHosts: typeof parsed.knownHosts === "string" && parsed.knownHosts.length > 0 ? parsed.knownHosts : null,
     strictHostKeyChecking:
       typeof parsed.strictHostKeyChecking === "boolean" ? parsed.strictHostKeyChecking : true,
+    // AgentDash: present only when set, so legacy specs parse to the same shape.
+    ...(typeof parsed.identityFile === "string" && parsed.identityFile.trim().length > 0
+      ? { identityFile: parsed.identityFile.trim() }
+      : {}),
+    ...(typeof parsed.knownHostsFile === "string" && parsed.knownHostsFile.trim().length > 0
+      ? { knownHostsFile: parsed.knownHostsFile.trim() }
+      : {}),
   };
 }
 
@@ -218,10 +238,24 @@ async function withTempFile(
 }
 
 async function createSshAuthArgs(
-  config: Pick<SshConnectionConfig, "privateKey" | "knownHosts" | "strictHostKeyChecking">,
+  config: Pick<
+    SshConnectionConfig,
+    "privateKey" | "knownHosts" | "strictHostKeyChecking" | "identityFile" | "knownHostsFile"
+  >,
 ): Promise<{ args: string[]; cleanup: () => Promise<void> }> {
   const tempFiles: Array<() => Promise<void>> = [];
+  const identityFile = typeof config.identityFile === "string" && config.identityFile.length > 0
+    ? config.identityFile
+    : null;
+  const knownHostsFile = typeof config.knownHostsFile === "string" && config.knownHostsFile.length > 0
+    ? config.knownHostsFile
+    : null;
+  const hardened = Boolean(identityFile || knownHostsFile);
   const sshArgs = [
+    // AgentDash: a hardened (operator-pinned) connection ignores the server
+    // user's ~/.ssh/config entirely, so no Host * block can add a
+    // ProxyCommand, LocalCommand, SendEnv or ControlMaster reuse.
+    ...(hardened ? ["-F", "/dev/null"] : []),
     "-o",
     "BatchMode=yes",
     "-o",
@@ -231,7 +265,10 @@ async function createSshAuthArgs(
   ];
 
   if (config.strictHostKeyChecking) {
-    if (config.knownHosts) {
+    if (knownHostsFile) {
+      // AgentDash: a pinned known_hosts file on disk is the only host-key source.
+      sshArgs.push("-o", `UserKnownHostsFile=${knownHostsFile}`, "-o", "GlobalKnownHostsFile=/dev/null");
+    } else if (config.knownHosts) {
       const knownHosts = await withTempFile("paperclip-ssh-known-hosts-", config.knownHosts, 0o600);
       tempFiles.push(knownHosts.cleanup);
       sshArgs.push("-o", `UserKnownHostsFile=${knownHosts.path}`);
@@ -240,10 +277,26 @@ async function createSshAuthArgs(
     sshArgs.push("-o", "UserKnownHostsFile=/dev/null");
   }
 
-  if (config.privateKey) {
+  if (identityFile) {
+    // AgentDash: a dedicated identity file is the only key offered.
+    sshArgs.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
+  } else if (config.privateKey) {
     const privateKey = await withTempFile("paperclip-ssh-key-", config.privateKey, 0o600);
     tempFiles.push(privateKey.cleanup);
     sshArgs.push("-i", privateKey.path);
+  }
+
+  if (hardened) {
+    // AgentDash: hardened connections never forward the operator's agent,
+    // ports or X11, never share a multiplexed master, never run a local command.
+    sshArgs.push(
+      "-o", "ForwardAgent=no",
+      "-o", "ForwardX11=no",
+      "-o", "ClearAllForwardings=yes",
+      "-o", "ControlMaster=no",
+      "-o", "ControlPath=none",
+      "-o", "PermitLocalCommand=no",
+    );
   }
 
   return {

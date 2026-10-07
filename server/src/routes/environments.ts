@@ -30,6 +30,7 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { executionWorkspaceService } from "../services/execution-workspaces.js";
+import { hermesSshEnabled } from "../services/hermes-ssh-policy.js";
 
 export function environmentRoutes(
   db: Db,
@@ -171,6 +172,8 @@ export function environmentRoutes(
     res.json(getEnvironmentCapabilities(
       AGENT_ADAPTER_TYPES,
       {
+        // AgentDash: instance switch; off by default (services/hermes-ssh-policy.ts).
+        hermesSshEnabled: hermesSshEnabled(),
         sandboxProviders: Object.fromEntries(pluginDrivers.map((driver) => [
           driver.driverKey,
           {

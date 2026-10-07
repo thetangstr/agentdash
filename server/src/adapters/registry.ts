@@ -134,7 +134,17 @@ import {
   provisionAgentProfile,
 } from "../services/hermes-profile.js";
 import { stripForeignHermesProfileConfig } from "./hermes-profile-args.js";
-import { defaultHermesCommand, pinDefaultHermesCommand } from "../services/adapter-command-resolution.js";
+import {
+  DEFAULT_HERMES_COMMAND,
+  defaultHermesCommand,
+  pinDefaultHermesCommand,
+} from "../services/adapter-command-resolution.js";
+import {
+  readAdapterExecutionTarget,
+  runAdapterExecutionTargetShellCommand,
+  type AdapterSshExecutionTarget,
+} from "@paperclipai/adapter-utils/execution-target";
+import { shellQuote } from "@paperclipai/adapter-utils/ssh";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 import { withHermesSpawnWatch } from "./hermes-spawn-watch.js";
 import {
@@ -789,6 +799,19 @@ import {
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
 
 /**
+ * AgentDash: the SSH execution target a hermes run was handed, if any. The
+ * server only produces one when AGENTDASH_HERMES_SSH_ENABLED is on and the
+ * environment is allowlisted for the company (services/hermes-ssh-policy.ts).
+ * Everything server-local the wrapper would otherwise do — managed profile
+ * wrappers, the boot-pinned binary path, the stream-json probe, the ledger
+ * read — refers to THIS host, so it is skipped for an SSH run.
+ */
+function readHermesSshTarget(ctx: { executionTarget?: unknown }): AdapterSshExecutionTarget | null {
+  const target = readAdapterExecutionTarget({ executionTarget: ctx.executionTarget });
+  return target?.kind === "remote" && target.transport === "ssh" ? target : null;
+}
+
+/**
  * Run Hermes, then read what it spent out of its own ledger.
  *
  * Nothing about the invocation changes — the earlier attempt at this passed
@@ -826,8 +849,17 @@ function hermesRunAdapterConfig(ctx: { config?: unknown; agent?: unknown }): Rec
 
 async function withHermesSessionUsage(
   result: AdapterExecutionResult,
-  ctx: { config?: unknown; agent?: unknown },
+  ctx: { config?: unknown; agent?: unknown; executionTarget?: unknown },
 ): Promise<AdapterExecutionResult> {
+  // AgentDash: an SSH run's ledger lives in the remote user's Hermes home, not
+  // this server's; say so rather than read the wrong ledger.
+  if (readHermesSshTarget(ctx)) {
+    const resultJson =
+      result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
+        ? result.resultJson
+        : {};
+    return { ...result, resultJson: { ...resultJson, meteringStatus: "unmetered_no_ledger", meteringLedger: null } };
+  }
   let read: ReturnType<typeof readHermesSessionUsageDetailed>;
   try {
     const sessionId = readHermesSessionId(result);
@@ -877,7 +909,9 @@ async function executeHermesFailClosed(
   // `session_id:` bookkeeping line off stderr in either mode.
   const agentConfig = readRecord(ctx.agent?.adapterConfig) ?? {};
   const command = readNonEmptyString(agentConfig.hermesCommand) ?? getHermesCommandFromContext(ctx);
-  const wantsStreamJson = !hermesStreamJsonDisabledByEnv() && !hermesConfigPinsOutputFormat(agentConfig);
+  // AgentDash: the stream-json probe runs the LOCAL binary; an SSH run stays in text mode.
+  const wantsStreamJson =
+    !readHermesSshTarget(ctx) && !hermesStreamJsonDisabledByEnv() && !hermesConfigPinsOutputFormat(agentConfig);
 
   const attempt = async (streamJson: boolean) => {
     const capture = createHermesStreamJsonCapture();
@@ -924,6 +958,54 @@ async function executeHermesFailClosed(
     ? applyHermesStreamUsageFallback(metered, run.capture.streamUsage(), run.capture.streamCostUsd())
     : metered;
   return guard.failClosed(result);
+}
+
+/**
+ * AgentDash: environment check for a hermes agent pinned to an SSH environment.
+ * Probing this server's Hermes would say nothing about the remote user's, so
+ * check over the same hardened ssh connection that the run will use.
+ */
+async function testHermesOverSsh(
+  ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0],
+  target: AdapterSshExecutionTarget,
+) {
+  const cfg = readRecord(ctx.config) ?? {};
+  const configured = readNonEmptyString(cfg.hermesCommand);
+  const command = configured && configured !== defaultHermesCommand() ? configured : DEFAULT_HERMES_COMMAND;
+  const where = `${target.spec.username}@${target.spec.host}`;
+  const checks: AdapterEnvironmentCheck[] = [];
+  try {
+    const result = await runAdapterExecutionTargetShellCommand(
+      "hermes-ssh-env-check",
+      target,
+      `command -v ${shellQuote(command)}`,
+      { cwd: target.remoteCwd, env: {}, timeoutSec: 20 },
+    );
+    const found = result.exitCode === 0 && result.stdout.trim().length > 0;
+    checks.push(
+      found
+        ? { code: "hermes_ssh_command_found", level: "info", message: `Hermes is installed for ${where}.` }
+        : {
+            code: "hermes_ssh_command_missing",
+            level: "error",
+            message: `Hermes ("${command}") was not found for ${where}.`,
+            hint: "Install Hermes for that OS user, or set hermesCommand to its full path on that machine.",
+          },
+    );
+  } catch (error) {
+    checks.push({
+      code: "hermes_ssh_unreachable",
+      level: "error",
+      message: `Could not connect to ${where} over SSH: ${error instanceof Error ? error.message : String(error)}`,
+      hint: "Check the environment's key file, known_hosts file, and the OS user's authorized_keys.",
+    });
+  }
+  return {
+    adapterType: "hermes_local",
+    status: summarizeAdapterEnvironmentChecks(checks),
+    checks,
+    testedAt: new Date().toISOString(),
+  };
 }
 
 const hermesLocalAdapter: ServerAdapterModule = {
@@ -1002,7 +1084,21 @@ const hermesLocalAdapter: ServerAdapterModule = {
     // not just the hire-approval flow). On-prem falls back to the default command
     // if it could not be provisioned; a hosted box fails the run instead (#721).
     let managedProfileCommand: string | undefined;
-    if (hermesManagedProfilesEnabled()) {
+    const sshTarget = readHermesSshTarget(taskPatchedCtx);
+    if (sshTarget) {
+      // AgentDash: over SSH the remote OS user's own Hermes runs. The boot-pinned
+      // absolute path names a binary on THIS host, so fall back to the bare
+      // command the remote login shell resolves; an explicit command is kept.
+      if (patchedConfig.hermesCommand === defaultHermesCommand()) {
+        patchedConfig.hermesCommand = DEFAULT_HERMES_COMMAND;
+      }
+      if (hermesManagedProfilesEnabled()) {
+        await taskPatchedCtx.onLog(
+          "stdout",
+          "[hermes] Managed Hermes profiles are local to this server; the SSH run uses the remote user's Hermes home.\n",
+        );
+      }
+    } else if (hermesManagedProfilesEnabled()) {
       try {
         managedProfileCommand = await ensureAgentProfileCommand(
           taskPatchedCtx.agent?.id,
@@ -1025,7 +1121,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
     // agent config the adapter executes and the run config metering reads, so
     // the run and its ledger can never name different profiles.
     let strippedRunConfig: Record<string, unknown> | null = null;
-    if (hermesManagedProfilesEnabled() && taskPatchedCtx.agent?.id) {
+    if (!sshTarget && hermesManagedProfilesEnabled() && taskPatchedCtx.agent?.id) {
       const ownProfile = agentProfileName(taskPatchedCtx.agent.id);
       const strippedAgent = stripForeignHermesProfileConfig(patchedConfig, ownProfile);
       const strippedRun = stripForeignHermesProfileConfig(readRecord(taskPatchedCtx.config) ?? {}, ownProfile);
@@ -1101,6 +1197,8 @@ const hermesLocalAdapter: ServerAdapterModule = {
   // harness-preflight passes for an agent created by any path, and run the check
   // against that profile's wrapper command.
   testEnvironment: async (ctx) => {
+    const sshTarget = readHermesSshTarget(ctx as { executionTarget?: unknown });
+    if (sshTarget) return testHermesOverSsh(ctx, sshTarget);
     if (hermesManagedProfilesEnabled()) {
       const agentId = ctx.agent?.id;
       let profileCmd: string | undefined;

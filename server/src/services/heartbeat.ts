@@ -6888,6 +6888,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       issueId: issueId ?? null,
       heartbeatRunId: run.id,
       agentId: agent.id,
+      // AgentDash: lets the orchestrator hold a Hermes agent to its admin-set SSH pin.
+      agentDefaultEnvironmentId: agent.defaultEnvironmentId ?? null,
       persistedExecutionWorkspace,
     });
     const selectedEnvironment = acquiredEnvironment.environment;
