@@ -607,3 +607,7 @@ Agent creation and hiring authority does not permit creating CEO or Chief of Sta
 <!-- AgentDash: approval-channel-provenance — DO NOT REMOVE OR REORDER THIS BLOCK -->
 REST approval approve/reject/override requests may use `channel: "web"`; connector channel names are server-owned provenance and return 403 if supplied through REST. `channel: "assistant"` additionally requires an authenticated assistant grant. Do not retry a denied decision using a different channel; use the authorized human decision path, retaining the current revision and a stable idempotency key.
 <!-- /AgentDash: approval-channel-provenance -->
+
+<!-- AgentDash: spend-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Spend and budget amounts are restricted to authorized readers. Company and agent reads return `null` for unavailable monthly spend and budget; do not turn this into zero or infer hidden amounts. `GET /api/companies/:companyId/budgets/overview` returns 403 without spend access. Members retain nonfinancial budget-stop status and should ask an administrator to resolve a stop. Restricted financial activity is omitted.
+<!-- /AgentDash: spend-visibility -->

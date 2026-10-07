@@ -91,6 +91,13 @@ describe("ApprovalDetail", () => {
   let root: ReturnType<typeof createRoot>;
   let queryClient: QueryClient;
 
+  it("directs restricted budget readers to an administrator without a costs link", async () => {
+    mockApprovalsApi.get.mockResolvedValue(cosPlanHireApproval({ type: "budget_override_required", payload: {} }));
+    await renderPage("Budget Override");
+    expect(container.textContent).toContain("Ask a workspace administrator to resolve this budget stop");
+    expect(container.querySelector('a[href="/costs"]')).toBeNull();
+  });
+
   beforeEach(() => {
     mockApprovalsApi.get.mockResolvedValue(cosPlanHireApproval());
     mockApprovalsApi.listComments.mockResolvedValue([]);
@@ -114,7 +121,7 @@ describe("ApprovalDetail", () => {
     vi.clearAllMocks();
   });
 
-  async function renderPage() {
+  async function renderPage(expected = "Bookkeeper") {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -124,7 +131,7 @@ describe("ApprovalDetail", () => {
     });
     // The page resolves several queries before the card renders.
     await vi.waitFor(() => {
-      expect(container.textContent ?? "").toContain("Bookkeeper");
+      expect(container.textContent ?? "").toContain(expected);
     });
   }
 

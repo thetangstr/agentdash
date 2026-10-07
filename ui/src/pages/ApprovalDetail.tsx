@@ -29,7 +29,7 @@ const APPROVAL_STATUS_LABELS: Record<string, string> = {
 
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
-  const { selectedCompanyId, setSelectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -331,7 +331,9 @@ export function ApprovalDetail() {
           )}
           {isBudgetApproval && approval.status === "pending" && (
             <p className="text-sm text-muted-foreground">
-              Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.
+              {selectedCompany?.spentMonthlyCents != null
+                ? <>Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.</>
+                : <>Ask a workspace administrator to resolve this budget stop.</>}
             </p>
           )}
           {approval.status === "pending" && (

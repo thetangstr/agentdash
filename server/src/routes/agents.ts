@@ -93,6 +93,7 @@ import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompan
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import {
+  canReadCompanySpend,
   agentVisibilityCondition,
   assertAgentIdVisible,
   assertIssueIdVisible,
@@ -953,6 +954,7 @@ export function agentRoutes(
       // restricted reader is exactly the one who cannot tell staleness alone.
       harnessReadiness: withHarnessReadiness(agent).harnessReadiness,
       chainOfCommand,
+      ...(!(await canReadCompanySpend(db, req, agent.companyId)) ? { budgetMonthlyCents: null, spentMonthlyCents: null } : {}),
       // Present and null when nobody stewards this agent, never absent: an
       // agent reading a missing key cannot tell "unstewarded" from "this
       // build does not report stewards".
@@ -2477,21 +2479,23 @@ export function agentRoutes(
       .filter((agent) => visibleIds === null || visibleIds.has(agent.id))
       .map((agent) => withHarnessReadiness(agent));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
+    const redactSpend = <T extends object>(row: T) => canReadSpend ? row : { ...row, budgetMonthlyCents: null, spentMonthlyCents: null };
     if (canReadConfigs) {
-      res.json(await attachHumanContext(req, companyId, result));
+      res.json((await attachHumanContext(req, companyId, result)).map(redactSpend));
       return;
     }
     // The restricted view redacts adapter and runtime configuration, which is
     // where credentials live. Stewardship is not a credential — it is the org
     // chart — so it survives the redaction rather than being stripped with it.
     res.json(
-      await attachHumanContext(
+      (await attachHumanContext(
         req,
         companyId,
         // Non-null: every row came from `svc.list`, and the redactor only
         // returns null for a null input.
         result.map((agent) => redactForRestrictedAgentView(agent)!),
-      ),
+      )).map(redactSpend),
     );
   });
 

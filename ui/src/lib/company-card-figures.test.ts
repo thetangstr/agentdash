@@ -17,6 +17,9 @@ describe("token figures share one definition", () => {
 });
 
 describe("companyUsageLine", () => {
+  it("shows unavailable rather than zero when spend is restricted", () => {
+    expect(companyUsageLine({ spentMonthlyCents: null, budgetMonthlyCents: null, monthTokens: null })).toMatchObject({ text: "Unavailable", unmetered: false });
+  });
   it("shows tokens billed by the provider on an unmetered (BYOK) workspace", () => {
     expect(companyUsageLine({ spentMonthlyCents: 0, budgetMonthlyCents: 0, monthTokens: 1_900_000 })).toEqual({
       text: "1.9M tokens",
