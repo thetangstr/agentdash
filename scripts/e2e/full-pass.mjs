@@ -12,13 +12,13 @@
  * users and invites, and it does not clean up after itself: the intended
  * teardown is dropping the database it ran against.
  *
- *   node scripts/e2e/full-pass.mjs                     # http://127.0.0.1:3199
+ *   node scripts/e2e/full-pass.mjs                     # http://127.0.0.1:3399
  *   E2E_BASE=http://127.0.0.1:4000 node scripts/e2e/full-pass.mjs
  *
  * Exits non-zero if any check fails, so CI or a wrapper script can gate on it.
  */
 
-const BASE = (process.env.E2E_BASE ?? "http://127.0.0.1:3199").replace(/\/$/, "");
+const BASE = (process.env.E2E_BASE ?? "http://127.0.0.1:3399").replace(/\/$/, "");
 
 /**
  * Refuse to run anywhere that looks like somebody's production instance.
@@ -27,7 +27,8 @@ const BASE = (process.env.E2E_BASE ?? "http://127.0.0.1:3199").replace(/\/$/, ""
  * would write junk into a customer's workspace, and the failure mode is silent
  * — everything "passes" while polluting real data. The known production ports
  * on the reference deployment are 3102 (app) and 3112 (TLS front), so those are
- * refused outright, as is any non-loopback host.
+ * refused outright — as are the live local-instance ports 3100, 3120, 3199 and
+ * 3300 — and any non-loopback host.
  *
  * `E2E_I_KNOW_THIS_IS_NOT_PRODUCTION=1` exists for a deliberate remote test
  * instance. It is deliberately verbose to type.
@@ -37,7 +38,8 @@ function assertSafeTarget() {
   const url = new URL(BASE);
   const loopback = ["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname);
   const productionPort = ["3102", "3112"].includes(url.port);
-  if (!loopback || productionPort) {
+  const liveLocalPort = ["3100", "3120", "3199", "3300"].includes(url.port);
+  if (!loopback || productionPort || liveLocalPort) {
     console.error(
       `Refusing to run against ${BASE}.\n\n` +
         "This suite creates users, companies and agents and does not clean up.\n" +
