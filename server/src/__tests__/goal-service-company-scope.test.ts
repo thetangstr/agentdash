@@ -7,6 +7,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { goalService } from "../services/goals.js";
 import { HttpError } from "../errors.js";
+import { errorHandler } from "../middleware/error-handler.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -125,5 +126,80 @@ describeEmbeddedPostgres("goalService company-scoped references (GH #921)", () =
 
     await expectHttpError(goalService(db).update(goal.id, { parentId: foreignGoal.id }), 404);
     await expectHttpError(goalService(db).update(goal.id, { parentId: randomUUID() }), 404);
+  });
+
+  it("update rejects an ownerAgentId from another company or unknown with 404, and accepts a same-company owner", async () => {
+    const [a, b] = await Promise.all([makeCompany("Ico"), makeCompany("Jco")]);
+    const goal = await db
+      .insert(goals)
+      .values({ companyId: a.id, title: "goal" })
+      .returning()
+      .then((rows) => rows[0]!);
+    const [foreignAgent, localAgent] = await db
+      .insert(agents)
+      .values([
+        { companyId: b.id, name: "foreign-owner", role: "general" },
+        { companyId: a.id, name: "local-owner", role: "general" },
+      ])
+      .returning();
+
+    await expectHttpError(goalService(db).update(goal.id, { ownerAgentId: foreignAgent!.id }), 404);
+    await expectHttpError(goalService(db).update(goal.id, { ownerAgentId: randomUUID() }), 404);
+    const updated = await goalService(db).update(goal.id, { ownerAgentId: localAgent!.id });
+    expect(updated?.ownerAgentId).toBe(localAgent!.id);
+  });
+
+  it("update refuses to make a goal its own parent with 422", async () => {
+    const a = await makeCompany("Kco");
+    const goal = await db
+      .insert(goals)
+      .values({ companyId: a.id, title: "self" })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    await expectHttpError(goalService(db).update(goal.id, { parentId: goal.id }), 422);
+  });
+
+  it("update refuses a longer parent cycle (A->B->A, A->B->C->A) with 422", async () => {
+    const a = await makeCompany("Lco");
+    const goalA = await goalService(db).create(a.id, { title: "A" });
+    const goalB = await goalService(db).create(a.id, { title: "B", parentId: goalA!.id });
+    const goalC = await goalService(db).create(a.id, { title: "C", parentId: goalB!.id });
+
+    await expectHttpError(goalService(db).update(goalA!.id, { parentId: goalB!.id }), 422);
+    await expectHttpError(goalService(db).update(goalA!.id, { parentId: goalC!.id }), 422);
+
+    // A non-cycling re-parent still works: C moves directly under A.
+    const moved = await goalService(db).update(goalC!.id, { parentId: goalA!.id });
+    expect(moved?.parentId).toBe(goalA!.id);
+  });
+
+  it("deleting a goal that is still referenced answers 409 through the error handler, and a missing reference 422", async () => {
+    const a = await makeCompany("Mco");
+    const parent = await goalService(db).create(a.id, { title: "parent" });
+    await goalService(db).create(a.id, { title: "child", parentId: parent!.id });
+
+    async function statusFor(work: PromiseLike<unknown>) {
+      const err = await Promise.resolve(work).then(() => null, (e: unknown) => e);
+      expect(err).not.toBeNull();
+      let status = 0;
+      let body: unknown;
+      const res = {
+        status(code: number) { status = code; return this; },
+        json(payload: unknown) { body = payload; return this; },
+      };
+      errorHandler(err, { method: "DELETE", originalUrl: "/api/goals/x", params: {}, query: {} } as never, res as never, (() => {}) as never);
+      return { status, body };
+    }
+
+    expect(await statusFor(goalService(db).remove(parent!.id))).toEqual({
+      status: 409,
+      body: { error: "Resource is still referenced by other records" },
+    });
+    // The insert-side shape, bypassing the service's own reference check.
+    expect(await statusFor(db.insert(goals).values({ companyId: a.id, title: "orphan", parentId: randomUUID() }))).toEqual({
+      status: 422,
+      body: { error: "Request references a resource that does not exist" },
+    });
   });
 });

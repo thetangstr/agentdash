@@ -15,6 +15,8 @@ export interface PgErrorLike {
   constraint?: string;
   constraint_name?: string;
   message?: string;
+  /** Driver detail line, e.g. `Key (id)=(…) is still referenced from table "x".` */
+  detail?: string;
 }
 
 /**
