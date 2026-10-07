@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "@/api/agents";
 import { queryKeys } from "@/lib/queryKeys";
+import { isAgentConfigForbidden } from "./AgentConfigAccessNotice";
 
 interface Props {
   agentId: string;
@@ -135,7 +136,9 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
         </h2>
         <MandateExplainer entryFile={entryFile} />
         <p className="mt-2 text-xs text-muted-foreground">
-          {bundle.error instanceof Error
+          {isAgentConfigForbidden(bundle.error)
+            ? "Only this agent's steward or a company owner or admin can see its mandate."
+            : bundle.error instanceof Error
             ? bundle.error.message
             : hasNoBundle
               ? "This agent has no mandate file yet, so nothing you write here reaches it. It is created automatically before the agent's next run; you can also create it now."

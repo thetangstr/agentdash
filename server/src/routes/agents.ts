@@ -1072,6 +1072,35 @@ export function agentRoutes(
     throw forbidden("Missing permission: agents:create");
   }
 
+  /**
+   * GH #886 review: reading ONE agent's configuration (adapter/runtime config,
+   * config revisions, skills, instructions bundle) admits whoever may change
+   * it — `resolveConfigurationAuthority`, the same question the write routes
+   * ask through `requireAgentConfigurationAuthority`: an `agents:create`
+   * holder or instance admin, or, in an `agentdash_mk` company, the agent's
+   * steward or creator. A steward who may edit a mandate file must be able to
+   * read it. Agent keys keep the company-wide grant rule.
+   */
+  async function assertCanReadAgentConfiguration(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "board") {
+      await assertCanReadConfigurations(req, targetAgent.companyId);
+      return;
+    }
+    const authority = await governance.resolveConfigurationAuthority(
+      targetAgent.companyId,
+      targetAgent.id,
+      req.actor,
+    );
+    if (authority) return;
+    throw forbidden(
+      "Only this agent's steward or a company administrator can read its configuration",
+    );
+  }
+
   async function getAccessibleAgent(req: Request, res: Response, id: string) {
     const agent = await svc.getById(id);
     if (!agent) {
@@ -1266,10 +1295,10 @@ export function agentRoutes(
     return "agent";
   }
 
-  async function assertCanReadAgent(req: Request, targetAgent: { companyId: string }) {
+  async function assertCanReadAgent(req: Request, targetAgent: { id: string; companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertCanReadConfigurations(req, targetAgent.companyId);
+      await assertCanReadAgentConfiguration(req, targetAgent);
       return;
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
@@ -2087,7 +2116,10 @@ export function agentRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const type = assertKnownAdapterType(req.params.type as string);
-      await assertCanReadConfigurations(req, companyId);
+      // GH #886 review: the create form calls this probe, so it admits
+      // everyone who may create agents (every active member, 2026-08-16).
+      // What it may run is narrowed by the host-execution guard below.
+      await assertCanCreateAgentsForCompany(req, companyId);
 
       // AgentDash (security): the environment probe spawns the adapter CLI on
       // the host — some adapters (opencode/pi model discovery) with the full
@@ -2185,7 +2217,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
 
     const adapter = findActiveServerAdapter(agent.adapterType);
     if (!adapter?.listSkills) {
@@ -2549,7 +2581,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
     res.json(redactAgentConfiguration(agent));
   });
 
@@ -2560,7 +2592,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
     const revisions = await svc.listConfigRevisions(id);
     res.json(revisions.map((revision) => redactConfigRevision(revision)));
   });
@@ -2573,7 +2605,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanReadConfigurations(req, agent.companyId);
+    await assertCanReadAgentConfiguration(req, agent);
     const revision = await svc.getConfigRevision(id, revisionId);
     if (!revision) {
       res.status(404).json({ error: "Revision not found" });
