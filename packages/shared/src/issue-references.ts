@@ -7,7 +7,15 @@ export interface IssueReferenceMatch {
   matchedText: string;
 }
 
-const ISSUE_REFERENCE_TOKEN_RE = /https?:\/\/[^\s<>()]+|\/[^\s<>()]+|[A-Z]+-\d+/gi;
+// The identifier prefix is deliberately bounded: `[A-Z]+` under the `i` flag
+// matched an entire alphabetic blob greedily and then backtracked one char at
+// a time hunting `-\d+` — per start position, so a ~1MB plain-text blob made
+// the scan O(n²) and pinned the event loop for minutes (UltraQA-B). Real
+// issue prefixes are short codes; {1,64} keeps each start position O(64).
+// The lookarounds make an oversize token (a longer letter run, or more than
+// 15 digits) produce no match rather than a match on its tail or head.
+const ISSUE_REFERENCE_TOKEN_RE =
+  /https?:\/\/[^\s<>()]+|\/[^\s<>()]+|(?<![A-Z])[A-Z]{1,64}-[0-9]{1,15}(?![0-9])/gi;
 
 function preserveNewlinesAsWhitespace(value: string) {
   return value.replace(/[^\n]/g, " ");
@@ -73,20 +81,37 @@ function stripMarkdownCode(markdown: string): string {
 }
 
 function trimTrailingPunctuation(token: string): string {
-  let trimmed = token;
-  while (trimmed.length > 0) {
-    const last = trimmed[trimmed.length - 1]!;
+  // Opening brackets are never trimmed, so their counts are invariant; closing
+  // counts shrink by one per `)`/`]` removed. Counting once up front keeps
+  // this linear — recounting the whole remaining token per trimmed char was
+  // O(n²) on a `/x]]]]…` token (UltraQA-B).
+  let opensParen = 0;
+  let closesParen = 0;
+  let opensBracket = 0;
+  let closesBracket = 0;
+  for (const char of token) {
+    if (char === "(") opensParen += 1;
+    else if (char === ")") closesParen += 1;
+    else if (char === "[") opensBracket += 1;
+    else if (char === "]") closesBracket += 1;
+  }
+
+  let end = token.length;
+  while (end > 0) {
+    const last = token[end - 1]!;
     if (!".,!?;:".includes(last) && last !== ")" && last !== "]") break;
 
     if (
-      (last === ")" && (trimmed.match(/\(/g)?.length ?? 0) >= (trimmed.match(/\)/g)?.length ?? 0))
-      || (last === "]" && (trimmed.match(/\[/g)?.length ?? 0) >= (trimmed.match(/\]/g)?.length ?? 0))
+      (last === ")" && opensParen >= closesParen)
+      || (last === "]" && opensBracket >= closesBracket)
     ) {
       break;
     }
-    trimmed = trimmed.slice(0, -1);
+    if (last === ")") closesParen -= 1;
+    else if (last === "]") closesBracket -= 1;
+    end -= 1;
   }
-  return trimmed;
+  return token.slice(0, end);
 }
 
 export function normalizeIssueIdentifier(value: string): string | null {

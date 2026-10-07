@@ -7,10 +7,15 @@ const HEX_COLOR_RE = /^[0-9a-f]{6}$/i;
 const HEX_COLOR_SHORT_RE = /^[0-9a-f]{3}$/i;
 const HEX_COLOR_WITH_HASH_RE = /^#[0-9a-f]{6}$/i;
 const HEX_COLOR_SHORT_WITH_HASH_RE = /^#[0-9a-f]{3}$/i;
-const PROJECT_MENTION_LINK_RE = /\[[^\]]*]\((project:\/\/[^)\s]+)\)/gi;
-const AGENT_MENTION_LINK_RE = /\[[^\]]*]\((agent:\/\/[^)\s]+)\)/gi;
-const USER_MENTION_LINK_RE = /\[[^\]]*]\((user:\/\/[^)\s]+)\)/gi;
-const SKILL_MENTION_LINK_RE = /\[[^\]]*]\((skill:\/\/[^)\s]+)\)/gi;
+// `[^\]` also matched `[`, so a blob of open brackets let `[^\]]*` consume
+// the rest of the string and backtrack one char at a time per start position
+// — O(n²), ~21s on a 200KB comment of `[` (UltraQA-B). Excluding `[` makes a
+// non-match fail in O(1); nested `[` in link text is invalid markdown and did
+// not match before either, so the match set is unchanged.
+const PROJECT_MENTION_LINK_RE = /\[[^\][]*]\((project:\/\/[^)\s]+)\)/gi;
+const AGENT_MENTION_LINK_RE = /\[[^\][]*]\((agent:\/\/[^)\s]+)\)/gi;
+const USER_MENTION_LINK_RE = /\[[^\][]*]\((user:\/\/[^)\s]+)\)/gi;
+const SKILL_MENTION_LINK_RE = /\[[^\][]*]\((skill:\/\/[^)\s]+)\)/gi;
 const AGENT_ICON_NAME_RE = /^[a-z0-9-]+$/i;
 const SKILL_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/i;
 

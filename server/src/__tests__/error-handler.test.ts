@@ -131,6 +131,132 @@ describe("errorHandler", () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(recordServerError).toHaveBeenCalledTimes(1);
   });
+
+  it("answers body-parser's malformed-JSON error as 400, not a recorded 500", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    const next = vi.fn() as unknown as NextFunction;
+    vi.mocked(recordServerError).mockClear();
+
+    // The shape body-parser (http-errors) raises for `{"name": broken`.
+    const err = Object.assign(
+      new Error('Unexpected token \'b\', "{"name": broken" is not valid JSON'),
+      { status: 400, statusCode: 400, type: "entity.parse.failed", expose: true },
+    );
+
+    errorHandler(err, req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    // The raw parse message echoes request bytes — never reflect it back.
+    expect(res.json).toHaveBeenCalledWith({ error: "Bad Request" });
+    expect(res.__errorContext).toBeUndefined();
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("answers an oversized body as 413, not a recorded 500", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    const next = vi.fn() as unknown as NextFunction;
+    vi.mocked(recordServerError).mockClear();
+
+    const err = Object.assign(new Error("request entity too large"), {
+      status: 413,
+      statusCode: 413,
+      type: "entity.too.large",
+      expose: true,
+    });
+
+    errorHandler(err, req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(res.json).toHaveBeenCalledWith({ error: "Payload Too Large" });
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("keeps a 4xx-marked error without expose a recorded 500", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    const next = vi.fn() as unknown as NextFunction;
+    vi.mocked(recordServerError).mockClear();
+
+    const err = Object.assign(new Error("internal validator bug"), { status: 400 });
+
+    errorHandler(err, req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(recordServerError).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a NUL/invalid-UTF8 rejection (22021, drizzle-wrapped) to a 400 and records no server error", () => {
+    const req = makeReq();
+    const res = makeRes() as any;
+    const next = vi.fn() as unknown as NextFunction;
+    vi.mocked(recordServerError).mockClear();
+
+    errorHandler(
+      drizzleWrapped("22021", 'invalid byte sequence for encoding "UTF8": 0x00'),
+      req,
+      res,
+      next,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Text contains a byte sequence Postgres cannot store",
+    });
+    expect(res.__errorContext).toBeUndefined();
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
+
+  it("logs the 400-mapped 22021 at warn with the route, never the message or values", () => {
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/abc/comments?token=secret",
+      baseUrl: "/api",
+      route: { path: "/issues/:id/comments" },
+      params: { id: "abc" },
+      query: { token: "secret" },
+      body: { body: "a\u0000b" },
+    } as unknown as Request;
+    const res = makeRes() as any;
+    vi.mocked(logger.warn).mockClear();
+
+    errorHandler(
+      drizzleWrapped("22021", 'invalid byte sequence for encoding "UTF8": 0x00'),
+      req,
+      res,
+      vi.fn() as unknown as NextFunction,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = vi.mocked(logger.warn).mock.calls[0]! as unknown as [Record<string, unknown>, string];
+    expect(fields).toEqual({
+      method: "POST",
+      route: "/api/issues/:id/comments",
+      path: "/api/issues/abc/comments",
+      code: "22021",
+    });
+    expect(message).toMatch(/server bug/);
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls[0])).not.toContain("secret");
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls[0])).not.toContain("0x00");
+  });
+
+  it.each([
+    ["22021", 'invalid byte sequence for encoding "UTF8": 0x00', "Text contains a byte sequence Postgres cannot store"],
+    ["22P02", 'invalid input syntax for type uuid: "PRIVATE"', "Invalid identifier"],
+  ])("maps %s to a 400 on private human routes too, without leaking the message", (code, message, expected) => {
+    const req = makeReq();
+    req.originalUrl = "/api/human-control/prepare";
+    const res = makeRes() as any;
+    vi.mocked(recordServerError).mockClear();
+
+    errorHandler(drizzleWrapped(code, message), req, res, vi.fn() as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: expected });
+    expect(recordServerError).not.toHaveBeenCalled();
+  });
 });
 
 describe('private human failure diagnostics', () => {
