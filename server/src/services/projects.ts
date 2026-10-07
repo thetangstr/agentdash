@@ -1,4 +1,4 @@
-import { HttpError, conflict } from "../errors.js";
+import { HttpError, conflict, notFound } from "../errors.js";
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, issues, projects, projectGoals, goals, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
@@ -292,6 +292,17 @@ function resolveGoalIds(data: { goalIds?: string[]; goalId?: string | null }): s
   return undefined;
 }
 
+/** Refuse goal ids that are missing or owned by another company (404, same as issue PATCH). */
+async function assertGoalIdsInCompany(db: Db, companyId: string, goalIds: string[]) {
+  const unique = [...new Set(goalIds)];
+  if (unique.length === 0) return;
+  const rows = await db
+    .select({ id: goals.id })
+    .from(goals)
+    .where(and(eq(goals.companyId, companyId), inArray(goals.id, unique)));
+  if (rows.length !== unique.length) throw notFound("Goal not found");
+}
+
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -445,6 +456,7 @@ export function projectService(db: Db) {
     ): Promise<ProjectWithGoals> => {
       const { goalIds: inputGoalIds, ...projectData } = data;
       const ids = resolveGoalIds({ goalIds: inputGoalIds, goalId: projectData.goalId });
+      if (ids) await assertGoalIdsInCompany(db, companyId, ids);
 
       // Auto-assign a color from the palette if none provided
       if (!projectData.color) {
@@ -490,6 +502,7 @@ export function projectService(db: Db) {
         .where(eq(projects.id, id))
         .then((rows) => rows[0] ?? null);
       if (!existingProject) return null;
+      if (ids) await assertGoalIdsInCompany(db, existingProject.companyId, ids);
 
       if (projectData.name !== undefined) {
         const existingShortname = normalizeProjectUrlKey(existingProject.name);
