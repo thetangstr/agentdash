@@ -32,6 +32,8 @@ export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
 export const NO_AGENTS_TEXT = "No agents yet.";
 export const BYOK_SPEND_NOTE = BILLED_BY_PROVIDER_NOTE;
+/** GH #918: what the spend tile says to a member who cannot read the cost routes. */
+export const SPEND_RESTRICTED_NOTE = "Visible to administrators only";
 
 /**
  * AgentDash (review-1015): the line under an agent's name must never restate
@@ -62,15 +64,27 @@ export function monthSpendTile(costs: DashboardSummary["costs"]): {
   value: string;
   unmetered: boolean;
   unmeasured: boolean;
+  restricted: boolean;
 } {
+  // GH #918: `costs` is null for members who cannot read the cost routes —
+  // say so plainly rather than fake a zero.
+  if (costs === null) {
+    return {
+      label: "Spend this month",
+      value: "—",
+      unmetered: false,
+      unmeasured: false,
+      restricted: true,
+    };
+  }
   const tokens = Number(costs.monthTokens ?? 0);
   if (costs.monthSpendCents <= 0 && tokens > 0) {
-    return { label: "Tokens this month", value: formatTokens(tokens), unmetered: true, unmeasured: false };
+    return { label: "Tokens this month", value: formatTokens(tokens), unmetered: true, unmeasured: false, restricted: false };
   }
   if (costs.monthSpendCents <= 0 && ((costs.monthRuns ?? 0) + (costs.monthChatTurns ?? 0)) > 0) {
-    return { label: "Spend this month", value: NOT_MEASURED_TEXT, unmetered: false, unmeasured: true };
+    return { label: "Spend this month", value: NOT_MEASURED_TEXT, unmetered: false, unmeasured: true, restricted: false };
   }
-  return { label: "Spend this month", value: formatCents(costs.monthSpendCents), unmetered: false, unmeasured: false };
+  return { label: "Spend this month", value: formatCents(costs.monthSpendCents), unmetered: false, unmeasured: false, restricted: false };
 }
 
 export const NO_ACTIVITY_TEXT = "No activity yet. Hires, issues and runs show up here as they happen.";
@@ -156,18 +170,14 @@ function StatCard({
   label: string;
   value: ReactNode;
   detail: ReactNode;
-  to: string;
+  /** GH #918: a card with nowhere truthful to go renders as a div, not a link. */
+  to?: string;
   testId: string;
   /** Hover text saying what the number counts. */
   title?: string;
 }) {
-  return (
-    <Link
-      to={to}
-      title={title}
-      data-testid={testId}
-      className="block rounded-xl border border-border bg-card px-4 py-3 text-inherit no-underline transition-colors hover:border-foreground/20"
-    >
+  const body = (
+    <>
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
         <Icon className="h-3.5 w-3.5" aria-hidden="true" />
         {label}
@@ -176,6 +186,20 @@ function StatCard({
         {value}
       </div>
       <div className="mt-0.5 text-xs text-muted-foreground">{detail}</div>
+    </>
+  );
+  const className =
+    "block rounded-xl border border-border bg-card px-4 py-3 text-inherit no-underline transition-colors hover:border-foreground/20";
+  if (!to) {
+    return (
+      <div title={title} data-testid={testId} className={className}>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Link to={to} title={title} data-testid={testId} className={className}>
+      {body}
     </Link>
   );
 }
@@ -258,15 +282,17 @@ function StatsRow({
           label={spend.label}
           value={spend.value}
           detail={
-            spend.unmetered
+            spend.restricted
+              ? SPEND_RESTRICTED_NOTE
+              : spend.unmetered
               ? BYOK_SPEND_NOTE
               : spend.unmeasured
               ? UNMEASURED_USAGE_NOTE
-              : costs.monthBudgetCents > 0
+              : costs && costs.monthBudgetCents > 0
               ? `${costs.monthUtilizationPercent}% of ${formatCents(costs.monthBudgetCents)} budget`
               : "No monthly budget set"
           }
-          to="/costs"
+          to={spend.restricted ? undefined : "/costs"}
           title={spend.unmetered ? TOKENS_COUNTED_NOTE : undefined}
           testId="dashboard-stat-spend"
         />

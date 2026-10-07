@@ -10,6 +10,7 @@ import { assertCompanyAccess } from "./authz.js";
 import {
   agentVisibilityCondition,
   approvalVisibilityCondition,
+  canReadCompanySpend,
   issueVisibilityCondition,
   resolveAgentVisibility,
 } from "./visibility.js";
@@ -84,9 +85,12 @@ export function sidebarBadgeRoutes(db: Db) {
       issueVisibleWhere: issueVisibilityCondition(req, companyId),
     });
     const hasFailedRuns = badges.failedRuns > 0;
+    // GH #918: the budget-approaching alert derives from company spend, so it
+    // follows the same agents:create gate as the dashboard's costs block.
+    const spendVisible = await canReadCompanySpend(db, req, companyId);
     const alertsCount =
       (summary.agents.error > 0 && !hasFailedRuns ? 1 : 0) +
-      (summary.costs.monthBudgetCents > 0 && summary.costs.monthUtilizationPercent >= 80 ? 1 : 0);
+      (spendVisible && summary.costs.monthBudgetCents > 0 && summary.costs.monthUtilizationPercent >= 80 ? 1 : 0);
     badges.inbox = badges.failedRuns + alertsCount + badges.joinRequests + badges.approvals;
 
     res.json(badges);

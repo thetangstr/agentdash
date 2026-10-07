@@ -16,6 +16,7 @@
 // documented note — the unit-level gate is the CI blocker.
 
 import { test, expect } from "@playwright/test";
+import { resolveE2eServerPort } from "./e2e-port";
 import fs from "node:fs";
 import { chrisCtoPersona } from "./personas/chris-cto";
 
@@ -33,7 +34,7 @@ test.describe("Hermes informational — deep-interview token budget", () => {
   test.skip(!HERMES_ENABLED, "Set PAPERCLIP_E2E_HERMES=true to run this spec against hermes_local");
 
   test("hermes_local prompt bytes ≤ 0.30 × claude_api prompt bytes (informational)", async ({ page }) => {
-    const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
+    const baseUrl = `http://127.0.0.1:${resolveE2eServerPort(3399)}`;
 
     // Reset token-budget file before this run so we only capture fresh entries.
     try { fs.writeFileSync(TOKEN_BUDGET_FILE, "[]", "utf8"); } catch { /* ignore */ }

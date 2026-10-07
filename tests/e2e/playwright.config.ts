@@ -3,10 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
 import { resolveE2eEmbeddedPostgresPort } from "./e2e-db-port";
+import { resolveE2eServerPort } from "./e2e-port";
 
 // Use a dedicated port so e2e tests always start their own server in local_trusted mode,
-// even when the dev server is running on :3100 in authenticated mode.
-const PORT = Number(process.env.PAPERCLIP_E2E_PORT ?? 3199);
+// even when the dev server is running on :3100 in authenticated mode. The
+// resolver refuses the live-instance ports (3100, 3120, 3199, 3300) outright.
+const PORT = resolveE2eServerPort(3399);
+// Publish the resolved port so spec-level `process.env.PAPERCLIP_E2E_PORT`
+// reads in test workers agree with the server the webServer block boots.
+process.env.PAPERCLIP_E2E_PORT ??= String(PORT);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 // The throwaway instance's embedded Postgres gets its own explicit port —
 // never the 54329 default, which belongs to a live local instance.
