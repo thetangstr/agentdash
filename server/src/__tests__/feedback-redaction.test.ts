@@ -97,6 +97,82 @@ describe("cooperative feedback privacy", () => {
     expect(out).toContain("ordinary");
   });
 
+  it("applies existing numeric phone privacy only to serialized NDJSON primitives", async () => {
+    const value = { phone: 14155551234, nested: { phones: [14155551234, { phone: 14155551234 }] },
+      ordinary: [0, 42, -3, 12.5, 1e-7, true, false, null] };
+    const input = JSON.stringify(value);
+    const legacyState = redaction.createFeedbackRedactionState();
+    expect(redaction.sanitizeFeedbackText(input, legacyState, "log", 10_000)).not.toContain("14155551234");
+    const state = redaction.createFeedbackRedactionState();
+    const output = await redaction.sanitizeFeedbackNdjsonAsync(input, state, "log", 10_000, { sliceMs: 0 });
+    expect(JSON.parse(output)).toEqual({ phone: "[REDACTED_PHONE]", nested: {
+      phones: ["[REDACTED_PHONE]", { phone: "[REDACTED_PHONE]" }],
+    }, ordinary: value.ordinary });
+    expect(state.counts.get("phone")).toBe(3);
+    expect(state.counts.get("phone")).toBe(legacyState.counts.get("phone"));
+    const structuredState = redaction.createFeedbackRedactionState();
+    expect(await redaction.sanitizeFeedbackValueAsync(value, structuredState, "value", 10_000)).toEqual(value);
+    expect(structuredState.counts.has("phone")).toBe(false);
+  });
+
+  it("keeps numeric NDJSON redactions parseable and counts an omitted numeric record", async () => {
+    const state = redaction.createFeedbackRedactionState();
+    const output = await redaction.sanitizeFeedbackNdjsonAsync(
+      '14155551234\n42\n14155551234\n', state, "log", 22, { sliceMs: 0 });
+    expect(output.split("\n").map((line) => JSON.parse(line))).toEqual(["[REDACTED_PHONE]", 42]);
+    expect(state.counts.get("phone")).toBe(2);
+    expect(state.truncatedFields.has("log")).toBe(true);
+  });
+
+  it("retains nested and repeated sanitized-key collisions, including literal marker suffixes", async () => {
+    const value = {
+      "alpha@example.test": "retain-first",
+      "beta@example.test": "retain-second",
+      "[REDACTED_EMAIL]": "retain-literal-marker",
+      "[REDACTED_EMAIL]__2": "retain-literal-suffix",
+      "gamma@example.test": {
+        "inner-a@example.test": "nested-first",
+        "inner-b@example.test": "nested-second",
+        "[REDACTED_EMAIL]__2": "nested-literal",
+      },
+      "[REDACTED_EMAIL]__3": "retain-literal-suffix-three",
+    };
+    const expected = {
+      "[REDACTED_EMAIL]": "retain-first",
+      "[REDACTED_EMAIL]__4": "retain-second",
+      "[REDACTED_EMAIL]__5": "retain-literal-marker",
+      "[REDACTED_EMAIL]__2": "retain-literal-suffix",
+      "[REDACTED_EMAIL]__6": {
+        "[REDACTED_EMAIL]": "nested-first",
+        "[REDACTED_EMAIL]__3": "nested-second",
+        "[REDACTED_EMAIL]__2": "nested-literal",
+      },
+      "[REDACTED_EMAIL]__3": "retain-literal-suffix-three",
+    };
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const state = redaction.createFeedbackRedactionState();
+      const output = await redaction.sanitizeFeedbackNdjsonAsync(JSON.stringify(value), state, "log", 10_000, { sliceMs: 0 });
+      expect(JSON.parse(output)).toEqual(expected);
+      const summary = redaction.finalizeFeedbackRedactionSummary(state);
+      expect(JSON.stringify({ output, summary })).not.toContain("@example.test");
+      expect(state.counts.get("email")).toBe(5);
+      expect(state.omittedFields.size).toBe(0);
+      expect(state.truncatedFields.size).toBe(0);
+    }
+  });
+
+  it("retains a complete collision record and counts sanitized keys beyond truncation", async () => {
+    const first = { "alpha@example.test": "first", "beta@example.test": "second" };
+    const second = { "gamma@example.test": "third", "delta@example.test": "fourth", padding: "z".repeat(1000) };
+    const state = redaction.createFeedbackRedactionState();
+    const input = JSON.stringify(first) + "\n" + JSON.stringify(second) + "\n";
+    const output = await redaction.sanitizeFeedbackNdjsonAsync(input, state, "log", 100, { sliceMs: 0 });
+    expect(JSON.parse(output)).toEqual({ "[REDACTED_EMAIL]": "first", "[REDACTED_EMAIL]__2": "second" });
+    expect(state.counts.get("email")).toBe(4);
+    expect(state.truncatedFields.has("log")).toBe(true);
+    expect(JSON.stringify(redaction.finalizeFeedbackRedactionSummary(state))).not.toContain("@example.test");
+  });
+
   it("rejects cancellation without publishing partial privacy counts", async () => {
     const state = redaction.createFeedbackRedactionState();
     const controller = new AbortController();

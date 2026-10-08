@@ -223,9 +223,17 @@ export async function sanitizeFeedbackValueAsync(
   state: FeedbackRedactionState,
   fieldPath: string,
   maxStringLength: number,
-  opts?: AsyncRedactionOptions & { sanitizeKeys?: boolean },
+  opts?: AsyncRedactionOptions & { sanitizeKeys?: boolean; sanitizeNumbers?: boolean },
 ): Promise<unknown> {
   if (typeof value === "string") return sanitizeFeedbackTextAsync(value, state, fieldPath, maxStringLength, opts);
+  // NDJSON formerly passed its serialized numeric primitives through the text
+  // policy too. Retain ordinary number types, but encode a detected value as a
+  // safe string marker. Other structured-value callers keep their old policy.
+  if (typeof value === "number" && opts?.sanitizeNumbers) {
+    const serialized = JSON.stringify(value);
+    const safe = await sanitizeFeedbackTextAsync(serialized, state, fieldPath, Infinity, opts);
+    return safe === serialized ? value : safe;
+  }
   const checkpoint = feedbackCheckpoint(opts);
   if (Array.isArray(value)) {
     const output: unknown[] = [];
@@ -241,12 +249,32 @@ export async function sanitizeFeedbackValueAsync(
     recordField(state, fieldPath);
     increment(state, "structured_secret", 1);
   }
-  const output: Record<string, unknown> = {};
+  const entries: Array<[string, unknown]> = [];
   for (const [key, entry] of Object.entries(structurallySanitized)) {
     await checkpoint();
     const safeKey = opts?.sanitizeKeys
       ? await sanitizeFeedbackTextAsync(key, state, fieldPath, Infinity, opts)
       : key;
+    entries.push([safeKey, entry]);
+  }
+  // Reserve every safe base before choosing suffixes, including literal marker
+  // names appearing later. Collisions retain each value under a deterministic
+  // name; neither the suffix nor the summary path contains the original key.
+  const reservedKeys = new Set(entries.map(([key]) => key));
+  const assignedKeys = new Set<string>();
+  const nextSuffix = new Map<string, number>();
+  const output: Record<string, unknown> = {};
+  for (const [baseKey, entry] of entries) {
+    await checkpoint();
+    let safeKey = baseKey;
+    if (assignedKeys.has(safeKey)) {
+      let suffix = nextSuffix.get(baseKey) ?? 2;
+      do {
+        safeKey = `${baseKey}__${suffix++}`;
+      } while (reservedKeys.has(safeKey) || assignedKeys.has(safeKey));
+      nextSuffix.set(baseKey, suffix);
+    }
+    assignedKeys.add(safeKey);
     output[safeKey] = await sanitizeFeedbackValueAsync(entry, state, `${fieldPath}.${safeKey}`, maxStringLength, opts);
   }
   return output;
@@ -282,7 +310,7 @@ export async function sanitizeFeedbackNdjsonAsync(
     }
     const safe = parsed === undefined
       ? line
-      : JSON.stringify(await sanitizeFeedbackValueAsync(parsed, pending, fieldPath, Infinity, { ...opts, sanitizeKeys: true }));
+      : JSON.stringify(await sanitizeFeedbackValueAsync(parsed, pending, fieldPath, Infinity, { ...opts, sanitizeKeys: true, sanitizeNumbers: true }));
     const nextLength = length + (lines.length > 0 ? 1 : 0) + safe.length;
     if (nextLength > maxLength) truncated = true;
     if (!truncated) {

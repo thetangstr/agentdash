@@ -127,3 +127,37 @@ Local evidence logs: `/tmp/agentdash-residual-isolated-tests.log`,
 `/tmp/agentdash-residual-final-tests.log`, and
 `/tmp/agentdash-residual-final-typecheck.log`. These are execution logs, not
 production evidence or committed artifacts.
+
+## Independent review repair — round 1
+
+Independent review of `d163c613a038dd6312cfb6b795530b01731abae7` requested two
+repairs: numeric phone values bypassed decoded-string sanitization, and distinct
+PII-bearing property names could collapse to one output name and lose a value.
+
+Both were reproduced before implementation. The numeric regression failed on
+nested/array phone numbers and standalone numeric NDJSON; the collision
+regression failed on missing earlier values, including a whole-record truncation
+case. Numeric NDJSON values now pass their serialized representation through the
+existing feedback text policy. Values without a match retain their original
+number type; detected values become JSON-safe strings with the existing marker.
+General structured-value callers do not enable this numeric check, preserving
+their earlier policy.
+
+Key allocation reserves all sanitized base names before choosing suffixes, so a
+later literal marker or suffix name cannot be overwritten. Repeated collisions
+receive deterministic `__2`, `__3`, ... suffixes, skipping reserved/assigned names;
+per-base suffix cursors avoid repeatedly scanning earlier collisions. Nested
+records allocate independently. Suffixes and summary paths contain only sanitized
+names. Tests retain every input value, verify repeatability, check exact redaction
+counts, and account for numeric/key redactions beyond whole-record truncation.
+
+Round 1 final verification: **2 files / 26 tests passed** (feedback redaction and
+feedback service); shared/server scoped typechecks and `git diff --check` passed.
+Every repair-round test invocation used an allowlisted environment and fresh
+synthetic home/provider directories. No broad test run or production/provider
+access was performed for this round. Evidence logs:
+`/tmp/agentdash-redaction-r1-numeric-red.log`,
+`/tmp/agentdash-redaction-r1-numeric-green.log`,
+`/tmp/agentdash-redaction-r1-collision-red.log`,
+`/tmp/agentdash-redaction-r1-final-tests.log`, and
+`/tmp/agentdash-redaction-r1-final-typecheck.log`.
