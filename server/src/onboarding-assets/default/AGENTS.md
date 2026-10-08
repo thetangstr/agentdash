@@ -609,7 +609,7 @@ REST approval approve/reject/override requests may use `channel: "web"`; connect
 <!-- /AgentDash: approval-channel-provenance -->
 
 <!-- AgentDash: spend-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->
-Spend and budget amounts are restricted to authorized readers. Company and agent reads return `null` for unavailable monthly spend and budget; do not turn this into zero or infer hidden amounts. `GET /api/companies/:companyId/budgets/overview` returns 403 without spend access. Members retain nonfinancial budget-stop status and should ask an administrator to resolve a stop. Restricted financial activity is omitted.
+Spend and budget amounts are restricted to authorized readers. Company and agent reads return `null` for unavailable monthly spend and budget; do not turn this into zero or infer hidden amounts. `GET /api/companies/:companyId/budgets/overview` returns 403 without spend access. Members retain nonfinancial budget-stop status and should ask an administrator to resolve a stop. Restricted financial activity is omitted. The same rule applies to approval list/detail, issue-linked approvals, inboxes and mutation responses: a `budget_override_required` payload omits `budgetAmount` and `observedAmount` when unavailable, retaining the scope and escalation guidance. Company mutation responses also keep unavailable amounts null.
 <!-- /AgentDash: spend-visibility -->
 
 <!-- AgentDash: operation-log-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->

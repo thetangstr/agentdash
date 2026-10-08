@@ -2,6 +2,27 @@
 
 Base for independent review: `97ec8e21f`. Implementation head: `7c63d332f` (report commit follows).
 
+
+## Security review correction round 1
+
+Correction base: `ee82e9107` (functional predecessor `4fb25e661`). This supersedes the initial #1057 approval-payload and mounted-403 coverage limitations; independent re-review is still required on the new frozen head.
+
+The HIGH approval-payload disclosure was reproduced dynamically: 12 of the first 14 real-PostgreSQL route regressions failed. The new shared pure `redactApprovalForReader` preserves credential redaction and omits only `budgetAmount` / `observedAmount` for `budget_override_required` when the existing spend predicate denies access. Approval GET/list/create/approve/reject/override/revision/resubmit, issue-linked GET/link POST and both inbox builders apply the same response policy. Stored values, decision authority, project visibility and nonfinancial scope/escalation remain unchanged. Other approval types retain similarly named user fields.
+
+Company create/PATCH/branding/archive responses now pass through `companyForReader`; mutation permission and archive behavior are unchanged. Regression tests prove plain-member PATCH/branding/archive still succeed and persist their intended state while returning null spend fields.
+
+ApprovalDetail also suppresses cached monetary payload fields when the current company indicates unavailable spend, including its expanded Technical details. Its regression uses real nonzero amounts and proved red before the UI correction. Authorized UI controls retain actual amounts and the Costs link.
+
+Fresh correction-round validation:
+
+- `pnpm -C server exec vitest run src/__tests__/budget-approval-spend-visibility.test.ts --maxWorkers=1 --fileParallelism=false`: initial **12 failed / 2 passed** (`/tmp/task2-round1-red.log`), then **14/14 passed**. Expanded create/override controls bring the new suite to **16/16**.
+- The new suite plus approval-authority, budget-project-visibility and dashboard-cost-visibility: **66/66 passed** (`/tmp/task2-round1-scoped.log`).
+- UI ApprovalDetail, AgentDetail.config-access and ProjectDetail.budget-access: **9/9 passed** (`/tmp/task2-round1-ui-freeze.log`). The nonempty cached-amount regression failed before the correction (`/tmp/task2-round1-ui-red.log`). Both full detail pages are now mounted with an actual rejected 403 transport promise; no budget editor or zero-dollar fallback appears and escalation remains visible.
+- Server typecheck: **exit 0** (`/tmp/task2-round1-server-typecheck-final.log`). UI typecheck initially found two missing test-error constructor arguments; these were corrected and the final result is recorded below.
+- Existing inbox/idempotency/create-transaction/redaction controls: **42/42 passed** (`/tmp/task2-round1-existing.log`). Final UI typecheck: **exit 0** (`/tmp/task2-round1-ui-typecheck-final.log`). `git diff --check` passed.
+
+No broad full-suite/build gate was run in this correction round, per root instruction. No new dependencies, policy, live provider operations, production access, PR or push. Root owns independent re-review and combined landing gates.
+
 ## Outcome and review units
 
 - `8888ae5d5`: #1053. Both direct creation and hires reject agent-supplied CEO/CoS roles and `canCreateAgents: true` before configuration, environment, agent, approval or audit mutations. This includes CEO callers and CEO defaults/explicit false permissions. Board controls and ordinary agent hires remain supported. The hire tests also cover board-approval-enabled companies.
@@ -42,6 +63,6 @@ Commands below run from the isolated worktree; server/UI Vitest commands use `pn
 
 - The full `project-visibility.test.ts` run intermittently terminates one request with `socket hang up`, in different existing tests across two runs; all other assertions passed. The last affected `runs: list, live list` case passes when isolated (`/tmp/task2-project-isolated.log`). This remains a full-suite reliability limitation, not a clean aggregate pass claim.
 - Initial concurrent suite startup exceeded an existing 20-second hook timeout. Retried with lower contention; the temporary timeout change was reverted as requested. Test-source loading also encountered a fixture duplicate issue-prefix error while authoring operation tests; fixed before the six meaningful baseline failures.
-- AgentDetail/ProjectDetail budget-denial branches were inspected and typechecked; no new full-page mounted 403 regression was added for those two pages. Financial display, dashboard escalation and ApprovalDetail escalation have rendered UI regressions.
+- Initial-round mounted-403 coverage gap is closed by security correction round 1 above. Both AgentDetail and ProjectDetail now have mounted denial regressions.
 - Root owns the combined full workspace typecheck/test/build gate, independent security re-review after these fixes, dependency audit, PR creation and landing. No push, PR or merge was performed by this lane. Do not describe the candidate as release-ready until those gates pass.
 - Root's in-progress edit to `doc/plans/2026-10-07-launch-security-and-reliability.md` was intentionally left untouched and uncommitted by this lane.

@@ -1,3 +1,4 @@
+import { redactApprovalForReader } from "../redaction.js";
 import { issueCurrentAuthority } from "../services/issue-current-authority.js";
 import { registerRossRequestRoutes } from "./ross-requests.js";
 import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
@@ -36,6 +37,7 @@ import {
   resolveAgentVisibility,
   truncateAncestorsAtInvisible,
   visibleAgentIdsFor,
+  canReadCompanySpend,
 } from "./visibility.js";
 import { decodeShippedCursor, sanitizeWorkProductTitle, workProductDocumentKey } from "../services/work-products.js";
 import {
@@ -2253,7 +2255,8 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(id);
-    res.json(approvals);
+    const canReadSpend = await canReadCompanySpend(db, req, issue.companyId);
+    res.json(approvals.map(approval => redactApprovalForReader(approval, canReadSpend)));
   });
 
   router.post("/issues/:id/approvals", validate(linkIssueApprovalSchema), async (req, res) => {
@@ -2286,7 +2289,8 @@ export function issueRoutes(
     });
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(id);
-    res.status(201).json(approvals);
+    const canReadSpend = await canReadCompanySpend(db, req, issue.companyId);
+    res.status(201).json(approvals.map(approval => redactApprovalForReader(approval, canReadSpend)));
   });
 
   router.delete("/issues/:id/approvals/:approvalId", async (req, res) => {

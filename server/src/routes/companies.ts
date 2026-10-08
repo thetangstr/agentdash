@@ -657,7 +657,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         req.actor.userId ?? "board",
       );
     }
-    res.status(201).json(company);
+    res.status(201).json(await companyForReader(req, company));
   });
 
   router.patch("/:companyId", async (req, res) => {
@@ -767,7 +767,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       entityId: companyId,
       details: body,
     });
-    res.json(company);
+    res.json(await companyForReader(req, company));
   });
 
   router.patch("/:companyId/branding", validate(updateCompanyBrandingSchema), async (req, res) => {
@@ -802,7 +802,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       // entry — the worst kind, because it is the record you reach for later.
       details: payload,
     });
-    res.json(company);
+    res.json(await companyForReader(req, company));
   });
 
   router.post("/:companyId/archive", async (req, res) => {
@@ -822,7 +822,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       entityType: "company",
       entityId: companyId,
     });
-    res.json(company);
+    res.json(company ? await companyForReader(req, company) : company);
   });
 
   router.delete("/:companyId", async (req, res) => {
