@@ -740,11 +740,12 @@ export function AgentDetail() {
     enabled: !!resolvedCompanyId && needsAgentsList,
   });
 
-  const { data: budgetOverview } = useQuery({
+  const { data: budgetOverview, error: budgetOverviewError } = useQuery({
     queryKey: queryKeys.budgets.overview(resolvedCompanyId ?? "__none__"),
     queryFn: () => budgetsApi.overview(resolvedCompanyId!),
+    retry: (count, error) => !(error instanceof ApiError && error.status === 403) && count < 3,
     enabled: !!resolvedCompanyId,
-    refetchInterval: 30_000,
+    refetchInterval: (query) => query.state.error instanceof ApiError && query.state.error.status === 403 ? false : 30_000,
     staleTime: 5_000,
   });
 
@@ -1335,12 +1336,14 @@ export function AgentDetail() {
 
       {activeView === "budget" && resolvedCompanyId ? (
         <div className="max-w-3xl">
-          <BudgetPolicyCard
+          {budgetOverviewError || agent.budgetMonthlyCents == null || agent.spentMonthlyCents == null ? (
+            <p className="text-sm text-muted-foreground">Budget details are unavailable. Ask a workspace administrator for help with budget stops.</p>
+          ) : !budgetOverview ? <p className="text-sm text-muted-foreground">Loading budget…</p> : <BudgetPolicyCard
             summary={agentBudgetSummary}
             isSaving={budgetMutation.isPending}
             onSave={(amount) => budgetMutation.mutate(amount)}
             variant="plain"
-          />
+          />}
         </div>
       ) : null}
 
@@ -1705,6 +1708,7 @@ export function AgentSpendFigure({
   now?: Date;
   monthCost?: Pick<CostByAgent, "costCents" | "inputTokens" | "cachedInputTokens" | "outputTokens"> | null;
 }) {
+  if (agent.spentMonthlyCents == null) return <span className="text-muted-foreground">Unavailable</span>;
   if (!agentBilledByProvider(agent, runs as HeartbeatRun[], now, monthCost)) {
     const cents = monthCost === undefined
       ? agent.spentMonthlyCents ?? 0

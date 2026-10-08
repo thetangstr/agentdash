@@ -2542,9 +2542,13 @@ components:
             - string
             - "null"
         budgetMonthlyCents:
-          type: number
+          type:
+            - number
+            - "null"
         spentMonthlyCents:
-          type: number
+          type:
+            - number
+            - "null"
         pauseReason:
           anyOf:
             - $ref: "#/components/schemas/PauseReason"
@@ -2769,9 +2773,13 @@ components:
             - string
             - "null"
         budgetMonthlyCents:
-          type: number
+          type:
+            - number
+            - "null"
         spentMonthlyCents:
-          type: number
+          type:
+            - number
+            - "null"
         pauseReason:
           anyOf:
             - $ref: "#/components/schemas/PauseReason"
@@ -3318,9 +3326,13 @@ components:
         issueCounter:
           type: number
         budgetMonthlyCents:
-          type: number
+          type:
+            - number
+            - "null"
         spentMonthlyCents:
-          type: number
+          type:
+            - number
+            - "null"
         attachmentMaxBytes:
           type: number
         requireBoardApprovalForNewAgents:

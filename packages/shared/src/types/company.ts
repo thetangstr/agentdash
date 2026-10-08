@@ -10,8 +10,8 @@ export interface Company {
   pausedAt: Date | null;
   issuePrefix: string;
   issueCounter: number;
-  budgetMonthlyCents: number;
-  spentMonthlyCents: number;
+  budgetMonthlyCents: number | null;
+  spentMonthlyCents: number | null;
   attachmentMaxBytes: number;
   requireBoardApprovalForNewAgents: boolean;
   /** AgentDash: new issues with no status given start as `todo` instead of `backlog`. */

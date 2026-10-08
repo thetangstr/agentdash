@@ -1,5 +1,6 @@
 import express from "express";
 import request from "supertest";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // GH #830: issue, run and workspace routes run the A5 project-visibility
@@ -135,8 +136,19 @@ describe.sequential("activity routes", () => {
       agentId: undefined,
       entityType: undefined,
       entityId: undefined,
+      since: undefined,
+      includeSystem: undefined,
+      visibleWhere: expect.objectContaining({ queryChunks: expect.any(Array) }),
       limit: 100,
     });
+    // A plain member's service query must retain the financial exclusion,
+    // alongside the pagination defaults asserted above.
+    const query = new PgDialect().sqlToQuery(mockActivityService.list.mock.calls[0]![0].visibleWhere);
+    expect(query.sql).toContain("not (");
+    expect(query.params).toEqual([
+      "cost_event", "finance_event", "budget_policy", "budget_incident",
+      "cost.%", "finance.%", "budget.%", "company.budget_updated", "agent.budget_updated",
+    ]);
   });
 
   it("caps requested company activity list limits", async () => {
@@ -153,6 +165,9 @@ describe.sequential("activity routes", () => {
       agentId: undefined,
       entityType: "issue",
       entityId: undefined,
+      since: undefined,
+      includeSystem: undefined,
+      visibleWhere: expect.objectContaining({ queryChunks: expect.any(Array) }),
       limit: 500,
     });
   });
@@ -172,6 +187,8 @@ describe.sequential("activity routes", () => {
       entityType: undefined,
       entityId: undefined,
       since: new Date("2026-09-22T00:00:00Z"),
+      includeSystem: undefined,
+      visibleWhere: expect.objectContaining({ queryChunks: expect.any(Array) }),
       limit: 100,
     });
   });

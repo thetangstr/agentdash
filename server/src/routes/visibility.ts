@@ -17,7 +17,7 @@ import {
   projects,
   projectWorkspaces,
 } from "@paperclipai/db";
-import { notFound } from "../errors.js";
+import { HttpError, notFound } from "../errors.js";
 import { actorHumanRole } from "./authz.js";
 import { accessService } from "../services/access.js";
 
@@ -406,6 +406,47 @@ export async function assertWorkspaceIdsVisible(
       .then((rows) => rows[0] ?? null);
     if (row && !(await isProjectIdVisible(db, req, row.projectId))) throw notFound("Execution workspace not found");
   }
+}
+
+/**
+ * AgentDash: operation logs and excerpts require BOTH their linked resources.
+ * Deleted links are set null by the DB; fully orphaned operations retain the
+ * documented company-visible policy. A present but unresolved link fails closed.
+ */
+export async function assertWorkspaceOperationVisible(
+  db: Db,
+  req: Request,
+  operation: { companyId: string; executionWorkspaceId: string | null; heartbeatRunId: string | null },
+  companyId = operation.companyId,
+): Promise<void> {
+  if (operation.companyId !== companyId) throw notFound("Workspace operation not found");
+  if (operation.executionWorkspaceId) {
+    const [workspace] = await db.select({ companyId: executionWorkspaces.companyId }).from(executionWorkspaces)
+      .where(eq(executionWorkspaces.id, operation.executionWorkspaceId));
+    if (!workspace || workspace.companyId !== companyId) throw notFound("Workspace operation not found");
+    await assertWorkspaceIdsVisible(db, req, { executionWorkspaceId: operation.executionWorkspaceId });
+  }
+  if (operation.heartbeatRunId) {
+    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, operation.heartbeatRunId));
+    if (!run || run.companyId !== companyId) throw notFound("Workspace operation not found");
+    await assertAgentIdVisible(db, req, run.agentId);
+    await assertRunVisible(db, req, run);
+  }
+}
+
+export async function filterVisibleWorkspaceOperations<T extends {
+  companyId: string; executionWorkspaceId: string | null; heartbeatRunId: string | null;
+}>(db: Db, req: Request, companyId: string, operations: T[]): Promise<T[]> {
+  const visible: T[] = [];
+  for (const operation of operations) {
+    try {
+      await assertWorkspaceOperationVisible(db, req, operation, companyId);
+      visible.push(operation);
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.status !== 404) throw error;
+    }
+  }
+  return visible;
 }
 
 /**

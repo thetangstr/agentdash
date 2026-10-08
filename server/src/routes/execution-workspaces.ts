@@ -28,6 +28,7 @@ import {
   assertIssueIdVisible,
   assertProjectIdVisible,
   assertWorkspaceIdsVisible,
+  filterVisibleWorkspaceOperations,
   projectScopedVisibilityCondition,
 } from "./visibility.js";
 import {
@@ -135,7 +136,7 @@ export function executionWorkspaceRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, workspace.companyId);
-    const operations = await workspaceOperationsSvc.listForExecutionWorkspace(id);
+    const operations = await filterVisibleWorkspaceOperations(db, req, workspace.companyId, await workspaceOperationsSvc.listForExecutionWorkspace(id));
     res.json(operations);
   });
 

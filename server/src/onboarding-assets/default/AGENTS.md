@@ -600,6 +600,21 @@ Run transcripts, run events, workspace-operation logs and issue comments are scr
 - This redaction is not permission to print secrets carelessly — a credential shape the scrubber does not recognize could still be persisted. Keep secrets out of run output regardless.
 <!-- /AgentDash: run-log-secret-redaction -->
 
+<!-- AgentDash: agent-creation-authority — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Agent creation and hiring authority does not permit creating CEO or Chief of Staff roles, or granting `permissions.canCreateAgents: true`. This applies to agent callers of both `POST /api/companies/:companyId/agents` and `/agent-hires`, including CEO callers. A 403 leaves no hire or approval; ask a board administrator to create the privileged agent and do not retry by changing routes or disguising the role. Ordinary hires remain supported.
+<!-- /AgentDash: agent-creation-authority -->
+
+<!-- AgentDash: approval-channel-provenance — DO NOT REMOVE OR REORDER THIS BLOCK -->
+REST approval approve/reject/override requests may use `channel: "web"`; connector channel names are server-owned provenance and return 403 if supplied through REST. `channel: "assistant"` additionally requires an authenticated assistant grant. Do not retry a denied decision using a different channel; use the authorized human decision path, retaining the current revision and a stable idempotency key.
+<!-- /AgentDash: approval-channel-provenance -->
+
+<!-- AgentDash: spend-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Spend and budget amounts are restricted to authorized readers. Company and agent reads return `null` for unavailable monthly spend and budget; do not turn this into zero or infer hidden amounts. `GET /api/companies/:companyId/budgets/overview` returns 403 without spend access. Members retain nonfinancial budget-stop status and should ask an administrator to resolve a stop. Restricted financial activity is omitted. The same rule applies to approval list/detail, issue-linked approvals, inboxes and mutation responses: a `budget_override_required` payload omits `budgetAmount` and `observedAmount` when unavailable, retaining the scope and escalation guidance. Company and agent mutation/create/hire responses also keep unavailable amounts null. Configuration authority alone does not grant spend access: agent revision snapshots and `hire_agent` approval payloads keep unavailable monthly amounts null, while configuration history remains readable under its existing access rules.
+<!-- /AgentDash: spend-visibility -->
+
+<!-- AgentDash: operation-log-visibility — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Workspace-operation logs and related lists require access to both the linked execution workspace and the linked heartbeat run. A 404 means unavailable: do not probe alternate run/workspace routes. Operations with both links removed remain company-visible; an inconsistent cross-company link is refused.
+<!-- /AgentDash: operation-log-visibility -->
 
 <!-- AgentDash: hermes-ssh-hardening — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Hermes SSH execution boundaries

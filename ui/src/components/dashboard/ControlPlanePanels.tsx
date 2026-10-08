@@ -255,9 +255,9 @@ function StatsRow({
               </div>
             </div>
           </div>
-          <Link to="/costs" className="shrink-0 text-sm underline underline-offset-2">
+          {costs ? <Link to="/costs" className="shrink-0 text-sm underline underline-offset-2">
             Open budgets
-          </Link>
+          </Link> : <span className="text-sm text-muted-foreground">Ask a workspace administrator to resolve this budget stop.</span>}
         </div>
       ) : null}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="dashboard-stats">

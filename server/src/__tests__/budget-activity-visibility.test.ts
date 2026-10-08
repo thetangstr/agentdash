@@ -9,6 +9,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  principalPermissionGrants,
   projectAccess,
   projects,
 } from "@paperclipai/db";
@@ -118,6 +119,11 @@ describeEmbeddedPostgres("GH #933: budget activity follows the restricted-projec
         membershipRole: role,
       });
     }
+    // #1057: these fixtures isolate project visibility AFTER spend authority.
+    // Plain members without this explicit grant are covered by dashboard-cost-visibility.
+    await db.insert(principalPermissionGrants).values(["sam", "listed-user", "member-user"].map(principalId => ({
+      companyId: COMPANY, principalType: "user", principalId, permissionKey: "agents:create",
+    })));
     await db.insert(projects).values([
       { id: OPEN_PROJECT, companyId: COMPANY, name: "Open project", createdByUserId: "admin-user" },
       {

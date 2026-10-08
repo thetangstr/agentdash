@@ -309,6 +309,12 @@ describe("monthCountedTokens + AgentSpendFigure", () => {
     ).toBe(36_000);
   });
 
+  it("does not reconstruct restricted spend from run usage", () => {
+    renderNode(<AgentSpendFigure agent={{ spentMonthlyCents: null }} runs={[run(32_000, 2_900)]} now={now} />);
+    expect(container!.textContent).toContain("Unavailable");
+    expect(container!.textContent).not.toMatch(/34.9k|\$0.00/);
+  });
+
   it("prints the month's tokens plus who bills them on BYOK", () => {
     renderNode(
       <AgentSpendFigure agent={{ spentMonthlyCents: 0 }} runs={[run(32_000, 2_900)]} now={now} />,

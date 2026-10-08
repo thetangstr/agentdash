@@ -93,6 +93,9 @@ import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompan
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import {
+  canReadCompanySpend,
+  assertWorkspaceOperationVisible,
+  filterVisibleWorkspaceOperations,
   agentVisibilityCondition,
   assertAgentIdVisible,
   assertIssueIdVisible,
@@ -140,7 +143,7 @@ import {
   refreshAdapterModels,
   requireServerAdapter,
 } from "../adapters/index.js";
-import { redactEventPayload } from "../redaction.js";
+import { redactApprovalForReader, redactEventPayload, redactMonthlySpendForReader } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
@@ -890,6 +893,11 @@ export function agentRoutes(
     };
   }
 
+  // AgentDash (#1057): configuration/mutation authority does not grant spend reads.
+  async function agentForReader<T extends { companyId: string }>(req: Request, agent: T) {
+    return redactMonthlySpendForReader(agent, await canReadCompanySpend(db, req, agent.companyId));
+  }
+
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     // AgentDash (GH #505): the caller, so steward/accountable emails follow
@@ -935,7 +943,7 @@ export function agentRoutes(
     ]);
 
     return {
-      ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
+      ...await agentForReader(req, options?.restricted ? redactForRestrictedAgentView(agent)! : agent),
       // Computed from the UNREDACTED agent, deliberately: the digest needs the
       // adapter configuration, and the restricted view strips it. The verdict
       // itself carries no configuration, so it is safe on both views — and a
@@ -1015,6 +1023,15 @@ export function agentRoutes(
       );
     }
     return actorAgent;
+  }
+
+  // AgentDash (#1053): hiring is not authority to delegate privileged roles
+  // or grant hiring authority, including the CEO role's inherited default.
+  function assertAgentCreationAuthority(req: Request) {
+    if (req.actor.type !== "agent") return;
+    if (req.body.role === "ceo" || req.body.role === "chief_of_staff" || req.body.permissions?.canCreateAgents === true) {
+      throw forbidden("Agents cannot create privileged roles or grant canCreateAgents. Ask a board administrator to create this agent.");
+    }
   }
 
   /**
@@ -2112,11 +2129,11 @@ export function agentRoutes(
     };
   }
 
-  function redactRevisionSnapshot(snapshot: unknown): Record<string, unknown> {
+  function redactRevisionSnapshot(snapshot: unknown, canReadSpend: boolean): Record<string, unknown> {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return {};
     const record = snapshot as Record<string, unknown>;
     return {
-      ...record,
+      ...redactMonthlySpendForReader(record, canReadSpend),
       adapterConfig: redactEventPayload(
         typeof record.adapterConfig === "object" && record.adapterConfig !== null
           ? (record.adapterConfig as Record<string, unknown>)
@@ -2136,11 +2153,12 @@ export function agentRoutes(
 
   function redactConfigRevision(
     revision: Record<string, unknown> & { beforeConfig: unknown; afterConfig: unknown },
+    canReadSpend: boolean,
   ) {
     return {
       ...revision,
-      beforeConfig: redactRevisionSnapshot(revision.beforeConfig),
-      afterConfig: redactRevisionSnapshot(revision.afterConfig),
+      beforeConfig: redactRevisionSnapshot(revision.beforeConfig, canReadSpend),
+      afterConfig: redactRevisionSnapshot(revision.afterConfig, canReadSpend),
     };
   }
 
@@ -2457,21 +2475,23 @@ export function agentRoutes(
       .filter((agent) => visibleIds === null || visibleIds.has(agent.id))
       .map((agent) => withHarnessReadiness(agent));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
+    const redactSpend = <T extends object>(row: T) => redactMonthlySpendForReader(row, canReadSpend);
     if (canReadConfigs) {
-      res.json(await attachHumanContext(req, companyId, result));
+      res.json((await attachHumanContext(req, companyId, result)).map(redactSpend));
       return;
     }
     // The restricted view redacts adapter and runtime configuration, which is
     // where credentials live. Stewardship is not a credential — it is the org
     // chart — so it survives the redaction rather than being stripped with it.
     res.json(
-      await attachHumanContext(
+      (await attachHumanContext(
         req,
         companyId,
         // Non-null: every row came from `svc.list`, and the redactor only
         // returns null for a null input.
         result.map((agent) => redactForRestrictedAgentView(agent)!),
-      ),
+      )).map(redactSpend),
     );
   });
 
@@ -2690,7 +2710,8 @@ export function agentRoutes(
     }
     await assertCanReadAgentConfiguration(req, agent);
     const revisions = await svc.listConfigRevisions(id);
-    res.json(revisions.map((revision) => redactConfigRevision(revision)));
+    const canReadSpend = await canReadCompanySpend(db, req, agent.companyId);
+    res.json(revisions.map((revision) => redactConfigRevision(revision, canReadSpend)));
   });
 
   router.get("/agents/:id/config-revisions/:revisionId", async (req, res) => {
@@ -2707,7 +2728,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Revision not found" });
       return;
     }
-    res.json(redactConfigRevision(revision));
+    res.json(redactConfigRevision(revision, await canReadCompanySpend(db, req, agent.companyId)));
   });
 
   router.post("/agents/:id/config-revisions/:revisionId/rollback", async (req, res) => {
@@ -2789,7 +2810,7 @@ export function agentRoutes(
       details: { revisionId },
     });
 
-    res.json(updated);
+    res.json(await agentForReader(req, updated));
   });
 
   router.get("/agents/:id/runtime-state", async (req, res) => {
@@ -2962,7 +2983,7 @@ export function agentRoutes(
     });
 
     res.json({
-      agent: updated ?? { ...agent, metadata },
+      agent: await agentForReader(req, updated ?? { ...agent, metadata }),
       result,
       readiness,
     });
@@ -2971,6 +2992,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    assertAgentCreationAuthority(req);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     // AgentDash (GH #828): body metadata becomes the hire approval's payload
     // metadata, which the digest reads for assistant provenance.
@@ -3231,12 +3253,17 @@ export function agentRoutes(
       });
     }
 
-    res.status(201).json({ agent, approval });
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
+    res.status(201).json({
+      agent: redactMonthlySpendForReader(agent, canReadSpend),
+      approval: approval ? redactApprovalForReader(approval, canReadSpend) : null,
+    });
   });
 
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
+    assertAgentCreationAuthority(req);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
 
     const company = await db
@@ -3526,7 +3553,7 @@ export function agentRoutes(
 
     // AgentDash (AGE-24): say plainly that this key was minted with the agent,
     // so nobody finds a "default" key later and wonders who holds it.
-    res.status(201).json({ ...agent, apiKey: apiKey ? { ...apiKey, autoCreated: true } : null });
+    res.status(201).json({ ...await agentForReader(req, agent), apiKey: apiKey ? { ...apiKey, autoCreated: true } : null });
   });
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {
@@ -4365,7 +4392,7 @@ export function agentRoutes(
       await recordAccountabilityChange(db, req, existing, agent);
     }
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/pause", async (req, res) => {
@@ -4391,7 +4418,7 @@ export function agentRoutes(
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/resume", async (req, res) => {
@@ -4415,7 +4442,7 @@ export function agentRoutes(
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/approve", async (req, res) => {
@@ -4509,7 +4536,7 @@ export function agentRoutes(
       );
     }
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/terminate", async (req, res) => {
@@ -4535,7 +4562,7 @@ export function agentRoutes(
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.delete("/agents/:id", async (req, res) => {
@@ -5212,7 +5239,7 @@ export function agentRoutes(
 
     const context = asRecord(run.contextSnapshot);
     const executionWorkspaceId = asNonEmptyString(context?.executionWorkspaceId);
-    const operations = await workspaceOperations.listForRun(runId, executionWorkspaceId);
+    const operations = await filterVisibleWorkspaceOperations(db, req, run.companyId, await workspaceOperations.listForRun(runId, executionWorkspaceId));
     res.json(redactCurrentUserValue(operations, await getCurrentUserRedactionOptions()));
   });
 
@@ -5224,6 +5251,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, operation.companyId);
+    await assertWorkspaceOperationVisible(db, req, operation);
 
     const offset = Number(req.query.offset ?? 0);
     const limitBytes = readRunLogLimitBytes(req.query.limitBytes);
