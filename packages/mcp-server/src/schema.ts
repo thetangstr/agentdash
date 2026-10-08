@@ -25,9 +25,22 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
     case z.ZodFirstPartyTypeKind.ZodString:
       return withDescription({ type: "string" }, schema);
     case z.ZodFirstPartyTypeKind.ZodNumber: {
-      const checks = (def.checks as Array<{ kind: string }> | undefined) ?? [];
+      const checks = (schema as z.ZodNumber)._def.checks;
       const isInt = checks.some((check) => check.kind === "int");
-      return withDescription({ type: isInt ? "integer" : "number" }, schema);
+      // AgentDash: repeated Zod bounds are conjunctive. Advertise the strongest
+      // bound on each side; an exclusive bound wins a tie at the same value.
+      let lower: { value: number; inclusive: boolean } | undefined;
+      let upper: { value: number; inclusive: boolean } | undefined;
+      for (const check of checks) {
+        if (check.kind === "min" && (!lower || check.value > lower.value ||
+          (check.value === lower.value && !check.inclusive))) lower = check;
+        if (check.kind === "max" && (!upper || check.value < upper.value ||
+          (check.value === upper.value && !check.inclusive))) upper = check;
+      }
+      const result: JsonSchema = { type: isInt ? "integer" : "number" };
+      if (lower) result[lower.inclusive ? "minimum" : "exclusiveMinimum"] = lower.value;
+      if (upper) result[upper.inclusive ? "maximum" : "exclusiveMaximum"] = upper.value;
+      return withDescription(result, schema);
     }
     case z.ZodFirstPartyTypeKind.ZodBoolean:
       return withDescription({ type: "boolean" }, schema);
@@ -70,7 +83,9 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
       return withDescription({ anyOf: options.map((option) => zodToJsonSchema(option)) }, schema);
     }
     case z.ZodFirstPartyTypeKind.ZodOptional:
-      return zodToJsonSchema(def.innerType as z.ZodTypeAny);
+      // AgentDash: as with nullable/default, an explicit wrapper description
+      // takes precedence; otherwise retain the converted inner description.
+      return withDescription(zodToJsonSchema(def.innerType as z.ZodTypeAny), schema);
     case z.ZodFirstPartyTypeKind.ZodNullable: {
       const inner = zodToJsonSchema(def.innerType as z.ZodTypeAny);
       return withDescription({ anyOf: [inner, { type: "null" }] }, schema);

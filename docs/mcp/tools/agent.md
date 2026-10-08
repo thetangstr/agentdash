@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `ddebd3f5c` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `92bec8fe1` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -133,7 +133,7 @@ List issue comments with incremental options
 | `issueId` | string | yes |  |
 | `after` | string | no |  |
 | `order` | `"asc"` \| `"desc"` | no |  |
-| `limit` | integer | no |  |
+| `limit` | integer | no | Maximum: 500. Exclusive minimum: 0. |
 
 ## `get_comment`
 
@@ -160,7 +160,7 @@ Attach a file you created in your workspace to an issue, and get back a URL a pe
 |---|---|---|---|
 | `issueId` | string | yes |  |
 | `path` | string | yes | Path to the file, relative to your workspace directory. Not absolute. |
-| `filename` | string | no |  |
+| `filename` | string | no | Name to show the human. Defaults to the file's own name. |
 
 ## `list_documents`
 
@@ -234,7 +234,7 @@ Wait until an issue execution workspace runtime service is running and has a URL
 | `issueId` | string | yes |  |
 | `runtimeServiceId` | string \| null | no |  |
 | `serviceName` | string \| null | no |  |
-| `timeoutSeconds` | integer | no |  |
+| `timeoutSeconds` | integer | no | Maximum: 300. Exclusive minimum: 0. |
 
 ## `list_goals`
 
@@ -331,7 +331,7 @@ Create a new issue
 | `assigneeUserId` | string \| null | no |  |
 | `originKind` | string (1 value omitted: engagement-specific) | no |  |
 | `originId` | string \| null | no |  |
-| `requestDepth` | integer | no | Default: `0`. |
+| `requestDepth` | integer | no | Default: `0`. Minimum: 0. |
 | `requestId` | string | no |  |
 | `billingCode` | string \| null | no |  |
 | `definitionOfDone` | object \| null | no |  |
@@ -391,7 +391,7 @@ Patch an issue, optionally including a comment; include resume=true when intenti
 | `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no | Default: `"medium"`. |
 | `assigneeAgentId` | string \| null | no |  |
 | `assigneeUserId` | string \| null | no |  |
-| `requestDepth` | integer | no |  |
+| `requestDepth` | integer | no | Minimum: 0. |
 | `requestId` | any | no |  |
 | `billingCode` | string \| null | no |  |
 | `assigneeAdapterOverrides` | object \| null | no |  |
@@ -676,8 +676,8 @@ AgentDash: explicitly create a new company (workspace). For full onboarding pref
 | `description` | string \| null | no |  |
 | `productProfile` | `"default"` (1 value omitted) | no |  |
 | `inviteCode` | string | no |  |
-| `budgetMonthlyCents` | integer | no | Default: `0`. |
-| `attachmentMaxBytes` | integer | no |  |
+| `budgetMonthlyCents` | integer | no | Default: `0`. Minimum: 0. |
+| `attachmentMaxBytes` | integer | no | Minimum: 1. Maximum: 1073741824. |
 
 ## `agentdashCosChat`
 
@@ -695,7 +695,7 @@ AgentDash: read recent messages in a conversation (e.g. to fetch the Chief of St
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `conversationId` | string | yes |  |
-| `limit` | integer | no |  |
+| `limit` | integer | no | Maximum: 200. Exclusive minimum: 0. |
 
 ## `agentdashHireAgent`
 
@@ -711,7 +711,7 @@ AgentDash: hire an agent into a company (e.g. agents the Chief of Staff proposes
 | `title` | string \| null | no |  |
 | `capabilities` | string \| null | no |  |
 | `desiredSkills` | array of string | no |  |
-| `budgetMonthlyCents` | integer | no |  |
+| `budgetMonthlyCents` | integer | no | Minimum: 0. |
 
 ## `agentdash_setup_status`
 
@@ -735,7 +735,7 @@ Founding-user signup for a FRESH authenticated-mode install — works ONLY while
 |---|---|---|---|
 | `email` | string | yes |  |
 | `name` | string | yes |  |
-| `inviteCode` | string | no |  |
+| `inviteCode` | string | no | AgentDash invite code. Most installs require one — ask the human for it (NEVER invent or guess a code). If signup answers invite_code_required, collect the code and retry. |
 
 ## `agentdash_setup_adapter`
 
@@ -744,7 +744,7 @@ Configure the model adapter your agents will run on — a required onboarding st
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `preset` | `"claude"` \| `"openai"` \| `"gemini"` \| `"stub"` | yes | claude=ANTHROPIC_API_KEY; openai=OPENAI_COMPAT_API_KEY (api.openai.com); gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans. |
-| `apiKey` | string | no |  |
+| `apiKey` | string | no | The provider API key. Required for claude/openai/gemini. Omit for stub. Collected from the human — NEVER invented. |
 
 ## `agentdash_start_interview`
 
@@ -891,12 +891,12 @@ Resume a paused agent. GATED: resuming an agent a human paused, or resuming the 
 | `companyId` | string \| null | no |  |
 | `agentId` | string \| null | no |  |
 | `permissions` | array of string | yes |  |
-| `monthlyBudgetCents` | integer | yes |  |
+| `monthlyBudgetCents` | integer | yes | Minimum: 0. |
 | `destructiveActions` | `"blocked"` \| `"approval_required"` \| `"allowed"` | yes |  |
 | `dataScopes` | array of string | yes |  |
 | `providers` | array of string | yes |  |
 | `minimumApproval` | `"none"` \| `"steward"` | yes |  |
-| `revision` | integer | no |  |
+| `revision` | integer | no | Exclusive minimum: 0. |
 
 ## `agentdashGetAgentPolicy`
 

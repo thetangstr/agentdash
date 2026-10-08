@@ -3,7 +3,7 @@ title: "Bridge tools"
 summary: "The tools a bridge endpoint token gets: the local end of the agent bridge and the steward inbox."
 ---
 
-> Generated at commit `c69c37f49` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `92bec8fe1` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **8 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface` in `packages/mcp-server/src/index.ts`, which returns these for any credential `isControlPlaneCredential` (`src/config.ts`) rejects, whatever the toolset except `human`; the tools are defined in `src/bridge.ts`.
@@ -24,7 +24,7 @@ Read this machine's AgentDash steward inbox: what needs a decision, what stopped
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `limit` | integer | no |  |
+| `limit` | integer | no | Minimum: 1. Maximum: 200. |
 | `includeDigest` | boolean | no |  |
 
 ## `inbox_agents`
@@ -40,11 +40,11 @@ Work out what an instruction means and read it back for confirmation. Changes no
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `kind` | `"assign_work"` \| `"set_cadence"` | yes |  |
-| `items` | array of object | no |  |
+| `items` | array of object | no | For assign_work: who, and what they should do |
 | `items[].agent` | string | yes |  |
 | `items[].work` | string | yes | Short name for the job; becomes the issue title |
-| `items[].description` | string | no |  |
-| `minutes` | integer | no |  |
+| `items[].description` | string | no | The full brief: context, what done looks like, constraints |
+| `minutes` | integer | no | For set_cadence: 30 or 60 |
 
 ## `inbox_confirm`
 
@@ -60,7 +60,7 @@ Move this machine's inbox position forward, so acknowledged items are not shown 
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `seq` | integer | yes |  |
+| `seq` | integer | yes | Minimum: 0. |
 
 ## `inbox_decide`
 

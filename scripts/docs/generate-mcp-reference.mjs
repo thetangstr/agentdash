@@ -370,6 +370,8 @@ const CONSTRAINTS = [
   ["maxLength", "Maximum length"],
   ["minimum", "Minimum"],
   ["maximum", "Maximum"],
+  ["exclusiveMinimum", "Exclusive minimum"],
+  ["exclusiveMaximum", "Exclusive maximum"],
   ["minItems", "Minimum items"],
   ["maxItems", "Maximum items"],
 ];
