@@ -60,3 +60,21 @@ node scripts/ci/check-mcp-reference-drift.mjs
 ## Limits and handoff
 
 Ready for independent review as a bounded local fix. No push, PR, merge, production change or deployment was performed. No new dependencies or schema changes. Full monorepo builds/tests and browser screenshot/e2e suites were outside the assigned scope and were not run. No claim of full application transport parity, external provider execution, overall workforce readiness, quality/cost acceptance, or resolution of held architecture decisions #934/#936.
+
+
+## Root browser and generated-artifact verification
+
+Root inspected actual baseline components from `052acc60edb022d77e874386a593ca51e33dfb9e` and current components from `92cb1d9080325d00845723f6a107227081aa6f68` in a disposable real-component harness on loopback3479. The API is an explicit synthetic in-memory fixture, with no database, provider, customer data or production calls. This is component browser evidence, not a full authenticated application or persisted-runtime proof.
+
+Before: readiness404 leaves no recovery controls. After: readiness404 still permits discovery, cancellation preview/confirmation and explicit replacement preview. The browser separately opened the fixture's replacement state, submitted a genuine typed answer through the canonical response UI, and observed “Working on first job.” Shared Chrome navigation interrupted the earlier sequence after replacement confirmation, so these browser steps are not claimed as one continuous end-to-end transaction. The independent real PostgreSQL/HTTP/SDK tests above establish persisted cancellation, hold preservation and exactly-one continuation.
+
+At390px, measured document scrollWidth equals innerWidth390. Root viewed the before and replacement-review screenshots. Screenshots below contain only neutral synthetic content:
+
+- [Before recovery fix](assets/2026-10-07-question-recovery/before-desktop.png)
+- [After: recovery available](assets/2026-10-07-question-recovery/after-recovery-available.png)
+- [After: replacement review](assets/2026-10-07-question-recovery/after-replacement-review.png)
+- [After: replacement question](assets/2026-10-07-question-recovery/after-replacement-question.png)
+- [After: answered](assets/2026-10-07-question-recovery/after-answered.png)
+- [Mobile](assets/2026-10-07-question-recovery/after-mobile.png)
+
+Generated search metadata was corrected at `840c8c5bfa79384a636fe1bcef198f975a6329fa`; its3 currentness tests passed, and independent review approved both this exact branch and the corrected composition `ffa268e2e2c940f3afb3a75fe978f08f06d39731`. Production source was unchanged by the search correction and screenshot evidence. Full composed typecheck passes; full composed test/build and required PR CI remain gating before landing. No production deployment or external provider execution is claimed.
