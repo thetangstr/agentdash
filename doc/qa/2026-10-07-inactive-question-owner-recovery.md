@@ -78,3 +78,17 @@ At390px, measured document scrollWidth equals innerWidth390. Root viewed the bef
 - [Mobile](assets/2026-10-07-question-recovery/after-mobile.png)
 
 Generated search metadata was corrected at `840c8c5bfa79384a636fe1bcef198f975a6329fa`; its3 currentness tests passed, and independent review approved both this exact branch and the corrected composition `ffa268e2e2c940f3afb3a75fe978f08f06d39731`. Production source was unchanged by the search correction and screenshot evidence. Full composed typecheck passes; full composed test/build and required PR CI remain gating before landing. No production deployment or external provider execution is claimed.
+
+## Local dependency composition before redaction lands
+
+Fetched actual `origin/main` at `c557176cf807c370c0463f75811bc316a4cc7806` and merged it locally as `832e6341e`. Then composed exact redaction dependency `96cdaeea3a0eb6b0e11d064d261ec7d16f5074f7`. This is a preparatory local merge, not proof that the redaction PR has landed. After PR #1077 is squash-merged, actual updated main must be merged before final review or any push so the eventual recovery PR has narrow ancestry.
+
+The sole merge-conflict file was the canonical default prompt. Its resolution and the generated-hire prompt source match the approved composed `ffa268e2` byte-for-byte, preserving security, SSH, redaction and recovery guidance. All 13 other recovery source/test paths match approved `92cb1d908` exactly. The main-relative patch for those 13 paths equals the original `052acc60e..92cb1d908` patch; both SHA-256 hashes are `911c1072d4899968485414b0245bedcdeeddc6751f052e09ecc88cd9b800d1d4`.
+
+Regenerated route index, OpenAPI, MCP reference and documentation search index from real sources. Paperclip attribution remains present. Compared with actual main, search metadata adds only the recovery heading and the route count/digest change, and the route index adds the same three recovery routes.
+
+Fresh composed verification: **179 tests passed** — server 146 across 9 suites, UI/search 27 across 4 suites, human MCP 2, shared ingress/cooperative redaction 4. Server suites include all five original recovery controls, agent-creation authority, budget-approval visibility, workspace-operation visibility and recovery-evidence redaction. The real SDK/HTTP test still records only one original-task wake/run after a genuine answer and rejects replay after a forced acknowledgment loss. The synthetic-adapter heartbeat control still holds unanswered input without adapter/quota use and resumes once. Server/UI/shared/MCP scoped typechecks, generated API/MCP drift, search currentness, and diff checks passed.
+
+Commands used the task-owned `/tmp/agentdash-question-recovery-env/run-safe.sh`: `env -i`, PATH restricted to a synthetic node/pnpm bin plus `/usr/bin:/bin`, and synthetic HOME/XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CACHE_HOME/XDG_STATE_HOME/HERMES_HOME/PAPERCLIP_HOME. Real provider commands/configuration, SSH, shared runtime ports and production resources were not used. Disposable database helpers retain the reserved-port exclusions.
+
+Evidence: `/tmp/question-recovery-composed-{server,ui,mcp,shared}.log`, `/tmp/question-recovery-composed-{server,ui,mcp,shared}-types.log`, `/tmp/question-recovery-composed-{api,mcp}-drift.log` and `/tmp/question-recovery-composed-{route-regen,openapi-regen,mcp-regen,search}.log`. No broad monorepo build/test or deployment was run in this preparatory slice.

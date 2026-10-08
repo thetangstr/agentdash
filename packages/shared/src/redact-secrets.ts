@@ -156,12 +156,14 @@ interface NormalizedText {
 
 const UNICODE_ESCAPE_TAIL = /^u00([0-9a-fA-F]{2})/;
 
-function normalizeWithMap(text: string): NormalizedText {
+function* normalizeWithMapSteps(text: string): Generator<void, NormalizedText> {
   const chars: string[] = [];
   const start: number[] = [];
   const end: number[] = [];
   let i = 0;
+  let scanned = 0;
   while (i < text.length) {
+    if (++scanned % 4096 === 0) yield;
     const code = text.codePointAt(i) as number;
     const width = code > 0xffff ? 2 : 1;
     // `\u00XX` escape — but not when the backslash is itself escaped (`\\u00XX`).
@@ -490,10 +492,15 @@ function buildKnownSecretsRegex(secrets: readonly string[]): RegExp | null {
  * that index and continues — used by NAME_VALUE_RE so a rejected `label:`
  * prefix does not swallow a `NAME=` that starts inside its value.
  */
-function eachMatch(regex: RegExp, text: string, fn: (match: RegExpExecArray) => void | number): void {
-  regex.lastIndex = 0;
+// AgentDash: each resumable scan owns its lastIndex. Concurrent requests and
+// synchronous persist-time calls must never move another request's cursor.
+function* eachMatchSteps(pattern: RegExp, text: string, fn: (match: RegExpExecArray) => void | number): Generator<void> {
+  const regex = new RegExp(pattern.source, pattern.flags);
+  let matched = 0;
+  yield;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
+    if (++matched % 128 === 0) yield;
     const rewind = fn(match);
     if (typeof rewind === "number") {
       regex.lastIndex = Math.max(0, Math.min(rewind, text.length));
@@ -501,6 +508,16 @@ function eachMatch(regex: RegExp, text: string, fn: (match: RegExpExecArray) => 
     }
     if (match[0].length === 0) regex.lastIndex++;
   }
+}
+
+function finishSteps<T>(steps: Generator<void, T>): T {
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+function eachMatch(regex: RegExp, text: string, fn: (match: RegExpExecArray) => void | number): void {
+  finishSteps(eachMatchSteps(regex, text, fn));
 }
 
 /** Span of a capture group, or null when the group did not participate. */
@@ -611,7 +628,7 @@ function closeEscapedJson(text: string, from: number): number {
   return text.length;
 }
 
-function collectEdits(text: string, secrets: readonly string[]): Edit[] {
+function* collectEditsSteps(text: string, secrets: readonly string[]): Generator<void, Edit[]> {
   const edits: Edit[] = [];
   // Per-byte claim mask. Marking and checking are both O(span), never
   // O(prior edits) — a linear `claimed` scan is quadratic on `-b a=`×N and
@@ -647,7 +664,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   // BEGIN/END markers so the log still reads as a key. Runs once on the full
   // text: it is the only multi-line pattern and a windowed scan could split
   // the body.
-  eachMatch(PEM_BLOCK_RE, text, (m) => {
+  yield* eachMatchSteps(PEM_BLOCK_RE, text, (m) => {
     const block = m[0];
     const firstNl = block.indexOf("\n");
     const lastNl = block.lastIndexOf("\n");
@@ -668,7 +685,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   // suppress the full match in the next one and leak the tail.
   const known = knownSecretsRegex(secrets);
   if (known) {
-    eachMatch(known, text, (m) => {
+    yield* eachMatchSteps(known, text, (m) => {
       if (m[0] === REDACTED) return;
       push(m.index, m.index + m[0].length);
     });
@@ -677,21 +694,21 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   // Scan the piece [base, limit). Match spans are piece-relative; callbacks
   // translate to full-text offsets with `base` — context reads go to `text`
   // so a lookbehind/lookahead at the piece edge still sees real neighbours.
-  const collect = (base: number, limit: number): void => {
+  const collect = function* (base: number, limit: number): Generator<void> {
     pieceEnd = limit;
     const slice = text.slice(base, limit);
 
     // An unmarked 40-char AWS secret only counts next to its AKIA id.
-    eachMatch(AWS_SECRET_AFTER_ID_RE, slice, (m) => {
+    yield* eachMatchSteps(AWS_SECRET_AFTER_ID_RE, slice, (m) => {
       const span = groupSpan(m, 2);
       if (span) push(base + span.start, base + span.end);
     });
-    eachMatch(AWS_SECRET_BEFORE_ID_RE, slice, (m) => {
+    yield* eachMatchSteps(AWS_SECRET_BEFORE_ID_RE, slice, (m) => {
       const span = groupSpan(m, 1);
       if (span) push(base + span.start, base + span.end);
     });
 
-    eachMatch(COOKIE_HEADER_RE, slice, (m) => {
+    yield* eachMatchSteps(COOKIE_HEADER_RE, slice, (m) => {
       const span = groupSpan(m, 2);
       if (span && !m[2].includes(REDACTED)) push(base + span.start, base + span.end, REDACTED, CONT_LINE);
     });
@@ -703,7 +720,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     // char, overflowing on multi-megabyte runs. This runs BEFORE NAME_VALUE so
     // a secret name inside the URL (`x-access-token:`) cannot claim
     // `<token>@host/path` as its bare value and eat the host.
-    eachMatch(URL_SCHEME_RE, slice, (m) => {
+    yield* eachMatchSteps(URL_SCHEME_RE, slice, (m) => {
       const start = base + m.index + m[0].length;
       // `[` opens an IP literal (`http://[::1]:8080/…`) — never userinfo.
       if (text.charCodeAt(start) === 0x5b) return;
@@ -776,7 +793,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     // assignments are intentional); `:` uses the strict matcher and requires
     // a credential-looking bare value so prose (`password: required`,
     // `token: 1500 tokens used`) and identifier fields survive.
-    eachMatch(NAME_VALUE_RE, slice, (m) => {
+    yield* eachMatchSteps(NAME_VALUE_RE, slice, (m) => {
       const name = m[1];
       const sep = m[2];
       const scheme = m[3];
@@ -870,18 +887,18 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
       push(base + span.start, valueEnd);
     });
 
-    eachMatch(CURL_USER_RE, slice, (m) => {
+    yield* eachMatchSteps(CURL_USER_RE, slice, (m) => {
       const span = groupSpan(m, 4);
       if (span && m[4] && !m[4].includes(REDACTED)) {
         push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
       }
     });
-    eachMatch(CURL_COOKIE_RE, slice, (m) => {
+    yield* eachMatchSteps(CURL_COOKIE_RE, slice, (m) => {
       const span = groupSpan(m, 3);
       if (span && !m[3].includes(REDACTED)) push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
     });
 
-    eachMatch(MYSQL_LINE_RE, slice, (m) => {
+    yield* eachMatchSteps(MYSQL_LINE_RE, slice, (m) => {
       eachMatch(MYSQL_PASSWORD_RE, m[0], (inner) => {
         const span = groupSpan(inner, 2);
         if (span && inner[2] !== REDACTED) {
@@ -890,7 +907,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
       });
     });
 
-    eachMatch(CLI_SECRET_OPTION_RE, slice, (m) => {
+    yield* eachMatchSteps(CLI_SECRET_OPTION_RE, slice, (m) => {
       const span = groupSpan(m, 3);
       if (span && m[3] !== REDACTED && !/^</.test(m[3])) {
         push(base + span.start, base + span.end, REDACTED, CONT_TOKEN);
@@ -898,7 +915,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     });
 
     // Quoted JSON / Python-dict keys.
-    eachMatch(JSON_KV_RE, slice, (m) => {
+    yield* eachMatchSteps(JSON_KV_RE, slice, (m) => {
       const key = m[1] ?? m[4];
       const value = m[3] ?? m[6];
       const valueSpan = groupSpan(m, 3) ?? groupSpan(m, 6);
@@ -925,7 +942,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
         quote ? undefined : CONT_JSON_BARE,
       );
     });
-    eachMatch(ESCAPED_JSON_KV_RE, slice, (m) => {
+    yield* eachMatchSteps(ESCAPED_JSON_KV_RE, slice, (m) => {
       const name = m[2] ?? m[6];
       const span = groupSpan(m, 4) ?? groupSpan(m, 8);
       const value = m[4] ?? m[8];
@@ -943,7 +960,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     });
 
     // `Bearer x` / `Basic x` anywhere.
-    eachMatch(AUTH_SCHEME_VALUE_RE, slice, (m) => {
+    yield* eachMatchSteps(AUTH_SCHEME_VALUE_RE, slice, (m) => {
       const span = groupSpan(m, 3);
       if (!span) return;
       // Extend through mid-token `\"` escape pairs and the piece edge, then
@@ -986,13 +1003,13 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
     });
 
     for (const shape of KEY_SHAPES) {
-      eachMatch(shape, slice, (m) => push(base + m.index, base + m.index + m[0].length, REDACTED, CONT_KEY_SHAPE));
+      yield* eachMatchSteps(shape, slice, (m) => push(base + m.index, base + m.index + m[0].length, REDACTED, CONT_KEY_SHAPE));
     }
 
     // JWTs: the flat run match is extended to its real end first, then the
     // `header.payload.signature` segment structure is checked in JS — a
     // `X.Y.Z` regex can neither span pieces nor survive a multi-MB segment.
-    eachMatch(JWT_RUN_RE, slice, (m) => {
+    yield* eachMatchSteps(JWT_RUN_RE, slice, (m) => {
       let end = base + m.index + m[0].length;
       if (end === limit && end < text.length) end = extendRight(text, end, CONT_KEY_SHAPE);
       const parts = text.slice(base + m.index, end).split(".");
@@ -1009,7 +1026,7 @@ function collectEdits(text: string, secrets: readonly string[]): Edit[] {
   // so lookbehind/`\b` at the window edge see real text. Small inputs take
   // the same path through a single window.
   for (let pos = 0; pos < text.length; pos += SCAN_PIECE) {
-    collect(Math.max(0, pos - SCAN_LEFT), Math.min(pos + SCAN_PIECE + SCAN_OVERLAP, text.length));
+    yield* collect(Math.max(0, pos - SCAN_LEFT), Math.min(pos + SCAN_PIECE + SCAN_OVERLAP, text.length));
   }
   return edits;
 }
@@ -1029,11 +1046,11 @@ function normalizedSecrets(knownSecrets?: KnownSecrets): string[] {
  * key-shaped. Matching runs on a normalized copy; replacements are applied to
  * the original text.
  */
-export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string {
+function* redactSecretsSteps(text: string, knownSecrets?: KnownSecrets): Generator<void, string> {
   if (!text) return text;
-  const normalized = normalizeWithMap(text);
+  const normalized = yield* normalizeWithMapSteps(text);
   if (normalized.text.length === 0) return text;
-  const edits = collectEdits(normalized.text, normalizedSecrets(knownSecrets));
+  const edits = yield* collectEditsSteps(normalized.text, normalizedSecrets(knownSecrets));
   if (edits.length === 0) return text;
   const original = edits
     .map((edit) => ({
@@ -1048,7 +1065,9 @@ export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string
   // (sub-span fills around an earlier claim read as one redaction).
   const parts: string[] = [];
   let cursor = 0;
+  let applied = 0;
   for (const edit of original) {
+    if (++applied % 128 === 0) yield;
     if (edit.start < cursor) continue;
     const gap = text.slice(cursor, edit.start);
     if (gap) parts.push(gap);
@@ -1059,12 +1078,51 @@ export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string
   return parts.join("");
 }
 
+export function redactSecrets(text: string, knownSecrets?: KnownSecrets): string {
+  return finishSteps(redactSecretsSteps(text, knownSecrets));
+}
+
+export type AsyncRedactionOptions = {
+  sliceMs?: number;
+  signal?: AbortSignal;
+  yieldToEventLoop?: () => Promise<void>;
+};
+
+/**
+ * AgentDash: identical policy and input context to the synchronous pass, with
+ * cooperative checkpoints in normalization, pattern scans and output assembly.
+ * A regex search, match callback, sort or allocation cannot be preempted; this
+ * is not a hard latency bound for one oversized/adversarial value.
+ */
+export async function redactSecretsAsync(
+  text: string,
+  knownSecrets?: KnownSecrets,
+  opts?: AsyncRedactionOptions,
+): Promise<string> {
+  opts?.signal?.throwIfAborted();
+  const sliceMs = opts?.sliceMs ?? 8;
+  const pause = opts?.yieldToEventLoop ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+  let sliceStart = performance.now();
+  const steps = redactSecretsSteps(text, knownSecrets);
+  let step = steps.next();
+  while (!step.done) {
+    if (performance.now() - sliceStart >= sliceMs) {
+      await pause();
+      opts?.signal?.throwIfAborted();
+      sliceStart = performance.now();
+    }
+    step = steps.next();
+  }
+  opts?.signal?.throwIfAborted();
+  return step.value;
+}
+
 /** True when `redactSecrets` would hide something in `text`. */
 export function containsSecrets(text: string, knownSecrets?: KnownSecrets): boolean {
   if (!text) return false;
-  const normalized = normalizeWithMap(text);
+  const normalized = finishSteps(normalizeWithMapSteps(text));
   if (normalized.text.length === 0) return false;
-  return collectEdits(normalized.text, normalizedSecrets(knownSecrets)).length > 0;
+  return finishSteps(collectEditsSteps(normalized.text, normalizedSecrets(knownSecrets))).length > 0;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

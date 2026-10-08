@@ -633,7 +633,12 @@ read. `unmetered_no_ledger` or `unmetered_no_session` means unknown spend, not
 zero. Keep wall-clock and turn limits, and report unavailable metering or failed
 private-file cleanup through a card OR comment so the operator can investigate.
 <!-- /AgentDash: hermes-ssh-hardening -->
-
+<!-- AgentDash: cooperative-log-reads — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Cooperative log processing changes scheduling, not agent permissions or
+secret-handling responsibilities. Follow returned nextOffset values for log
+paging; offsets refer to raw stored bytes, not the redacted response length.
+Feedback NDJSON truncation retains whole records and reports truncatedFields. -->
+<!-- /AgentDash: cooperative-log-reads -->
 <!-- AgentDash: inactive-question-owner-recovery — DO NOT REMOVE OR REORDER THIS BLOCK -->
 A pending required question stays pinned to its original human owner. If that person becomes inactive, the exact active current accountable human can inspect safe recovery metadata with `human_questions.recovery.list` (issueId) through `POST /api/human-control/read`, then explicitly prepare/read back/confirm `human_questions.recovery.cancel` (issueId, interactionId). The web workforce panel offers the same recovery even when readiness is unavailable. Discovery and cancellation never expose the old private question or answer; administrator status alone is insufficient. Cancellation records a receipt but supplies no answer and does not release or wake the task. The human must explicitly use `human_questions.replace`, then genuinely answer the replacement through the canonical response path before that same task can continue. A worker may explain this in a card OR comment, but cannot impersonate a human, use a board key on their behalf, or infer an answer from comment text. Current access, accountability and old-owner inactivity are checked again at confirmation. On a lost acknowledgment or `recovery_required`, inspect canonical state; never blindly repeat cancellation, replacement or answer.
 <!-- /AgentDash: inactive-question-owner-recovery -->

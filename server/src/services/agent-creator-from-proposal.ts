@@ -175,6 +175,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: hermes-ssh-hardening is inherited by every hired role from the
 // canonical bundle: human-only retargets, private-query compatibility, and
 // unknown remote spend/cleanup reporting must never be overridden by a hire.
+// AgentDash: cooperative-log-reads applies via the canonical bundle below;
+// scheduling/whole-record feedback truncation grants no additional capability.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")
