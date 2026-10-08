@@ -1,3 +1,4 @@
+import { companyLockQuery, observeExpectedWaiter } from './helpers/observed-lock-wait.js';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import express, { type Request } from 'express';
@@ -34,9 +35,15 @@ describe('final heartbeat pause admission on actual PostgreSQL',()=>{
     const treeContext={companyId:company.id,rootIssueId:issue.id,actor:{actorType:'user' as const,actorId:'local-board',userId:'local-board'},authority:issueTreeCurrentAuthority(actual)};
     return {company,agent,issue,context,request,run,comment,treeContext};
   }
-  async function waitFor(ownerPid:number,label:string){
-    const deadline=Date.now()+4000;while(Date.now()<deadline){const[row]=await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);if(row){expect(Number(row.pid)).not.toBe(ownerPid);expect(String(row.query)).toMatch(/companies.*for (?:no key )?update/i);console.log(JSON.stringify({label,ownerPid,waiter:row}));return;}await new Promise(resolve=>setImmediate(resolve));}throw new Error('No observed company wait');
+  async function waitFor(ownerPid: number, label: string, contender: Promise<unknown>) {
+    const row = await observeExpectedWaiter({
+      sample: () => db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`),
+      ownerPid, label, contender, timeoutMs: 4000, expectedQuery: companyLockQuery,
+    });
+    console.log(JSON.stringify({ label, ownerPid, waiter: row }));
+    return row;
   }
+
   it.each(['enqueue','claim'] as const)('%s uses final pause facts in both orders and preserves the verified exception',async kind=>{
     for(const interaction of [false,true])for(const order of ['pause-first','admission-first']){
       const f=await fixture(interaction,kind==='claim'),ready=gate(),release=gate();let ownerPid=0,held=false;
@@ -50,7 +57,7 @@ describe('final heartbeat pause admission on actual PostgreSQL',()=>{
       const admission=()=>kind==='claim'?heartbeat.resumeQueuedRuns():heartbeat.wakeup(f.agent.id,{source:'assignment',triggerDetail:'system',reason:f.context.wakeReason,payload:{issueId:f.issue.id,...(f.comment?{commentId:f.comment.id}:{})},contextSnapshot:f.context,requestedByActorType:'user',requestedByActorId:'local-board'});
       const first=order==='pause-first'?pause():admission();await Promise.race([ready.promise,first.then(()=>{throw new Error('Owner escaped barrier');})]);
       const second=order==='pause-first'?admission():pause(),settled=Promise.allSettled([first,second]);
-      try{await waitFor(ownerPid,`${kind}/${order}/interaction=${interaction}`);}finally{release.open();}
+      try{await waitFor(ownerPid,`${kind}/${order}/interaction=${interaction}`,second);}finally{release.open();await settled;}
       const results=await settled;expect(results.map(row=>row.status)).toEqual(['fulfilled','fulfilled']);
       const runs=await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId,f.company.id));
       const requests=await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId,f.company.id));

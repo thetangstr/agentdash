@@ -4,6 +4,7 @@ import {
   adapterExecutionTargetUsesManagedHome,
   resolveAdapterExecutionTargetCwd,
   runAdapterExecutionTargetShellCommand,
+  runAdapterExecutionTargetProcessWithStagedEnv,
 } from "./execution-target.js";
 
 describe("runAdapterExecutionTargetShellCommand", () => {
@@ -204,5 +205,22 @@ describe("resolveAdapterExecutionTargetCwd", () => {
     expect(resolveAdapterExecutionTargetCwd(null, "", "/Users/host/repo/server")).toBe(
       "/Users/host/repo/server",
     );
+  });
+});
+
+
+describe("private SSH input staging", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const target = {
+    kind: "remote" as const, transport: "ssh" as const, remoteCwd: "/work",
+    spec: { host: "test.invalid", username: "synthetic", port: 22, remoteCwd: "/work", remoteWorkspacePath: "/work", privateKey: null, knownHosts: null, strictHostKeyChecking: true },
+  };
+  it("sweeps partial remote input after staging fails", async () => {
+    vi.spyOn(ssh, "syncDirectoryToSsh").mockRejectedValue(new Error("synthetic transfer failure"));
+    const sweep = vi.spyOn(ssh, "runSshCommand").mockResolvedValue({ stdout: "", stderr: "" });
+    await expect(runAdapterExecutionTargetProcessWithStagedEnv("stage-failure", target, "hermes", ["chat"], {
+      cwd: "/work", env: {}, timeoutSec: 1, graceSec: 1, onLog: async () => {},
+    })).rejects.toThrow("Failed to stage");
+    expect(sweep).toHaveBeenCalledWith(target.spec, "rm -rf '/work/.paperclip-runenv/stage-failure'", { timeoutMs: 15_000 });
   });
 });

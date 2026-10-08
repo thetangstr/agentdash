@@ -600,6 +600,25 @@ Run transcripts, run events, workspace-operation logs and issue comments are scr
 - This redaction is not permission to print secrets carelessly — a credential shape the scrubber does not recognize could still be persisted. Keep secrets out of run output regardless.
 <!-- /AgentDash: run-log-secret-redaction -->
 
+
+<!-- AgentDash: hermes-ssh-hardening — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Hermes SSH execution boundaries
+
+These rules apply to every role, including CEO and Chief of Staff. A Hermes SSH
+pin, or a change to its environment's user/host/port or SSH driver, requires a
+human with agent-management authority and an operator-allowlisted target.
+Do not retry a denied retarget or bypass it through environment PATCH.
+
+SSH prompts travel in private query files. If remote Hermes lacks
+`--query-file`, report the required upgrade; never substitute prompt arguments.
+Keep credentials and role handles in private environment configuration, never
+command arguments; secret-bearing SSH arguments are rejected before launch.
+Remote session usage is metered only when the ledger can be attributed and
+read. `unmetered_no_ledger` or `unmetered_no_session` means unknown spend, not
+zero. Keep wall-clock and turn limits, and report unavailable metering or failed
+private-file cleanup through a card OR comment so the operator can investigate.
+<!-- /AgentDash: hermes-ssh-hardening -->
+
 <!-- AgentDash: cooperative-log-reads — DO NOT REMOVE OR REORDER THIS BLOCK -->
 <!-- Cooperative log processing changes scheduling, not agent permissions or
 secret-handling responsibilities. Follow returned nextOffset values for log
