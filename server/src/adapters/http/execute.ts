@@ -7,7 +7,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (!url) throw new Error("HTTP adapter missing url");
 
   const method = asString(config.method, "POST");
-  const timeoutMs = asNumber(config.timeoutMs, 0);
+  // AgentDash: documented seconds win, including an explicit zero. Retain
+  // milliseconds for legacy/invalid-seconds configs; Node overflows larger
+  // timer delays to 1ms, so cap the converted delay at its supported maximum.
+  const timeoutSec = asNumber(config.timeoutSec, NaN);
+  const timeoutMs = Math.min(
+    2_147_483_647,
+    Number.isFinite(timeoutSec) ? timeoutSec * 1000 : asNumber(config.timeoutMs, 0),
+  );
   const headers = parseObject(config.headers) as Record<string, string>;
   const payloadTemplate = parseObject(config.payloadTemplate);
   const body = { ...payloadTemplate, agentId: agent.id, runId, context };

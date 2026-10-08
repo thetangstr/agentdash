@@ -22,9 +22,10 @@ If the agent runs on the server host and you want its output in the run log, use
 | `method` | string | No | HTTP method. Default `POST`. |
 | `headers` | object | No | Extra request headers. `content-type: application/json` is always set. |
 | `payloadTemplate` | object | No | Fields merged into the request body. |
-| `timeoutMs` | number | No | Request timeout in milliseconds. `0` or unset means none. |
+| `timeoutSec` | number | No | Request timeout in seconds. A finite number takes precedence over `timeoutMs`. `0` or negative means none. |
+| `timeoutMs` | number | No | Legacy timeout in milliseconds, used when `timeoutSec` is absent or not a finite number. `0`, negative, or unset means none. |
 
-The adapter's built-in field list (`index.ts`) names `timeoutSec`, but `execute.ts` reads `timeoutMs`. Use `timeoutMs`.
+Use `timeoutSec` for new configurations. Numeric strings are not converted. Positive delays are capped at `2147483647` milliseconds (about 24.9 days), so a value beyond the Node timer limit does not become an immediate timeout. If neither field contains a finite positive number, the request has no timeout.
 
 ## Request body
 
