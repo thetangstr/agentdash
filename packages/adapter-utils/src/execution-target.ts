@@ -308,7 +308,10 @@ export async function runAdapterExecutionTargetProcessWithStagedEnv(
   target: AdapterSshExecutionTarget,
   command: string,
   args: string[],
-  options: AdapterExecutionTargetProcessOptions,
+  options: AdapterExecutionTargetProcessOptions & {
+    privateQuery?: string;
+    onInvocation?: (invocation: { command: string; commandArgs: string[] }) => Promise<void>;
+  },
 ): Promise<RunProcessResult> {
   if (!STAGED_ENV_RUN_ID_RE.test(runId)) {
     throw new Error("Refusing to stage a run environment over SSH for an unsafe run id.");
@@ -320,29 +323,36 @@ export async function runAdapterExecutionTargetProcessWithStagedEnv(
   }
   const remoteDir = path.posix.join(target.remoteCwd, ".paperclip-runenv", runId);
   const remoteEnvFile = path.posix.join(remoteDir, "runenv");
+  const remoteQueryFile = path.posix.join(remoteDir, "query");
 
   const stagingDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-runenv-"));
   try {
-    const body = Object.entries(options.env)
-      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-      .map(([key, value]) => `${key}=${shellQuote(value)}`)
-      .join("\n");
-    await writeFile(path.join(stagingDir, "runenv"), body.length > 0 ? `${body}\n` : "", { mode: 0o600 });
-    await syncDirectoryToSsh({ spec: target.spec, localDir: stagingDir, remoteDir });
-  } catch (error) {
-    throw new Error(
-      `Failed to stage the run environment on the SSH execution target: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  } finally {
-    await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+    try {
+      const body = Object.entries(options.env)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .map(([key, value]) => `${key}=${shellQuote(value)}`)
+        .join("\n");
+      await writeFile(path.join(stagingDir, "runenv"), body.length > 0 ? `${body}\n` : "", { mode: 0o600 });
+      if (options.privateQuery !== undefined) {
+        await writeFile(path.join(stagingDir, "query"), options.privateQuery, { mode: 0o600 });
+      }
+      await syncDirectoryToSsh({ spec: target.spec, localDir: stagingDir, remoteDir, privateDirectory: true });
+    } catch (error) {
+      throw new Error(
+        `Failed to stage the run environment on the SSH execution target: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    }
 
-  try {
+    const commandArgs = [...args, ...(options.privateQuery !== undefined ? ["--query-file", remoteQueryFile] : [])];
+    // Report the actual executable boundary, excluding SSH and the env wrapper.
+    await options.onInvocation?.({ command, commandArgs: [...commandArgs] });
     return await runAdapterExecutionTargetProcess(
       runId,
       target,
       "sh",
-      ["-c", STAGED_ENV_WRAPPER, "runenv", remoteEnvFile, command, ...args],
+      ["-c", STAGED_ENV_WRAPPER, "runenv", remoteEnvFile, command, ...commandArgs],
       { ...options, env: {} },
     );
   } finally {

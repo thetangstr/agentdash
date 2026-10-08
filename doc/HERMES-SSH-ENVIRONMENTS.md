@@ -212,35 +212,59 @@ plugin environments rather than being run on the server host.
   environment (database URL, auth secrets) is never sent.
 - Hermes runs in the environment's workspace directory, as the target user.
 
-### Budgets don't apply to SSH runs
+### Private prompts and runtime compatibility
 
-SSH runs are **unmetered**. Hermes' session ledger lives in the remote user's
-Hermes home, so AgentDash records these runs as `unmetered_no_ledger` and has
-no token counts for them. As a result **AgentDash budget hard-stops and token
-ceilings don't fire for SSH-pinned Hermes agents.** The controls that do apply
-are the agent's `timeoutSec` (wall-clock limit per run) and `maxTurnsPerRun`
-(passed to Hermes as `--max-turns`). Set both on every SSH-pinned agent. The
-provider key belongs to the remote OS user, so its spend shows up on that key's
-provider account. Reading the remote ledger is tracked in #1064.
+SSH prompts use `hermes chat --query-file <private file>`; neither SSH nor
+Hermes argv contains the rendered prompt. The query and run environment are
+staged over stdin as 0600 files in a run directory set to 0700 before extraction.
+AgentDash attempts to remove the directory after success, timeout, launch
+failure, and partial transfer failure; a cleanup failure is reported.
 
-### Known limitations and follow-ups
+The remote Hermes version must support `chat --query-file`. An unsupported
+option fails with an upgrade instruction. There is no fallback to `-q` or shell
+command substitution. Conflicting query options in `extraArgs`, including
+abbreviations and short attached values, are refused before SSH starts. Local
+Hermes invocation is unchanged.
 
-- **The prompt is visible on the target host (#1062).** The prompt is passed
-  as a `hermes chat -q` argument, so any OS user on the target host can read it
-  with `ps`. That is acceptable only while every such user can already reach that
-  company's prompts. **It must move to stdin or a 0600 staged file before any
-  second target user (for example `ac-prov-b`, `ac-prov-c`) serves a different
-  company;** until then, don't add such a target.
-- **A pinned environment can be retargeted (#1063).** Someone who can edit
-  environments (including an agent with that permission) can change a pinned SSH
-  environment's user, host or port to another target allowlisted for the *same*
-  company. No `agent.ssh_environment_pinned` entry is written for that.
-  `agent.ssh_run_launched` still records the real `user@host` of every run. Fix
-  this before any company gets a second allowlisted target.
-- **No metering (#1064)**: see above.
-- Not available over SSH yet: managed per-agent Hermes profiles (the remote
-  user's own Hermes home is used) and Hermes' structured `stream-json`
-  transcript (text mode is used).
+### Metering and budget limits
+
+After execution, AgentDash reads only the completed session's usage from the
+remote user's `state.db`, using the same operator-pinned SSH connection and
+login-shell setup. The query uses Python's standard-library SQLite in read-only
+mode with a parameterized session id, a 10-second timeout and bounded output.
+It returns usage fields only, including cumulative input/output/cache tokens,
+model/provider, available cost and tool-call totals. Existing resumed-session
+delta accounting and budget checks consume these totals.
+
+The reader supports standard Python Hermes console entry points, explicit
+`-p`/`--profile` arguments, and configured `HOME`/`HERMES_HOME`/`PATH` location
+inputs. Arbitrary wrapper launchers and a named sticky `active_profile` without
+an explicit profile are left unmetered because their invocation home cannot be
+proven. Missing Python, an unreadable/missing ledger, timeout or malformed
+output records `unmetered_no_ledger`; a missing session records
+`unmetered_no_session`. Neither case fails a completed run or reads the server's
+ledger. Unknown spend is not zero. Token/cost budget controls cannot account
+for missing usage, so retain `timeoutSec` and `maxTurnsPerRun` limits on every
+SSH agent. Zero or absent ledger cost remains unknown even when tokens exist.
+
+### Retarget authority and remaining limits
+
+Changing the effective username, host or port of an environment pinned by a
+Hermes agent requires the same human `agents:create` authority as pinning the
+agent. Agents, including CEO and creator agents, cannot retarget it. Changes
+into or away from the SSH driver use this guard too. A new SSH target must be
+allowlisted for the company before config or secrets are persisted; every
+affected company Hermes agent receives an `agent.ssh_environment_pinned` audit
+with target and port. Metadata and normalized same-target edits retain their
+existing environment-management rules. Pins (including config rollback) and
+environment edits share a company-first transaction boundary. The edit reloads
+the current target and pins under that lock, so a concurrent pin or stale
+partial config cannot bypass authorization. Audits commit with the retarget.
+
+Managed per-agent profiles and structured `stream-json` remain local-only.
+Validation uses fake SSH and disposable SQLite fixtures; an installed remote
+Hermes version, provider and live ledger still require deployment-specific
+verification before enabling a target. No target is enabled by these repairs.
 
 ## 6. Turning it off (rollback)
 
@@ -257,7 +281,21 @@ All are company-scoped activity-log entries carrying the `user@host` and ids
 only (never key material, key paths or env values):
 
 - `agent.ssh_environment_pinned`: a Hermes agent was pinned to an SSH
-  environment (create, hire, or update).
+  environment (create, hire, agent update, or environment retarget), including
+  port. A driver change away from SSH records a null target and the new driver.
 - `agent.ssh_run_launched`: a Hermes run was launched over SSH.
 - `agent.ssh_run_refused`: a Hermes run was refused before launch, with the
   reason.
+
+### Invocation evidence
+
+SSH runs emit `adapter.invoke` only after private staging succeeds, immediately
+before launching Hermes. `command` names the actual remote executable and
+`commandArgs` contains its complete ordered argv, beginning with `chat` and
+including the private `--query-file` path. SSH and environment-wrapper arguments
+are excluded. `promptSha256` is lowercase SHA-256 of the exact rendered UTF-8
+query. The event contains neither query bytes nor environment values. Known
+credential values, role handles, bearer strings and credential options in argv
+are rejected before staging; put credentials in private environment configuration.
+Local invocation behavior is unchanged. Synthetic fake-SSH tests verify this
+contract; no installed remote target has been probed or validated.

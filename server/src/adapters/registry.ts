@@ -1,3 +1,4 @@
+import { readRemoteHermesSessionUsage } from "./hermes-usage-remote.js";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -851,21 +852,13 @@ async function withHermesSessionUsage(
   result: AdapterExecutionResult,
   ctx: { config?: unknown; agent?: unknown; executionTarget?: unknown },
 ): Promise<AdapterExecutionResult> {
-  // AgentDash: an SSH run's ledger lives in the remote user's Hermes home, not
-  // this server's; say so rather than read the wrong ledger.
-  if (readHermesSshTarget(ctx)) {
-    const resultJson =
-      result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
-        ? result.resultJson
-        : {};
-    return { ...result, resultJson: { ...resultJson, meteringStatus: "unmetered_no_ledger", meteringLedger: null } };
-  }
   let read: ReturnType<typeof readHermesSessionUsageDetailed>;
   try {
     const sessionId = readHermesSessionId(result);
-    read = readHermesSessionUsageDetailed(sessionId, {
-      adapterConfig: hermesRunAdapterConfig(ctx),
-    });
+    const target = readHermesSshTarget(ctx);
+    read = target
+      ? await readRemoteHermesSessionUsage(sessionId, target, readRecord(readRecord(ctx.agent)?.adapterConfig) ?? {})
+      : readHermesSessionUsageDetailed(sessionId, { adapterConfig: hermesRunAdapterConfig(ctx) });
   } catch {
     return result;
   }

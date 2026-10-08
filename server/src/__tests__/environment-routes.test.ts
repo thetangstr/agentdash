@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import express from "express";
 import request from "supertest";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { environmentRoutes } from "../routes/environments.js";
 import { errorHandler } from "../middleware/index.js";
 
@@ -11,6 +11,7 @@ const mockAccessService = vi.hoisted(() => ({
 }));
 
 const mockAgentService = vi.hoisted(() => ({
+  list: vi.fn(),
   getById: vi.fn(),
 }));
 
@@ -52,6 +53,16 @@ vi.mock("../services/index.js", () => ({
   environmentService: () => mockEnvironmentService,
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
+}));
+
+vi.mock("../services/hermes-ssh-policy.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../services/hermes-ssh-policy.js")>(),
+  withHermesSshCompanyLock: async (db: unknown, _company: string, work: (tx: unknown) => Promise<unknown>) => work(db),
+}));
+vi.mock("../services/activity-log.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../services/activity-log.js")>(),
+  insertActivity: mockLogActivity,
+  publishActivity: vi.fn(),
 }));
 
 vi.mock("../services/environment-probe.js", () => ({
@@ -136,6 +147,7 @@ describe("environment routes", () => {
     mockAccessService.canUser.mockReset();
     mockAccessService.hasPermission.mockReset();
     mockAgentService.getById.mockReset();
+    mockAgentService.list.mockReset().mockResolvedValue([]);
     mockIssueService.getById.mockReset();
     mockProjectService.getById.mockReset();
     mockEnvironmentService.list.mockReset();
@@ -167,6 +179,98 @@ describe("environment routes", () => {
     }));
     mockListReadyPluginEnvironmentDrivers.mockReset();
     mockListReadyPluginEnvironmentDrivers.mockResolvedValue([]);
+  });
+
+  it("denies a manage-only user retargeting a pinned Hermes agent before persisting secrets", async () => {
+    const existing = { ...createEnvironment(), driver: "ssh", config: { username: "alice", host: "host.test", remoteWorkspacePath: "/work" } };
+    mockEnvironmentService.getById.mockResolvedValue(existing);
+    mockEnvironmentService.update.mockResolvedValue(existing);
+    mockAgentService.list.mockResolvedValue([{ id: "hermes-1", companyId: "company-1", adapterType: "hermes_local", defaultEnvironmentId: "env-1" }]);
+    mockAccessService.canUser.mockImplementation(async (_company, _user, permission) => permission === "environments:manage");
+    const app = createApp({ type: "board", userId: "user-1", source: "session", companyIds: ["company-1"] });
+    const res = await request(app).patch("/api/environments/env-1").send({ config: { username: "bob", privateKey: "synthetic-key" } });
+    expect(res.status).toBe(403);
+    expect(mockEnvironmentService.update).not.toHaveBeenCalled();
+    expect(mockSecretService.create).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("rejects a pinned SSH-to-sandbox transition without persisting validated plugin secrets", async () => {
+    const existing = { ...createEnvironment(), driver: "ssh", config: { username: "alice", host: "host.test", remoteWorkspacePath: "/work" } };
+    mockEnvironmentService.getById.mockResolvedValue(existing);
+    mockAgentService.list.mockResolvedValue([{ id: "hermes-1", companyId: "company-1", adapterType: "hermes_local", defaultEnvironmentId: "env-1" }]);
+    mockAccessService.canUser.mockImplementation(async (_company, _user, permission) => permission === "environments:manage");
+    mockValidatePluginSandboxProviderConfig.mockResolvedValue({ normalizedConfig: { apiKey: "synthetic-plugin-secret" }, driver: { configSchema: { type: "object", properties: { apiKey: { type: "string", format: "secret-ref" } } } } });
+    const app = createApp({ type: "board", userId: "user-1", source: "session", companyIds: ["company-1"] }, { pluginWorkerManager: {} });
+    const res = await request(app).patch("/api/environments/env-1").send({ driver: "sandbox", config: { provider: "secure-plugin", apiKey: "synthetic-plugin-secret" } });
+    expect(res.status).toBe(403);
+    expect(mockSecretService.create).not.toHaveBeenCalled();
+    expect(mockEnvironmentService.update).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  describe("pinned Hermes SSH retargeting", () => {
+    const companyId = "11111111-1111-1111-1111-111111111111";
+    const config = { username: "alice", host: "host.test", port: 22, remoteWorkspacePath: "/work" };
+    let existing: ReturnType<typeof createEnvironment>;
+    beforeEach(() => {
+      vi.stubEnv("AGENTDASH_HERMES_SSH_ENABLED", "true");
+      vi.stubEnv("AGENTDASH_HERMES_SSH_ALLOWLIST", JSON.stringify({
+        "alice@host.test": { companies: [companyId], identityFile: "/synthetic/key", knownHostsFile: "/synthetic/hosts" },
+        "bob@host.test": { companies: [companyId], identityFile: "/synthetic/key", knownHostsFile: "/synthetic/hosts", port: 2222 },
+        "outsider@host.test": { companies: ["22222222-2222-2222-2222-222222222222"], identityFile: "/synthetic/key", knownHostsFile: "/synthetic/hosts" },
+      }));
+      existing = { ...createEnvironment(), companyId, driver: "ssh", config } as never;
+      mockEnvironmentService.getById.mockImplementation(async () => existing);
+      mockEnvironmentService.update.mockImplementation(async (_id, patch) => ({ ...existing, ...patch }));
+      mockAgentService.list.mockResolvedValue([
+        { id: "h1", companyId, adapterType: "hermes_local", defaultEnvironmentId: "env-1" },
+        { id: "h2", companyId, adapterType: "hermes_local", defaultEnvironmentId: "env-1" },
+        { id: "other", companyId: "foreign", adapterType: "hermes_local", defaultEnvironmentId: "env-1" },
+        { id: "codex", companyId, adapterType: "codex_local", defaultEnvironmentId: "env-1" },
+      ]);
+    });
+    afterEach(() => vi.unstubAllEnvs());
+    it.each(["ceo", "engineer"])("denies %s agents with create privileges", async (role) => {
+      mockAgentService.getById.mockResolvedValue({ id: "actor", companyId, role, permissions: { canCreateAgents: true } });
+      const app = createApp({ type: "agent", agentId: "actor", companyId });
+      const res = await request(app).patch("/api/environments/env-1").send({ config: { username: "bob", port: 2222 } });
+      expect(res.status).toBe(403);
+      expect(mockEnvironmentService.update).not.toHaveBeenCalled();
+      expect(mockLogActivity).not.toHaveBeenCalled();
+    });
+    it.each(["local_implicit", "instance_admin", "granted"])("allows %s board and audits every affected company Hermes agent", async (role) => {
+      mockAccessService.canUser.mockResolvedValue(true);
+      const app = createApp({ type: "board", userId: "person", companyIds: [companyId], source: role, isInstanceAdmin: role === "instance_admin" });
+      const res = await request(app).patch("/api/environments/env-1").send({ config: { username: "bob", port: 2222 } });
+      expect(res.status).toBe(200);
+      const pins = mockLogActivity.mock.calls.map((call) => call[1]).filter((entry) => entry.action === "agent.ssh_environment_pinned");
+      expect(pins.map((entry) => entry.entityId)).toEqual(["h1", "h2"]);
+      expect(pins[0].details).toMatchObject({ environmentId: "env-1", sshTarget: "bob@host.test", port: 2222 });
+      expect(res.body.config.host).toBe("host.test");
+    });
+    it.each(["missing", "outsider"])("rejects %s allowlist target without writes", async (username) => {
+      const app = createApp({ type: "board", source: "local_implicit" });
+      const res = await request(app).patch("/api/environments/env-1").send({ config: { username } });
+      expect(res.status).toBe(403);
+      expect(mockEnvironmentService.update).not.toHaveBeenCalled();
+      expect(mockLogActivity).not.toHaveBeenCalled();
+    });
+    it.each([{ name: "Renamed" }, { config: { host: "HOST.TEST", port: 22 } }])("allows same-target edits with environment management only", async (patch) => {
+      mockAccessService.canUser.mockImplementation(async (_c, _u, permission) => permission === "environments:manage");
+      const app = createApp({ type: "board", userId: "person", companyIds: [companyId], source: "session" });
+      const res = await request(app).patch("/api/environments/env-1").send(patch);
+      expect(res.status).toBe(200);
+      expect(mockLogActivity.mock.calls.map((call) => call[1].action)).toEqual(["environment.updated"]);
+    });
+    it.each(["into", "away"])("requires pin authority when changing %s SSH", async (direction) => {
+      if (direction === "into") existing = { ...existing, driver: "local", config: {} } as never;
+      mockAccessService.canUser.mockImplementation(async (_c, _u, permission) => permission === "environments:manage");
+      const app = createApp({ type: "board", userId: "person", companyIds: [companyId], source: "session" });
+      const res = await request(app).patch("/api/environments/env-1").send(direction === "into" ? { driver: "ssh", config } : { driver: "local", config: {} });
+      expect(res.status).toBe(403);
+      expect(mockEnvironmentService.update).not.toHaveBeenCalled();
+    });
   });
 
   it("lists company-scoped environments", async () => {

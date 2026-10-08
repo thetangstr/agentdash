@@ -7,7 +7,7 @@ import {
   probeEnvironmentConfigSchema,
   updateEnvironmentSchema,
 } from "@paperclipai/shared";
-import { forbidden } from "../errors.js";
+import { conflict, forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import {
   accessService,
@@ -18,11 +18,13 @@ import {
 } from "../services/index.js";
 import {
   normalizeEnvironmentConfigForPersistence,
+  prepareExternalEnvironmentConfigPersistence,
   normalizeEnvironmentConfigForProbe,
   parseEnvironmentDriverConfig,
   readSshEnvironmentPrivateKeySecretId,
   type ParsedEnvironmentConfig,
 } from "../services/environment-config.js";
+import { insertActivity, publishActivity, type ActivityPublication } from "../services/activity-log.js";
 import { probeEnvironment } from "../services/environment-probe.js";
 import { secretService } from "../services/secrets.js";
 import { listReadyPluginEnvironmentDrivers } from "../services/plugin-environment-driver.js";
@@ -30,7 +32,7 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { executionWorkspaceService } from "../services/execution-workspaces.js";
-import { hermesSshEnabled } from "../services/hermes-ssh-policy.js";
+import { assertCanPinHermesSsh, assertHermesSshEnvironmentPermitted, hermesSshEnabled, hermesSshTargetIdentity, withHermesSshCompanyLock } from "../services/hermes-ssh-policy.js";
 
 export function environmentRoutes(
   db: Db,
@@ -56,7 +58,9 @@ export function environmentRoutes(
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
   }
 
-  async function assertCanMutateEnvironments(req: Request, companyId: string) {
+  async function assertCanMutateEnvironments(req: Request, companyId: string, executor: Db = db) {
+    const access = accessService(executor);
+    const agents = agentService(executor);
     assertCompanyAccess(req, companyId);
 
     if (req.actor.type === "board") {
@@ -286,54 +290,76 @@ export function environmentRoutes(
     }
     await assertCanMutateEnvironments(req, existing.companyId);
     const actor = getActorInfo(req);
-    const nextDriver = req.body.driver ?? existing.driver;
-    const nextName = req.body.name ?? existing.name;
-    const configSource =
-      req.body.config !== undefined
-        ? req.body.driver !== undefined && req.body.driver !== existing.driver
-          ? req.body.config
-          : {
-              ...parseObject(existing.config),
-              ...parseObject(req.body.config),
-            }
-        : req.body.driver !== undefined && req.body.driver !== existing.driver
-          ? {}
-          : existing.config;
-    const patch = {
-      ...req.body,
-      ...(req.body.config !== undefined || req.body.driver !== undefined
-        ? {
-            config: await normalizeEnvironmentConfigForPersistence({
-              db,
-              companyId: existing.companyId,
-              environmentName: nextName,
-              driver: nextDriver,
-              config: configSource,
-              actor: {
-                agentId: actor.agentId,
-                userId: actor.actorType === "user" ? actor.actorId : null,
-              },
-              pluginWorkerManager: options.pluginWorkerManager,
-            }),
-          }
-        : {}),
-    };
-    const environment = await svc.update(existing.id, patch);
-    if (!environment) {
-      res.status(404).json({ error: "Environment not found" });
-      return;
-    }
-    await logActivity(db, {
-      companyId: environment.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "environment.updated",
-      entityType: "environment",
-      entityId: environment.id,
-      details: summarizeEnvironmentUpdate(patch as Record<string, unknown>, environment),
+    const configSourceFor = (current: typeof existing) =>
+      req.body.driver !== undefined && req.body.driver !== current.driver
+        ? req.body.config ?? {}
+        : req.body.config !== undefined
+          ? { ...parseObject(current.config), ...parseObject(req.body.config) }
+          : current.config;
+    // Plugin validation can call a worker. Do it before the transaction and
+    // reject a stale snapshot instead of holding company locks during I/O.
+    const initialDriver = req.body.driver ?? existing.driver;
+    const needsConfig = req.body.config !== undefined || req.body.driver !== undefined;
+    const preparedConfig = needsConfig && initialDriver !== "ssh" && initialDriver !== "local"
+      ? await prepareExternalEnvironmentConfigPersistence({ db, companyId: existing.companyId,
+          environmentName: req.body.name ?? existing.name, driver: initialDriver,
+          config: configSourceFor(existing), actor: { agentId: actor.agentId, userId: actor.actorType === "user" ? actor.actorId : null },
+          pluginWorkerManager: options.pluginWorkerManager })
+      : undefined;
+    const publications: ActivityPublication[] = [];
+    const environment = await withHermesSshCompanyLock(db, existing.companyId, async tx => {
+      const txSvc = environmentService(tx);
+      const current = await txSvc.getById(existing.id);
+      if (!current) return null;
+      await assertCanMutateEnvironments(req, current.companyId, tx);
+      if (preparedConfig && current.updatedAt.getTime() !== existing.updatedAt.getTime()) {
+        throw conflict("Environment changed while validating its config; reload and retry.");
+      }
+      const nextDriver = req.body.driver ?? current.driver;
+      if (needsConfig && nextDriver !== "ssh" && nextDriver !== "local" && !preparedConfig) {
+        throw conflict("Environment driver changed while validating its config; reload and retry.");
+      }
+      const configSource = configSourceFor(current);
+      const identityChanged = hermesSshTargetIdentity(current.driver, current.config) !== hermesSshTargetIdentity(nextDriver, configSource);
+      const affectedAgents = identityChanged
+        ? (await agentService(tx).list(current.companyId)).filter(agent =>
+            agent.companyId === current.companyId && agent.adapterType === "hermes_local" && agent.defaultEnvironmentId === current.id)
+        : [];
+      let newPin: { target: string; port: number } | null = null;
+      if (affectedAgents.length > 0) {
+        // Before any secret persistence, and after concurrent pins commit.
+        await assertCanPinHermesSsh(req, current.companyId, accessService(tx));
+        if (nextDriver === "ssh") newPin = assertHermesSshEnvironmentPermitted({ companyId: current.companyId, config: configSource });
+      }
+      const patch = {
+        ...req.body,
+        ...(needsConfig ? { config: preparedConfig ? await preparedConfig(tx) : await normalizeEnvironmentConfigForPersistence({
+          db: tx, companyId: current.companyId, environmentName: req.body.name ?? current.name,
+          driver: nextDriver, config: configSource,
+          actor: { agentId: actor.agentId, userId: actor.actorType === "user" ? actor.actorId : null },
+          pluginWorkerManager: options.pluginWorkerManager,
+        }) } : {}),
+      };
+      const updated = await txSvc.update(current.id, patch);
+      if (!updated) return null;
+      publications.push(await insertActivity(tx, {
+        companyId: current.companyId, actorType: actor.actorType, actorId: actor.actorId,
+        agentId: actor.agentId, runId: actor.runId, action: "environment.updated",
+        entityType: "environment", entityId: current.id,
+        details: summarizeEnvironmentUpdate(patch as Record<string, unknown>, updated),
+      }));
+      for (const agent of affectedAgents) {
+        publications.push(await insertActivity(tx, {
+          companyId: current.companyId, actorType: actor.actorType, actorId: actor.actorId,
+          agentId: actor.agentId, runId: actor.runId, action: "agent.ssh_environment_pinned",
+          entityType: "agent", entityId: agent.id,
+          details: { environmentId: current.id, adapterType: "hermes_local", sshTarget: newPin?.target ?? null, port: newPin?.port ?? null, driver: nextDriver },
+        }));
+      }
+      return updated;
     });
+    for (const publication of publications) publishActivity(publication);
+    if (!environment) { res.status(404).json({ error: "Environment not found" }); return; }
     res.json(environment);
   });
 
