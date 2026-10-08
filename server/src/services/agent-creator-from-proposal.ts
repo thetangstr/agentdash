@@ -128,6 +128,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // All named policy blocks, including workforce-learning and issue-current-authority, are inherited verbatim
 // from onboarding-assets/default/AGENTS.md via the canonical bundle loader.
 // Update that source for shared behavior; do not duplicate its mandate here.
+// AgentDash: mandate-read-contract is inherited from the canonical default
+// bundle: read the instruction entry file separately from steward directives.
+// MCP schema descriptions/bounds advertise existing validation, not capability.
 // The unmarked hire supplement survives named-block refresh. SOUL, HEARTBEAT
 // and TOOLS retain the unified worker baseline without role/persona overrides.
 // AgentDash: predicate-acceptance applicability — synthesized workers use the

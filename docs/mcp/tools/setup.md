@@ -3,7 +3,7 @@ title: "Setup toolset"
 summary: "The install and onboarding tools: what an agent standing up a fresh instance is given."
 ---
 
-> Generated at commit `ddebd3f5c` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `92bec8fe1` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **17 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "setup")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/journey.ts`.
@@ -34,7 +34,7 @@ Founding-user signup for a FRESH authenticated-mode install — works ONLY while
 |---|---|---|---|
 | `email` | string | yes |  |
 | `name` | string | yes |  |
-| `inviteCode` | string | no |  |
+| `inviteCode` | string | no | AgentDash invite code. Most installs require one — ask the human for it (NEVER invent or guess a code). If signup answers invite_code_required, collect the code and retry. |
 
 ## `agentdash_setup_adapter`
 
@@ -43,7 +43,7 @@ Configure the model adapter your agents will run on — a required onboarding st
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `preset` | `"claude"` \| `"openai"` \| `"gemini"` \| `"stub"` | yes | claude=ANTHROPIC_API_KEY; openai=OPENAI_COMPAT_API_KEY (api.openai.com); gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans. |
-| `apiKey` | string | no |  |
+| `apiKey` | string | no | The provider API key. Required for claude/openai/gemini. Omit for stub. Collected from the human — NEVER invented. |
 
 ## `agentdash_start_interview`
 

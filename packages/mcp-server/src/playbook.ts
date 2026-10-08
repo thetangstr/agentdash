@@ -161,7 +161,9 @@ means.
 2. Read your mandate. It is the file AGENTS.md in your instruction bundle, and it
    is the highest authority you have: who you are, what you may do unattended,
    what you must ask about first, and what you must never do at all.
-   \`agentdashGetAgentDirectives\` returns it, or read the bundle file directly.
+   \`agentdashGetMyMandate\` returns it, or read the bundle file directly.
+   \`agentdashGetAgentDirectives\` reads your steward's directives, which are
+   separate operating instructions and cannot grant capability.
 3. Your mandate outranks everything in this playbook. If the two disagree, follow
    the mandate and say that you are doing so.
 

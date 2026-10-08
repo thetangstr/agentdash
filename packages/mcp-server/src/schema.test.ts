@@ -11,7 +11,43 @@ describe("zodToJsonSchema", () => {
 
   it("converts int-checked numbers to integer", () => {
     expect(zodToJsonSchema(z.number().int())).toEqual({ type: "integer" });
-    expect(zodToJsonSchema(z.number().int().positive().max(500))).toEqual({ type: "integer" });
+    expect(zodToJsonSchema(z.number().int().positive().max(500))).toEqual({
+      type: "integer", exclusiveMinimum: 0, maximum: 500,
+    });
+  });
+
+  it.each([
+    ["inclusive", z.number().min(-2.5).max(7.25), { minimum: -2.5, maximum: 7.25 }],
+    ["exclusive", z.number().gt(-2.5).lt(7.25), { exclusiveMinimum: -2.5, exclusiveMaximum: 7.25 }],
+    ["positive", z.number().positive(), { exclusiveMinimum: 0 }],
+    ["negative", z.number().negative(), { exclusiveMaximum: 0 }],
+    ["nonnegative", z.number().nonnegative(), { minimum: 0 }],
+    ["nonpositive", z.number().nonpositive(), { maximum: 0 }],
+    ["strongest repeated", z.number().min(4).min(1).max(9).max(12), { minimum: 4, maximum: 9 }],
+    ["mixed repeated", z.number().gt(4).min(5).lt(9).max(8), { minimum: 5, maximum: 8 }],
+    ["equal exclusive first", z.number().gt(4).min(4).lt(9).max(9), { exclusiveMinimum: 4, exclusiveMaximum: 9 }],
+    ["equal exclusive last", z.number().min(4).gt(4).max(9).lt(9), { exclusiveMinimum: 4, exclusiveMaximum: 9 }],
+  ])("advertises %s numeric bounds", (_name, schema, bounds) => {
+    expect(zodToJsonSchema(schema)).toEqual({ type: "number", ...bounds });
+  });
+
+  it("preserves inner descriptions unless an outer optional description replaces them", () => {
+    expect(zodToJsonSchema(z.string().describe("Inner").optional())).toEqual({
+      type: "string", description: "Inner",
+    });
+    expect(zodToJsonSchema(z.string().describe("Inner").optional().describe("Outer"))).toEqual({
+      type: "string", description: "Outer",
+    });
+    expect(zodToJsonSchema(z.string().describe("Inner").optional().describe(""))).toEqual({
+      type: "string", description: "Inner",
+    });
+  });
+
+  it("preserves wrapper descriptions through nested optional, nullable and default schemas", () => {
+    expect(zodToJsonSchema(z.number().min(1).max(5).nullable().describe("Nullable").optional().describe("Optional").default(3).describe("Default"))).toEqual({
+      anyOf: [{ type: "number", minimum: 1, maximum: 5 }, { type: "null" }],
+      description: "Default", default: 3,
+    });
   });
 
   it("converts enums", () => {

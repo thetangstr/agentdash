@@ -3,7 +3,7 @@ title: "Assistant toolset"
 summary: "The person-facing toolset a cloud assistant relays to a person, filtered by the grant's OAuth scopes."
 ---
 
-> Generated at commit `5f77b8a62` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `92bec8fe1` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 > 2 tools omitted: engagement-specific.
 
@@ -35,9 +35,9 @@ Annotations: `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: f
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `since` | string | no |  |
+| `since` | string | no | ISO 8601 timestamp, a duration like "12h" or "30m", or "last_check" |
 | `project` | string | no | A project name or id — identifier, title fragment, UUID or deep link |
-| `format` | `"summary"` \| `"briefing"` | no |  |
+| `format` | `"summary"` \| `"briefing"` | no | "briefing" returns the short sourced briefing as the summary |
 
 ### `list_projects`
 
@@ -47,7 +47,7 @@ Annotations: `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: f
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `status` | `"active"` \| `"all"` | no |  |
+| `status` | `"active"` \| `"all"` | no | "active" (default) hides archived and completed projects |
 
 ### `get_project`
 
@@ -67,11 +67,11 @@ Annotations: `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: f
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `query` | string | no |  |
-| `status` | `"backlog"` \| `"todo"` \| `"in_progress"` \| `"in_review"` \| `"blocked"` \| `"done"` \| `"cancelled"` | no |  |
+| `query` | string | no | Words to match in the title or identifier |
+| `status` | `"backlog"` \| `"todo"` \| `"in_progress"` \| `"in_review"` \| `"blocked"` \| `"done"` \| `"cancelled"` | no | Task status filter |
 | `agent` | string | no | A person or agent — identifier, title fragment, UUID or deep link |
 | `project` | string | no | A project — identifier, title fragment, UUID or deep link |
-| `limit` | integer | no |  |
+| `limit` | integer | no | Minimum: 1. Maximum: 25. |
 
 ### `get_work_item`
 
@@ -109,7 +109,7 @@ Annotations: `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: f
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `limit` | integer | no |  |
+| `limit` | integer | no | Minimum: 1. Maximum: 10. |
 
 ## Work tools — grants with `agentdash:work`
 
@@ -124,9 +124,9 @@ Annotations: `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: 
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | The project's name, as the person said it |
-| `goal` | string | no |  |
-| `lead` | string | no | The agent to lead it — identifier, title fragment, UUID or deep link |
-| `dueDate` | string | no |  |
+| `goal` | string | no | What the project is for — becomes the project description and the kickoff task's brief |
+| `lead` | string | no | Who leads it — omit for the Chief of Staff, or say "best fit" |
+| `dueDate` | string | no | Target date (ISO 8601, e.g. 2026-10-31) |
 
 ### `create_work_item`
 
@@ -137,10 +137,10 @@ Annotations: `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: 
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `title` | string | yes | The task title, as the person said it |
-| `description` | string | no |  |
-| `project` | string | no | A project — identifier, title fragment, UUID or deep link |
-| `assignee` | string | no | An agent — identifier, title fragment, UUID or deep link |
-| `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no |  |
+| `description` | string | no | Details the assignee needs |
+| `project` | string | no | The project it belongs to |
+| `assignee` | string | no | Which agent should do it — a name, or "best fit" for the Chief of Staff |
+| `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no | Task priority |
 
 ### `assign_work`
 
@@ -151,7 +151,7 @@ Annotations: `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: 
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | The task — identifier, title fragment, UUID or deep link |
-| `agent` | string | no | The agent to give it to — identifier, title fragment, UUID or deep link |
+| `agent` | string | no | Who gets it — a name or "best fit" for the Chief of Staff; omit to nudge the current owner |
 
 ### `comment_on_work`
 
@@ -173,10 +173,10 @@ Annotations: `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: f
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | The task — identifier, title fragment, UUID or deep link |
-| `status` | `"todo"` \| `"in_progress"` \| `"done"` \| `"cancelled"` \| `"backlog"` | no |  |
-| `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no |  |
-| `title` | string | no |  |
-| `project` | string | no | A project — identifier, title fragment, UUID or deep link |
+| `status` | `"todo"` \| `"in_progress"` \| `"done"` \| `"cancelled"` \| `"backlog"` | no | New status — todo, in_progress, done, cancelled or backlog |
+| `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no | New priority |
+| `title` | string | no | New title |
+| `project` | string | no | Move it to this project |
 
 ## Gated tools — grants with `agentdash:decide`
 
@@ -192,7 +192,7 @@ Annotations: `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: 
 |---|---|---|---|
 | `approval` | string | yes | Which pending decision — its id or what it is about |
 | `decision` | `"approve"` \| `"reject"` \| `"request_changes"` | yes | What the person wants to do with it |
-| `note` | string | no |  |
+| `note` | string | no | An optional note attached to the decision |
 
 ### `request_hire`
 
@@ -202,11 +202,11 @@ Annotations: `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: 
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `workforceTemplateId` | `"marketing-content"` \| `"sales-support"` | no |  |
+| `workforceTemplateId` | `"marketing-content"` \| `"sales-support"` | no | Explicit workforce catalog selection; omit for custom or ambiguous roles. Requires company admin authority. |
 | `role` | string | yes | What kind of agent — designer, QA, whatever the person asked for |
 | `reason` | string | yes | Why they are needed — the approver reads this |
-| `project` | string | no | A project — identifier, title fragment, UUID or deep link |
-| `nameHint` | string | no |  |
+| `project` | string | no | The project the hire is for |
+| `nameHint` | string | no | A name for the agent, if the person gave one |
 
 ### `confirm_action`
 
@@ -217,4 +217,4 @@ Annotations: `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: f
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `handle` | string | yes | The handle prepare_decision or request_hire returned |
-| `personSaid` | string | no |  |
+| `personSaid` | string | no | What the person said, in their words — recorded in the audit trail |

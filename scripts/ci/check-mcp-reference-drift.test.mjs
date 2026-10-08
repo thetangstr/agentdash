@@ -148,6 +148,21 @@ test("input tables flatten nested objects and escape pipes", () => {
   assert.equal(inputTable({ type: "object", properties: {} }), "No input.");
 });
 
+test("input tables distinguish inclusive from exclusive numeric bounds", () => {
+  assert.equal(inputTable({
+    type: "object",
+    properties: {
+      inclusive: { type: "number", minimum: -2.5, maximum: 7.25 },
+      exclusive: { type: "integer", exclusiveMinimum: 0, exclusiveMaximum: 500 },
+    },
+  }), [
+    "| Property | Type | Required | Description |",
+    "|---|---|---|---|",
+    "| `inclusive` | number | no | Minimum: -2.5. Maximum: 7.25. |",
+    "| `exclusive` | integer | no | Exclusive minimum: 0. Exclusive maximum: 500. |",
+  ].join("\n"));
+});
+
 test("the private profile name is replaced in every spelling, and the page says where", () => {
   const page = `${commitLine("abc1234")}\n\nAgentDash-MK: does a thing. Enum: "agentdash_mk". Also AgentDash MK and agentdashmk.\n`;
   const redacted = redactPrivateProfile(page);
