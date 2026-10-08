@@ -3,6 +3,14 @@
 Base for independent review: `97ec8e21f`. Initial implementation head: `7c63d332f`; subsequent correction evidence appears below.
 
 
+## Merge of reviewed main into the security candidate
+
+Merge parents: security `9ccdf657601d751f5f932bf3110c7e00a2b59aeb` and `origin/main` at `b71d558e0da807cf216d2257f8d03430d5f06c6c` (SSH PR #1075, plus previously landed reliability and marketing changes). The only merge conflict was the canonical default prompt. Its four security blocks precede `hermes-ssh-hardening`, with all five blocks checked byte-for-byte against root's approved composition `ffa268e2e`; Task 5/7a prompt additions were not imported. Route and renderer changes auto-merged; no authorization policy or new production behavior was added in the resolution.
+
+The tracked Hermes adapter patch was refreshed using `pnpm install --offline --frozen-lockfile --ignore-scripts --store-dir /Volumes/mac_studio_ssd/.pnpm-store/v3` (one cached patched package, zero dependency downloads), followed by adapter-utils build. Verification uses synthetic homes and allowlisted environments. Focused controls cover composed creation permissions, stewardship/history privacy, SSH retarget serialization, fake SSH execution and rendered prompt inheritance. Logs: `/tmp/task2-main-merge-dependencies.log`, `/tmp/task2-main-merge-controls.log`, `/tmp/task2-main-merge-typecheck.log`. The first focused run passed 165/167 tests; its two Free-tier controls were incorrectly affected by the wrapper's global billing-disabled flag. That wrapper flag was removed for the permission-suite rerun; no production or test source was changed to accommodate it. The corrected permission rerun passed **80/80** (`/tmp/task2-main-merge-permissions-green.log`), completing **167 distinct integration controls**. Server typecheck passed (exit 0); both staged and unstaged diff checks were clean.
+
+Hosted e2e job `113095194274` did not reach browser tests. In `/tmp/agentdash-1074-current-e2e.log` lines 898–930, the first `playwright install-deps chromium` process was killed after its five-minute timeout; both retries then failed acquiring `/var/lib/dpkg/lock-frontend`, held by surviving `apt-get` process 3354. This is dependency-install infrastructure failure, not a reproduced security fixture or application failure. No workflow/production workaround was introduced, and no live SSH or provider probe was performed. Root owns CI retry and independent review of the merged head.
+
 ## CI fixture correction after security review
 
 Base: `06fd244c7168f3443fda1fe2c5fafb9e6bd0ab8b` (PR #1074). Completed CI shards identified four stale test expectations: approval-provenance-spoof's ordinary REST success supplied `bridge_inbox`, and three activity-list expectations omitted `visibleWhere`, `includeSystem`, and/or `since`.

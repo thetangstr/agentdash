@@ -57,3 +57,31 @@ describe("marketing copy guardrails", () => {
     }
   });
 });
+
+// Launch posts must stay within the release facts, without borrowing private
+// customer proof or presenting an operator-enabled feature as a safety boundary.
+describe("launch-week copy guardrails", () => {
+  const launchFiles = ["content/updates.ts", "pages/WhatsNew.tsx", "pages/LaunchWeek.tsx", "updates/ReleaseIllustrations.tsx"];
+  const launchCopy = launchFiles.map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
+  it("does not name customers or design partners, quote prices, or promise global availability", () => {
+    expect(launchCopy).not.toMatch(/\bMKThink\b|\bTrack C\b|\bRoma\b|Italy Trips|Euro Tours|\bYarda\b|\bMultica\b/i);
+    expect(launchCopy).not.toMatch(/\$\d|per[- ]seat|per[- ]month|free trial|no credit card/i);
+    expect(launchCopy).not.toMatch(/live (everywhere|on every)|available (everywhere|to everyone)|guaranteed|few milliseconds/i);
+    expect(launchCopy).not.toMatch(/secure isolation|SSH.{0,80}(isolat|budget.{0,20}enforc)/i);
+  });
+  it("keeps travel-specific work out of the launch highlights", () => {
+    expect(launchCopy).not.toMatch(/Business view|milestones?|Negotiation|Settlement|ac\.milestone-timeline|RUN-BUSINESS-VIEW|harness|assignment[- ]only|wake[- ]policy|run[- ]window|instance identity|AGENT-WAKE-POLICY|travel/i);
+  });
+  it("labels both illustrations and avoids implying rollout to every instance", () => {
+    expect(readFileSync(join(ROOT, "updates/ReleaseIllustrations.tsx"), "utf8").match(/Simulated illustration/g)).toHaveLength(2);
+    expect(launchCopy).toMatch(/depends on the version your operator has installed/);
+  });
+  it("links only the two release-note source files", async () => {
+    const { UPDATE_SOURCES } = await import("./updates");
+    const { GITHUB_URL } = await import("./site");
+    expect(UPDATE_SOURCES.map((s) => s.href)).toEqual([
+      `${GITHUB_URL}/blob/main/releases/v2026.1007.0.md`,
+      `${GITHUB_URL}/blob/main/releases/v2026.1007.1.md`,
+    ]);
+  });
+});

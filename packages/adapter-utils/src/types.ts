@@ -116,6 +116,7 @@ export interface AdapterInvocationMeta {
   env?: Record<string, string>;
   prompt?: string;
   promptMetrics?: Record<string, number>;
+  promptSha256?: string;
   context?: Record<string, unknown>;
 }
 

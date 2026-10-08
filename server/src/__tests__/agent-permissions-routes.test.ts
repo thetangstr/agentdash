@@ -238,6 +238,7 @@ function createDbStub(
     requireBoardApprovalForNewAgents?: boolean;
     planTier?: string;
     activeAgents?: number;
+    onCompanyLock?: () => void;
   } = {},
 ) {
   const db: any = {
@@ -266,6 +267,7 @@ function createDbStub(
       leftJoin: vi.fn(() => chain),
       innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
+      for: vi.fn(() => { options.onCompanyLock?.(); return chain; }),
       groupBy: vi.fn(() => chain),
       // The agent detail reads run health, which orders and limits. Missing
       // links in this chain surface as a 500 from the route rather than as a
@@ -279,7 +281,7 @@ function createDbStub(
   return db;
 }
 
-async function createApp(actor: Record<string, unknown>, dbOptions: { requireBoardApprovalForNewAgents?: boolean } = {}) {
+async function createApp(actor: Record<string, unknown>, dbOptions: { requireBoardApprovalForNewAgents?: boolean; onCompanyLock?: () => void } = {}) {
   const [{ errorHandler }, { agentRoutes }] = await Promise.all([
     import("../middleware/index.js") as Promise<typeof import("../middleware/index.js")>,
     import("../routes/agents.js") as Promise<typeof import("../routes/agents.js")>,
@@ -1692,6 +1694,7 @@ describe.sequential("agent permission routes", () => {
       expect(mockAgentService.create).toHaveBeenCalledWith(
         companyId,
         expect.objectContaining({ adapterType: "hermes_local", defaultEnvironmentId: environmentId }),
+        expect.objectContaining({ executor: expect.anything(), publications: expect.any(Array) }),
       );
 
       const hired = await hireHermes(app);
@@ -1795,6 +1798,21 @@ describe.sequential("agent permission routes", () => {
       const allowed = await createHermes(app);
       expect(allowed.status, JSON.stringify(allowed.body)).toBe(201);
       expect(pinnedActivityCalls()).toHaveLength(1);
+    });
+
+    it("rechecks human pin authority if the environment becomes SSH before the final create or hire", async () => {
+      allowFor([companyId]);
+      const ceoAgentId = "44444444-4444-4444-8444-444444444444";
+      mockAgentService.getById.mockResolvedValue({ ...baseAgent, id: ceoAgentId, role: "ceo", permissions: { canCreateAgents: true } });
+      mockAccessService.hasPermission.mockResolvedValue(true);
+      const app = await createApp({ type: "agent", agentId: ceoAgentId, companyId, source: "agent_key" }, { onCompanyLock: () => mockSshEnvironment() });
+      for (const send of [createHermes, hireHermes]) {
+        mockSshEnvironment({ driver: "local", config: {} });
+        const res = await send(app);
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+      }
+      expect(mockAgentService.create).not.toHaveBeenCalled();
+      expect(pinnedActivityCalls()).toHaveLength(0);
     });
 
     it("refuses an agent (even a CEO with canCreateAgents) pinning a Hermes agent to SSH", async () => {

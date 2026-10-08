@@ -1,10 +1,12 @@
 diff --git a/dist/server/execute.js b/dist/server/execute.js
-index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62ae40751d9 100644
+index e96d5c9c0d175a06c668406ba57ac8f5ba750901..e43686bf4f696cde609e538d8d2f38b0fdbf8339 100644
 --- a/dist/server/execute.js
 +++ b/dist/server/execute.js
-@@ -18,7 +18,8 @@
+@@ -17,8 +17,10 @@
+  *   --yolo             bypass dangerous-command approval prompts (agents have no TTY)
   *   --source           session source tag for filtering
   */
++import { createHash } from "node:crypto";
  import { runChildProcess, buildPaperclipEnv, renderTemplate, ensureAbsoluteDirectory, } from "@paperclipai/adapter-utils/server-utils";
 -import { HERMES_CLI, DEFAULT_TIMEOUT_SEC, DEFAULT_GRACE_SEC, DEFAULT_MODEL, } from "../shared/constants.js";
 +import { readAdapterExecutionTarget, describeAdapterExecutionTarget, runAdapterExecutionTargetProcessWithStagedEnv, } from "@paperclipai/adapter-utils/execution-target";
@@ -12,7 +14,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
  import { detectModel, resolveProvider, } from "./detect-model.js";
  // ---------------------------------------------------------------------------
  // Config helpers
-@@ -247,7 +248,7 @@ export async function execute(ctx) {
+@@ -247,7 +249,7 @@ export async function execute(ctx) {
      const config = (ctx.agent?.adapterConfig ?? {});
      // ── Resolve configuration ──────────────────────────────────────────────
      const hermesCmd = cfgString(config.hermesCommand) || HERMES_CLI;
@@ -21,7 +23,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
      const timeoutSec = cfgNumber(config.timeoutSec) || DEFAULT_TIMEOUT_SEC;
      const graceSec = cfgNumber(config.graceSec) || DEFAULT_GRACE_SEC;
      const maxTurns = cfgNumber(config.maxTurnsPerRun);
-@@ -256,6 +257,17 @@ export async function execute(ctx) {
+@@ -256,6 +258,17 @@ export async function execute(ctx) {
      const persistSession = cfgBoolean(config.persistSession) !== false;
      const worktreeMode = cfgBoolean(config.worktreeMode) === true;
      const checkpoints = cfgBoolean(config.checkpoints) === true;
@@ -39,7 +41,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
      // ── Resolve provider (defense in depth) ────────────────────────────────
      // Priority chain:
      //   1. Explicit provider in adapterConfig (user override)
-@@ -268,7 +280,9 @@ export async function execute(ctx) {
+@@ -268,7 +281,9 @@ export async function execute(ctx) {
      // correct provider is still used.
      let detectedConfig = null;
      const explicitProvider = cfgString(config.provider);
@@ -50,7 +52,25 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
          try {
              detectedConfig = await detectModel();
          }
-@@ -341,16 +355,65 @@ export async function execute(ctx) {
+@@ -287,7 +302,16 @@ export async function execute(ctx) {
+     // ── Build command args ─────────────────────────────────────────────────
+     // Use -Q (quiet) to get clean output: just response + session_id line
+     const useQuiet = cfgBoolean(config.quiet) !== false; // default true
+-    const args = ["chat", "-q", prompt];
++    // AgentDash: SSH query bytes travel only in the private staged file.
++    // Reject aliases/abbreviations too: argparse accepts short attached values
++    // and unambiguous long prefixes. Never fall back to prompt argv.
++    if (sshTarget && extraArgs?.some((arg) => {
++        const flag = arg.split("=", 1)[0];
++        return /^-[^-]*q/.test(flag) || (flag.startsWith("--") && flag.length > 2 && "--query-file".startsWith(flag));
++    })) {
++        throw new Error("SSH Hermes extraArgs cannot supply query options; the query uses a private staged file.");
++    }
++    const args = sshTarget ? ["chat"] : ["chat", "-q", prompt];
+     if (useQuiet)
+         args.push("-Q");
+     if (model) {
+@@ -341,16 +365,80 @@ export async function execute(ctx) {
      if (userEnv && typeof userEnv === "object") {
          Object.assign(env, userEnv);
      }
@@ -81,6 +101,21 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
      }
 -    catch {
 -        // Non-fatal
++    // AgentDash: exact invocation metadata must never contain credentials.
++    // Refuse unsafe executable/argument values before staging, without echoing
++    // the rejected value. Do not fabricate a redacted argv for another command.
++    if (sshTarget) {
++        const secrets = Object.entries(remoteEnv).filter(([key, value]) =>
++            /key|token|secret|password|credential|authorization|handle/i.test(key) && typeof value === "string" && value.length > 0
++        ).map(([, value]) => value);
++        if (typeof ctx.authToken === "string" && ctx.authToken) secrets.push(ctx.authToken);
++        const unsafeArg = (arg) => secrets.some(secret => arg.includes(secret))
++            || /ccra_[a-z0-9_-]+|\bbearer\s+\S+|\b(?:sk-|sk_|gsk_|xai-|hf_|AIza)[a-z0-9_-]+/i.test(arg)
++            || /^--?(?:api[-_]?key|token|auth(?:orization)?|password|secret|credential|role[-_]?handle)(?:=|$)/i.test(arg);
++        if ([hermesCmd, ...args].some(unsafeArg)) {
++            throw new Error("SSH Hermes refuses secret-bearing argv; supply credentials through private environment configuration.");
++        }
++    }
 +    // ── Resolve working directory ──────────────────────────────────────────
 +    // AgentDash patch: honour the workspace the runtime already resolved.
 +    //
@@ -123,7 +158,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
      if (prevSessionId) {
          await ctx.onLog("stdout", `[hermes] Resuming session: ${prevSessionId}\n`);
      }
-@@ -377,13 +440,22 @@ export async function execute(ctx) {
+@@ -377,13 +465,29 @@ export async function execute(ctx) {
          }
          return ctx.onLog(stream, chunk);
      };
@@ -138,6 +173,13 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
 +        ? await runAdapterExecutionTargetProcessWithStagedEnv(ctx.runId, sshTarget, hermesCmd, args, {
 +            cwd: sshTarget.remoteCwd,
 +            env: remoteEnv,
++            privateQuery: prompt,
++            // AgentDash: actual remote Hermes argv, never the SSH/env wrapper,
++            // prompt bytes, credentials or role handles. Hash the rendered query.
++            onInvocation: async ({ command, commandArgs }) => ctx.onMeta?.({
++                adapterType: "hermes_local", command, commandArgs, cwd: sshTarget.remoteCwd,
++                promptSha256: createHash("sha256").update(prompt, "utf8").digest("hex"),
++            }),
 +            timeoutSec,
 +            graceSec,
 +            onLog: wrappedOnLog,
@@ -153,15 +195,21 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..c9fd1d13c19e74c93445d8edcb20e62a
      // ── Parse output ───────────────────────────────────────────────────────
      const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");
      await ctx.onLog("stdout", `[hermes] Exit code: ${result.exitCode ?? "null"}, timed out: ${result.timedOut}\n`);
-@@ -396,7 +468,7 @@ export async function execute(ctx) {
+@@ -396,9 +500,12 @@ export async function execute(ctx) {
          signal: result.signal,
          timedOut: result.timedOut,
          provider: resolvedProvider,
 -        model,
 +        model: modelLabel,
      };
-     if (parsed.errorMessage) {
+-    if (parsed.errorMessage) {
++    if (sshTarget && /(?:unrecognized|unknown|no such) (?:arguments?|options?).*--query/i.test(result.stderr || "")) {
++        executionResult.errorMessage = "Remote Hermes does not support --query-file. Upgrade Hermes on the SSH target; prompt argv fallback is disabled.";
++    }
++    else if (parsed.errorMessage) {
          executionResult.errorMessage = parsed.errorMessage;
+     }
+     if (parsed.usage) {
 diff --git a/dist/server/test.js b/dist/server/test.js
 index d440427d7df7703dfd469675a2cadfca413e2df1..38f8b39aa4c2511dc82267cb3d0efdf8c2434e25 100644
 --- a/dist/server/test.js

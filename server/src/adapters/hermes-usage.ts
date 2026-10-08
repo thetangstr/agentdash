@@ -109,6 +109,7 @@ export type HermesStateDbCertainty = "certain" | "uncertain";
 
 /** How the path was found, for evidence and logs. */
 export type HermesStateDbSource =
+  | "remote_session_ledger"
   | "profile_hint"
   | "env_state_db"
   | "adapter_env_hermes_home"

@@ -1,3 +1,4 @@
+import { companyLockQuery, observeExpectedWaiter } from './helpers/observed-lock-wait.js';
 import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -35,10 +36,10 @@ describe('actual CLI topology apply vs canonical acceptance', () => {
     const accept = () => issuePatchActions(db, { wakeup: vi.fn(), cancelRun: vi.fn(), reportRunActivity: vi.fn() } as any).accept(context);
     const first = order === 'writer-first' ? write() : accept(); await Promise.race([ready.promise, first.then(() => { throw new Error('Owner escaped barrier'); })]);
     const second = order === 'writer-first' ? accept() : write(); const settled = Promise.allSettled([first, second]); let blocked: any;
-    try { const deadline = Date.now() + 4000; while (Date.now() < deadline) { const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`); if (row) { blocked = row; break; } await new Promise(resolve => setImmediate(resolve)); }
+    try { blocked = await observeExpectedWaiter({ sample: () => db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`), ownerPid, contender: second, label: order, expectedQuery: companyLockQuery, timeoutMs: 4000 });
       expect(blocked).toBeTruthy(); expect(Number(blocked.pid)).not.toBe(ownerPid); expect(blocked.query).toMatch(/companies.*for (?:no key )?update/i); console.log(JSON.stringify({ order, ownerPid, waiter: blocked }));
       expect(await db.select().from(projects).where(eq(projects.id, project.id))).toEqual([]); expect(await db.select().from(projectWorkspaces).where(eq(projectWorkspaces.id, workspace.id))).toEqual([]); expect(await db.select().from(issues).where(eq(issues.id, childId))).toEqual([]);
-    } finally { release.open(); }
+    } finally { release.open(); await settled; }
     const results = await settled; expect(results.map(row => row.status)).toEqual(['fulfilled', 'fulfilled']);
     expect(await db.select().from(issues).where(eq(issues.id, childId))).toEqual([expect.objectContaining({ parentId: parent.id, projectId: project.id, projectWorkspaceId: workspace.id })]);
     expect(await db.select().from(projects).where(eq(projects.id, project.id))).toHaveLength(1); expect(await db.select().from(projectWorkspaces).where(eq(projectWorkspaces.id, workspace.id))).toHaveLength(1);

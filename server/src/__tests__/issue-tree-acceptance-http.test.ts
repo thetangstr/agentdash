@@ -1,3 +1,4 @@
+import { companyLockQuery, observeExpectedWaiter } from './helpers/observed-lock-wait.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -368,15 +369,15 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
   });
 
   function gate() { let open!:()=>void; const promise=new Promise<void>(resolve=>{open=resolve;}); return {open,promise}; }
-  async function observedWait(ownerPid:number,label:string) {
-    const deadline=Date.now()+4000;
-    while(Date.now()<deadline) {
-      const [row]=await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
-      if(row){expect(Number(row.pid)).not.toBe(ownerPid);console.log(JSON.stringify({label,ownerPid,waiter:row}));return row;}
-      await new Promise(resolve=>setImmediate(resolve));
-    }
-    throw new Error(`No observed wait: ${label}`);
+  async function observedWait(ownerPid: number, label: string, contender: Promise<unknown>, expectedQuery?: RegExp) {
+    const row = await observeExpectedWaiter({
+      sample: () => db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`),
+      ownerPid, label, contender, timeoutMs: 4000, expectedQuery,
+    });
+    console.log(JSON.stringify({ label, ownerPid, waiter: row }));
+    return row;
   }
+
   it.each(['create','child','reparent','remove','project','company','suggestion','routine','cli','workspace-create','workspace-source','workspace-metadata','issue-workspace-metadata'] as const)('%s orders both ways against production exact tree acceptance', async operation=>{
     for(const order of ['writer-first','tree-first']) {
       const f=await fixture(),ctx=await serviceContext(f),ready=gate(),release=gate();let ownerPid=0,paused=false;
@@ -415,8 +416,8 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
       const accept=()=>tree.acceptAction(ctx,{kind:'create',input:{mode:'pause'}});
       const first=order==='writer-first'?write():accept();await Promise.race([ready.promise,first.then(()=>{throw new Error('Owner escaped barrier');})]);
       const second=order==='writer-first'?accept():write(),settled=Promise.allSettled([first,second]);
-      try {expect(String((await observedWait(ownerPid,`${operation}/${order}`)).query)).toMatch(/companies.*for (?:no key )?update/i);}
-      finally{release.open();}
+      try {expect(String((await observedWait(ownerPid,`${operation}/${order}`,second,companyLockQuery)).query)).toMatch(/companies.*for (?:no key )?update/i);}
+      finally{release.open();await settled;}
       const results=await settled;expect(results[0].status).toBe('fulfilled');
       const deleted=['remove','project','company'].includes(operation);
       if(order==='writer-first'&&deleted)expect(results[1]).toMatchObject({status:'rejected',reason:{status:404}});
@@ -445,7 +446,7 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
       const pending=request(f,'tree-holds',{mode:'pause'});
       if(order==='tree-first'){await ready.promise;write=db.transaction(async tx=>{writerPid=Number((await tx.execute(sql`select pg_backend_pid() pid`))[0].pid);writerReady.open();await update(tx);});}
       await writerReady.promise;
-      try{await observedWait(order==='tree-first'?acceptancePid!:writerPid,`${resource}/${order}`);}finally{release.open();}
+      try{await observedWait(order==='tree-first'?acceptancePid!:writerPid,`${resource}/${order}`,order==='tree-first'?write!:pending);}finally{release.open();await Promise.allSettled([write,pending]);}
       const response=await pending;await write;
       expect(response.status).toBe(order==='tree-first'?201:resource==='credential'?401:resource==='membership'?403:404);
       if(order==='revocation-first'){expect(await db.select().from(issueTreeHolds).where(eq(issueTreeHolds.companyId,f.company.id))).toEqual([]);expect(await db.select().from(activityLog).where(eq(activityLog.companyId,f.company.id))).toEqual([]);}
@@ -460,7 +461,7 @@ describe('tree acceptance authority over real middleware, HTTP and PostgreSQL', 
     const ready=gate(),release=gate();let pid=0;
     const writer=db.transaction(async tx=>{pid=Number((await tx.execute(sql`select pg_backend_pid() pid`))[0].pid);await tx.select().from(projects).where(eq(projects.id,lower.id)).for('update');ready.open();await release.promise;});
     await ready.promise;const pending=request(f,'tree-holds',{mode:'pause'});
-    try{await observedWait(pid,'reverse-project-union');await db.transaction(async tx=>{await tx.execute(sql`select id from projects where id = ${higher.id} for update nowait`);});}finally{release.open();}
+    try{await observedWait(pid,'reverse-project-union',pending);await db.transaction(async tx=>{await tx.execute(sql`select id from projects where id = ${higher.id} for update nowait`);});}finally{release.open();await Promise.allSettled([writer,pending]);}
     expect((await pending).status).toBe(201);await writer;
   });
   it.each(['history','run','queue'] as const)('locks reference-only %s agents and refuses a changed reference before any write',async source=>{

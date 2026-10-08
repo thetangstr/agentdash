@@ -24,7 +24,7 @@
 }
 .mkt-header__nav {
   display: flex;
-  gap: 28px;
+  gap: 20px;
 }
 .mkt-header__nav a {
   text-decoration: none;
@@ -71,11 +71,11 @@
   margin-top: 20px;
 }
 .mkt-header__sheet-cta .mkt-btn { width: 100%; }
-@media (max-width: 860px) {
+@media (max-width: 1060px) {
   .mkt-header__nav,
   .mkt-header__cta { display: none; }
   .mkt-header__toggle { display: inline-flex; }
 }
-@media (min-width: 861px) {
+@media (min-width: 1061px) {
   .mkt-header__sheet { display: none; }
 }

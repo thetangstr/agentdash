@@ -1,3 +1,4 @@
+import { companyLockQuery, observeExpectedWaiter } from './helpers/observed-lock-wait.js';
 import type { Request } from 'express';
 import { issuePatchActions, type IssuePatchContext } from '../services/issue-patch-actions.js';
 import { issueCurrentAuthority } from '../services/issue-current-authority.js';
@@ -90,16 +91,15 @@ describe('central topology writers on PostgreSQL', () => {
   // is "the contender reaches its lock attempt"; 20s only fails on a genuine
   // wedge, and we stop polling as soon as the contender settles.
   async function blockedBy(ownerPid: number, label: string, contender: Promise<unknown>) {
-    const deadline = Date.now() + 20_000;
-    let done = false;
-    void contender.then(() => { done = true; }, () => { done = true; });
-    while (Date.now() < deadline && !done) {
-      const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
-      if (row) { expect(Number(row.pid)).not.toBe(ownerPid); console.log(JSON.stringify({ label, ownerPid, waiter: row })); return row; }
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    throw new Error(`No observed company lock wait: ${label}`);
+    const row = await observeExpectedWaiter({
+      sample: () => db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`),
+      ownerPid, label, contender, timeoutMs: 20000, expectedQuery: companyLockQuery,
+      pause: () => new Promise(resolve => setTimeout(resolve, 25)),
+    });
+    console.log(JSON.stringify({ label, ownerPid, waiter: row }));
+    return row;
   }
+
   it.each(['create', 'child', 'reparent', 'remove', 'project', 'company', 'suggestion'] as const)('%s participates in both orders against actual canonical acceptance', async operation => {
     for (const order of ['writer-first', 'acceptance-first']) {
       const f = await fixture(), ready = gate(), release = gate(); let ownerPid = 0;
@@ -148,7 +148,7 @@ describe('central topology writers on PostgreSQL', () => {
       // A contender that settles without ever blocking means the lock was
       // never contended — report that instead of polling to the deadline.
       try { expect(String((await blockedBy(ownerPid, `${operation}/${order}`, Promise.resolve(second))).query)).toMatch(/companies.*for (?:no key )?update/i); }
-      finally { release.open(); }
+      finally { release.open(); await results; }
       const settled = await results;
       expect(settled[0].status).toBe('fulfilled');
       if (operation === 'company' && order === 'writer-first') expect(settled[1].status).toBe('rejected');

@@ -820,6 +820,8 @@ export async function syncDirectoryToSsh(input: {
   remoteDir: string;
   exclude?: string[];
   followSymlinks?: boolean;
+  /** AgentDash: create the input directory privately before receiving any bytes. */
+  privateDirectory?: boolean;
 }): Promise<void> {
   const auth = await createSshAuthArgs(input.spec);
   const sshArgs = [
@@ -827,7 +829,7 @@ export async function syncDirectoryToSsh(input: {
     "-p",
     String(input.spec.port),
     `${input.spec.username}@${input.spec.host}`,
-    `sh -lc ${shellQuote(`mkdir -p ${shellQuote(input.remoteDir)} && tar -xf - -C ${shellQuote(input.remoteDir)}`)}`,
+    `sh -lc ${shellQuote(`${input.privateDirectory ? "umask 077 && " : ""}mkdir -p ${shellQuote(input.remoteDir)}${input.privateDirectory ? ` && test ! -L ${shellQuote(input.remoteDir)} && chmod 700 ${shellQuote(input.remoteDir)}` : ""} && tar -xf - -C ${shellQuote(input.remoteDir)}`)}`,
   ];
 
   await new Promise<void>((resolve, reject) => {
