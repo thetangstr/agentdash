@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { agents, authUsers, companies, companyMemberships, createDb } from "@paperclipai/db";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { agentRoutes } from "../routes/agents.js";
+import { agentService } from "../services/agents.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
 
@@ -161,6 +162,51 @@ describeEmbeddedPostgres("per-agent configuration reads follow write authority (
     `/api/agents/${agentId}/skills`,
     `/api/agents/${agentId}/instructions-bundle`,
   ];
+
+  for (const authority of ["steward", "creator", "owner", "agent"] as const) {
+    for (const responseKind of ["patch", "revision list", "revision detail"] as const) {
+      it(`${authority}: ${responseKind} separates configuration access from spend access`, async () => {
+        const { company, ownerUserId, stewardUserId, outsiderUserId, stewarded } = await seed();
+        await db.update(agents).set({
+          budgetMonthlyCents: 876543,
+          spentMonthlyCents: 987654,
+          createdByUserId: outsiderUserId,
+          permissions: { canCreateAgents: true },
+          adapterConfig: { command: "echo", apiKey: "synthetic-history-secret" },
+        }).where(eq(agents.id, stewarded.id));
+        const actor = authority === "agent"
+          ? { type: "agent", agentId: stewarded.id, companyId: company.id, source: "agent_key" }
+          : member(company.id,
+            authority === "owner" ? ownerUserId : authority === "creator" ? outsiderUserId : stewardUserId,
+            authority === "owner" ? "owner" : "member");
+        const canReadSpend = authority === "owner" || authority === "agent";
+        const patched = await send(actor, (r) => r.patch(`/api/agents/${stewarded.id}`).send({ title: "New title" }));
+        expect(patched.status, JSON.stringify(patched.body)).toBe(200);
+        const storedRevisions = await agentService(db).listConfigRevisions(stewarded.id);
+        expect(storedRevisions).toHaveLength(1);
+        for (const snapshot of [storedRevisions[0]!.beforeConfig, storedRevisions[0]!.afterConfig]) {
+          expect(snapshot.budgetMonthlyCents).toBe(876543);
+        }
+        if (responseKind === "patch") {
+          expect(patched.body.title).toBe("New title");
+          expect(patched.body.budgetMonthlyCents).toBe(canReadSpend ? 876543 : null);
+          expect(patched.body.spentMonthlyCents).toBe(canReadSpend ? 987654 : null);
+        } else {
+          const suffix = responseKind === "revision detail" ? `/${storedRevisions[0]!.id}` : "";
+          const response = await send(actor, (r) => r.get(`/api/agents/${stewarded.id}/config-revisions${suffix}`));
+          expect(response.status, JSON.stringify(response.body)).toBe(200);
+          const revision = responseKind === "revision list" ? response.body[0] : response.body;
+          for (const snapshot of [revision.beforeConfig, revision.afterConfig]) {
+            expect(snapshot.budgetMonthlyCents).toBe(canReadSpend ? 876543 : null);
+            expect(snapshot.adapterConfig.command).toBe("echo");
+            expect(snapshot.adapterConfig.apiKey).toBe("***REDACTED***");
+          }
+          expect(revision.afterConfig.title).toBe("New title");
+          expect(await agentService(db).listConfigRevisions(stewarded.id)).toEqual(storedRevisions);
+        }
+      });
+    }
+  }
 
   it("lets a steward without agents:create write and then read their agent's mandate file", async () => {
     const { company, ownerUserId, stewardUserId, stewarded } = await seed();

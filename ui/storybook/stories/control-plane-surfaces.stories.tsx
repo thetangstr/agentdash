@@ -191,7 +191,7 @@ function ControlPlaneSurfaces() {
                     <Badge variant="outline">{agent.adapterType}</Badge>
                     <Badge variant="outline" className="gap-1">
                       <WalletCards className="h-3 w-3" />
-                      ${(agent.spentMonthlyCents / 100).toFixed(0)} spent
+                      {agent.spentMonthlyCents == null ? "Unavailable" : `$${(agent.spentMonthlyCents / 100).toFixed(0)} spent`}
                     </Badge>
                   </div>
                 </CardContent>

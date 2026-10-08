@@ -5,8 +5,8 @@ import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
 import { isUuidLike } from "@paperclipai/shared";
 import { badRequest, forbidden } from "../errors.js";
-import { redactEventPayload } from "../redaction.js";
-import { approvalVisibilityCondition, seesEverything } from "./visibility.js";
+import { redactApprovalForReader } from "../redaction.js";
+import { approvalVisibilityCondition, canReadCompanySpend, seesEverything } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { summarizeApprovalRisk } from "../services/approval-risk.js";
 import { issueApprovalService } from "../services/issue-approvals.js";
@@ -70,6 +70,7 @@ export function agentdashMkInboxRoutes(db: Db) {
    */
   async function buildItems(
     companyId: string,
+    canReadSpend: boolean,
     scope: { agentIds: string[]; userId?: string } | { allCompanyAgents: true },
     requiresOverride: boolean,
     options: { includeResolved?: boolean } = {},
@@ -173,7 +174,7 @@ export function agentdashMkInboxRoutes(db: Db) {
         // carry adapterConfig, which routinely holds credentials; returning it
         // raw here would hand them to any steward and, on the override view, to
         // every administrator.
-        payload: redactEventPayload(approval.payload) ?? {},
+        payload: redactApprovalForReader(approval, canReadSpend).payload,
         createdAt: approval.createdAt,
         decidedAt: approval.decidedAt,
         expiresAt: approval.expiresAt,
@@ -246,6 +247,7 @@ export function agentdashMkInboxRoutes(db: Db) {
       stewardship: current?.stewardship ?? null,
       items: await buildItems(
         companyId,
+        await canReadCompanySpend(db, req, companyId),
         { agentIds: current ? [current.agent.id] : [], userId },
         false,
         { includeResolved: statusParam === "all" },
@@ -278,6 +280,7 @@ export function agentdashMkInboxRoutes(db: Db) {
     res.json({
       items: await buildItems(
         companyId,
+        await canReadCompanySpend(db, req, companyId),
         { allCompanyAgents: true },
         true,
         {},

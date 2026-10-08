@@ -361,6 +361,7 @@ export function costRoutes(
   router.get("/companies/:companyId/budgets/overview", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await assertSpendVisibility(req, companyId);
     const overview = await budgets.overview(companyId, {
       // AgentDash (GH #902): only project-scoped policies carry a project id;
       // company/agent scopes stay visible, project ones follow the project rule.

@@ -29,7 +29,7 @@ const APPROVAL_STATUS_LABELS: Record<string, string> = {
 
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
-  const { selectedCompanyId, setSelectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -168,7 +168,14 @@ export function ApprovalDetail() {
   if (isLoading) return <PageSkeleton variant="detail" />;
   if (!approval) return <p className="text-sm text-muted-foreground">Approval not found.</p>;
 
-  const payload = approval.payload as Record<string, unknown>;
+  // AgentDash (#1057): also protect cached approvals after spend access is
+  // lost. The server performs the authoritative redaction on every response.
+  const payload = { ...approval.payload } as Record<string, unknown>;
+  if (approval.type === "budget_override_required" &&
+      (selectedCompany?.id !== approval.companyId || selectedCompany.spentMonthlyCents == null)) {
+    delete payload.budgetAmount;
+    delete payload.observedAmount;
+  }
   const linkedAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
   // AgentDash (c4-hire-ux): "Dana (via Chief of Staff)" for a hire the person
   // confirmed on a CoS plan card; plain name for a direct request; the agent
@@ -331,7 +338,9 @@ export function ApprovalDetail() {
           )}
           {isBudgetApproval && approval.status === "pending" && (
             <p className="text-sm text-muted-foreground">
-              Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.
+              {selectedCompany?.spentMonthlyCents != null
+                ? <>Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.</>
+                : <>Ask a workspace administrator to resolve this budget stop.</>}
             </p>
           )}
           {approval.status === "pending" && (

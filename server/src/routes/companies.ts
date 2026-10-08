@@ -41,6 +41,7 @@ import {
   getActorInfo,
 } from "./authz.js";
 import {
+  canReadCompanySpend,
   assertIssueIdVisible,
   assertProjectIdVisible,
   feedbackTraceVisibilityCondition,
@@ -196,29 +197,27 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     }
   }
 
+  // AgentDash (#1057): company summaries follow the same spend predicate as Costs.
+  async function companyForReader(req: Request, company: Awaited<ReturnType<typeof svc.list>>[number]) {
+    return await canReadCompanySpend(db, req, company.id)
+      ? company
+      : { ...company, budgetMonthlyCents: null, spentMonthlyCents: null };
+  }
+
   router.get("/", async (req, res) => {
     assertBoard(req);
-    const result = await svc.list();
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
-      res.json(result);
-      return;
-    }
-    const allowed = new Set(req.actor.companyIds ?? []);
-    res.json(result.filter((company) => allowed.has(company.id)));
+    const allowed = req.actor.source === "local_implicit" || req.actor.isInstanceAdmin ? null : new Set(req.actor.companyIds ?? []);
+    const result = (await svc.list()).filter((company) => !allowed || allowed.has(company.id));
+    res.json(await Promise.all(result.map(company => companyForReader(req, company))));
   });
 
   router.get("/stats", async (req, res) => {
     assertBoard(req);
-    const allowed = req.actor.source === "local_implicit" || req.actor.isInstanceAdmin
-      ? null
-      : new Set(req.actor.companyIds ?? []);
-    const stats = await svc.stats();
-    if (!allowed) {
-      res.json(stats);
-      return;
-    }
-    const filtered = Object.fromEntries(Object.entries(stats).filter(([companyId]) => allowed.has(companyId)));
-    res.json(filtered);
+    const allowed = req.actor.source === "local_implicit" || req.actor.isInstanceAdmin ? null : new Set(req.actor.companyIds ?? []);
+    const entries = Object.entries(await svc.stats()).filter(([companyId]) => !allowed || allowed.has(companyId));
+    res.json(Object.fromEntries(await Promise.all(entries.map(async ([companyId, stats]) => [
+      companyId, await canReadCompanySpend(db, req, companyId) ? stats : { ...stats, monthTokens: null },
+    ]))));
   });
 
   // Common malformed path when companyId is empty in "/api/companies/{companyId}/issues".
@@ -240,7 +239,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       res.status(404).json({ error: "Company not found" });
       return;
     }
-    res.json(company);
+    res.json(await companyForReader(req, company));
   });
 
   router.get("/:companyId/feedback-traces", async (req, res) => {
@@ -658,7 +657,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         req.actor.userId ?? "board",
       );
     }
-    res.status(201).json(company);
+    res.status(201).json(await companyForReader(req, company));
   });
 
   router.patch("/:companyId", async (req, res) => {
@@ -768,7 +767,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       entityId: companyId,
       details: body,
     });
-    res.json(company);
+    res.json(await companyForReader(req, company));
   });
 
   router.patch("/:companyId/branding", validate(updateCompanyBrandingSchema), async (req, res) => {
@@ -803,7 +802,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       // entry — the worst kind, because it is the record you reach for later.
       details: payload,
     });
-    res.json(company);
+    res.json(await companyForReader(req, company));
   });
 
   router.post("/:companyId/archive", async (req, res) => {
@@ -823,7 +822,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       entityType: "company",
       entityId: companyId,
     });
-    res.json(company);
+    res.json(company ? await companyForReader(req, company) : company);
   });
 
   router.delete("/:companyId", async (req, res) => {

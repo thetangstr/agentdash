@@ -3,6 +3,7 @@ import request from "supertest";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  activityLog,
   agents,
   companies,
   companyMemberships,
@@ -16,6 +17,10 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+import { companyRoutes } from "../routes/companies.js";
+import { agentRoutes } from "../routes/agents.js";
+import { costRoutes } from "../routes/costs.js";
+import { activityRoutes } from "../routes/activity.js";
 import { dashboardRoutes } from "../routes/dashboard.js";
 import { errorHandler } from "../middleware/index.js";
 
@@ -144,6 +149,45 @@ describeEmbeddedPostgres("dashboard month spend and tokens follow project visibi
     ]);
   }, 30_000);
 
+  it("hides company and agent financial fields, stats usage, overview and cost activity from members", async () => {
+    const app = appAs(asUser("member-user", "member"));
+    await db.insert(activityLog).values({ companyId: COMPANY, actorType: "agent", actorId: AGENT, agentId: AGENT, action: "cost.created", entityType: "cost_event", entityId: randomUUID(), details: { costCents: 987654 } });
+    await db.insert(activityLog).values({ companyId: COMPANY, actorType: "user", actorId: "admin-user", action: "company.updated", entityType: "company", entityId: COMPANY, details: { name: "Renamed", budgetMonthlyCents: 876543, spentMonthlyCents: 765432 } });
+    for (const path of [`/api/companies/${COMPANY}`, "/api/companies"]) {
+      const res = await request(app).get(path);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const row = Array.isArray(res.body) ? res.body.find((row: { id: string }) => row.id === COMPANY) : res.body;
+      expect(row.spentMonthlyCents == null, path).toBe(true);
+      expect(row.budgetMonthlyCents == null, path).toBe(true);
+    }
+    const stats = await request(app).get("/api/companies/stats");
+    expect(stats.body[COMPANY].monthTokens).toBeNull();
+    expect(stats.body[COMPANY].agentCount).toBe(2);
+    for (const path of [`/api/agents/${AGENT}`, `/api/companies/${COMPANY}/agents`]) {
+      const res = await request(app).get(path);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const row = Array.isArray(res.body) ? res.body.find((row: { id: string }) => row.id === AGENT) : res.body;
+      expect(row.spentMonthlyCents == null, path).toBe(true);
+      expect(row.budgetMonthlyCents == null, path).toBe(true);
+    }
+    expect((await request(app).get(`/api/companies/${COMPANY}/budgets/overview`)).status).toBe(403);
+    const feed = await request(app).get(`/api/companies/${COMPANY}/activity`);
+    expect(feed.status).toBe(200);
+    expect(JSON.stringify(feed.body)).not.toMatch(/987654|876543|765432/);
+    expect(JSON.stringify(feed.body)).toContain("Renamed");
+  });
+
+  it("preserves financial values and overview for administrators and agents", async () => {
+    for (const actor of [asUser("admin-user", "admin"), { type: "agent", agentId: AGENT, companyId: COMPANY, source: "agent_key" }]) {
+      const app = appAs(actor);
+      const company = await request(app).get(`/api/companies/${COMPANY}`);
+      expect(company.body.spentMonthlyCents).toBe(32150);
+      const agent = await request(app).get(`/api/agents/${AGENT}`);
+      expect(agent.body.spentMonthlyCents).toBe(32150);
+      expect((await request(app).get(`/api/companies/${COMPANY}/budgets/overview`)).status).toBe(200);
+    }
+  });
+
   afterAll(async () => {
     await tempDb?.cleanup();
   });
@@ -156,6 +200,10 @@ describeEmbeddedPostgres("dashboard month spend and tokens follow project visibi
       next();
     });
     app.use("/api", dashboardRoutes(db));
+    app.use("/api/companies", companyRoutes(db));
+    app.use("/api", agentRoutes(db));
+    app.use("/api", costRoutes(db));
+    app.use("/api", activityRoutes(db));
     app.use(errorHandler);
     return app;
   }

@@ -690,11 +690,11 @@ function AgentManagementStories() {
                 <div className="grid gap-3 text-sm md:grid-cols-2">
                   <div className="rounded-lg border border-border p-3">
                     <div className="text-xs text-muted-foreground">Budget</div>
-                    <div className="mt-1 font-mono">${(agentManagementAgents[0]!.budgetMonthlyCents / 100).toFixed(0)} / month</div>
+                    <div className="mt-1 font-mono">${(agentManagementAgents[0]!.budgetMonthlyCents! / 100).toFixed(0)} / month</div>
                   </div>
                   <div className="rounded-lg border border-border p-3">
                     <div className="text-xs text-muted-foreground">Spent</div>
-                    <div className="mt-1 font-mono">${(agentManagementAgents[0]!.spentMonthlyCents / 100).toFixed(0)}</div>
+                    <div className="mt-1 font-mono">${(agentManagementAgents[0]!.spentMonthlyCents! / 100).toFixed(0)}</div>
                   </div>
                   <div className="rounded-lg border border-border p-3">
                     <div className="text-xs text-muted-foreground">Instructions</div>

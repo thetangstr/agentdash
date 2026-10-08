@@ -42,12 +42,13 @@ import {
   assertAgentIdVisible,
   assertApprovalProjectVisible,
   assertIssueIdVisible,
+  canReadCompanySpend,
   filterVisibleByProject,
   visibleAgentIdsFor,
 } from "./visibility.js";
 import { badRequest, forbidden, unprocessable } from "../errors.js";
 import { assertNoAssistantProvenanceClaimInPayload } from "../services/assistant-provenance-claims.js";
-import { redactEventPayload } from "../redaction.js";
+import { redactApprovalForReader } from "../redaction.js";
 import { approvalUrl } from "../lib/public-base-url.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
@@ -57,13 +58,6 @@ import {
   isBillingDisabled,
   withCompanyTierCapacityLock,
 } from "../services/tier-policy.js";
-
-function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
-  return {
-    ...approval,
-    payload: redactEventPayload(approval.payload) ?? {},
-  };
-}
 
 /**
  * Shape an approval row for a client response: redact the payload, and attach the
@@ -78,10 +72,10 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
  * Absent, not null, when the instance advertises no public URL — the same idiom
  * the health route uses for `publicBaseUrl`.
  */
-function approvalResponse<T extends { id: string; payload: Record<string, unknown> }>(approval: T) {
+function approvalResponse<T extends { id: string; type: string; payload: Record<string, unknown> }>(approval: T, canReadSpend: boolean) {
   const url = approvalUrl(approval.id);
   return {
-    ...redactApprovalPayload(approval),
+    ...redactApprovalForReader(approval, canReadSpend),
     ...(url ? { url } : {}),
   };
 }
@@ -258,6 +252,16 @@ export function approvalRoutes(
     return approval;
   }
 
+  // AgentDash (#1054): connector provenance is selected by authenticated
+  // connector code, never by a JSON claim at the public REST boundary.
+  function assertRestDecisionChannel(channel: unknown) {
+    if (channel !== undefined && channel !== "web" && channel !== "assistant") {
+      throw forbidden("REST approval decisions cannot claim a connector channel");
+    }
+    // The authority service separately requires an authenticated assistant
+    // grant for "assistant". Do not weaken that check or internal connectors.
+  }
+
   /** Decision provenance recorded alongside the status change. */
   function decisionMeta(
     context: Awaited<ReturnType<typeof authority.requireDecisionAuthority>>,
@@ -326,7 +330,8 @@ export function approvalRoutes(
       visibleIds === null
         ? result
         : result.filter((approval) => !approval.requestedByAgentId || visibleIds.has(approval.requestedByAgentId));
-    res.json(visible.map((approval) => approvalResponse(approval)));
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
+    res.json(visible.map((approval) => approvalResponse(approval, canReadSpend)));
   });
 
   router.get("/approvals/:id", async (req, res) => {
@@ -342,7 +347,7 @@ export function approvalRoutes(
     }
     // AgentDash (GH #902): 404 for a budget override on a hidden project.
     await assertApprovalProjectVisible(db, req, approval);
-    res.json(approvalResponse(approval));
+    res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
 
   router.post("/companies/:companyId/approvals", validate(createApprovalSchema), async (req, res) => {
@@ -447,7 +452,7 @@ export function approvalRoutes(
     // internally, so an unreachable provider cannot fail this response.
     await cardDelivery.deliverForApproval(approval.id);
 
-    res.status(201).json(approvalResponse(approval));
+    res.status(201).json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
 
   router.get("/approvals/:id/issues", async (req, res) => {
@@ -465,6 +470,7 @@ export function approvalRoutes(
 
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
+    assertRestDecisionChannel(req.body.channel);
     const id = req.params.id as string;
     const existingApproval = await requireApprovalAccess(req, id);
     if (!existingApproval) {
@@ -494,11 +500,12 @@ export function approvalRoutes(
       decisionNote: req.body.decisionNote ?? null,
     });
 
-    res.json(approvalResponse(approval));
+    res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
 
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
+    assertRestDecisionChannel(req.body.channel);
     const id = req.params.id as string;
     const existingApproval = await requireApprovalAccess(req, id);
     if (!existingApproval) {
@@ -524,7 +531,7 @@ export function approvalRoutes(
       decisionNote: req.body.decisionNote ?? null,
     });
 
-    res.json(approvalResponse(approval));
+    res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
 
   /**
@@ -537,6 +544,7 @@ export function approvalRoutes(
    */
   router.post("/approvals/:id/override", validate(overrideApprovalSchema), async (req, res) => {
     assertBoard(req);
+    assertRestDecisionChannel(req.body.channel);
     const id = req.params.id as string;
     const existingApproval = await requireApprovalAccess(req, id);
     if (!existingApproval) {
@@ -609,7 +617,7 @@ export function approvalRoutes(
       }
     }
 
-    res.json(approvalResponse(approval));
+    res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
 
   router.post(
@@ -641,7 +649,7 @@ export function approvalRoutes(
         details: { type: approval.type },
       });
 
-      res.json(approvalResponse(approval));
+      res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
     },
   );
 
@@ -713,7 +721,7 @@ export function approvalRoutes(
     // closed with no explanation of what replaced them.
     await cardDelivery.deliverForApproval(approval.id);
 
-    res.json(approvalResponse(approval));
+    res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
 
   router.get("/approvals/:id/comments", async (req, res) => {
