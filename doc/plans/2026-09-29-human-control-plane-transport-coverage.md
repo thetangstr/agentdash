@@ -4,6 +4,12 @@ Date: September29,2026. Status: **pending implementation and verification; not a
 
 The founder requires every human-facing page to be available through API, MCP and bridge. Availability means a person can discover the operation, retrieve useful content and complete the same allowed action through each transport. Existing API-client files, JSON fallback or links alone do not pass this gate.
 
+## Current verification — October7,2026
+
+All three split foundation PRs #881, #882 and #883 are merged; superseded #859 is closed with its branch/evidence preserved. Current registry has22 operations, including task_recovery.exhausted.read and task_recovery.remediate. The historical20-operation rows below describe their original checkpoint. Fresh local synthetic foundation tests passed176 across15 suites; exact source/evidence and limits are in [the verification report](../qa/2026-10-07-workforce-foundation.md).
+
+This refresh does not certify whole-app transport parity, inactive question-owner recovery, exact workspace uncertainty recovery, intended-model output quality/cost or hosted acceptance. Pending rows and original requirements remain in force.
+
 ## Connection contract
 
 The selected path is an explicit local `human` MCP toolset calling a distinct `/api/human-control` human bridge using the existing browser-approved named-human CLI key. Canonical roles/company/project/source visibility apply to each operation and at confirmation. Targets are explicit company/self/instance/public. Prepared mutations pin human, key, target, operation version, resolved payload and preconditions; the underlying board key retains its ordinary authorized REST capabilities. This is a trusted harness connection, not a confined delegated credential. Existing OAuth assistant and MK laptop bridges remain separate, with their existing scopes and ceremonies.

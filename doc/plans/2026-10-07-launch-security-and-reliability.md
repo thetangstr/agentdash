@@ -31,9 +31,11 @@ Each task ends with committed code/evidence, a diff package, independent spec/qu
 
 **Interfaces:** Consumes the linked Vercel preview and independent review in `.omc/handoff/codex-review-whats-new.md`. Produces public `/whats-new` and `/whats-new/launch-week` containing generic teams/transcript/log/security improvements, with Travel MVP highlights excluded.
 
-- [ ] Re-read frozen PR head, review and all six required checks; validate the existing PR body with `node scripts/ci/check-pr-process.mjs --body-file`.
-- [ ] Record that the founder's instruction to do these items follows presentation of this exact preview and authorizes this publish. Mark PR ready, then `gh pr merge 1072 --squash --match-head-commit 602e2a2966f9c21d8c7490485d0b46a9b44ca435` using correctly separated CLI arguments.
-- [ ] Observe the production Vercel deployment; verify public index/article, mobile navigation, manual illustrations and exclusion of Travel MVP copy. Use browser-harness and persist the actual result; do not equate merge with deployed proof.
+- [x] Re-read frozen PR head, review and all six required checks; validate the existing PR body with `node scripts/ci/check-pr-process.mjs --body-file`.
+- [x] Record that the founder's instruction to do these items follows presentation of this exact preview and authorizes this publish. Mark PR ready, then `gh pr merge 1072 --squash --match-head-commit 602e2a2966f9c21d8c7490485d0b46a9b44ca435` using correctly separated CLI arguments.
+- [x] Observe the production Vercel deployment; verify public index/article, mobile navigation, manual illustrations and exclusion of Travel MVP copy. Use browser-harness and persist the actual result; do not equate merge with deployed proof.
+
+Actual publication: #1072 merged0efe570ea46e5204f8ea1b5297ee8908f9f3916e; Vercel production succeeded. Fresh public index/article, desktop/mobile navigation, transcript controls and Travel MVP exclusion verified; evidence `.omc/qa/2026-10-07-whats-new-public.md`.
 
 ### Task 2: Close access-security defects (#1053, #1054, #1057) and operation-log visibility
 
@@ -113,7 +115,7 @@ expect(await observeExpectedWaiter(nextSample, ownerPid, expectedLock)).toMatchO
 
 ### Task 5: Make residual log sanitization cooperative
 
-**Files:** `server/src/routes/feedback.ts`, `server/src/services/feedback-redaction.ts`, `server/src/services/recovery/service.ts`, `workspace-operations.ts`, existing `run-log-redaction.ts` utilities and relevant tests; docs/prompt applicability comments as needed.
+**Files:** `server/src/services/feedback.ts`, `server/src/services/feedback-redaction.ts`, `server/src/services/recovery/service.ts`, `workspace-operations.ts`, existing `run-log-redaction.ts` utilities and relevant tests; docs/prompt applicability comments as needed.
 
 **Interfaces:** Preserve runtime known-secret and feedback-specific PII policies, structured JSON, raw-byte offsets, trusted-persistence/epoch semantics and truncation. Existing feedback/recovery already redact: the defect is synchronous heavy work, including the second whole-log feedback sanitizer after reading.
 
@@ -138,9 +140,11 @@ expect(() => output.trim().split("\n").map(line => JSON.parse(line))).not.toThro
 **Interfaces:** Current docs implementation and already-merged prerequisite #925; public Docs links/redirect allowlist must coexist with Task1's What's new routes and preserve app routes.
 
 - [ ] Freeze #928 original branch/diff and audit its body; replay its minimal go-live intent in an isolated current-main worktree, preserving any foreign changes rather than resetting their checkout. Resolve current marketing/footer/router differences after Task1 is landed.
-- [ ] Before exposure, inspect public bundles/redirects for client briefs and private release-note material (including `ui/src/UnprefixedBoardRedirect.tsx` and the docs release-note loader). Remove public entry points to private customer prose; preserve canonical historical source files. Add privacy assertions using synthetic labels, without contacting any customer.
+- [ ] Before exposure, inspect public bundles/redirects for client briefs and private release-note material (including `ui/src/components/UnprefixedBoardRedirect.tsx` and the docs release-note loader). Remove public entry points to private customer prose; preserve canonical historical source files. Add privacy assertions using synthetic labels, without contacting any customer.
 - [ ] Verify anonymous public `/docs` discovery, deep-link refresh, navigation/footer links and Guides/MCP integration with existing unit tests plus browser coverage; workspace app navigation and company selection stay unchanged. Add a regression only for a real uncovered behavior.
 - [ ] Independently review final diff and all required CI, then land/publish the authorized docs go-live and verify the actual public deployment. Preserve source attribution, redirects and existing operator/private-doc exclusions.
+
+Task4 frozen dcb14e4c6:146 focused tests pass; independent review approved/no findings; PR1073 is running required CI. Task2 review found a residual budget-approval amount disclosure; repair/re-review is required before landing.
 
 ### Task 7: Reconcile and verify the workforce/human-control foundation
 
@@ -148,8 +152,8 @@ expect(() => output.trim().split("\n").map(line => JSON.parse(line))).not.toThro
 
 **Interfaces:** Approved existing company/workforce/authority contracts in current source; held architecture choices #934/#936 are not silently decided. Detail: launch audit report `/tmp/agentdash-20261007-launch-plan.md`.
 
-- [ ] Read the three merged PR acceptance criteria and current transport ledger, identify remaining executable checks, and run relevant human-control auth/source-authority/workforce readiness/runtime tests against synthetic local data.
-- [ ] Correct stale draft status: reference the actual merged successors and close #859 as superseded after preserving its evidence/branch. Record fresh source-tested behavior separately from unrun customer/quality/cost acceptance; do not invent numeric targets or launch claims.
+- [x] Read the three merged PR acceptance criteria and current transport ledger, identify remaining executable checks, and run relevant human-control auth/source-authority/workforce readiness/runtime tests against synthetic local data.
+- [x] Correct stale draft status: reference the actual merged successors and close #859 as superseded after preserving its evidence/branch. Record fresh source-tested behavior separately from unrun customer/quality/cost acceptance; do not invent numeric targets or launch claims.
 - [ ] Prepare any missing, approved-contract verification fixes as a separately reviewed PR. If a remaining path depends on #934/#936 or unapproved quality targets, document exact dependency, concrete options and evidence in the final decision packet while continuing independent tasks.
 
 ## Final completion gate
