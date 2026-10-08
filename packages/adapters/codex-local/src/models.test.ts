@@ -44,6 +44,18 @@ describe("codex-local fast mode and the model picker", () => {
     }
   });
 
+  it("keeps fast mode for the gpt-6 family now that it is listed", () => {
+    // Codex's catalog offers the Fast tier on every gpt-6 model (2026-10-08).
+    for (const id of ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+      expect(isCodexLocalManualModel(id), `${id} should be a known model`).toBe(false);
+      expect(isCodexLocalFastModeSupported(id), `${id} lost fast mode by becoming selectable`).toBe(true);
+    }
+  });
+
+  it("does not list a gpt-6 Terra, which Codex's catalog does not offer", () => {
+    expect(models.some((entry) => entry.id === "gpt-6-terra")).toBe(false);
+  });
+
   it("still grants fast mode to a model typed in by hand", () => {
     // The escape hatch that made the regression invisible. Keep it working.
     expect(isCodexLocalManualModel("gpt-6-not-released-yet")).toBe(true);

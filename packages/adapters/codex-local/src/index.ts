@@ -33,6 +33,10 @@ export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
  * refreshing the list was for.
  */
 export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = [
+  "gpt-6.1-sol",
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
@@ -73,8 +77,19 @@ export function isCodexLocalFastModeSupported(model: string | null | undefined):
  * is given straight through as `--model`. So this array is a convenience, and
  * being out of date makes new models unreachable from the UI without making
  * them unsupported.
+ *
+ * The gpt-6 family was read from Codex's own model catalog for a ChatGPT Team
+ * login on 2026-10-08 (`/backend-api/codex/models`). There is no gpt-6 Terra:
+ * the tiers are Astra (frontier), Sol (workhorse; 6.1 is current) and Luna
+ * (fast). All four offer the Fast service tier. The catalog only lists them to
+ * Codex CLI 0.160.0 and later, so an older `codex` cannot run them — upgrade
+ * the CLI before moving an agent onto one.
  */
 export const models = [
+  { id: "gpt-6.1-sol", label: "gpt-6.1 Sol — current workhorse (Codex CLI 0.160+)" },
+  { id: "gpt-6-astra", label: "gpt-6 Astra — frontier, most demanding work (Codex CLI 0.160+)" },
+  { id: "gpt-6-sol", label: "gpt-6 Sol — previous workhorse (Codex CLI 0.160+)" },
+  { id: "gpt-6-luna", label: "gpt-6 Luna — fast, affordable (Codex CLI 0.160+)" },
   { id: "gpt-5.6-sol", label: "gpt-5.6 Sol — deepest reasoning" },
   { id: "gpt-5.6-terra", label: "gpt-5.6 Terra — balanced" },
   { id: "gpt-5.6-luna", label: "gpt-5.6 Luna — fastest, cheapest" },
