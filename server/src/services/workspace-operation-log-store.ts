@@ -19,6 +19,9 @@ export interface WorkspaceOperationLogReadOptions {
 export interface WorkspaceOperationLogReadResult {
   content: string;
   nextOffset?: number;
+  // Internal serve metadata; never include raw bytes in an API response.
+  buffer?: Buffer;
+  startOffset?: number;
 }
 
 export interface WorkspaceOperationLogFinalizeSummary {
@@ -77,9 +80,31 @@ function createLocalFileWorkspaceOperationLogStore(basePath: string): WorkspaceO
       stream.on("end", () => resolve());
     });
 
-    const content = Buffer.concat(chunks).toString("utf8");
-    const nextOffset = end + 1 < stat.size ? end + 1 : undefined;
-    return { content, nextOffset };
+    // AgentDash: a page must retain the final NDJSON record whole. Otherwise
+    // its next page can start inside an escaped or unshaped credential value.
+    let buffer = Buffer.concat(chunks);
+    let consumed = start + buffer.length;
+    if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a && consumed < stat.size) {
+      const fh = await fs.open(filePath, "r");
+      try {
+        const remainder: Buffer[] = [buffer];
+        while (consumed < stat.size) {
+          const chunk = Buffer.alloc(Math.min(64 * 1024, stat.size - consumed));
+          const { bytesRead } = await fh.read(chunk, 0, chunk.length, consumed);
+          if (bytesRead === 0) break;
+          const newline = chunk.subarray(0, bytesRead).indexOf(0x0a);
+          const used = newline < 0 ? bytesRead : newline + 1;
+          remainder.push(chunk.subarray(0, used));
+          consumed += used;
+          if (newline >= 0) break;
+        }
+        buffer = Buffer.concat(remainder);
+      } finally {
+        await fh.close();
+      }
+    }
+    const nextOffset = consumed < stat.size ? consumed : undefined;
+    return { content: buffer.toString("utf8"), nextOffset, buffer, startOffset: start };
   }
 
   async function sha256File(filePath: string): Promise<string> {

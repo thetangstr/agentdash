@@ -5,7 +5,7 @@ import type { WorkspaceOperation, WorkspaceOperationPhase, WorkspaceOperationSta
 import { asc, desc, eq, inArray, isNull, or, and } from "drizzle-orm";
 import { notFound } from "../errors.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
-import { redactRunLogText, redactRunLogValue } from "./run-log-redaction.js";
+import { redactRunLogText, redactRunLogValue, redactRunLogReadForServe } from "./run-log-redaction.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { getWorkspaceOperationLogStore } from "./workspace-operation-log-store.js";
 
@@ -239,7 +239,7 @@ export function workspaceOperationService(db: Db) {
       return rows.map(toWorkspaceOperation);
     },
 
-    readLog: async (operationId: string, opts?: { offset?: number; limitBytes?: number }) => {
+    readLog: async (operationId: string, opts?: { offset?: number; limitBytes?: number; signal?: AbortSignal }) => {
       const operation = await getById(operationId);
       if (!operation) throw notFound("Workspace operation not found");
       if (!operation.logStore || !operation.logRef) throw notFound("Workspace operation log not found");
@@ -252,14 +252,15 @@ export function workspaceOperationService(db: Db) {
         opts,
       );
 
+      // AgentDash: use the shared cooperative path and raw-byte cursor. This
+      // store does not issue persist trust marks, so every range is verified.
+      const served = await redactRunLogReadForServe(result, { signal: opts?.signal });
       return {
         operationId,
         store: operation.logStore,
         logRef: operation.logRef,
-        ...result,
-        // AgentDash (GH #992): same serve-time pass as run logs — files
-        // written before redaction shipped stay safe to return.
-        content: redactRunLogText(result.content),
+        content: served.content,
+        nextOffset: served.nextOffset,
       };
     },
   };

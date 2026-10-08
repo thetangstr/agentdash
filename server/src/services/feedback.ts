@@ -42,6 +42,9 @@ import {
   createFeedbackRedactionState,
   finalizeFeedbackRedactionSummary,
   sanitizeFeedbackText,
+  sanitizeFeedbackTextAsync,
+  sanitizeFeedbackNdjsonAsync,
+  sanitizeFeedbackValueAsync,
   sanitizeFeedbackValue,
   sha256Digest,
 } from "./feedback-redaction.js";
@@ -256,7 +259,7 @@ async function readTextFileIfPresent(
   if (!filePath) return null;
   const raw = await readFile(filePath, "utf8").catch(() => null);
   if (raw == null) return null;
-  return sanitizeFeedbackText(raw, state, fieldPath, MAX_TRACE_FILE_CHARS);
+  return sanitizeFeedbackTextAsync(raw, state, fieldPath, MAX_TRACE_FILE_CHARS);
 }
 
 async function listChildFiles(dirPath: string) {
@@ -419,7 +422,7 @@ async function buildCodexTraceFiles(input: {
       sessionId: input.sessionId,
       sessionFile: sessionFile ? path.basename(sessionFile) : null,
     },
-    normalized: sanitizeFeedbackValue(
+    normalized: await sanitizeFeedbackValueAsync(
       {
         adapterType: "codex_local",
         sessionId: input.sessionId,
@@ -439,7 +442,7 @@ async function buildClaudeTraceFiles(input: {
   notes: string[];
 }) {
   const files: FeedbackTraceBundleFile[] = [];
-  const sanitizedStdout = sanitizeFeedbackText(
+  const sanitizedStdout = await sanitizeFeedbackTextAsync(
     input.stdoutText,
     input.state,
     "bundle.rawAdapterTrace.claude.stdout",
@@ -547,7 +550,7 @@ async function buildClaudeTraceFiles(input: {
       debugLogFound: Boolean(debugLogText),
       taskDirPresent: taskFiles.length > 0,
     },
-    normalized: sanitizeFeedbackValue(
+    normalized: await sanitizeFeedbackValueAsync(
       {
         adapterType: "claude_local",
         sessionId: input.sessionId,
@@ -572,7 +575,7 @@ async function buildOpenCodeTraceFiles(input: {
     return {
       files,
       raw: null as Record<string, unknown> | null,
-      normalized: sanitizeFeedbackValue(
+      normalized: await sanitizeFeedbackValueAsync(
         {
           adapterType: "opencode_local",
           summary: parseOpenCodeJsonl(input.stdoutText),
@@ -604,7 +607,7 @@ async function buildOpenCodeTraceFiles(input: {
   const sessionText =
     sessionRaw == null
       ? null
-      : sanitizeFeedbackText(sessionRaw, input.state, "bundle.rawAdapterTrace.opencode.session", MAX_TRACE_FILE_CHARS);
+      : await sanitizeFeedbackTextAsync(sessionRaw, input.state, "bundle.rawAdapterTrace.opencode.session", MAX_TRACE_FILE_CHARS);
   if (sessionText) {
     files.push(makeBundleFile({
       path: "adapter/opencode/session.json",
@@ -723,7 +726,7 @@ async function buildOpenCodeTraceFiles(input: {
       projectFound: Boolean(projectText),
       todoFound: Boolean(todoText),
     },
-    normalized: sanitizeFeedbackValue(
+    normalized: await sanitizeFeedbackValueAsync(
       {
         adapterType: "opencode_local",
         sessionId: input.sessionId,
@@ -1487,7 +1490,7 @@ async function buildFeedbackTraceBundleFromRow(
         .map((entry) => entry.chunk)
         .join("");
 
-      paperclipRun = sanitizeFeedbackValue(
+      paperclipRun = await sanitizeFeedbackValueAsync(
         {
           id: run.id,
           companyId: run.companyId,
@@ -1528,7 +1531,7 @@ async function buildFeedbackTraceBundleFromRow(
         contents: `${JSON.stringify(paperclipRun, null, 2)}\n`,
       }));
 
-      const sanitizedEvents = sanitizeFeedbackValue(
+      const sanitizedEvents = await sanitizeFeedbackValueAsync(
         events,
         state,
         "bundle.paperclipRun.events",
@@ -1546,7 +1549,7 @@ async function buildFeedbackTraceBundleFromRow(
           path: "paperclip/run-log.ndjson",
           contentType: "application/x-ndjson",
           source: "paperclip_run_log",
-          contents: `${sanitizeFeedbackText(logText, state, "bundle.paperclipRun.log", MAX_TRACE_FILE_CHARS)}\n`,
+          contents: `${await sanitizeFeedbackNdjsonAsync(logText, state, "bundle.paperclipRun.log", MAX_TRACE_FILE_CHARS)}\n`,
         }));
       } else {
         appendNote(notes, "run_log_missing");

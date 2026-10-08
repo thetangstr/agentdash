@@ -30,9 +30,9 @@ import { runningProcesses } from "../../adapters/index.js";
 import { forbidden, notFound } from "../../errors.js";
 import { isUniqueViolation, pgConstraintName, unwrapPgError } from "../../lib/pg-error.js";
 import { logger } from "../../middleware/logger.js";
-import { redactCurrentUserText } from "../../log-redaction.js";
+import { redactCurrentUserText, type CurrentUserRedactionOptions } from "../../log-redaction.js";
 import { redactSensitiveText } from "../../redaction.js";
-import { redactRunLogText } from "../run-log-redaction.js";
+import { redactRunLogText, redactRunLogTextAsync } from "../run-log-redaction.js";
 import { logActivity } from "../activity-log.js";
 import { budgetService } from "../budgets.js";
 import { instanceSettingsService } from "../instance-settings.js";
@@ -59,6 +59,17 @@ import {
   probeRunLiveness,
   type RunLivenessEvidence,
 } from "../run-liveness-probe.js";
+
+// AgentDash: whole-text context matters for a legacy tail beginning mid-line.
+// The 8KB tail is bounded by its reader; matching itself is cooperative, not
+// a hard latency guarantee for a single regex/callback.
+export function redactRecoveryEvidenceTextAsync(
+  value: string,
+  options?: CurrentUserRedactionOptions,
+  opts?: import("@paperclipai/shared").AsyncRedactionOptions,
+) {
+  return redactRunLogTextAsync(redactSensitiveText(redactCurrentUserText(value, options)), undefined, opts);
+}
 
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
@@ -977,7 +988,7 @@ export function recoveryService(
         : Promise.resolve([]),
     ]);
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
-    const safeTail = truncateEvidenceText(redactWatchdogEvidenceText(tail, currentUserRedactionOptions));
+    const safeTail = truncateEvidenceText(await redactRecoveryEvidenceTextAsync(tail, currentUserRedactionOptions));
     const silenceAgeMs = input.activityAt
       ? Math.max(0, input.now.getTime() - input.activityAt.getTime())
       : silenceAgeMsForRun(input.run, input.now);

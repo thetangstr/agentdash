@@ -633,3 +633,10 @@ read. `unmetered_no_ledger` or `unmetered_no_session` means unknown spend, not
 zero. Keep wall-clock and turn limits, and report unavailable metering or failed
 private-file cleanup through a card OR comment so the operator can investigate.
 <!-- /AgentDash: hermes-ssh-hardening -->
+
+<!-- AgentDash: cooperative-log-reads — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Cooperative log processing changes scheduling, not agent permissions or
+secret-handling responsibilities. Follow returned nextOffset values for log
+paging; offsets refer to raw stored bytes, not the redacted response length.
+Feedback NDJSON truncation retains whole records and reports truncatedFields. -->
+<!-- /AgentDash: cooperative-log-reads -->
