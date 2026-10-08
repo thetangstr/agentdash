@@ -115,7 +115,10 @@ async function createApp() {
     };
     next();
   });
-  app.use("/api", agentRoutes(createDbStub() as any));
+  const db = createDbStub();
+  app.locals.companyTransaction = db.transaction;
+  app.locals.lockCompany = db.lockCompany;
+  app.use("/api", agentRoutes(db as any));
   app.use(errorHandler);
   return app;
 }
@@ -127,14 +130,29 @@ async function createApp() {
  * unchanged baseline path.
  */
 function createDbStub() {
+  let transactionOpen = false;
+  const lockCompany = vi.fn(() => {
+    expect(transactionOpen).toBe(true);
+    return chain;
+  });
   const chain: any = {
     from: () => chain,
     leftJoin: () => chain,
     where: () => chain,
+    for: lockCompany,
     then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
       Promise.resolve([{ id: "company-1", productProfile: "default" }]).then(resolve, reject),
   };
-  return { select: () => chain };
+  const db = {
+    select: () => chain,
+    lockCompany,
+    transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => {
+      transactionOpen = true;
+      try { return await work(db); }
+      finally { transactionOpen = false; }
+    }),
+  };
+  return db;
 }
 
 async function requestApp(
@@ -314,7 +332,8 @@ describe("agent instructions bundle routes", () => {
       },
     });
 
-    const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
       .patch("/api/agents/11111111-1111-4111-8111-111111111111?companyId=company-1")
       .send({
         adapterType: "claude_local",
@@ -324,6 +343,9 @@ describe("agent instructions bundle routes", () => {
       }));
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(app.locals.companyTransaction).toHaveBeenCalledTimes(1);
+    expect(app.locals.lockCompany).toHaveBeenCalledExactlyOnceWith("no key update");
+    expect(app.locals.lockCompany.mock.invocationCallOrder[0]).toBeLessThan(mockAgentService.update.mock.invocationCallOrder[0]);
     expect(mockAgentService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       expect.objectContaining({

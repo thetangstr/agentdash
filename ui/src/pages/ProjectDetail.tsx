@@ -1,3 +1,4 @@
+import { ApiError } from "../api/client";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Link, useParams, useNavigate, useLocation, Navigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -397,9 +398,10 @@ export function ProjectDetail() {
     },
   });
 
-  const { data: budgetOverview } = useQuery({
+  const { data: budgetOverview, error: budgetOverviewError } = useQuery({
     queryKey: queryKeys.budgets.overview(resolvedCompanyId ?? "__none__"),
     queryFn: () => budgetsApi.overview(resolvedCompanyId!),
+    retry: (count, error) => !(error instanceof ApiError && error.status === 403) && count < 3,
     enabled: !!resolvedCompanyId,
     refetchInterval: 30_000,
     staleTime: 5_000,
@@ -760,12 +762,13 @@ export function ProjectDetail() {
 
       {activeTab === "budget" && canEditProject && resolvedCompanyId ? (
         <div className="max-w-3xl">
-          <BudgetPolicyCard
+          {budgetOverviewError ? <p className="text-sm text-muted-foreground">Budget details are unavailable. Ask a workspace administrator for help with budget stops.</p>
+          : !budgetOverview ? <p className="text-sm text-muted-foreground">Loading budget…</p> : <BudgetPolicyCard
             summary={projectBudgetSummary}
             variant="plain"
             isSaving={budgetMutation.isPending}
             onSave={(amount) => budgetMutation.mutate(amount)}
-          />
+          />}
         </div>
       ) : null}
 

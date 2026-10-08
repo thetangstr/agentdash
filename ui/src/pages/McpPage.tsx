@@ -196,6 +196,11 @@ export function McpPage() {
             you. Then just talk: &ldquo;show me my dashboard&rdquo; is enough.
           </p>
           <CodeBlock label="Existing instance">{MCP_ADD_EXISTING}</CodeBlock>
+          <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
+            The documentation covers every transport, toolset and tool:{" "}
+            <a href="/docs/mcp/overview">MCP overview</a> and{" "}
+            <a href="/docs/mcp/connecting">Connecting</a>.
+          </p>
         </div>
       </SectionContainer>
 

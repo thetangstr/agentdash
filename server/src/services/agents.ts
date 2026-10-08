@@ -1,3 +1,4 @@
+import { withHermesSshCompanyLock } from "./hermes-ssh-policy.js";
 import { publishActivity, type ActivityPublication } from "./activity-log.js";
 import { workforceService } from "./workforce.js";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
@@ -229,7 +230,7 @@ export function deduplicateAgentName(
   return `${candidateName} ${Date.now()}`;
 }
 
-export function agentService(db: Db) {
+export function agentService(db: Db, optionsForService: { environmentLockHeld?: boolean } = {}) {
   function currentUtcMonthWindow(now = new Date()) {
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth();
@@ -348,6 +349,13 @@ export function agentService(db: Db) {
     options?: UpdateAgentOptions,
     connection: Db = db,
   ): Promise<ReturnType<typeof normalizeAgentRow> | null> {
+    // AgentDash: every pin writer (including rollback/internal callers) shares
+    // the company-first boundary with environment retargets.
+    if (!optionsForService.environmentLockHeld && (data.defaultEnvironmentId !== undefined || data.adapterType !== undefined)) {
+      const current = await getById(id);
+      if (!current) return null;
+      return withHermesSshCompanyLock(db, current.companyId, tx => agentService(tx, { environmentLockHeld: true }).update(id, data, options));
+    }
     if (data.adapterType && !supportsWorkforcePrompt(data.adapterType) && connection === db) {
       return db.transaction(tx => updateAgent(id, data, options, tx as unknown as Db));
     }
@@ -452,11 +460,18 @@ export function agentService(db: Db) {
     create: async (companyId: string, input: Omit<typeof agents.$inferInsert, "companyId"> & { workforceTemplateId?: string }, acceptance?: ActivityAcceptance): Promise<ReturnType<typeof normalizeAgentRow>> => {
       // AgentDash: enrollment shares the actual caller acceptance; root calls own commit.
       if (acceptance !== undefined) assertActivityAcceptance(acceptance);
+      if (!optionsForService.environmentLockHeld && input.defaultEnvironmentId) {
+        const publications = acceptance?.publications ?? [];
+        const created = await withHermesSshCompanyLock(acceptance?.executor ?? db, companyId, tx =>
+          agentService(tx, { environmentLockHeld: true }).create(companyId, input, { executor: tx, publications }));
+        if (!acceptance) for (const publication of publications) publishActivity(publication);
+        return created;
+      }
       const { workforceTemplateId, ...data } = input;
       if (workforceTemplateId !== undefined) {
         workforceTemplateIdSchema.parse(workforceTemplateId);
         const create = async (accepted: ActivityAcceptance) => {
-          const created = await agentService(accepted.executor).create(companyId, data);
+          const created = await agentService(accepted.executor, optionsForService).create(companyId, data);
           await workforceService(accepted.executor).enroll(companyId, created.id, { templateId: workforceTemplateId as "marketing-content" | "sales-support" }, {}, accepted);
           return created;
         };
@@ -466,7 +481,7 @@ export function agentService(db: Db) {
         for (const publication of publications) publishActivity(publication);
         return created;
       }
-      if (acceptance) return agentService(acceptance.executor).create(companyId, data);
+      if (acceptance) return agentService(acceptance.executor, optionsForService).create(companyId, data);
       if (data.reportsTo) {
         await ensureManager(companyId, data.reportsTo);
       }

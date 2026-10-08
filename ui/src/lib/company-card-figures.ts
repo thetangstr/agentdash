@@ -18,10 +18,13 @@ export interface CompanyUsageLine {
 }
 
 export function companyUsageLine(input: {
-  spentMonthlyCents: number;
-  budgetMonthlyCents: number;
+  spentMonthlyCents: number | null;
+  budgetMonthlyCents: number | null;
   monthTokens?: number | null;
 }): CompanyUsageLine {
+  if (input.spentMonthlyCents == null || input.budgetMonthlyCents == null) {
+    return { text: "Unavailable", note: "Spend is visible to administrators", unmetered: false };
+  }
   const tokens = Number(input.monthTokens ?? 0);
   if (input.spentMonthlyCents <= 0 && tokens > 0) {
     return {

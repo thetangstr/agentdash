@@ -1,4 +1,4 @@
-import { and } from "drizzle-orm";
+import { and, not, or, like, inArray } from "drizzle-orm";
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
@@ -18,6 +18,7 @@ import {
 } from "./authz.js";
 import {
   activityVisibilityCondition,
+  canReadCompanySpend,
   agentVisibilityCondition,
   issueVisibilityParam,
   projectScopedVisibilityCondition,
@@ -82,6 +83,7 @@ export function activityRoutes(db: Db) {
       since = parsed;
     }
 
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
     const filters = {
       companyId,
       agentId: req.query.agentId as string | undefined,
@@ -97,11 +99,24 @@ export function activityRoutes(db: Db) {
       // guarded /issues/:id/activity.
       visibleWhere: and(
         activityVisibilityCondition(req, companyId),
+        // AgentDash (#1057): monetary activity is no exception to spend access.
+        canReadSpend ? undefined : not(or(
+          inArray(activityLog.entityType, ["cost_event", "finance_event", "budget_policy", "budget_incident"]),
+          like(activityLog.action, "cost.%"), like(activityLog.action, "finance.%"), like(activityLog.action, "budget.%"),
+          inArray(activityLog.action, ["company.budget_updated", "agent.budget_updated"]),
+        )!),
         // Agent visibility (2026-09-30): rows about an invisible agent are absent.
         agentVisibilityCondition(req, companyId, activityLog.agentId),
       ),
     };
-    const result = await svc.list(filters);
+    const rows = await svc.list(filters);
+    // Generic company/agent update events may carry these fields alongside
+    // nonfinancial edits; preserve the event while omitting hidden amounts.
+    const result = canReadSpend ? rows : rows.map((row) => {
+      if (!row.details) return row;
+      const { budgetMonthlyCents: _budget, spentMonthlyCents: _spent, ...details } = row.details;
+      return { ...row, details };
+    });
     // GH #863: blocker and referenced-issue entries in details follow visibility.
     res.json(await redactHiddenIssuesInActivityRows(db, req, companyId, result));
   });

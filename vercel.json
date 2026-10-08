@@ -112,7 +112,7 @@
       "permanent": false
     },
     {
-      "source": "/:path((?!(?:demo|consulting|about|whats-new|mcp|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
+      "source": "/:path((?!(?:demo|consulting|about|whats-new|mcp|docs|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
       "destination": "/find",
       "permanent": false
     }

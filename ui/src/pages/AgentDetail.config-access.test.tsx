@@ -43,7 +43,7 @@ vi.mock("../api/client", async (importOriginal) => {
           );
         }
         if (path.startsWith(`/agents/${AGENT_ID}`)) return AGENT;
-        if (path.includes("budget")) return { policies: [], incidents: [] };
+        if (path.includes("budget")) throw new actual.ApiError("Spend is restricted", 403, { error: "forbidden" });
         return [];
       }),
       post: vi.fn(async () => ({})),
@@ -121,6 +121,8 @@ const AGENT = {
   runtimeConfig: {},
   metadata: null,
   harnessReadiness: null,
+  budgetMonthlyCents: 0,
+  spentMonthlyCents: 0,
 };
 
 let container: HTMLDivElement | null = null;
@@ -159,6 +161,13 @@ afterEach(() => {
 });
 
 describe("AgentDetail settings views for a viewer without configuration access", () => {
+  it("renders an unavailable budget instead of a zero-filled editor after overview 403", async () => {
+    const page = await renderTab("budget");
+    expect(page.textContent).toContain("Budget details are unavailable");
+    expect(page.textContent).toContain("Ask a workspace administrator");
+    expect(page.querySelector('input[type="number"]')).toBeNull();
+    expect(page.textContent).not.toContain("$0.00");
+  });
   it("explains the hidden instructions instead of showing an empty editor", async () => {
     const page = await renderTab("instructions");
     const notice = page.querySelector('[data-testid="agent-config-access-notice"]');

@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { REDACTED_EVENT_VALUE, redactEventPayload, redactSensitiveText, sanitizeRecord } from "../redaction.js";
+import { REDACTED_EVENT_VALUE, redactApprovalForReader, redactEventPayload, redactSensitiveText, sanitizeRecord } from "../redaction.js";
 
 describe("redaction", () => {
+  it("redacts only typed hire monthly fields while retaining credential protection and stored history", () => {
+    const payload = { budgetMonthlyCents: 876543, apiKey: "synthetic-secret", note: "Budget discussion" };
+    const hire = { type: "hire_agent", payload };
+    expect(redactApprovalForReader(hire, false).payload).toEqual({
+      budgetMonthlyCents: null, apiKey: REDACTED_EVENT_VALUE, note: "Budget discussion",
+    });
+    expect(redactApprovalForReader(hire, true).payload.budgetMonthlyCents).toBe(876543);
+    expect(redactApprovalForReader({ ...hire, type: "generic" }, false).payload.budgetMonthlyCents).toBe(876543);
+    expect(hire.payload).toEqual(payload);
+    expect(hire.payload.apiKey).toBe("synthetic-secret");
+    expect(hire.payload.budgetMonthlyCents).toBe(876543);
+  });
+
   it("redacts sensitive keys and nested secret values", () => {
     const input = {
       apiKey: "abc123",

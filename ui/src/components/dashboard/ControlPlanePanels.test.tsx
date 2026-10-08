@@ -233,6 +233,14 @@ describe("ControlPlanePanels", () => {
     expect(tile.value).not.toBe("$0.00");
   });
 
+  it("keeps budget-stop counts but offers administrator escalation without a costs link", async () => {
+    mockDashboardApi.summary.mockResolvedValue(makeSummary({ costs: null, budgets: { activeIncidents: 2, pendingApprovals: 1, pausedAgents: 1, pausedProjects: 1 } }));
+    await render();
+    expect(q("dashboard-budget-incident")?.textContent).toContain("2 active budget incidents");
+    expect(q("dashboard-budget-incident")?.textContent).toContain("Ask a workspace administrator");
+    expect(q("dashboard-budget-incident")?.querySelector('a[href="/costs"]')).toBeNull();
+  });
+
   it("shows the empty states for a brand-new company", async () => {
     mockDashboardApi.summary.mockResolvedValue(
       makeSummary({ tasks: { open: 0, inProgress: 0, blocked: 0, done: 0 }, costs: { monthSpendCents: 0, monthBudgetCents: 0, monthUtilizationPercent: 0 } }),

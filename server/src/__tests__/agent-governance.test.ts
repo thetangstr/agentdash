@@ -881,7 +881,10 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
         request(baseUrl).patch(`/api/agents/${agent.id}`).send({ budgetMonthlyCents: 9_000 }),
       );
       expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
-      expect(accepted.body.budgetMonthlyCents).toBe(9_000);
+      // Configuration writes do not confer spend visibility. The write still persists.
+      expect(accepted.body.budgetMonthlyCents).toBeNull();
+      const [stored] = await db.select().from(agents).where(eq(agents.id, agent.id));
+      expect(stored!.budgetMonthlyCents).toBe(9_000);
     });
 
     // These are the escalation paths: a steward is an ordinary operator, so any

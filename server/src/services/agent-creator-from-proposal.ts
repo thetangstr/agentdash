@@ -103,6 +103,15 @@ export function agentCreatorFromProposal(deps: Deps) {
   };
 }
 
+// AgentDash: operation-log-visibility is inherited from the canonical default bundle;
+// workers must not probe alternate run/workspace routes after an unavailable operation.
+// AgentDash: spend-visibility is inherited from the canonical default;
+// null/omitted amounts stay unavailable in approvals, inboxes, agent history and mutation/create/hire responses too;
+// 403 readers ask an administrator about budget stops.
+// AgentDash: approval-channel-provenance is inherited from the canonical default bundle;
+// synthesized workers cannot claim connector provenance through REST decisions.
+// AgentDash: agent-creation-authority is inherited from the canonical default bundle;
+// proposal-created workers must escalate privileged hires to a board administrator.
 // AgentDash: accepted-hire-recovery is inherited verbatim from the canonical default
 // bundle: repair accepted IDs without replaying interview/plan confirmations.
 // AgentDash: this remains the proposal creator's agent-facing prompt surface.
@@ -163,6 +172,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // worker bundle: secrets in run output are scrubbed server-side before storage
 // and again when served, never rely on echoing a credential to read it back.
 // Proposal-created hires add nothing to that.
+// AgentDash: hermes-ssh-hardening is inherited by every hired role from the
+// canonical bundle: human-only retargets, private-query compatibility, and
+// unknown remote spend/cleanup reporting must never be overridden by a hire.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

@@ -61,7 +61,7 @@
         "Names that still carry the upstream name",
         "Source and license"
       ],
-      "firstParagraph": "AgentDash is a fork of an open-source control plane for AI agents, released under the MIT license. This page names that project and explains the names it left behind in the code."
+      "firstParagraph": "AgentDash is a fork of Paperclip, the open-source control plane for AI agents. We thank the Paperclip team and contributors for the agent harness, heartbeat scheduler, adapter framework and plugin SDK that AgentDash builds on. The project retains Paperclip's MIT license and…"
     },
     {
       "slug": "concepts/companies",

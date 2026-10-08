@@ -45,6 +45,7 @@ vi.mock("@/context/CompanyContext", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const { healthApi } = await import("@/api/health");
 const { Docs } = await import("./Docs");
 const { listDocPages, loadDocSource, INSTANCE_URL_TOKEN } = await import("@/lib/docs");
 
@@ -81,6 +82,8 @@ describe("docs URLs", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.unstubAllGlobals();
+    vi.mocked(healthApi.get).mockResolvedValue({ status: "ok", publicBaseUrl: PUBLISHED } as Awaited<ReturnType<typeof healthApi.get>>);
   });
 
   async function settle(done: () => boolean) {
@@ -161,6 +164,28 @@ describe("docs URLs", () => {
     expect(rendered.apiReferenceInstance).toBe(PUBLISHED);
     const other = await visit("/docs/api/authentication", (current) => current.body !== "");
     expect(other.apiReference).toBe(false);
+  });
+
+  it.each(["www.agentdash.cloud", "agentdash.cloud"])("uses a placeholder in prose and Try It on %s even when health names another host", async (hostname) => {
+    const localWindow = window;
+    vi.stubGlobal("window", new Proxy(localWindow, {
+      get(target, key) {
+        if (key === "location") return { hostname, origin: `https://${hostname}` };
+        return Reflect.get(target, key);
+      },
+    }));
+    const rendered = await visit("/docs/api/api-keys", (current) => current.body !== "");
+    expect(rendered.body).toContain("https://your-instance.example");
+    expect(rendered.body).not.toContain(PUBLISHED);
+    const reference = await visit("/docs/api/reference", (current) => current.apiReference);
+    expect(reference.apiReferenceInstance).toBe("");
+  });
+
+  it("uses the browser origin on an instance when health has no published URL", async () => {
+    vi.mocked(healthApi.get).mockResolvedValue({ status: "ok" } as Awaited<ReturnType<typeof healthApi.get>>);
+    const rendered = await visit("/docs/api/api-keys", (current) => current.body !== "");
+    expect(rendered.body).toContain(window.location.origin);
+    expect(rendered.body).not.toContain("https://your-instance.example");
   });
 
   it("/docs lands on the first page of the first tab", async () => {

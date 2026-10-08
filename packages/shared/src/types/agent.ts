@@ -189,8 +189,8 @@ export interface Agent {
   adapterConfig: Record<string, unknown>;
   runtimeConfig: AgentRuntimeConfig;
   defaultEnvironmentId?: string | null;
-  budgetMonthlyCents: number;
-  spentMonthlyCents: number;
+  budgetMonthlyCents: number | null;
+  spentMonthlyCents: number | null;
   pauseReason: PauseReason | null;
   pausedAt: Date | null;
   permissions: AgentPermissions;

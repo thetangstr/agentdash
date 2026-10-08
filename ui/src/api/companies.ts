@@ -21,7 +21,7 @@ export type CompanyStats = Record<
     /** Of those, the ones that left no comment and no activity behind. */
     runsSucceededWithoutEvidence: number;
     /** This month's input + output tokens (cached input not counted). Absent on older servers. */
-    monthTokens?: number;
+    monthTokens?: number | null;
   }
 >;
 

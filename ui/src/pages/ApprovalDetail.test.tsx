@@ -21,6 +21,7 @@ const mockApprovalsApi = vi.hoisted(() => ({
 }));
 const mockAgentsApi = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn() }));
 const mockAccessApi = vi.hoisted(() => ({ listUserDirectory: vi.fn() }));
+const mockCompany = vi.hoisted(() => ({ id: "company-1", spentMonthlyCents: null as number | null }));
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
@@ -29,7 +30,7 @@ vi.mock("../api/approvals", () => ({ approvalsApi: mockApprovalsApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
 vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
 vi.mock("../context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompanyId: "company-1", setSelectedCompanyId: mockSetSelectedCompanyId }),
+  useCompany: () => ({ selectedCompanyId: "company-1", selectedCompany: mockCompany, setSelectedCompanyId: mockSetSelectedCompanyId }),
 }));
 vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs: mockSetBreadcrumbs }),
@@ -91,7 +92,29 @@ describe("ApprovalDetail", () => {
   let root: ReturnType<typeof createRoot>;
   let queryClient: QueryClient;
 
+  it("directs restricted budget readers to an administrator without a costs link", async () => {
+    mockApprovalsApi.get.mockResolvedValue(cosPlanHireApproval({ type: "budget_override_required", payload: { scopeName: "Synthetic workspace", budgetAmount: 876543, observedAmount: 987654, guidance: "Ask an administrator" } }));
+    await renderPage("Budget Override");
+    expect(container.textContent).toContain("Ask a workspace administrator to resolve this budget stop");
+    expect(container.querySelector('a[href="/costs"]')).toBeNull();
+    expect(container.textContent).toContain("Synthetic workspace");
+    expect(container.textContent).not.toMatch(/8,765|9,876|876543|987654/);
+    const details = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("Technical details"))!;
+    act(() => details.click());
+    expect(container.textContent).not.toMatch(/8,765|9,876|876543|987654/);
+  });
+
+  it("keeps budget amounts and the Costs link for an authorized reader", async () => {
+    mockCompany.spentMonthlyCents = 0;
+    mockApprovalsApi.get.mockResolvedValue(cosPlanHireApproval({ type: "budget_override_required", payload: { scopeName: "Synthetic workspace", budgetAmount: 876543, observedAmount: 987654 } }));
+    await renderPage("Budget Override");
+    expect(container.textContent).toContain("8,765.43");
+    expect(container.textContent).toContain("9,876.54");
+    expect(container.querySelector('a[href="/costs"]')).not.toBeNull();
+  });
+
   beforeEach(() => {
+    mockCompany.spentMonthlyCents = null;
     mockApprovalsApi.get.mockResolvedValue(cosPlanHireApproval());
     mockApprovalsApi.listComments.mockResolvedValue([]);
     mockApprovalsApi.listIssues.mockResolvedValue([]);
@@ -114,7 +137,7 @@ describe("ApprovalDetail", () => {
     vi.clearAllMocks();
   });
 
-  async function renderPage() {
+  async function renderPage(expected = "Bookkeeper") {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -124,7 +147,7 @@ describe("ApprovalDetail", () => {
     });
     // The page resolves several queries before the card renders.
     await vi.waitFor(() => {
-      expect(container.textContent ?? "").toContain("Bookkeeper");
+      expect(container.textContent ?? "").toContain(expected);
     });
   }
 

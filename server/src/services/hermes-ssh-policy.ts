@@ -17,6 +17,10 @@
 // (doc/HERMES-SSH-ENVIRONMENTS.md).
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
+import type { Request } from "express";
+import { companies, type Db } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import type { accessService } from "./access.js";
 import { forbidden, unprocessable } from "../errors.js";
 
 export const HERMES_SSH_ENABLED_ENV = "AGENTDASH_HERMES_SSH_ENABLED";
@@ -236,9 +240,9 @@ export function hermesSshConnectionFor(entry: HermesSshAllowlistEntry) {
 export function assertHermesSshEnvironmentPermitted(input: {
   companyId: string;
   config: Record<string, unknown> | null | undefined;
-}): { target: string } {
+}): { target: string; port: number } {
   const decision = evaluateHermesSshEnvironment(input);
-  if (decision.ok) return { target: decision.target };
+  if (decision.ok) return { target: decision.target, port: decision.entry.port };
   throw decision.status === 403 ? forbidden(decision.message) : unprocessable(decision.message);
 }
 
@@ -282,4 +286,34 @@ export async function assertHermesSshLaunchReady(input: {
   if (!pinned) {
     throw new Error("The known_hosts file the server's allowlist names for this target doesn't pin any host key.");
   }
+}
+
+
+// AgentDash: shared by initial pinning and edits to the pinned environment.
+export async function assertCanPinHermesSsh(req: Request, companyId: string, access: Pick<ReturnType<typeof accessService>, "canUser">) {
+  if (req.actor.type !== "board") {
+    throw forbidden("Only a person who manages agents can put a Hermes agent on an SSH environment; agents can't.");
+  }
+  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+  const allowed = req.actor.userId ? await access.canUser(companyId, req.actor.userId, "agents:create") : false;
+  if (!allowed) throw forbidden("Only a company owner, an instance admin or someone with the agents:create permission can put a Hermes agent on an SSH environment.");
+}
+
+/** Compare effective identity, matching allowlist normalization (including port 22). */
+export function hermesSshTargetIdentity(driver: string, config: Record<string, unknown> | null | undefined): string | null {
+  if (driver !== "ssh") return null;
+  const value = config ?? {};
+  const port = value.port === undefined || value.port === null || value.port === "" ? 22 : Number(value.port);
+  return JSON.stringify([readString(value.username), readString(value.host)?.toLowerCase(), port]);
+}
+
+
+/** Company first, before environment/agent rows; shared by pins and retargets. */
+export async function withHermesSshCompanyLock<T>(db: Db, companyId: string, work: (tx: Db) => Promise<T>): Promise<T> {
+  return db.transaction(async (transaction) => {
+    const tx = transaction as unknown as Db;
+    const [company] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
+    if (!company) throw unprocessable("Environment company no longer exists");
+    return work(tx);
+  });
 }

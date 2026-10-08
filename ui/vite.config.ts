@@ -1,3 +1,4 @@
+import { publicReleaseNotesPlugin } from "../scripts/docs/public-release-notes.mjs";
 import path from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -5,7 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { createUiDevWatchOptions } from "./src/lib/vite-watch";
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [publicReleaseNotesPlugin(), react(), tailwindcss()],
   build: {
     minify: "esbuild",
   },
