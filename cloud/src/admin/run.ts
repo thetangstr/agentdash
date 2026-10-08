@@ -46,11 +46,12 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   box wake <slug>            queue a resume for a suspended box
   alerts list                firing alerts
   alerts test                send a test alert on every configured transport and report each
-  invites list               list self-hosted invite codes (ids and labels; codes are never stored)
+  invites list               list invitation metadata (purpose, ids, expiry, consumption; never codes/hashes)
   invites import [label] [--allow-short]
                              read codes from stdin (commas or newlines) and store their hashes;
                              codes under 12 characters are refused unless --allow-short
   invites add [label]        make one new code and print it once
+  invites add-hosted <label> make one single-use hosted admission code and print it once
   invites revoke <id>        revoke a code
   jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
   waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
@@ -202,6 +203,7 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
     return print(await call("POST", "/invites/import", { codes, ...(args[0] ? { label: args[0] } : {}), ...(allowShort ? { allowShort: true } : {}) }));
   }
   if (group === "invites" && action === "add" && rest.length <= 1) return print(await call("POST", "/invites", rest[0] ? { label: rest[0] } : {}));
+  if (group === "invites" && action === "add-hosted" && rest.length === 1) return print(await call("POST", "/invites/hosted", { label: rest[0] }));
   if (group === "invites" && action === "revoke" && rest.length === 1) return print(await call("POST", `/invites/${encodeURIComponent(rest[0]!)}/revoke`));
   if (group === "jobs" && action === "list") {
     return print(await call("GET", `/jobs?state=${encodeURIComponent(rest[0] ?? "all")}`));

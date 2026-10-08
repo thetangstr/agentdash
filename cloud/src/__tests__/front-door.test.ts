@@ -10,9 +10,10 @@ import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { encryptField, sha256Hex } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, emailTokens, jobs, waitlist } from "../db/schema.js";
+import { accounts, boxEvents, boxes, emailTokens, inviteCodes, jobs, signupRequests, waitlist } from "../db/schema.js";
 import { hasMx, isDisposableDomain, normaliseEmail } from "../front-door/email-policy.js";
 import type { MailMessage } from "../front-door/mailer.js";
+import { inviteService } from "../invites.js";
 import { frontDoor, type FrontDoor, MAX_SLUG_HOLDS } from "../front-door/service.js";
 import { logMailer, emails } from "../front-door/mailer.js";
 import { pruneRateEvents } from "../front-door/rate-limit.js";
@@ -22,8 +23,26 @@ import { settingsService } from "../settings.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 
 // The capabilities module is frozen in production; this suite swaps in a mutable stand-in.
-const caps = vi.hoisted(() => ({ claimTrackingReady: false }));
+const caps = vi.hoisted(() => ({ claimTrackingReady: false, failBeforeQueue: false, terminalBeforeQueue: null as "failed" | "pending_delete" | "cleanup" | null }));
 vi.mock("../capabilities.js", () => ({ capabilities: caps }));
+vi.mock("../jobs/queue.js", async importOriginal => {
+  const original = await importOriginal<typeof import("../jobs/queue.js")>();
+  return { ...original, requestProvision: async (...args: Parameters<typeof original.requestProvision>) => {
+    if (caps.failBeforeQueue) { caps.failBeforeQueue = false; throw new Error("synthetic interruption after admission commit"); }
+    if (caps.terminalBeforeQueue) {
+      const state = caps.terminalBeforeQueue;
+      caps.terminalBeforeQueue = null;
+      const [connection, boxId] = args;
+      await connection.update(boxes).set({ state: "provisioning" }).where(eq(boxes.id, boxId));
+      if (state === "pending_delete") {
+        await connection.update(boxes).set({ state: "awaiting_claim" }).where(eq(boxes.id, boxId));
+        await connection.update(boxes).set({ state: "active" }).where(eq(boxes.id, boxId));
+      } else await connection.update(boxes).set({ state: "failed" }).where(eq(boxes.id, boxId));
+      await connection.update(boxes).set({ state }).where(eq(boxes.id, boxId));
+    }
+    return await original.requestProvision(...args);
+  } };
+});
 
 // supertest given a bare app starts and stops a server per request on an
 // ephemeral port, which intermittently reset or crossed connections when a
@@ -157,6 +176,8 @@ beforeEach(async () => {
   clockOffsetMs = 0;
   turnstileAnswer = true;
   caps.claimTrackingReady = false;
+  caps.failBeforeQueue = false;
+  caps.terminalBeforeQueue = null;
   await db.execute(sql`truncate settings`);
   await db.execute(sql`update jobs set state = 'dead' where state in ('queued', 'running', 'failed')`);
 });
@@ -360,7 +381,7 @@ describe("while provisioning is gated (claimTrackingReady=false)", () => {
     const approve = await request(app).post(`/internal/waitlist/${entry!.id}/approve`).set("authorization", `Bearer ${ADMIN}`);
     expect(approve.status).toBe(200);
     expect(approve.body.provisioning).toEqual([{ slug: w.slug, outcome: "waitlisted", reason: "kill_switch" }]);
-    expect(lastMailTo(w.email, "approved").text).toContain("will be created shortly");
+    expect(lastMailTo(w.email, "approved").text).toContain("when capacity is available");
     const mine = await request(app).get("/api/cloud/boxes/mine").set("cookie", cookieOf(v));
     expect(mine.body.boxes[0].phase).toBe("approved");
     const [box] = await db.select().from(boxes).where(eq(boxes.slug, w.slug));
@@ -374,7 +395,7 @@ describe("while provisioning is gated (claimTrackingReady=false)", () => {
   it("the public config says new signups wait", async () => {
     const { app } = await build();
     const res = await request(app).get("/api/cloud/config");
-    expect(res.body).toEqual({ turnstileSiteKey: "site-key-for-tests", signupOpen: true, waitlist: true, edgeDomain: "agentdash.cloud" });
+    expect(res.body).toEqual({ turnstileSiteKey: "site-key-for-tests", signupOpen: true, invitationCodesEnabled: true, waitlist: true, edgeDomain: "agentdash.cloud" });
   });
 });
 
@@ -496,7 +517,7 @@ describe("with provisioning open (capability mocked on)", () => {
 });
 
 describe("end to end with a fake provisioner", () => {
-  it("signup, verify, approve, provision, ready email with the claim link, progress page shows it", async () => {
+  it.each(["manual", "invitation"])("signup, verify, %s approval, provision, ready email with the claim link, progress page shows it", async mode => {
     caps.claimTrackingReady = true;
     await setSetting("provisioning_enabled", true);
     await setSetting("waitlist_mode", true);
@@ -505,14 +526,16 @@ describe("end to end with a fake provisioner", () => {
     const w = who();
 
     expect((await request(app).get(`/api/cloud/slug-available?slug=${w.slug}`)).body).toEqual({ slug: w.slug, available: true });
-    expect((await signup(app, w)).status).toBe(202);
+    const invitation = mode === "invitation" ? await inviteService(db, cfg.dataKeys).addHosted("fake delivery", "test", null) : null;
+    expect((await signup(app, w, invitation ? { invitationCode: invitation.code } : {})).status).toBe(202);
     const v = await verify(app, tokenFrom(lastMailTo(w.email, "verify")));
     const cookie = cookieOf(v);
-    expect(v.body.reason).toBe("waitlist_mode");
+    if (mode === "manual") expect(v.body.reason).toBe("waitlist_mode");
+    else expect(v.body.provisioning).toBe("queued");
     expect((await request(app).get(`/api/cloud/slug-available?slug=${w.slug}`)).body.available).toBe(false);
 
     const [entry] = await db.select().from(waitlist).where(eq(waitlist.email, w.email));
-    await request(app).post(`/internal/waitlist/${entry!.id}/approve`).set("authorization", `Bearer ${ADMIN}`).expect(200);
+    if (mode === "manual") await request(app).post(`/internal/waitlist/${entry!.id}/approve`).set("authorization", `Bearer ${ADMIN}`).expect(200);
     const during = await request(app).get("/api/cloud/boxes/mine").set("cookie", cookie);
     expect(during.body.boxes[0]).toMatchObject({ phase: "provisioning", stepIndex: 0, slow: false });
 
@@ -730,5 +753,372 @@ describe("security review fixes (GH #836)", () => {
     let last = 200;
     for (let i = 0; i < 31; i++) last = (await request(app).get("/api/cloud/proxy-check").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, "198.51.100.45")).status;
     expect(last).toBe(429);
+  });
+});
+
+// Hosted admission uses only fake mail, ephemeral Postgres and queue jobs.
+describe("hosted invitation admission", () => {
+  async function hosted(app: Target) {
+    const r = await request(app).post("/internal/invites/hosted").set("authorization", `Bearer ${ADMIN}`).send({ label: "synthetic beta" });
+    expect(r.status).toBe(201);
+    return r.body as { id: string; code: string };
+  }
+  const redeem = (app: Target, cookie: string | null, code: unknown, ip = who().ip) => {
+    const req = request(app).post("/api/cloud/invitation/redeem").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, ip);
+    if (cookie) req.set("cookie", cookie);
+    return req.send({ code });
+  };
+  async function waiting(app: Target) {
+    const w = who();
+    expect((await signup(app, w)).status).toBe(202);
+    const v = await verify(app, tokenFrom(lastMailTo(w.email, "verify")));
+    expect(v.status).toBe(200);
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, w.slug));
+    return { w, cookie: cookieOf(v), box: box! };
+  }
+  async function open() {
+    caps.claimTrackingReady = true;
+    await setSetting("provisioning_enabled", true);
+    await setSetting("waitlist_mode", true);
+    await setSetting("daily_cap", 1000);
+  }
+
+  it("keeps signup unconsumed and no-code waitlisted, then approves one verified hosted box without Turnstile", async () => {
+    const { app, cfg } = await build({});
+    await open();
+    const a = await waiting(app);
+    expect(a.box.state).toBe("waitlisted");
+    const c = await hosted(app);
+    const w = who();
+    expect((await signup(app, w, { invitationCode: c.code })).status).toBe(202);
+    const [proof] = await db.select().from(signupRequests).where(eq(signupRequests.slug, w.slug));
+    expect(proof!.hostedInviteId).toBe(c.id);
+    const [pending] = await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id));
+    expect(pending!.consumedAt).toBeNull();
+    expect(await db.select().from(boxes).where(eq(boxes.slug, w.slug))).toHaveLength(0);
+    expect(await inviteService(db, cfg.dataKeys).isValid(c.code)).toBe(false);
+    const v = await verify(app, tokenFrom(lastMailTo(w.email, "verify")));
+    expect(v.body).toMatchObject({ provisioning: "queued" });
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, w.slug));
+    const [used] = await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id));
+    expect(used).toMatchObject({ purpose: "hosted_beta", consumedByAccountId: box!.accountId, consumedBoxId: box!.id });
+    expect(used!.consumedAt).toBeInstanceOf(Date);
+    const [entitlement] = await db.select().from(waitlist).where(eq(waitlist.accountId, box!.accountId));
+    expect(entitlement!.state).toBe("approved");
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(1);
+    expect((await verify(app, tokenFrom(lastMailTo(w.email, "verify")))).body.code).toBe("link_used");
+    expect(logLines.join("\n")).not.toContain(c.code);
+    expect(JSON.stringify(await db.select().from(inviteCodes))).not.toContain(c.code);
+    expect(JSON.stringify(await db.execute(sql`select detail from operator_audit`))).not.toContain(c.code);
+    expect(mail.map(m => m.text).join("\n")).not.toContain(c.code);
+    expect((await request(app).get("/api/cloud/config")).body.invitationCodesEnabled).toBe(true);
+  });
+
+  it("rejects malformed, oversized, wrong-purpose, revoked, expired and used signup codes", async () => {
+    const { app, cfg } = await build();
+    const legacy = await inviteService(db, cfg.dataKeys).add("self hosted", "test", null);
+    for (const code of [42, "x".repeat(121), "wrong-code", legacy.code]) {
+      expect((await signup(app, who(), { invitationCode: code })).body.code).toBe("invitation_unavailable");
+    }
+    const c = await hosted(app);
+    await db.update(inviteCodes).set({ expiresAt: new Date(0) }).where(eq(inviteCodes.id, c.id));
+    expect((await signup(app, who(), { invitationCode: c.code })).body.code).toBe("invitation_unavailable");
+    const revoked = await hosted(app);
+    await inviteService(db, cfg.dataKeys).revoke(revoked.id, "test", null);
+    expect((await signup(app, who(), { invitationCode: revoked.code })).body.code).toBe("invitation_unavailable");
+    const used = await hosted(app);
+    const a = await waiting(app);
+    expect((await redeem(app, a.cookie, used.code)).status).toBe(200);
+    expect((await signup(app, who(), { invitationCode: used.code })).body.code).toBe("invitation_unavailable");
+  });
+
+  it("rechecks revocation and rolls back email token/account/box on refusal", async () => {
+    const { app, cfg } = await build();
+    const c = await hosted(app);
+    const w = who();
+    await signup(app, w, { invitationCode: c.code });
+    const t = tokenFrom(lastMailTo(w.email, "verify"));
+    await inviteService(db, cfg.dataKeys).revoke(c.id, "test", null);
+    const v = await verify(app, t);
+    expect(v.body.code).toBe("invitation_unavailable");
+    const [token] = await db.select().from(emailTokens).where(eq(emailTokens.tokenHash, sha256Hex(t)));
+    expect(token!.usedAt).toBeNull();
+    const [acct] = await db.select().from(accounts).where(eq(accounts.email, w.email));
+    expect(acct!.status).toBe("pending_verification");
+    expect(await db.select().from(boxes).where(eq(boxes.slug, w.slug))).toHaveLength(0);
+    await db.update(inviteCodes).set({ revokedAt: null }).where(eq(inviteCodes.id, c.id));
+    expect((await verify(app, t)).status).toBe(200);
+  });
+
+  it("resend preserves proof, and concurrent links for one email create one box and consume only one invitation", async () => {
+    const { app } = await build();
+    const c = await hosted(app);
+    const w = who();
+    await signup(app, w, { invitationCode: c.code });
+    const oldToken = tokenFrom(lastMailTo(w.email, "verify"));
+    expect((await request(app).post("/api/cloud/resend").set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, w.ip).send({ email: w.email })).status).toBe(202);
+    const freshToken = tokenFrom(lastMailTo(w.email, "verify"));
+    expect(freshToken).not.toBe(oldToken);
+    const [proof] = await db.select().from(signupRequests).where(eq(signupRequests.slug, w.slug));
+    expect(proof!.hostedInviteId).toBe(c.id);
+    // The replaced link cannot create a box; the current request retains its invitation.
+    await verify(app, freshToken);
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, w.slug));
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedBoxId).toBe(box!.id);
+    const extra = await hosted(app);
+    const another = who();
+    const first = who();
+    const second = who();
+    await signup(app, another, { invitationCode: extra.code });
+    const t1 = tokenFrom(lastMailTo(another.email, "verify"));
+    const secondCode = await hosted(app);
+    await signup(app, { ...second, email: another.email }, { invitationCode: secondCode.code });
+    const t2 = tokenFrom(lastMailTo(another.email, "verify"));
+    const result = await Promise.all([verify(app, t1, first.ip), verify(app, t2, second.ip)]);
+    expect(result.map(r => r.status)).toEqual([200, 200]);
+    const [acct] = await db.select().from(accounts).where(eq(accounts.email, another.email));
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, acct!.id))).toHaveLength(1);
+    const invitations = await db.select().from(inviteCodes).where(sql`${inviteCodes.id} in (${extra.id}, ${secondCode.id})`);
+    expect(invitations.filter(i => i.consumedAt)).toHaveLength(1);
+  });
+
+  it("concurrent accounts redeem exactly once; original-box retries are idempotent and strangers cannot redeem", async () => {
+    const { app } = await build();
+    const a = await waiting(app);
+    const b = await waiting(app);
+    const c = await hosted(app);
+    const rs = await Promise.all([redeem(app, a.cookie, c.code), redeem(app, b.cookie, c.code)]);
+    expect(rs.map(r => r.status).sort()).toEqual([200, 400]);
+    const winner = rs[0]!.status === 200 ? a : b;
+    const loser = winner === a ? b : a;
+    const notifications = mail.filter(m => m.kind === "approved" && m.to === winner.w.email).length;
+    expect((await redeem(app, winner.cookie, c.code)).body).toMatchObject({ ok: true, provisioning: "waitlisted" });
+    expect(mail.filter(m => m.kind === "approved" && m.to === winner.w.email)).toHaveLength(notifications);
+    expect((await redeem(app, loser.cookie, c.code)).body.code).toBe("invitation_unavailable");
+    expect((await redeem(app, null, c.code)).body.code).toBe("no_session");
+    const [row] = await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id));
+    expect(row!.consumedBoxId).toBe(winner.box.id);
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, winner.box.accountId))).toHaveLength(1);
+    expect((await request(app).get("/api/cloud/boxes/mine").set("cookie", winner.cookie)).body.boxes[0]).toMatchObject({ slug: winner.w.slug, phase: "approved" });
+    await db.update(accounts).set({ status: "blocked" }).where(eq(accounts.id, winner.box.accountId));
+    expect((await redeem(app, winner.cookie, c.code)).status).toBe(401);
+    await db.update(accounts).set({ status: "deleted" }).where(eq(accounts.id, loser.box.accountId));
+    expect((await redeem(app, loser.cookie, c.code)).status).toBe(401);
+  });
+
+  it.each(["kill_switch", "claim_tracking", "daily_cap"])("preserves approval across %s deferral, then releases exactly once", async gate => {
+    const { app, fd } = await build({});
+    const a = await waiting(app);
+    await open();
+    if (gate === "kill_switch") await setSetting("provisioning_enabled", false);
+    if (gate === "claim_tracking") caps.claimTrackingReady = false;
+    if (gate === "daily_cap") await setSetting("daily_cap", 0);
+    const c = await hosted(app);
+    expect((await redeem(app, a.cookie, c.code)).body).toMatchObject({ provisioning: "waitlisted", reason: gate === "claim_tracking" ? "kill_switch" : gate });
+    const [entry] = await db.select().from(waitlist).where(eq(waitlist.accountId, a.box.accountId));
+    expect(entry!.state).toBe("approved");
+    expect(lastMailTo(a.w.email, "approved").text).toContain("when capacity is available");
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, a.box.id))).toHaveLength(0);
+    await open();
+    expect(await fd.releaseApproved(1000)).toContainEqual({ slug: a.w.slug, outcome: "queued" });
+    await fd.releaseApproved(1000);
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, a.box.id))).toHaveLength(1);
+    expect((await redeem(app, a.cookie, c.code)).body.provisioning).toBe("already_started");
+    const spare = await hosted(app);
+    expect((await redeem(app, a.cookie, spare.code)).body.provisioning).toBe("already_started");
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, spare.id)))[0]!.consumedAt).toBeNull();
+  });
+
+  it("rolls back code, link, account, box and approval after an injected transaction failure", async () => {
+    const { app } = await build();
+    const c = await hosted(app);
+    const w = who();
+    await signup(app, w, { invitationCode: c.code });
+    const token = tokenFrom(lastMailTo(w.email, "verify"));
+    await db.execute(sql`create function reject_invite_test_event() returns trigger language plpgsql as $$ begin if NEW.kind = 'box_created' then raise exception 'synthetic precommit failure'; end if; return NEW; end $$`);
+    await db.execute(sql`create trigger reject_invite_test_event before insert on box_events for each row execute function reject_invite_test_event()`);
+    try {
+      expect((await verify(app, token)).status).toBe(500);
+      expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedAt).toBeNull();
+      expect((await db.select().from(emailTokens).where(eq(emailTokens.tokenHash, sha256Hex(token))))[0]!.usedAt).toBeNull();
+      const [acct] = await db.select().from(accounts).where(eq(accounts.email, w.email));
+      expect(acct!.status).toBe("pending_verification");
+      expect(await db.select().from(waitlist).where(eq(waitlist.accountId, acct!.id))).toHaveLength(0);
+      expect(await db.select().from(boxes).where(eq(boxes.slug, w.slug))).toHaveLength(0);
+    } finally {
+      await db.execute(sql`drop trigger reject_invite_test_event on box_events`);
+      await db.execute(sql`drop function reject_invite_test_event()`);
+    }
+    expect((await verify(app, token)).status).toBe(200);
+  });
+
+  it("recovers a process gap after durable approval but before queue delivery", async () => {
+    const { app, fd } = await build({});
+    await open();
+    const c = await hosted(app);
+    const w = who();
+    await signup(app, w, { invitationCode: c.code });
+    const token = tokenFrom(lastMailTo(w.email, "verify"));
+    caps.failBeforeQueue = true;
+    expect((await verify(app, token)).status).toBe(500);
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, w.slug));
+    expect(box!.state).toBe("waitlisted");
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedBoxId).toBe(box!.id);
+    expect((await db.select().from(waitlist).where(eq(waitlist.accountId, box!.accountId)))[0]!.state).toBe("approved");
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(0);
+    expect(await fd.releaseApproved(1000)).toContainEqual({ slug: w.slug, outcome: "queued" });
+    await fd.releaseApproved(1000);
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(1);
+    expect((await verify(app, token)).body.code).toBe("link_used");
+    const [acct] = await db.select().from(accounts).where(eq(accounts.id, box!.accountId));
+    expect(acct!.status).toBe("active");
+    // A new authenticated find link recovers progress after the interrupted response.
+    await fd.find({ email: w.email }, { ip: who().ip, viaProxy: true });
+    expect((await verify(app, tokenFrom(lastMailTo(w.email, "find")))).status).toBe(200);
+  });
+
+  it("two invited accounts racing for the last daily slot retain one queued and one approved-pending box", async () => {
+    const { app } = await build();
+    const a = await waiting(app);
+    const b = await waiting(app);
+    await open();
+    const [today] = await db.execute(sql`select count(*)::int as n from jobs where kind = 'provision' and created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'`);
+    await setSetting("daily_cap", Number(today!.n) + 1);
+    const ca = await hosted(app), cb = await hosted(app);
+    const rs = await Promise.all([redeem(app, a.cookie, ca.code), redeem(app, b.cookie, cb.code)]);
+    expect(rs.map(r => r.body.provisioning).sort()).toEqual(["queued", "waitlisted"]);
+    expect(rs.find(r => r.body.provisioning === "waitlisted")!.body.reason).toBe("daily_cap");
+    for (const x of [a, b]) expect((await db.select().from(waitlist).where(eq(waitlist.accountId, x.box.accountId)))[0]!.state).toBe("approved");
+  });
+
+  it("does not reuse an old box approval to admit a replacement box", async () => {
+    const { app, fd } = await build();
+    const a = await waiting(app);
+    const oldCode = await hosted(app);
+    expect((await redeem(app, a.cookie, oldCode.code)).status).toBe(200);
+    await db.update(boxes).set({ state: "deleted" }).where(eq(boxes.id, a.box.id));
+    const c = await hosted(app);
+    const w = { ...who(), email: a.w.email };
+    await signup(app, w, { invitationCode: c.code });
+    expect((await verify(app, tokenFrom(lastMailTo(w.email, "verify")))).status).toBe(200);
+    const [replacement] = await db.select().from(boxes).where(eq(boxes.slug, w.slug));
+    const [used] = await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id));
+    expect(used!.consumedBoxId).toBe(replacement!.id);
+    await open();
+    const released = await fd.releaseApproved(1000);
+    expect(released.filter(x => x.slug === w.slug)).toHaveLength(1);
+  });
+
+  it("keeps replacement no-code progress on the waitlist after an old invited box was deleted", async () => {
+    const { app, fd } = await build();
+    const a = await waiting(app);
+    const c = await hosted(app);
+    await redeem(app, a.cookie, c.code);
+    await db.update(boxes).set({ state: "deleted" }).where(eq(boxes.id, a.box.id));
+    const w = { ...who(), email: a.w.email };
+    await signup(app, w);
+    const v = await verify(app, tokenFrom(lastMailTo(w.email, "verify")));
+    expect(v.body.provisioning).toBe("waitlisted");
+    expect((await request(app).get("/api/cloud/boxes/mine").set("cookie", cookieOf(v))).body.boxes[0]).toMatchObject({ slug: w.slug, phase: "waitlisted" });
+    await open();
+    expect(await fd.releaseApproved(1000)).not.toContainEqual({ slug: w.slug, outcome: "queued" });
+  });
+
+  it("an invited pending link for an existing waiting box approves and emails that original box name", async () => {
+    const { app } = await build();
+    const first = who();
+    await signup(app, first);
+    const t1 = tokenFrom(lastMailTo(first.email, "verify"));
+    const second = { ...who(), email: first.email };
+    const c = await hosted(app);
+    await signup(app, second, { invitationCode: c.code });
+    const t2 = tokenFrom(lastMailTo(first.email, "verify"));
+    expect((await verify(app, t1)).status).toBe(200);
+    expect((await verify(app, t2)).body).toMatchObject({ outcome: "existing", provisioning: "waitlisted" });
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, first.slug));
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedBoxId).toBe(box!.id);
+    expect(lastMailTo(first.email, "approved").text).toContain(first.slug);
+    expect(lastMailTo(first.email, "approved").text).not.toContain(second.slug);
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, box!.accountId))).toHaveLength(1);
+  });
+
+  it.each(["failed", "pending_delete", "cleanup"] as const)("returns authenticated existing progress for a second invited link when its original box is %s", async state => {
+    const { app } = await build();
+    const first = who();
+    await signup(app, first);
+    const t1 = tokenFrom(lastMailTo(first.email, "verify"));
+    const c = await hosted(app);
+    await signup(app, { ...who(), email: first.email }, { invitationCode: c.code });
+    const t2 = tokenFrom(lastMailTo(first.email, "verify"));
+    expect((await verify(app, t1)).status).toBe(200);
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, first.slug));
+    await db.update(boxes).set({ state: "provisioning" }).where(eq(boxes.id, box!.id));
+    if (state === "pending_delete") {
+      await db.update(boxes).set({ state: "awaiting_claim" }).where(eq(boxes.id, box!.id));
+      await db.update(boxes).set({ state: "active" }).where(eq(boxes.id, box!.id));
+    } else await db.update(boxes).set({ state: "failed" }).where(eq(boxes.id, box!.id));
+    await db.update(boxes).set({ state }).where(eq(boxes.id, box!.id));
+    const v = await verify(app, t2);
+    expect(v.status).toBe(200);
+    expect(v.body).toEqual({ ok: true, outcome: "existing" });
+    const progress = await request(app).get("/api/cloud/boxes/mine").set("cookie", cookieOf(v));
+    expect(progress.status).toBe(200);
+    expect(progress.body.boxes).toHaveLength(1);
+    expect(progress.body.boxes[0]).toMatchObject({ slug: first.slug, phase: state === "failed" ? "failed" : "closing" });
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedAt).toBeNull();
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, box!.accountId))).toHaveLength(1);
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(0);
+  });
+
+  it.each(["failed", "pending_delete", "cleanup"] as const)("preserves the committed session when a parallel box lifecycle reaches %s before queueing", async state => {
+    const { app } = await build();
+    const first = who();
+    await signup(app, first);
+    const t1 = tokenFrom(lastMailTo(first.email, "verify"));
+    const c = await hosted(app);
+    await signup(app, { ...who(), email: first.email }, { invitationCode: c.code });
+    const t2 = tokenFrom(lastMailTo(first.email, "verify"));
+    await verify(app, t1);
+    caps.terminalBeforeQueue = state;
+    const v = await verify(app, t2);
+    expect(v.status).toBe(200);
+    expect(v.body).toEqual({ ok: true, outcome: "existing" });
+    const progress = await request(app).get("/api/cloud/boxes/mine").set("cookie", cookieOf(v));
+    expect(progress.status).toBe(200);
+    expect(progress.body.boxes[0].phase).toBe(state === "failed" ? "failed" : "closing");
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, first.slug));
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedBoxId).toBe(box!.id);
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, box!.accountId))).toHaveLength(1);
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(0);
+  });
+
+  it("rejects blocked/unverified accounts and ignores client account/box/approval claims", async () => {
+    const { app, fd } = await build();
+    const a = await waiting(app);
+    const b = await waiting(app);
+    const c = await hosted(app);
+    const r = await request(app).post("/api/cloud/invitation/redeem").set("cookie", a.cookie).set(PROXY_HEADER, PROXY_SECRET).set(IP_HEADER, who().ip).send({ code: c.code, accountId: b.box.accountId, boxId: b.box.id, approved: true });
+    expect(r.status).toBe(200);
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedBoxId).toBe(a.box.id);
+    const unused = await hosted(app);
+    await db.update(accounts).set({ emailVerifiedAt: null }).where(eq(accounts.id, b.box.accountId));
+    expect((await redeem(app, b.cookie, unused.code)).body.code).toBe("no_session");
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, unused.id)))[0]!.consumedAt).toBeNull();
+    const w = who();
+    await signup(app, w, { invitationCode: unused.code });
+    const token = tokenFrom(lastMailTo(w.email, "verify"));
+    await db.update(accounts).set({ status: "blocked" }).where(eq(accounts.email, w.email));
+    expect((await fd.verify(token)).ok).toBe(false);
+    expect((await db.select().from(emailTokens).where(eq(emailTokens.tokenHash, sha256Hex(token))))[0]!.usedAt).toBeNull();
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, unused.id)))[0]!.consumedAt).toBeNull();
+  });
+
+  it("rate limits authenticated code guesses durably and requires JSON", async () => {
+    const { app } = await build();
+    const a = await waiting(app);
+    const ip = who().ip;
+    for (let i = 0; i < 10; i++) expect((await redeem(app, a.cookie, "wrong-code", ip)).status).toBe(400);
+    expect((await redeem(app, a.cookie, "wrong-code", ip)).body.code).toBe("rate_limited");
+    expect((await request(app).post("/api/cloud/invitation/redeem").set("cookie", a.cookie).type("form").send({ code: "anything" })).status).toBe(415);
   });
 });

@@ -29,6 +29,8 @@ export function Start() {
   const [slugEdited, setSlugEdited] = useState(false);
   const [slugState, setSlugState] = useState<SlugState>({ kind: "idle" });
   const [terms, setTerms] = useState(false);
+  const [invitationCode, setInvitationCode] = useState("");
+  const submitPending = useRef(false);
   const [token, setToken] = useState<string | null>(null);
   const [resetKey, setResetKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -75,17 +77,20 @@ export function Start() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || submitPending.current) return;
+    submitPending.current = true;
     setSubmitting(true);
     setError(null);
     try {
-      await cloudApi.signup({ email: email.trim(), workspaceName: name.trim(), slug, acceptTerms: terms, turnstileToken: token ?? undefined });
+      await cloudApi.signup({ email: email.trim(), workspaceName: name.trim(), slug, acceptTerms: terms, turnstileToken: token ?? undefined, ...(config?.invitationCodesEnabled === true && invitationCode.trim() ? { invitationCode: invitationCode.trim() } : {}) });
+      setInvitationCode("");
       setSentTo(email.trim());
     } catch (err) {
       setError(err instanceof CloudApiError ? err.message : "Something went wrong. Try again.");
       if (err instanceof CloudApiError && err.code.startsWith("slug_")) setSlugState({ kind: "bad", message: err.message });
       setResetKey((k) => k + 1);
     } finally {
+      submitPending.current = false;
       setSubmitting(false);
     }
   }
@@ -110,11 +115,11 @@ export function Start() {
             <h1 className="mkt-display-page">Create your workspace.</h1>
             <p className="mkt-body-lg">
               Your own AgentDash at <strong>{slug || "your-name"}.{config?.edgeDomain ?? "agentdash.cloud"}</strong>, with a Chief of Staff
-              agent ready to interview you. It takes about three minutes to set up.
+              agent ready to interview you. Once admitted and capacity is available, setup usually takes about three minutes.
             </p>
-            {config?.waitlist && (
+            {(config?.waitlist || config?.invitationCodesEnabled === true) && (
               <p className="mkt-cloud__note" data-testid="waitlist-note">
-                We are letting people in a few at a time. Sign up to save your name and your place; we will email you when your workspace is being created.
+                {config?.invitationCodesEnabled === true ? "Without a code, sign up and verify your email to join the waitlist. An invitation code admits one workspace after email verification, subject to available capacity. We will email you when your workspace is being created." : "We are letting people in a few at a time. Sign up to save your name and your place; we will email you when your workspace is being created."}
               </p>
             )}
           </div>
@@ -172,6 +177,23 @@ export function Start() {
                     {slugState.kind === "idle" && "Letters, numbers and dashes. You cannot change it later."}
                   </small>
                 </label>
+                {config?.invitationCodesEnabled === true && (
+                  <label className="mkt-cloud__field">
+                    <span>Invitation code (optional)</span>
+                    <input
+                      type="text"
+                      value={invitationCode}
+                      onChange={(e) => setInvitationCode(e.target.value)}
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      maxLength={120}
+                      disabled={submitting}
+                      aria-describedby="invitation-help"
+                    />
+                    <small id="invitation-help" className="mkt-cloud__muted">Leave this blank to join the waitlist.</small>
+                  </label>
+                )}
                 {config?.turnstileSiteKey && <Turnstile siteKey={config.turnstileSiteKey} onToken={setToken} resetKey={resetKey} />}
                 <label className="mkt-cloud__check">
                   <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} />

@@ -157,6 +157,14 @@ export function publicRoutes(opts: { frontDoor: FrontDoor; config: Pick<CloudCon
     res.json(await fd.boxesMine(account.id));
   });
 
+  router.post("/invitation/redeem", async (req, res) => {
+    const account = await fd.sessionAccount(readCookie(req, SESSION_COOKIE));
+    if (!account) return void res.status(401).json({ error: "Verify your email and sign in to redeem an invitation.", code: "no_session" });
+    const result = await fd.redeemInvitation(account.id, (req.body ?? {}).code, visitorOf(req, config));
+    if (!result.ok) return void res.status(result.status).json({ error: result.error, code: result.code });
+    res.json(result);
+  });
+
   router.post("/resend", async (req, res) => {
     const account = await fd.sessionAccount(readCookie(req, SESSION_COOKIE));
     answer(res, await fd.resend({ email: (req.body ?? {}).email, accountId: account?.id ?? null }, visitorOf(req, config)));

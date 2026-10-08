@@ -128,7 +128,7 @@ async function main() {
   // the release of approved waitlist entries once provisioning is open.
   if (config.frontDoor.mailTransport === "log") log.warn("CLOUD_MAIL_TRANSPORT=log: front-door emails (with their links) go to the log; local development only");
   else if (!config.resendApiKey) log.warn("CLOUD_RESEND_API_KEY is not set: /start and /find answer 503 until it is");
-  if (!config.frontDoor.turnstileSecret) log.warn("Turnstile is not configured: every signup waits for operator approval");
+  if (!config.frontDoor.turnstileSecret) log.warn("Turnstile is not configured: signups need operator or verified hosted invitation approval");
   const frontDoor = makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
 
   // AgentDash (GH #733): nightly encrypted off-box database backups. The
