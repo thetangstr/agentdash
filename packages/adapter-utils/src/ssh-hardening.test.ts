@@ -1,5 +1,8 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, mkdtemp, writeFile, cp, mkdir, rm, chmod } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as ssh from "./ssh.js";
 import * as serverUtils from "./server-utils.js";
@@ -85,6 +88,26 @@ describe("ssh argv hardening", () => {
   });
 });
 
+describe("private SSH tar staging", () => {
+  it("sets 0700 before archive extraction", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ssh-private-transfer-"));
+    const previousPath = process.env.PATH;
+    const local = path.join(root, "local"), remote = path.join(root, "remote"), bin = path.join(root, "bin"), modes = path.join(root, "modes");
+    await mkdir(local, { mode: 0o700 }); await mkdir(remote, { mode: 0o755 }); await mkdir(bin);
+    await chmod(remote, 0o755);
+    await writeFile(path.join(local, "query"), "synthetic-private", { mode: 0o600 });
+    await writeFile(path.join(bin, "ssh"), `#!${process.execPath}\nconst cp=require("node:child_process"), fs=require("node:fs"); const remote=process.argv.at(-1).replace(/^sh -lc /,"sh -c "); const result=cp.spawnSync("sh",["-c",remote],{input:fs.readFileSync(0),env:{PATH:${JSON.stringify(bin + ":/usr/bin:/bin")},HOME:${JSON.stringify(root)}},stdio:["pipe","inherit","inherit"]});process.exit(result.status ?? 1);`, { mode: 0o755 });
+    await writeFile(path.join(bin, "tar"), `#!${process.execPath}\nconst cp=require("node:child_process"), fs=require("node:fs");const args=process.argv.slice(2);if(args.includes("-xf")) fs.appendFileSync(${JSON.stringify(modes)},String(fs.statSync(args.at(-1)).mode & 511)+"\\n"); const result=cp.spawnSync("/usr/bin/tar",args,{stdio:"inherit"});process.exit(result.status ?? 1);`, { mode: 0o755 });
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      await ssh.syncDirectoryToSsh({ spec: hardenedSpec, localDir: local, remoteDir: remote, privateDirectory: true });
+      expect((await readFile(modes, "utf8")).trim()).toBe("448");
+      expect((await stat(path.join(remote, "query"))).mode & 0o777).toBe(0o600);
+      expect(await readFile(path.join(remote, "query"), "utf8")).toBe("synthetic-private");
+    } finally { process.env.PATH = previousPath; await rm(root, { recursive: true, force: true }); }
+  });
+});
+
 describe("runAdapterExecutionTargetProcessWithStagedEnv", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -162,6 +185,62 @@ describe("runAdapterExecutionTargetProcessWithStagedEnv", () => {
       `rm -rf '/Users/ac-provider/agentdash/.paperclip-runenv/run-1234'`,
       expect.any(Object),
     );
+  });
+
+  it("the runtime reads the unchanged query only from a 0600 file in a 0700 directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ssh-private-query-"));
+    const query = "雪 query\n' \" $(touch NEVER) `uname`";
+    const fake = path.join(root, "fake-hermes.cjs");
+    await writeFile(fake, `const fs = require("node:fs"); const args = process.argv.slice(2); const file = args[args.indexOf("--query-file") + 1]; process.stdout.write(JSON.stringify({ args, query: fs.readFileSync(file,"utf8"), mode: fs.statSync(file).mode & 511, dirMode: fs.statSync(require("node:path").dirname(file)).mode & 511, token: process.env.RUN_TOKEN }));`);
+    const localTarget = { ...target, remoteCwd: root, spec: { ...target.spec, remoteCwd: root } };
+    vi.spyOn(ssh, "syncDirectoryToSsh").mockImplementation(async (input) => {
+      expect(input.privateDirectory).toBe(true);
+      expect((await stat(input.localDir)).mode & 0o777).toBe(0o700);
+      await mkdir(input.remoteDir, { recursive: true, mode: 0o700 });
+      await cp(input.localDir, input.remoteDir, { recursive: true });
+    });
+    vi.spyOn(ssh, "runSshCommand").mockImplementation(async () => {
+      await rm(path.join(root, ".paperclip-runenv", "query-read"), { recursive: true, force: true });
+      return { stdout: "", stderr: "" };
+    });
+    vi.spyOn(serverUtils, "runChildProcess").mockImplementation(async (_run, command, args) => {
+      expect(JSON.stringify(args)).not.toContain("雪 query");
+      const result = await promisify(execFile)(command, args, { env: { PATH: process.env.PATH }, cwd: root });
+      return { ...result, exitCode: 0, signal: null, timedOut: false, pid: null, startedAt: new Date().toISOString() };
+    });
+    try {
+      const result = await runAdapterExecutionTargetProcessWithStagedEnv("query-read", localTarget, process.execPath, [fake], {
+        cwd: root, env: { RUN_TOKEN: "synthetic-private" }, privateQuery: query, timeoutSec: 5, graceSec: 1, onLog: async () => {},
+      });
+      const received = JSON.parse(result.stdout);
+      expect(received).toMatchObject({ query, mode: 0o600, dirMode: 0o700, token: "synthetic-private" });
+      expect(received.args).toEqual(["--query-file", path.join(root, ".paperclip-runenv/query-read/query")]);
+      await expect(stat(path.join(root, ".paperclip-runenv/query-read"))).rejects.toThrow();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["launch", "timeout", "nonzero"])("sweeps staged inputs after %s failure", async (failure) => {
+    vi.spyOn(ssh, "syncDirectoryToSsh").mockResolvedValue();
+    const sweep = vi.spyOn(ssh, "runSshCommand").mockResolvedValue({ stdout: "", stderr: "" });
+    const run = vi.spyOn(serverUtils, "runChildProcess");
+    if (failure === "launch") run.mockRejectedValue(new Error("synthetic launch failure"));
+    else run.mockResolvedValue({ exitCode: failure === "nonzero" ? 2 : null, signal: null, timedOut: failure === "timeout", stdout: "", stderr: "", pid: null, startedAt: new Date().toISOString() });
+    const pending = runAdapterExecutionTargetProcessWithStagedEnv("cleanup-case", target, "hermes", ["chat"], { cwd: target.remoteCwd, env: {}, privateQuery: "private-query", timeoutSec: 1, graceSec: 1, onLog: async () => {} });
+    if (failure === "launch") await expect(pending).rejects.toThrow("synthetic launch failure");
+    else await pending;
+    expect(sweep).toHaveBeenCalledWith(hardenedSpec, "rm -rf '/Users/ac-provider/agentdash/.paperclip-runenv/cleanup-case'", expect.any(Object));
+  });
+
+  it("sweeps staged inputs and does not launch when invocation metadata fails", async () => {
+    vi.spyOn(ssh, "syncDirectoryToSsh").mockResolvedValue();
+    const sweep = vi.spyOn(ssh, "runSshCommand").mockResolvedValue({ stdout: "", stderr: "" });
+    const run = vi.spyOn(serverUtils, "runChildProcess");
+    await expect(runAdapterExecutionTargetProcessWithStagedEnv("metadata-failure", target, "hermes", ["chat"], {
+      cwd: target.remoteCwd, env: {}, privateQuery: "private-query", timeoutSec: 1, graceSec: 1, onLog: async () => {},
+      onInvocation: async () => { throw new Error("synthetic metadata failure"); },
+    })).rejects.toThrow("synthetic metadata failure");
+    expect(run).not.toHaveBeenCalled();
+    expect(sweep).toHaveBeenCalledWith(hardenedSpec, "rm -rf '/Users/ac-provider/agentdash/.paperclip-runenv/metadata-failure'", expect.any(Object));
   });
 
   it("fails the run without spawning when staging fails (no argv fallback)", async () => {

@@ -127,7 +127,7 @@ import {
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { resolveEnvironmentExecutionTarget } from "../services/environment-execution-target.js";
-import { assertHermesSshEnvironmentPermitted, hermesSshEnabled } from "../services/hermes-ssh-policy.js";
+import { assertCanPinHermesSsh, assertHermesSshEnvironmentPermitted, hermesSshEnabled, withHermesSshCompanyLock } from "../services/hermes-ssh-policy.js";
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import type { AdapterEnvironmentCheck, AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
 import { secretService } from "../services/secrets.js";
@@ -296,31 +296,13 @@ export function agentRoutes(
   }
 
   /**
-   * AgentDash: only a person who administers agents may put a Hermes agent on
-   * an SSH environment (it runs as another OS user). Agents never may, not even
-   * a CEO or agent-creator agent; members need the agents:create grant.
-   */
-  async function assertCanPinHermesSsh(req: Request, companyId: string) {
-    if (req.actor.type !== "board") {
-      throw forbidden("Only a person who manages agents can put a Hermes agent on an SSH environment; agents can't.");
-    }
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-    const allowed = req.actor.userId ? await access.canUser(companyId, req.actor.userId, "agents:create") : false;
-    if (!allowed) {
-      throw forbidden(
-        "Only a company owner, an instance admin or someone with the agents:create permission can put a Hermes agent on an SSH environment.",
-      );
-    }
-  }
-
-  /**
    * AgentDash: audit a hermes agent being pinned to an SSH environment. Only
    * the target and ids are recorded — never key material or env values.
    */
   async function logHermesSshEnvironmentPin(
     req: Request,
     agent: { id: string; companyId: string },
-    pinned: { environmentId: string; sshTarget: string } | null,
+    pinned: { environmentId: string; sshTarget: string; port: number } | null,
   ) {
     // `pinned` is only ever non-null for a hermes_local agent on an SSH environment.
     if (!pinned) return;
@@ -338,6 +320,7 @@ export function agentRoutes(
         environmentId: pinned.environmentId,
         adapterType: "hermes_local",
         sshTarget: pinned.sshTarget,
+        port: pinned.port,
       },
     });
   }
@@ -346,6 +329,7 @@ export function agentRoutes(
     companyId: string,
     res: Response,
     create: (dbOrTx: Db, acceptance?: ActivityAcceptance) => Promise<T>,
+    validatePin?: (tx: Db) => Promise<void>,
   ): Promise<T | null> {
     const publications: ActivityPublication[] = [];
     const disabled = isBillingDisabled();
@@ -355,7 +339,12 @@ export function agentRoutes(
       { agents: 1 },
       buildRequireTierDeps,
       (action) => res.status(402).json(freeTierCapExceededPayload(action)),
-      executor => create(executor, disabled ? undefined : { executor, publications }),
+      executor => validatePin
+        ? withHermesSshCompanyLock(executor, companyId, async tx => {
+            await validatePin(tx);
+            return create(tx, { executor: tx, publications });
+          })
+        : create(executor, disabled ? undefined : { executor, publications }),
     );
     for (const publication of publications) publishActivity(publication);
     return result;
@@ -1385,10 +1374,10 @@ export function agentRoutes(
   async function assertAgentDefaultEnvironmentSelection(
     companyId: string,
     environmentId: string | null | undefined,
-    options?: { allowedDrivers?: string[]; allowedSandboxProviders?: string[]; adapterType?: string; req?: Request },
-  ): Promise<{ environmentId: string; sshTarget: string } | null> {
+    options?: { allowedDrivers?: string[]; allowedSandboxProviders?: string[]; adapterType?: string; req?: Request; executor?: Db },
+  ): Promise<{ environmentId: string; sshTarget: string; port: number } | null> {
     if (environmentId === undefined || environmentId === null) return null;
-    const environment = await environmentsSvc.getById(environmentId);
+    const environment = await (options?.executor ? environmentService(options.executor) : environmentsSvc).getById(environmentId);
     if (!environment || environment.companyId !== companyId) {
       throw unprocessable("Selected environment must belong to the same company");
     }
@@ -1414,12 +1403,12 @@ export function agentRoutes(
     // AgentDash: hermes_local over SSH. Only reachable with the flag on — with
     // it off the driver check above already refused "ssh" for hermes.
     if (options?.adapterType === "hermes_local" && environment.driver === "ssh") {
-      if (options.req) await assertCanPinHermesSsh(options.req, companyId);
-      const { target } = assertHermesSshEnvironmentPermitted({
+      if (options.req) await assertCanPinHermesSsh(options.req, companyId, options.executor ? accessService(options.executor) : access);
+      const { target, port } = assertHermesSshEnvironmentPermitted({
         companyId,
         config: environment.config as Record<string, unknown> | null,
       });
-      return { environmentId: environment.id, sshTarget: target };
+      return { environmentId: environment.id, sshTarget: target, port };
     }
     return null;
   }
@@ -2765,14 +2754,27 @@ export function agentRoutes(
     }
 
     const actor = getActorInfo(req);
-    const updated = await svc.rollbackConfigRevision(id, revisionId, {
-      agentId: actor.agentId,
-      userId: actor.actorType === "user" ? actor.actorId : null,
+    let rollbackPin: { environmentId: string; sshTarget: string; port: number } | null = null;
+    const updated = await withHermesSshCompanyLock(db, existing.companyId, async tx => {
+      const writer = agentService(tx, { environmentLockHeld: true });
+      const revision = await writer.getConfigRevision(id, revisionId);
+      const snapshot = asRecord(revision?.afterConfig);
+      if (!snapshot) return null;
+      const adapterType = typeof snapshot.adapterType === "string" ? snapshot.adapterType : existing.adapterType;
+      rollbackPin = await assertAgentDefaultEnvironmentSelection(existing.companyId,
+        typeof snapshot.defaultEnvironmentId === "string" ? snapshot.defaultEnvironmentId : null, {
+          allowedDrivers: allowedEnvironmentDriversForAgent(adapterType),
+          allowedSandboxProviders: allowedSandboxProvidersForAgent(adapterType), adapterType, req, executor: tx,
+        });
+      return writer.rollbackConfigRevision(id, revisionId, {
+        agentId: actor.agentId, userId: actor.actorType === "user" ? actor.actorId : null,
+      });
     });
     if (!updated) {
       res.status(404).json({ error: "Revision not found" });
       return;
     }
+    await logHermesSshEnvironmentPin(req, updated, rollbackPin);
     await refusePendingRunsIfWakePolicyTurnedOn(existing, updated);
 
     await logActivity(db, {
@@ -3066,7 +3068,7 @@ export function agentRoutes(
     // AgentDash: the hire path pins an environment too, so it gets the same
     // company, driver, allowlist and permission checks as create. A no-op for
     // a valid request (or none); it refuses another company's environment id.
-    const hermesSshHirePin = await assertAgentDefaultEnvironmentSelection(
+    let hermesSshHirePin = await assertAgentDefaultEnvironmentSelection(
       companyId,
       normalizedHireInput.defaultEnvironmentId,
       {
@@ -3105,6 +3107,13 @@ export function agentRoutes(
         // approval trail is its provenance.
         createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }, acceptance),
+      normalizedHireInput.adapterType === "hermes_local" && normalizedHireInput.defaultEnvironmentId ? async tx => {
+        hermesSshHirePin = await assertAgentDefaultEnvironmentSelection(companyId, normalizedHireInput.defaultEnvironmentId, {
+          allowedDrivers: allowedEnvironmentDriversForAgent(normalizedHireInput.adapterType),
+          allowedSandboxProviders: allowedSandboxProvidersForAgent(normalizedHireInput.adapterType),
+          adapterType: normalizedHireInput.adapterType, req, executor: tx,
+        });
+      } : undefined,
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
@@ -3296,7 +3305,7 @@ export function agentRoutes(
       normalizedAdapterConfig,
     );
     await assertAgentEnvironmentSelection(companyId, createInput.adapterType, createInput.defaultEnvironmentId);
-    const hermesSshPin = await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
+    let hermesSshPin = await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
       allowedDrivers: allowedEnvironmentDriversForAgent(createInput.adapterType),
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
       adapterType: createInput.adapterType,
@@ -3377,6 +3386,13 @@ export function agentRoutes(
         // approval trail is its provenance.
         createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }, acceptance),
+      createInput.adapterType === "hermes_local" && createInput.defaultEnvironmentId ? async tx => {
+        hermesSshPin = await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
+          allowedDrivers: allowedEnvironmentDriversForAgent(createInput.adapterType),
+          allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
+          adapterType: createInput.adapterType, req, executor: tx,
+        });
+      } : undefined,
     );
     if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
@@ -4273,7 +4289,7 @@ export function agentRoutes(
         baseAdapterConfig,
       );
     }
-    let hermesSshPin: { environmentId: string; sshTarget: string } | null = null;
+    let hermesSshPin: { environmentId: string; sshTarget: string; port: number } | null = null;
     if (touchesAdapterConfiguration || Object.prototype.hasOwnProperty.call(patchData, "defaultEnvironmentId")) {
       hermesSshPin = await assertAgentDefaultEnvironmentSelection(
         existing.companyId,
@@ -4294,13 +4310,26 @@ export function agentRoutes(
       metadata: hasOwn(patchData, "metadata") ? patchData.metadata : existing.metadata,
     });
     const actor = getActorInfo(req);
-    const agent = await svc.update(id, patchData, {
-      recordRevision: {
-        createdByAgentId: actor.agentId,
-        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-        source: "patch",
-      },
-    });
+    const writePatch = async (executor: Db, locked = false) => {
+      const writer = locked ? agentService(executor, { environmentLockHeld: true }) : svc;
+      if (locked) {
+        const latest = await writer.getById(id);
+        if (!latest) return null;
+        const adapterType = typeof patchData.adapterType === "string" ? patchData.adapterType : latest.adapterType;
+        hermesSshPin = await assertAgentDefaultEnvironmentSelection(latest.companyId,
+          hasOwn(patchData, "defaultEnvironmentId") ? (typeof patchData.defaultEnvironmentId === "string" ? patchData.defaultEnvironmentId : null) : latest.defaultEnvironmentId, {
+            allowedDrivers: allowedEnvironmentDriversForAgent(adapterType),
+            allowedSandboxProviders: allowedSandboxProvidersForAgent(adapterType),
+            adapterType, req, executor,
+          });
+      }
+      return writer.update(id, patchData, {
+        recordRevision: { createdByAgentId: actor.agentId, createdByUserId: actor.actorType === "user" ? actor.actorId : null, source: "patch" },
+      });
+    };
+    const agent = hasOwn(patchData, "adapterType") || hasOwn(patchData, "defaultEnvironmentId") || (touchesAdapterConfiguration && requestedAdapterType === "hermes_local" && existing.defaultEnvironmentId)
+      ? await withHermesSshCompanyLock(db, existing.companyId, tx => writePatch(tx, true))
+      : await writePatch(db);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;

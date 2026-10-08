@@ -406,41 +406,7 @@ export async function normalizeEnvironmentConfigForPersistence(input: {
   }
 
   if (input.driver === "sandbox") {
-    const parsed = parseSandboxEnvironmentConfig(input.config);
-    if (!parsed.success) {
-      throw unprocessable(toErrorMessage(parsed.error), {
-        issues: parsed.error.issues,
-      });
-    }
-    if (parsed.data.provider === "fake") {
-      throw unprocessable(
-        "Built-in fake sandbox environments are reserved for internal probes and cannot be saved.",
-      );
-    }
-    if (!input.pluginWorkerManager) {
-      throw unprocessable("Sandbox provider config validation requires a running plugin worker manager.");
-    }
-    const validated = await validatePluginSandboxProviderConfig({
-      db: input.db,
-      workerManager: input.pluginWorkerManager,
-      provider: parsed.data.provider,
-      config: stripSandboxProviderEnvelope(parsed.data),
-    });
-    return await persistConfigSecretRefs({
-      db: input.db,
-      companyId: input.companyId,
-      environmentName: input.environmentName,
-      driver: input.driver,
-      config: {
-        provider: parsed.data.provider,
-        ...validated.normalizedConfig,
-      },
-      schema:
-        validated.driver.configSchema && typeof validated.driver.configSchema === "object" && !Array.isArray(validated.driver.configSchema)
-          ? validated.driver.configSchema as Record<string, unknown>
-          : null,
-      actor: input.actor,
-    });
+    return (await prepareExternalEnvironmentConfigPersistence(input))(input.db);
   }
 
   if (input.driver === "plugin") {
@@ -464,6 +430,56 @@ export async function normalizeEnvironmentConfigForPersistence(input: {
     driver: input.driver,
     config: input.config,
   });
+}
+
+// AgentDash: plugin worker validation happens before company locks; secret
+// writes are deferred until the caller has rechecked authority in its transaction.
+export async function prepareExternalEnvironmentConfigPersistence(
+  input: Parameters<typeof normalizeEnvironmentConfigForPersistence>[0],
+): Promise<(db: Db) => Promise<Record<string, unknown>>> {
+  if (input.driver === "plugin") {
+    const normalized = await normalizeEnvironmentConfigForPersistence(input);
+    return async () => normalized;
+  }
+  if (input.driver === "sandbox") {
+    const parsed = parseSandboxEnvironmentConfig(input.config);
+    if (!parsed.success) {
+      throw unprocessable(toErrorMessage(parsed.error), {
+        issues: parsed.error.issues,
+      });
+    }
+    if (parsed.data.provider === "fake") {
+      throw unprocessable(
+        "Built-in fake sandbox environments are reserved for internal probes and cannot be saved.",
+      );
+    }
+    if (!input.pluginWorkerManager) {
+      throw unprocessable("Sandbox provider config validation requires a running plugin worker manager.");
+    }
+    const validated = await validatePluginSandboxProviderConfig({
+      db: input.db,
+      workerManager: input.pluginWorkerManager,
+      provider: parsed.data.provider,
+      config: stripSandboxProviderEnvelope(parsed.data),
+    });
+    return async (db: Db) => persistConfigSecretRefs({
+      db,
+      companyId: input.companyId,
+      environmentName: input.environmentName,
+      driver: input.driver,
+      config: {
+        provider: parsed.data.provider,
+        ...validated.normalizedConfig,
+      },
+      schema:
+        validated.driver.configSchema && typeof validated.driver.configSchema === "object" && !Array.isArray(validated.driver.configSchema)
+          ? validated.driver.configSchema as Record<string, unknown>
+          : null,
+      actor: input.actor,
+    });
+  }
+
+  throw new Error("External config preparation requires a plugin or sandbox driver.");
 }
 
 export async function resolveEnvironmentDriverConfigForRuntime(
