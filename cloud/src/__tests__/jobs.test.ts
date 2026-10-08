@@ -139,6 +139,16 @@ describe("enqueue: kill switch, waitlist mode and daily cap", () => {
     expect(await db.select().from(jobs).where(eq(jobs.boxId, box.id))).toHaveLength(0);
   });
 
+  it("promotes a preexisting waiting row when an approved request is still deferred", async () => {
+    const box = await makeBox("requested");
+    await requestProvision(db, box.id, { actor: "test" });
+    const [entry] = await db.select().from(waitlist).where(eq(waitlist.accountId, box.accountId));
+    expect(entry!.state).toBe("waiting");
+    expect(await requestProvision(db, box.id, { actor: "op", approved: true })).toEqual({ outcome: "waitlisted", reason: "kill_switch" });
+    const [approved] = await db.select().from(waitlist).where(eq(waitlist.id, entry!.id));
+    expect(approved).toMatchObject({ state: "approved", approvedBy: "op" });
+  });
+
   it("waitlist mode holds a request until an operator approves it", async () => {
     await setSetting("provisioning_enabled", true);
     const box = await makeBox("requested");

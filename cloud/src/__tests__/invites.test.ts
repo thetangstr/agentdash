@@ -13,7 +13,7 @@ import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
 import { inviteCodes } from "../db/schema.js";
-import { inviteService, parseCodeList } from "../invites.js";
+import { findHostedInvitation, inviteService, parseCodeList } from "../invites.js";
 import { createLogger } from "../logger.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 
@@ -211,5 +211,26 @@ describe("admin invites", () => {
   it("the admin surface refuses without the bearer", async () => {
     const app = await serve(createApp({ db, config: config(), log }));
     expect((await request(app).post("/internal/invites/import").send({ codes: "x" })).status).toBe(401);
+  });
+});
+
+describe("hosted invitation admin", () => {
+  it("issues an explicit hosted-only code once, lists safe metadata, and preserves self-hosted issuance", async () => {
+    const app = await serve(createApp({ db, config: config(), log }));
+    const server = app as http.Server;
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const out: string[] = [];
+    expect(await runAdmin(["invites", "add-hosted", "synthetic"], { CLOUD_CONTROL_URL: url, CLOUD_ADMIN_TOKEN: ADMIN }, { out: l => out.push(l), err: () => {}, fetch })).toBe(0);
+    const c = JSON.parse(out.join("")) as { id: string; code: string };
+    expect(c.code).toMatch(/^AGD-HOST-[0-9A-F]{32}$/);
+    expect((await validate(app, { code: c.code })).body).toEqual({ valid: false });
+    const metadata = await request(app).get("/internal/invites").set("authorization", `Bearer ${ADMIN}`);
+    expect(metadata.body.invites).toContainEqual(expect.objectContaining({ id: c.id, purpose: "hosted_beta", consumedAt: null }));
+    expect(JSON.stringify(metadata.body)).not.toContain(c.code);
+    expect(JSON.stringify(metadata.body)).not.toContain("codeHash");
+    expect(logLines.join("\n")).not.toContain(c.code);
+    const rotated = config({ CLOUD_DATA_KEY: KEY_B, CLOUD_DATA_KEYS_PREVIOUS: KEY_A });
+    expect((await findHostedInvitation(db, rotated.dataKeys, c.code))?.id).toBe(c.id);
+    expect((await findHostedInvitation(db, config({ CLOUD_DATA_KEY: KEY_B }).dataKeys, c.code))).toBeNull();
   });
 });

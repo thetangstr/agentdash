@@ -2,11 +2,11 @@
 
 **Scope:** `cloud-control` and `cloud-migrate` in the Railway project `agentdash-cloud`, workspace "AgentDash Boxes". Design: `docs/superpowers/specs/2026-09-25-self-serve-cloud-design.md`. SC-11 (#772) extends this runbook with the full operator procedures (kill switch, approve, retry, suspend, delete, token rotation); this first version covers what exists as of SC-2 and SC-3.
 
-## 1. Provisioning is locked until claim tracking lands
+## 1. Provisioning gates and claim tracking
 
-Turning provisioning on is **refused in code** (`cloud/src/capabilities.ts`, `claimTrackingReady = false`). `admin settings set provisioning_enabled true` answers 400, and even a stored `true` provisions nothing: the enqueue path and the job runner both treat provisioning as off while the capability is false.
+`cloud/src/capabilities.ts` currently enables claim tracking. This is a source capability, not proof that production can deliver a box: verify the deployed release, worker, accepting workspace, escrow public key, box image and real claim flow before admitting customers.
 
-Why: the control plane may delete a box that was never claimed (spec §3.4), and it may only do so on **positive evidence** from the box's own `/api/health` that it is unclaimed. Today's release does not report its claim (`claimed` arrives with SC-6, #767, and the edge gate with SC-5, #766), and `bootstrapStatus` stays `bootstrap_pending` after a founder has signed up, until they create a company. So the cleanup sweep never deletes a box whose claim state is unknown; it flags it (`cleanup_needs_operator` box event and an ops alert, at most once a day per box). The capability is flipped only by the pull request that lands SC-5 and SC-6 box-side, with a test that the sweep sees `claimed`.
+Provisioning still requires `provisioning_enabled=true`. The queue checks the kill switch and claim capability first, then waitlist/manual approval, then `daily_cap`. Keep `waitlist_mode=true` for the invitation beta. An invitation replaces the approval requirement for one verified account; it cannot bypass the kill switch, claim readiness or daily cap. Unknown claim state remains insufficient evidence for automatic cleanup; inspect the box's health evidence rather than treating an unknown state as unclaimed.
 
 ## 2. Deploy order
 
@@ -42,11 +42,11 @@ Every box's `PAPERCLIP_SECRETS_MASTER_KEY` is sealed (libsodium sealed box) to t
 
 www's `/start`, `/start/verify`, `/start/progress` and `/find` call `/api/cloud/*`, which `vercel.json` rewrites to `cloud-control`'s public routes (`cloud/src/routes/public.ts`). The flow: signup (checks, then a single-use 30-minute magic link by email; nothing is created yet) → the link (proves the email, creates the box, asks the queue for provisioning) → the progress page (polls `boxes/mine`) → the ready email and the **Open my workspace** button carry the box's claim link.
 
-**While provisioning is gated (`claimTrackingReady=false`, today):** every verified signup becomes a `waitlisted` box with reason `kill_switch` and a `waiting` waitlist entry, and gets the "You're on the list" email. `admin waitlist approve <id>` (or `approve-next <n>`) moves the entry to `approved` and emails the person, but the box stays `waitlisted` (the page says "You're in"): nothing is queued and nothing is provisioned. A pass every minute (`admin waitlist release` runs it by hand) gives approved boxes their job once the gates open, oldest approval first, within the daily cap.
+**Waitlist and deferred approval:** no-code signups join the waitlist while waitlist mode is on. `admin waitlist approve <id>` (or `approve-next <n>`) grants approval, but the box stays pending when the kill switch or daily cap holds. A pass every minute (`admin waitlist release` runs it by hand) gives approved boxes their job once the gates open, oldest approval first, within the daily cap. The progress page distinguishes waiting for admission from approved and waiting for capacity.
 
 **Client address (GH #836 review):** a static `vercel.json` rewrite cannot add a request header from an environment variable, so www runs Vercel Routing Middleware (repo-root `middleware.js`, matcher `/api/cloud/:path*` and `/api/invites/validate`). It strips any client-sent `X-AgentDash-Edge-Proxy` and `X-AgentDash-Client-IP`, then, when the Vercel env var `CLOUD_VERCEL_PROXY_SECRET` is set, adds the secret and the visitor address Vercel's edge saw. A direct call to the Railway host cannot forge the address without the secret. `rate_events` is pruned hourly through `prune_rate_events()` (SECURITY DEFINER, never deletes rows younger than an hour).
 
-**Controls (spec §5.1):** per visitor IP 3 signups an hour and 1 box a day; 5 boxes a day per non-freemail domain; one box per verified email (a second signup gets a "you already have a workspace" email, the same 202 answer); the disposable-domain list (`disposable-email-domains-js`) plus `CLOUD_DISPOSABLE_DOMAINS_EXTRA` / `_ALLOW`, and an MX record; find and resend 3 an hour per email; Turnstile on signup and find. **Without Turnstile keys, signups are accepted but every one waits for an operator's approval** (`needs_approval`), even with waitlist mode off.
+**Controls (spec §5.1):** per visitor IP 3 signups an hour and 1 box a day; 5 boxes a day per non-freemail domain; one box per verified email (a second signup gets a "you already have a workspace" email, the same 202 answer); the disposable-domain list (`disposable-email-domains-js`) plus `CLOUD_DISPOSABLE_DOMAINS_EXTRA` / `_ALLOW`, and an MX record; find and resend 3 an hour per email; Turnstile on signup and find. **Without Turnstile keys, ordinary signups require approval** (`needs_approval`), even with waitlist mode off. A valid hosted invitation grants that approval only after email verification; all other controls remain in force.
 
 **Variables on `cloud-control`:**
 
@@ -67,7 +67,7 @@ www's `/start`, `/start/verify`, `/start/progress` and `/find` call `/api/cloud/
 4. Deploy www (Vercel) with the `/api/cloud/:path*` rewrite; `curl -s https://www.agentdash.cloud/api/cloud/config` gives the same answer.
 5. Sign up at `https://www.agentdash.cloud/start` from a private window: the verify email arrives from no-reply@agentdash.cloud, the link lands on "You're on the list", and `admin waitlist list` shows the entry. Check the `signup_requests.ip` of that row is your address, not a Vercel one; if it is Vercel's, the middleware is not running or the two secrets differ. Also check that `curl -s -X POST https://cloud-control-production.up.railway.app/api/cloud/signup -H 'Content-Type: application/json' -H 'X-AgentDash-Client-IP: 203.0.113.9' -d '{}'` is keyed by your own address (it is refused as `invalid_email`; the point is that no row or limit ever records 203.0.113.9).
 5b. **Middleware check without a signup:** `curl -s https://www.agentdash.cloud/api/cloud/proxy-check` answers `{"trustedProxy":true}`; the same call straight to `https://cloud-control-production.up.railway.app/api/cloud/proxy-check` with a made-up `X-AgentDash-Edge-Proxy` answers `false`. It returns nothing else and is rate-limited (30 a minute per address). A Vercel preview can run the same check first (its rewrites point at the same control plane), once the preview scope has the secret too.
-6. `admin waitlist approve <id>`: the approval email arrives and the page says "You're in"; `admin jobs list` shows no provision job (gated).
+6. `admin waitlist approve <id>`: the approval email arrives and the page says "You're in"; `admin jobs list` reflects the current kill switch and cap: approval alone does not guarantee a job immediately.
 
 ## 5. The self-hosted invite validator and www's API (SC-9, GH #770)
 
@@ -327,3 +327,24 @@ The same command with no key change converges a new price or trial length across
 ### 9.3 Live mode (later, F4 #759)
 
 Repeat 9.1 with Test mode off: live price, live `boxes-shared` and `cloud-control` keys, a live endpoint (its own secret). Set `CLOUD_STRIPE_MODE=live` and the live values on `cloud-control`, redeploy it, then `pbpaste | admin stripe rotate-box-key --apply --redeploy` with the `rk_live_…` key (a test key is refused in live mode). Test-mode customers and subscriptions do not carry over: a box that started a test trial starts again in live mode.
+
+
+## 10. Hosted invitation beta
+
+The public entry is `https://www.agentdash.cloud/start`. With no code, visitors verify their email and join the waitlist. A hosted invitation approves one instance after email verification; it is distinct from a reusable self-hosted installation code. A visitor already on the list signs in through `/find` and enters the code on `/start/progress`, keeping their existing instance and address.
+
+The signup body accepts optional `invitationCode`. Existing customers use cookie-session `POST /api/cloud/invitation/redeem` with `{ "code": "<hosted invitation>" }`. Neither endpoint accepts account IDs, box IDs or an approval boolean from the visitor. Codes belong only in request bodies, never links, analytics, logs or reports. Signup checks the invitation but stores only its ID; no instance or consumption occurs before email verification. Verification rechecks revocation, expiry and prior use and atomically records the account/box binding and durable approval. Concurrent customers cannot both use a code. Same-account redemption of the same grant is idempotent.
+
+Operator issuance uses the existing authenticated, IP-restricted cloud admin surface:
+
+```sh
+pnpm --filter @agentdash/cloud-control admin invites add-hosted "beta batch 1"
+pnpm --filter @agentdash/cloud-control admin invites list
+pnpm --filter @agentdash/cloud-control admin invites revoke <invitation-id>
+```
+
+Issuance reveals the new invitation once. Handle that output privately; do not paste live codes into PRs, transcripts, screenshots or this runbook. Listing exposes only metadata. Existing `invites add` and `invites import` retain self-hosted semantics, and `/api/invites/validate` never grants hosted admission. Revocation prevents unused redemption; it does not undo an instance approval already granted to a verified account.
+
+Keep `waitlist_mode=true` and the established capacity/spend controls. An approved invitation can remain pending while provisioning is off or the daily cap is full. Its approval survives interruption between verification and queueing, and the release sweep can enqueue it later without another code. Do not approve the entire waiting list or remove the daily cap to make an invitation appear successful.
+
+Deploy the additive cloud invitation migration through `cloud-migrate` first, then `cloud-control`; publish the capability-aware frontend afterward. The frontend hides invitation entry when the deployed API lacks `invitationCodesEnabled`, allowing a staged rollout. Rollback the application only; retain additive columns and admission records. Before announcing beta delivery, verify no-code waitlisting, invalid-code refusal and one owned real invited email → instance → claim flow against the intended release. Fake-mailer/provisioner tests prove source behavior only.

@@ -14,7 +14,7 @@
 // old codes valid while CLOUD_DATA_KEYS_PREVIOUS lists the old key.
 import { createHmac, randomBytes } from "node:crypto";
 import { Router, type Router as ExpressRouter } from "express";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, gt } from "drizzle-orm";
 import type { CloudConfig } from "./config.js";
 import { constantTimeEqual, type DataKeyring } from "./crypto.js";
 import type { CloudDb } from "./db/client.js";
@@ -26,7 +26,9 @@ import { visitorOf } from "./routes/public.js";
 export const INVITE_WINDOW_MS = 15 * 60_000;
 /** Same as the box's auth-tier limiter: 10 attempts per 15 minutes per client. */
 export const INVITE_MAX_PER_IP = 10;
-const CODE_MAX = 120;
+export const INVITE_CODE_MAX = 120;
+const CODE_MAX = INVITE_CODE_MAX;
+export type InviteTx = Parameters<Parameters<CloudDb["transaction"]>[0]>[0];
 /**
  * GH #837 review: codes shorter than this are refused at import unless the
  * operator insists. At 10 guesses per 15 minutes per address a short code
@@ -44,16 +46,17 @@ export function lengthHistogram(codes: string[]): Record<string, number> {
   return out;
 }
 
-function hmacUnder(key: { reveal(): string }, code: string): string {
-  return createHmac("sha256", Buffer.from(key.reveal(), "hex")).update(`agentdash-invite-code:${code}`, "utf8").digest("hex");
+function hmacUnder(key: { reveal(): string }, code: string, hosted = false): string {
+  const domain = hosted ? "agentdash-hosted-invite-code" : "agentdash-invite-code";
+  return createHmac("sha256", Buffer.from(key.reveal(), "hex")).update(`${domain}:${code}`, "utf8").digest("hex");
 }
 
 export function inviteCodeHash(keys: DataKeyring, code: string): string {
   return hmacUnder(keys.current, code);
 }
 
-function candidateHashes(keys: DataKeyring, code: string): string[] {
-  return keys.all().map((k) => hmacUnder(k, code));
+function candidateHashes(keys: DataKeyring, code: string, hosted = false): string[] {
+  return keys.all().map((k) => hmacUnder(k, code, hosted));
 }
 
 /** A new code in the format the old instance used for its funnel codes. */
@@ -66,6 +69,34 @@ export function parseCodeList(raw: string): string[] {
   return [...new Set(raw.split(/[\s,]+/).map((c) => c.trim()).filter(Boolean))];
 }
 
+/** Bounded input; the raw code is used only for HMAC lookup. */
+export function parseHostedCode(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > CODE_MAX) return null;
+  const code = raw.trim();
+  return /^AGD-HOST-[0-9A-F]{32}$/.test(code) ? code : null;
+}
+
+/** Includes consumed codes only for the authenticated same-account retry check. */
+export async function findHostedInvitation(db: CloudDb | InviteTx, keys: DataKeyring, code: string) {
+  const hashes = candidateHashes(keys, code, true);
+  const [row] = await db.select().from(inviteCodes).where(and(
+    eq(inviteCodes.purpose, "hosted_beta"), inArray(inviteCodes.codeHash, hashes),
+  ));
+  return row && hashes.some(h => constantTimeEqual(row.codeHash, h)) ? row : null;
+}
+
+export function hostedInvitationAvailable(row: typeof inviteCodes.$inferSelect | null | undefined, at: Date): boolean {
+  return Boolean(row && row.purpose === "hosted_beta" && !row.revokedAt && !row.consumedAt && (!row.expiresAt || row.expiresAt > at));
+}
+
+/** Called with the caller's admission transaction, never a nested transaction. */
+export async function consumeHostedInvitation(tx: InviteTx, id: string, accountId: string, boxId: string, at: Date): Promise<boolean> {
+  const rows = await tx.update(inviteCodes).set({ consumedAt: at, consumedByAccountId: accountId, consumedBoxId: boxId })
+    .where(and(eq(inviteCodes.id, id), eq(inviteCodes.purpose, "hosted_beta"), isNull(inviteCodes.revokedAt), isNull(inviteCodes.consumedAt), or(isNull(inviteCodes.expiresAt), gt(inviteCodes.expiresAt, at))))
+    .returning({ id: inviteCodes.id });
+  return rows.length === 1;
+}
+
 export function inviteService(db: CloudDb, keys: DataKeyring) {
   return {
     async isValid(code: string): Promise<boolean> {
@@ -73,7 +104,7 @@ export function inviteService(db: CloudDb, keys: DataKeyring) {
       const rows = await db
         .select({ codeHash: inviteCodes.codeHash })
         .from(inviteCodes)
-        .where(and(inArray(inviteCodes.codeHash, hashes), isNull(inviteCodes.revokedAt)));
+        .where(and(eq(inviteCodes.purpose, "self_hosted"), inArray(inviteCodes.codeHash, hashes), isNull(inviteCodes.revokedAt)));
       // Constant-time confirmation of whatever the index found.
       return rows.some((r) => hashes.some((h) => constantTimeEqual(r.codeHash, h)));
     },
@@ -121,6 +152,16 @@ export function inviteService(db: CloudDb, keys: DataKeyring) {
       return { id: row!.id, code };
     },
 
+    /** Hosted codes are random, one-use, and cannot validate a self-hosted install. */
+    async addHosted(label: string, actor: string, ip: string | null): Promise<{ id: string; code: string }> {
+      const code = `AGD-HOST-${randomBytes(16).toString("hex").toUpperCase()}`;
+      return await db.transaction(async tx => {
+        const [row] = await tx.insert(inviteCodes).values({ codeHash: hmacUnder(keys.current, code, true), purpose: "hosted_beta", label }).returning({ id: inviteCodes.id });
+        await tx.insert(operatorAudit).values({ kind: "invite_codes_changed", actor, ip, detail: { action: "add", purpose: "hosted_beta", id: row!.id, label } });
+        return { id: row!.id, code };
+      });
+    },
+
     async revoke(id: string, actor: string, ip: string | null): Promise<boolean> {
       const rows = await db
         .update(inviteCodes)
@@ -134,7 +175,7 @@ export function inviteService(db: CloudDb, keys: DataKeyring) {
 
     async list() {
       return await db
-        .select({ id: inviteCodes.id, label: inviteCodes.label, createdAt: inviteCodes.createdAt, revokedAt: inviteCodes.revokedAt })
+        .select({ id: inviteCodes.id, label: inviteCodes.label, createdAt: inviteCodes.createdAt, revokedAt: inviteCodes.revokedAt, purpose: inviteCodes.purpose, expiresAt: inviteCodes.expiresAt, consumedAt: inviteCodes.consumedAt, consumedByAccountId: inviteCodes.consumedByAccountId, consumedBoxId: inviteCodes.consumedBoxId })
         .from(inviteCodes)
         .orderBy(inviteCodes.createdAt)
         .limit(1000);

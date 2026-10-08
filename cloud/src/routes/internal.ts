@@ -234,6 +234,15 @@ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps
     log.info("invite code added", { id: result.id });
     res.status(201).json(result);
   });
+  // Explicit hosted issuance: default add/import remain reusable self-hosted codes.
+  router.post("/invites/hosted", async (req, res) => {
+    if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
+    const label = typeof (req.body ?? {}).label === "string" ? req.body.label.trim() : "";
+    if (!label || label.length > 120) return void res.status(400).json({ error: "label must be 1-120 characters" });
+    const result = await deps.invites.addHosted(label, "admin-cli", adminIp(res));
+    log.info("hosted invite code added", { id: result.id });
+    res.status(201).json(result);
+  });
   router.post("/invites/:id/revoke", async (req, res) => {
     if (!deps.invites) return void res.status(409).json({ error: "invites are not configured" });
     if (!UUID_RE.test(req.params.id)) return void res.status(400).json({ error: "id must be a uuid" });

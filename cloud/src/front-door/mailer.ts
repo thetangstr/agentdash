@@ -135,7 +135,7 @@ export const emails = {
     return render("approved", to, "You're in: your AgentDash workspace is on its way", [
       input.provisioning
         ? `You're approved, and we are creating your workspace ${input.slug} now. It takes about 3 minutes; we will email the link to open it when it is ready.`
-        : `You're approved. Your workspace ${input.slug} will be created shortly; we will email the link to open it when it is ready.`,
+        : `You're approved. Your workspace ${input.slug} will be created when capacity is available; we will email the link to open it when it is ready.`,
     ], { label: "Watch progress", url: input.signInLink });
   },
   // AgentDash (SC-10, GH #771): Free idle policy, spec §5.2 (day 14 and day 45).

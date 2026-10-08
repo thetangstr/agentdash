@@ -94,7 +94,10 @@ export async function requestProvision(
       const [existing] = await tx
         .select({ id: waitlist.id })
         .from(waitlist)
-        .where(and(eq(waitlist.accountId, box.accountId), inArray(waitlist.state, ["waiting", "approved"])));
+        .where(and(eq(waitlist.accountId, box.accountId), eq(waitlist.requestedSlug, box.slug), inArray(waitlist.state, ["waiting", "approved"])));
+      if (existing && opts.approved) {
+        await tx.update(waitlist).set({ state: "approved", approvedAt: new Date(), approvedBy: opts.actor, updatedAt: new Date() }).where(and(eq(waitlist.id, existing.id), eq(waitlist.state, "waiting")));
+      }
       if (!existing) {
         const [acct] = await tx.select({ email: accounts.email }).from(accounts).where(eq(accounts.id, box.accountId));
         await tx.insert(waitlist).values({

@@ -18,12 +18,13 @@ import { and, asc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { CloudConfig } from "../config.js";
 import { sha256Hex } from "../crypto.js";
 import type { CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, cloudSessions, emailTokens, jobs, signupRequests, waitlist, type BoxState } from "../db/schema.js";
+import { accounts, boxEvents, boxes, cloudSessions, emailTokens, inviteCodes, jobs, operatorAudit, signupRequests, waitlist, type BoxState } from "../db/schema.js";
 import { claimLinkForBox } from "../jobs/claim.js";
-import { requestProvision, type ProvisionRequestResult } from "../jobs/queue.js";
+import { requestProvision, ProvisionRequestError, type ProvisionRequestResult } from "../jobs/queue.js";
 import type { Logger } from "../logger.js";
 import { isReservedSlug, SlugRefused, validateNewSlug } from "../railway/slug.js";
 import { capabilities } from "../capabilities.js";
+import { consumeHostedInvitation, findHostedInvitation, hostedInvitationAvailable, parseHostedCode, INVITE_MAX_PER_IP, INVITE_WINDOW_MS, type InviteTx } from "../invites.js";
 import { settingsService } from "../settings.js";
 import { emailDomain, hasMx, isDisposableDomain, isFreemail, type MxResolver, normaliseEmail } from "./email-policy.js";
 import { emails, type Mailer, MailNotConfigured } from "./mailer.js";
@@ -51,6 +52,9 @@ export const MAX_HOLD_MS = 2 * 3_600_000;
 export const SLUG_HOLD_WINDOW_MS = 24 * 3_600_000;
 
 export type Refusal = { ok: false; status: number; code: string; error: string };
+class AdmissionRefused extends Error {
+  constructor(readonly refusal: Refusal) { super(refusal.code); }
+}
 const refuse = (status: number, code: string, error: string): Refusal => ({ ok: false, status, code, error });
 
 export interface Visitor {
@@ -169,24 +173,24 @@ export function frontDoor(deps: FrontDoorDeps) {
   }
 
   /** Boxes created in the last day from this address (signups that became boxes). */
-  async function boxesFromIpToday(ip: string): Promise<number> {
-    const [row] = await db
+  async function boxesFromIpToday(ip: string, connection: CloudDb | InviteTx = db): Promise<number> {
+    const [row] = await connection
       .select({ n: sql<number>`count(*)::int` })
       .from(signupRequests)
       .where(and(eq(signupRequests.ip, ip), sql`${signupRequests.boxId} is not null`, gt(signupRequests.verifiedAt, new Date(now().getTime() - DAY_MS))));
     return row?.n ?? 0;
   }
 
-  async function boxesForDomainToday(domain: string): Promise<number> {
-    const rows = (await db.execute(sql`
+  async function boxesForDomainToday(domain: string, connection: CloudDb | InviteTx = db): Promise<number> {
+    const rows = (await connection.execute(sql`
       select count(*)::int as n from boxes b join accounts a on a.id = b.account_id
        where b.created_at > ${new Date(now().getTime() - DAY_MS).toISOString()}::timestamptz and split_part(a.email::text, '@', 2) = ${domain}`)) as unknown as Array<{ n: number }>;
     return rows[0]?.n ?? 0;
   }
 
-  async function createSession(accountId: string): Promise<{ token: string; maxAgeSeconds: number }> {
+  async function createSession(accountId: string, connection: CloudDb | InviteTx = db): Promise<{ token: string; maxAgeSeconds: number }> {
     const token = newToken();
-    await db.insert(cloudSessions).values({ accountId, tokenHash: sha256Hex(token), expiresAt: new Date(now().getTime() + SESSION_HOURS * 3_600_000) });
+    await connection.insert(cloudSessions).values({ accountId, tokenHash: sha256Hex(token), expiresAt: new Date(now().getTime() + SESSION_HOURS * 3_600_000) });
     return { token, maxAgeSeconds: SESSION_HOURS * 3600 };
   }
 
@@ -206,6 +210,49 @@ export function frontDoor(deps: FrontDoorDeps) {
     return await verifyTurnstile(fd.turnstileSecret, token, ip, { fetch: deps.fetch });
   }
 
+  const invitationUnavailable = () => refuse(400, "invitation_unavailable", "This invitation is not available. Check the code, or join the waitlist without it.");
+
+  /** Account/box creation lock is already held. Persist the one-box entitlement before delivery. */
+  async function approveHosted(tx: InviteTx, invitationId: string, account: typeof accounts.$inferSelect, box: typeof boxes.$inferSelect) {
+    const [invitation] = await tx.select().from(inviteCodes).where(eq(inviteCodes.id, invitationId)).for("update");
+    if (!invitation || invitation.purpose !== "hosted_beta" || invitation.revokedAt || (invitation.expiresAt && invitation.expiresAt <= now())) {
+      throw new AdmissionRefused(invitationUnavailable());
+    }
+    if (invitation.consumedAt) {
+      if (invitation.consumedByAccountId !== account.id || invitation.consumedBoxId !== box.id) throw new AdmissionRefused(invitationUnavailable());
+      return false;
+    }
+    // An existing admitted box never spends another invitation, including capacity-deferred approval.
+    const [approved] = await tx.select({ id: waitlist.id }).from(waitlist).where(and(eq(waitlist.accountId, account.id), eq(waitlist.requestedSlug, box.slug), eq(waitlist.state, "approved")));
+    if (approved || (box.state !== "requested" && box.state !== "waitlisted")) return false;
+    if (!(await consumeHostedInvitation(tx, invitationId, account.id, box.id, now()))) throw new AdmissionRefused(invitationUnavailable());
+    const [entry] = await tx.select({ id: waitlist.id }).from(waitlist).where(and(eq(waitlist.accountId, account.id), eq(waitlist.requestedSlug, box.slug), eq(waitlist.state, "waiting"))).for("update");
+    const approval = { state: "approved" as const, approvedAt: now(), approvedBy: `hosted-invitation:${invitationId}`, updatedAt: now() };
+    if (entry) await tx.update(waitlist).set(approval).where(eq(waitlist.id, entry.id));
+    else await tx.insert(waitlist).values({ accountId: account.id, email: account.email, requestedSlug: box.slug, ...approval });
+    if (box.state === "requested") await tx.update(boxes).set({ state: "waitlisted", updatedAt: now() }).where(eq(boxes.id, box.id));
+    await tx.insert(operatorAudit).values({ kind: "invite_codes_changed", actor: "hosted-invitation", detail: { action: "consume", purpose: "hosted_beta", id: invitationId, accountId: account.id, boxId: box.id } });
+    return true;
+  }
+
+  /** A parallel release/retry may have started the box after the admission commit. */
+  async function queueApproved(boxId: string, actor: string): Promise<ProvisionRequestResult | null> {
+    try { return await requestProvision(db, boxId, { actor, approved: true }); }
+    catch (err) {
+      if (!(err instanceof ProvisionRequestError)) throw err;
+      const [box] = await db.select({ state: boxes.state }).from(boxes).where(eq(boxes.id, boxId));
+      if (box && ["provisioning", "awaiting_claim", "active", "suspended"].includes(box.state)) return null;
+      throw err;
+    }
+  }
+
+  async function notifyApproved(accountId: string, slug: string, provisioning: boolean): Promise<void> {
+    const [acct] = await db.select().from(accounts).where(eq(accounts.id, accountId));
+    if (!acct || acct.status !== "active") return;
+    const t = await issueToken(acct.id, "find");
+    await sendQuietly(emails.approved(acct.email, { slug, signInLink: magicLink(t.token), provisioning }));
+  }
+
   return {
     checkSlug,
     sessionAccount,
@@ -217,6 +264,7 @@ export function frontDoor(deps: FrontDoorDeps) {
       return {
         turnstileSiteKey: fd.turnstileSiteKey,
         signupOpen: mailer.configured !== false,
+        invitationCodesEnabled: true,
         waitlist: provisioningOff || s.waitlist_mode || !fd.turnstileSecret,
         edgeDomain: config.edgeDomain,
       };
@@ -236,6 +284,15 @@ export function frontDoor(deps: FrontDoorDeps) {
       }
       if (visitor.ip && !(await takeHit(db, LIMITS.signupPerIp, visitor.ip))) {
         return refuse(429, "rate_limited", "Too many signups from your network. Try again in an hour.");
+      }
+
+      let hostedInviteId: string | null = null;
+      if (body.invitationCode !== undefined && body.invitationCode !== "") {
+        const code = parseHostedCode(body.invitationCode);
+        if (!code) return invitationUnavailable();
+        const invitation = await findHostedInvitation(db, config.dataKeys, code);
+        if (!hostedInvitationAvailable(invitation, now())) return invitationUnavailable();
+        hostedInviteId = invitation!.id;
       }
 
       const domain = emailDomain(email);
@@ -294,6 +351,7 @@ export function frontDoor(deps: FrontDoorDeps) {
         await db.insert(signupRequests).values({
           accountId: acct.id,
           emailTokenId: t.id,
+          hostedInviteId,
           slug,
           workspaceName,
           ip: visitor.ip,
@@ -308,82 +366,107 @@ export function frontDoor(deps: FrontDoorDeps) {
       return { ok: true };
     },
 
-    /**
-     * Use a magic link. Single use: the token is marked used in the same
-     * statement that checks it is unused and unexpired.
-     */
+    /** Consume a magic link atomically with account verification, box creation and admission. */
     async verify(token: unknown): Promise<
       | { ok: true; session: { token: string; maxAgeSeconds: number }; outcome: "box_requested" | "existing" | "signed_in"; provisioning?: ProvisionRequestResult }
       | Refusal
     > {
       if (typeof token !== "string" || !/^[A-Za-z0-9_-]{20,100}$/.test(token)) return refuse(400, "link_invalid", "This link is not valid.");
-      const hash = sha256Hex(token);
-      const [used] = await db
-        .update(emailTokens)
-        .set({ usedAt: now() })
-        .where(and(eq(emailTokens.tokenHash, hash), isNull(emailTokens.usedAt), gt(emailTokens.expiresAt, now())))
-        .returning();
-      if (!used) {
-        const [row] = await db.select().from(emailTokens).where(eq(emailTokens.tokenHash, hash));
-        if (!row) return refuse(400, "link_invalid", "This link is not valid.");
-        if (row.usedAt) return refuse(410, "link_used", "This link was already used. Each link works once.");
-        return refuse(410, "link_expired", "This link has expired. Links work for 30 minutes.");
+      let verified;
+      try {
+        verified = await db.transaction(async tx => {
+          // Shared order for verification and session redemption; limits count under this lock.
+          await tx.execute(sql`select pg_advisory_xact_lock(${BOX_CREATE_LOCK})`);
+          const [used] = await tx.select().from(emailTokens).where(eq(emailTokens.tokenHash, sha256Hex(token))).for("update");
+          if (!used) throw new AdmissionRefused(refuse(400, "link_invalid", "This link is not valid."));
+          if (used.usedAt) throw new AdmissionRefused(refuse(410, "link_used", "This link was already used. Each link works once."));
+          if (used.expiresAt <= now()) throw new AdmissionRefused(refuse(410, "link_expired", "This link has expired. Links work for 30 minutes."));
+          const [acct] = await tx.select().from(accounts).where(eq(accounts.id, used.accountId)).for("update");
+          if (!acct || acct.status === "blocked" || acct.status === "deleted") throw new AdmissionRefused(refuse(400, "link_invalid", "This link is not valid."));
+          if (acct.status === "pending_verification") {
+            await tx.update(accounts).set({ status: "active", emailVerifiedAt: now(), updatedAt: now() }).where(eq(accounts.id, acct.id));
+          }
+          await tx.update(emailTokens).set({ usedAt: now() }).where(eq(emailTokens.id, used.id));
+          const session = await createSession(acct.id, tx);
+          if (used.purpose === "find") return { kind: "signed_in" as const, session };
+          const [request] = await tx.select().from(signupRequests).where(eq(signupRequests.emailTokenId, used.id)).for("update");
+          if (!request) return { kind: "signed_in" as const, session };
+          const [existing] = await tx.select().from(boxes).where(and(eq(boxes.accountId, acct.id), inArray(boxes.state, LIVE_BOX_STATES))).for("update");
+          if (existing) {
+            const admitted = request.hostedInviteId ? await approveHosted(tx, request.hostedInviteId, acct, existing) : false;
+            await tx.update(signupRequests).set({ verifiedAt: now() }).where(eq(signupRequests.id, request.id));
+            return { kind: "existing" as const, session, request, boxId: existing.id, slug: existing.slug, admitted };
+          }
+          if (request.ip && (await boxesFromIpToday(request.ip, tx)) >= BOXES_PER_IP_PER_DAY) throw new AdmissionRefused(refuse(429, "ip_daily_limit", "A workspace was already created from your network today. Sign up again tomorrow."));
+          const domain = emailDomain(acct.email);
+          if (!isFreemail(domain) && (await boxesForDomainToday(domain, tx)) >= BOXES_PER_DOMAIN_PER_DAY) throw new AdmissionRefused(refuse(429, "domain_daily_limit", `Too many workspaces were created for ${domain} today. Sign up again tomorrow.`));
+          const [taken] = await tx.select({ id: boxes.id }).from(boxes).where(eq(boxes.slug, request.slug));
+          if (taken) throw new AdmissionRefused(refuse(409, "slug_taken", "Someone took that name while you were confirming. Start again with another name."));
+          const [box] = await tx.insert(boxes).values({ accountId: acct.id, slug: request.slug }).returning();
+          const admitted = request.hostedInviteId ? await approveHosted(tx, request.hostedInviteId, acct, box!) : false;
+          await tx.update(signupRequests).set({ verifiedAt: now(), boxId: box!.id }).where(eq(signupRequests.id, request.id));
+          await tx.insert(boxEvents).values({ boxId: box!.id, kind: "box_created", actor: "signup", detail: { by: "front_door", botCheck: !request.unverifiedHuman } });
+          return { kind: "created" as const, session, request, boxId: box!.id, slug: box!.slug, admitted };
+        });
+      } catch (err) {
+        if (err instanceof AdmissionRefused) return err.refusal;
+        throw err;
       }
-      const [acct] = await db.select().from(accounts).where(eq(accounts.id, used.accountId));
-      if (!acct || acct.status === "blocked" || acct.status === "deleted") return refuse(400, "link_invalid", "This link is not valid.");
-      if (acct.status === "pending_verification") {
-        await db.update(accounts).set({ status: "active", emailVerifiedAt: now(), updatedAt: now() }).where(eq(accounts.id, acct.id));
+      if (verified.kind === "signed_in") return { ok: true, session: verified.session, outcome: "signed_in" };
+      const { request, boxId, session, slug } = verified;
+      if (verified.kind === "existing" && !request.hostedInviteId) return { ok: true, session, outcome: "existing" };
+      const provisioning = request.hostedInviteId
+        ? await queueApproved(boxId, "hosted-invitation")
+        : await requestProvision(db, boxId, { actor: "signup", requireApproval: request.unverifiedHuman });
+      log.info("signup verified", { slug, outcome: provisioning?.outcome ?? "already_started", reason: provisioning?.outcome === "waitlisted" ? provisioning.reason : null });
+      if (verified.admitted) await notifyApproved(request.accountId, slug, provisioning?.outcome === "queued");
+      else if (!request.hostedInviteId && provisioning?.outcome === "waitlisted") {
+        const [acct] = await db.select().from(accounts).where(eq(accounts.id, request.accountId));
+        const t = await issueToken(request.accountId, "find");
+        await sendQuietly(emails.waitlisted(acct!.email, { slug, progressLink: magicLink(t.token) }));
       }
+      return { ok: true, session, outcome: verified.kind === "existing" ? "existing" : "box_requested", ...(provisioning ? { provisioning } : {}) };
+    },
 
-      if (used.purpose === "find") {
-        return { ok: true, session: await createSession(acct.id), outcome: "signed_in" };
+    /** Session-bound redemption never accepts an account or box from the request body. */
+    async redeemInvitation(accountId: string, raw: unknown, visitor: Visitor): Promise<{ ok: true; provisioning: "queued" | "waitlisted" | "already_started"; reason?: string | null } | Refusal> {
+      if (!(await takeHit(db, { bucket: "hosted_invite_ip", limit: INVITE_MAX_PER_IP, windowMs: INVITE_WINDOW_MS }, visitor.ip ?? "unknown")) ||
+          !(await takeHit(db, { bucket: "hosted_invite_account", limit: INVITE_MAX_PER_IP, windowMs: INVITE_WINDOW_MS }, accountId))) return refuse(429, "rate_limited", "Too many invitation attempts. Try again later.");
+      const code = parseHostedCode(raw);
+      if (!code) return invitationUnavailable();
+      let box;
+      try {
+        box = await db.transaction(async tx => {
+          await tx.execute(sql`select pg_advisory_xact_lock(${BOX_CREATE_LOCK})`);
+          const [account] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).for("update");
+          if (!account || account.status !== "active" || !account.emailVerifiedAt) throw new AdmissionRefused(refuse(401, "no_session", "Verify your email and sign in to redeem an invitation."));
+          const [existing] = await tx.select().from(boxes).where(and(eq(boxes.accountId, accountId), inArray(boxes.state, LIVE_BOX_STATES))).for("update");
+          if (!existing) throw new AdmissionRefused(refuse(409, "no_waitlisted_box", "Sign up for a workspace before redeeming an invitation."));
+          const invitation = await findHostedInvitation(tx, config.dataKeys, code);
+          if (!invitation) throw new AdmissionRefused(invitationUnavailable());
+          const admitted = await approveHosted(tx, invitation.id, account, existing);
+          return { existing, admitted };
+        });
+      } catch (err) {
+        if (err instanceof AdmissionRefused) return err.refusal;
+        throw err;
       }
-
-      const [request] = await db.select().from(signupRequests).where(eq(signupRequests.emailTokenId, used.id));
-      if (!request) return { ok: true, session: await createSession(acct.id), outcome: "signed_in" };
-
-      // One Free box per verified email; the per-IP and per-domain daily limits
-      // are checked again here, under one lock, because they count boxes.
-      const created = await db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(${BOX_CREATE_LOCK})`);
-        const existing = await tx.select({ id: boxes.id }).from(boxes).where(and(eq(boxes.accountId, acct.id), inArray(boxes.state, LIVE_BOX_STATES)));
-        if (existing.length) return { kind: "existing" as const };
-        if (request.ip && (await boxesFromIpToday(request.ip)) >= BOXES_PER_IP_PER_DAY) return { kind: "refused" as const, refusal: refuse(429, "ip_daily_limit", "A workspace was already created from your network today. Sign up again tomorrow.") };
-        const domain = emailDomain(acct.email);
-        if (!isFreemail(domain) && (await boxesForDomainToday(domain)) >= BOXES_PER_DOMAIN_PER_DAY) {
-          return { kind: "refused" as const, refusal: refuse(429, "domain_daily_limit", `Too many workspaces were created for ${domain} today. Sign up again tomorrow.`) };
-        }
-        const [taken] = await tx.select({ id: boxes.id }).from(boxes).where(eq(boxes.slug, request.slug));
-        if (taken) return { kind: "refused" as const, refusal: refuse(409, "slug_taken", "Someone took that name while you were confirming. Start again with another name.") };
-        const [box] = await tx.insert(boxes).values({ accountId: acct.id, slug: request.slug }).returning({ id: boxes.id });
-        await tx.update(signupRequests).set({ verifiedAt: now(), boxId: box!.id }).where(eq(signupRequests.id, request.id));
-        await tx.insert(boxEvents).values({ boxId: box!.id, kind: "box_created", actor: "signup", detail: { by: "front_door", botCheck: !request.unverifiedHuman } });
-        return { kind: "created" as const, boxId: box!.id };
-      });
-
-      const session = await createSession(acct.id);
-      if (created.kind === "refused") return created.refusal;
-      if (created.kind === "existing") return { ok: true, session, outcome: "existing" };
-
-      const provisioning = await requestProvision(db, created.boxId, { actor: "signup", requireApproval: request.unverifiedHuman });
-      log.info("signup verified", { slug: request.slug, outcome: provisioning.outcome, reason: provisioning.outcome === "waitlisted" ? provisioning.reason : null });
-      if (provisioning.outcome === "waitlisted") {
-        const t = await issueToken(acct.id, "find");
-        await sendQuietly(emails.waitlisted(acct.email, { slug: request.slug, progressLink: magicLink(t.token) }));
-      }
-      return { ok: true, session, outcome: "box_requested", provisioning };
+      if (box.existing.state !== "requested" && box.existing.state !== "waitlisted") return { ok: true, provisioning: "already_started" };
+      const result = await queueApproved(box.existing.id, "hosted-invitation");
+      if (box.admitted) await notifyApproved(accountId, box.existing.slug, result?.outcome === "queued");
+      return { ok: true, provisioning: result?.outcome ?? "already_started", reason: result?.outcome === "waitlisted" ? result.reason : null };
     },
 
     async boxesMine(accountId: string): Promise<{ email: string; boxes: BoxView[] }> {
       const [acct] = await db.select().from(accounts).where(eq(accounts.id, accountId));
       const rows = await db.select().from(boxes).where(and(eq(boxes.accountId, accountId), ne(boxes.state, "deleted"))).orderBy(asc(boxes.createdAt));
-      const [entry] = await db
+      const entries = await db
         .select()
         .from(waitlist)
-        .where(and(eq(waitlist.accountId, accountId), inArray(waitlist.state, ["waiting", "approved"])))
-        .limit(1);
+        .where(and(eq(waitlist.accountId, accountId), inArray(waitlist.state, ["waiting", "approved"])));
       const views: BoxView[] = [];
       for (const b of rows) {
+        const entry = entries.find(e => e.requestedSlug === b.slug);
         let phase: Phase;
         let stepIndex: number | null = null;
         let slow = false;
@@ -499,13 +582,8 @@ export function frontDoor(deps: FrontDoorDeps) {
       return { ok: true };
     },
 
-    /** After an operator approves a waitlist entry: tell the person, with a link to the progress page. */
-    async notifyApproved(accountId: string, slug: string, provisioning: boolean): Promise<void> {
-      const [acct] = await db.select().from(accounts).where(eq(accounts.id, accountId));
-      if (!acct || acct.status !== "active") return;
-      const t = await issueToken(acct.id, "find");
-      await sendQuietly(emails.approved(acct.email, { slug, signInLink: magicLink(t.token), provisioning }));
-    },
+    /** Confirmation for durable operator or invitation approval. */
+    notifyApproved,
 
     /**
      * Approved entries whose box still waits (provisioning was off, or the
@@ -517,15 +595,15 @@ export function frontDoor(deps: FrontDoorDeps) {
       const rows = await db
         .select({ boxId: boxes.id, slug: boxes.slug })
         .from(waitlist)
-        .innerJoin(boxes, and(eq(boxes.accountId, waitlist.accountId), eq(boxes.state, "waitlisted")))
+        .innerJoin(boxes, and(eq(boxes.accountId, waitlist.accountId), eq(boxes.slug, waitlist.requestedSlug), eq(boxes.state, "waitlisted")))
         .where(eq(waitlist.state, "approved"))
         .orderBy(asc(waitlist.approvedAt))
         .limit(limit);
       const out: Array<{ slug: string; outcome: string }> = [];
       for (const r of rows) {
-        const result = await requestProvision(db, r.boxId, { actor: "waitlist-release", approved: true });
-        out.push({ slug: r.slug, outcome: result.outcome });
-        if (result.outcome === "waitlisted") break;
+        const result = await queueApproved(r.boxId, "waitlist-release");
+        out.push({ slug: r.slug, outcome: result?.outcome ?? "already_started" });
+        if (result?.outcome === "waitlisted") break;
       }
       return out;
     },

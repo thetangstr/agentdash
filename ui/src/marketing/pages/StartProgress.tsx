@@ -5,7 +5,7 @@
  * (the one-time claim link) when it is ready (spec §1 steps 4 and 5).
  */
 import "./Start.css";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { MarketingShell } from "../MarketingShell";
 import { SectionContainer } from "../components/SectionContainer";
 import { Eyebrow } from "../components/Eyebrow";
@@ -33,6 +33,15 @@ export function StartProgress() {
   useDocumentMeta("Your AgentDash workspace", "Progress on your AgentDash workspace.");
   const [data, setData] = useState<MyBoxes | null>(null);
   const [error, setError] = useState<CloudApiError | null>(null);
+  const [invitationEnabled, setInvitationEnabled] = useState(false);
+  const [invitationConfigError, setInvitationConfigError] = useState<string | null>(null);
+  const [loadingInvitationConfig, setLoadingInvitationConfig] = useState(false);
+  const invitationConfigPending = useRef(false);
+  const [invitationCode, setInvitationCode] = useState("");
+  const [redeeming, setRedeeming] = useState(false);
+  const [invitationError, setInvitationError] = useState<string | null>(null);
+  const [invitationAccepted, setInvitationAccepted] = useState(false);
+  const redeemPending = useRef(false);
   const [resent, setResent] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -43,6 +52,27 @@ export function StartProgress() {
       setError(err instanceof CloudApiError ? err : new CloudApiError("Something went wrong.", 0, "unknown"));
     }
   }, []);
+
+  const loadInvitationConfig = useCallback(async () => {
+    if (invitationConfigPending.current) return;
+    invitationConfigPending.current = true;
+    setLoadingInvitationConfig(true);
+    try {
+      const config = await cloudApi.config();
+      setInvitationEnabled(config.invitationCodesEnabled === true);
+      setInvitationConfigError(null);
+    } catch (err) {
+      setInvitationEnabled(false);
+      setInvitationConfigError(err instanceof CloudApiError ? err.message : "Could not load invitation options. Try again.");
+    } finally {
+      invitationConfigPending.current = false;
+      setLoadingInvitationConfig(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadInvitationConfig();
+  }, [loadInvitationConfig]);
 
   const box = data?.boxes[0];
   useEffect(() => {
@@ -56,6 +86,31 @@ export function StartProgress() {
     const t = setTimeout(() => void load(), delay);
     return () => clearTimeout(t);
   }, [data, error, box, load]);
+
+  async function onRedeem(e: FormEvent) {
+    e.preventDefault();
+    const code = invitationCode.trim();
+    if (!code || redeemPending.current || !invitationEnabled || error || box?.phase !== "waitlisted") return;
+    redeemPending.current = true;
+    setRedeeming(true);
+    setInvitationError(null);
+    try {
+      await cloudApi.redeemInvitation(code);
+      setInvitationCode("");
+      setInvitationAccepted(true);
+      await load();
+    } catch (err) {
+      if (err instanceof CloudApiError && err.code === "no_session") {
+        setInvitationCode("");
+        setError(err);
+      } else {
+        setInvitationError(err instanceof CloudApiError ? err.message : "Could not apply this invitation. Try again.");
+      }
+    } finally {
+      redeemPending.current = false;
+      setRedeeming(false);
+    }
+  }
 
   async function onResend() {
     try {
@@ -94,7 +149,42 @@ export function StartProgress() {
                 </div>
               </>
             ) : (
-              <BoxStatus box={box} email={data.email} onResend={onResend} resent={resent} />
+              <>
+                {error && <p className="mkt-cloud__error" role="alert">{error.message}</p>}
+                {invitationAccepted && <p className="mkt-cloud__ok" role="status">Your invitation is accepted. We will email you when your workspace is ready; creation depends on available capacity.</p>}
+                <BoxStatus box={box} email={data.email} onResend={onResend} resent={resent} />
+                {box.phase === "waitlisted" && !error && invitationConfigError && (
+                  <div>
+                    <p className="mkt-cloud__error" role="alert">Invitation options could not load. {invitationConfigError}</p>
+                    <button type="button" className="mkt-cloud__linkbtn" disabled={loadingInvitationConfig} onClick={() => void loadInvitationConfig()}>
+                      {loadingInvitationConfig ? "Loading invitation options…" : "Retry invitation options"}
+                    </button>
+                  </div>
+                )}
+                {box.phase === "waitlisted" && invitationEnabled && !error && (
+                  <form onSubmit={onRedeem} noValidate data-testid="invitation-form" aria-busy={redeeming}>
+                    <label className="mkt-cloud__field">
+                      <span>Invitation code</span>
+                      <input
+                        type="text"
+                        value={invitationCode}
+                        onChange={(e) => setInvitationCode(e.target.value)}
+                        autoComplete="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                        maxLength={120}
+                        disabled={redeeming}
+                        aria-describedby="redeem-help"
+                      />
+                      <small id="redeem-help" className="mkt-cloud__muted">Have an invitation? Apply it to this verified workspace. Creation still depends on available capacity.</small>
+                    </label>
+                    {invitationError && <p className="mkt-cloud__error" role="alert">{invitationError}</p>}
+                    <Button type="submit" disabled={redeeming || !invitationCode.trim()} className="mkt-cloud__submit">
+                      {redeeming ? "Applying…" : "Apply invitation"}
+                    </Button>
+                  </form>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -121,7 +211,7 @@ function BoxStatus({ box, email, onResend, resent }: { box: BoxView; email: stri
         <div data-testid="phase-approved">
           <h2>You're in</h2>
           <p>
-            You are approved, and <strong>{host}</strong> will be created shortly. We will email <strong>{email}</strong> the link to open it when it is ready.
+            You are approved for <strong>{host}</strong>. We will create your workspace when capacity is available, then email <strong>{email}</strong> the link to open it when it is ready.
           </p>
           <p className="mkt-cloud__muted">You can close this page.</p>
         </div>

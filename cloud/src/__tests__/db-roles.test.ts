@@ -116,6 +116,18 @@ describe("role split", () => {
     expect(job!.id).toBeTruthy();
   });
 
+  it("the runtime role can persist hosted admission columns after the additive migration", async () => {
+    const [acct] = await rt`insert into accounts (email) values ('hosted-role@example.test') returning id`;
+    const [box] = await rt`insert into boxes (account_id, slug, state) values (${acct!.id}, 'hosted-role', 'waitlisted') returning id`;
+    const [invitation] = await rt`insert into invite_codes (code_hash, purpose, label) values ('synthetic-role-hash', 'hosted_beta', 'synthetic') returning id`;
+    await rt`update invite_codes set consumed_at = now(), consumed_by_account_id = ${acct!.id}, consumed_box_id = ${box!.id} where id = ${invitation!.id}`;
+    await rt`insert into signup_requests (account_id, hosted_invite_id, slug, workspace_name, expires_at) values (${acct!.id}, ${invitation!.id}, 'hosted-role', 'Synthetic', now() + interval '30 minutes')`;
+    await rt`insert into operator_audit (kind, actor, detail) values ('invite_codes_changed', 'hosted-invitation', '{"action":"consume","purpose":"hosted_beta"}'::jsonb)`;
+    expect(await denied(rt.unsafe("update operator_audit set actor = 'tampered'"))).toBe("42501");
+    const [used] = await rt`select consumed_box_id from invite_codes where id = ${invitation!.id}`;
+    expect(used!.consumed_box_id).toBe(box!.id);
+  });
+
   it("the runtime role cannot DELETE from any table; removal is a state change (GH #799)", async () => {
     for (const t of ["boxes", "accounts", "jobs", "settings", "waitlist", "email_tokens", "invite_codes", "railway_workspaces", "rate_events", "signup_requests", "cloud_sessions"]) {
       expect(await denied(rt.unsafe(`delete from ${t}`)), t).toBe("42501");

@@ -3,7 +3,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { decryptField, encryptField, parseDataKey, sha256Hex } from "../crypto.js";
 import { createCloudDb, migrateCloudDb, type CloudDb } from "../db/client.js";
-import { accounts, boxes, jobs, settings, waitlist } from "../db/schema.js";
+import { accounts, boxes, inviteCodes, jobs, settings, waitlist } from "../db/schema.js";
 import { SETTING_DEFAULTS, settingsService } from "../settings.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 
@@ -74,6 +74,19 @@ describe("migrations", () => {
     const [box] = await db.insert(boxes).values({ accountId: acct!.id, slug: "states" }).returning();
     expect(box).toMatchObject({ state: "requested", kind: "dedicated", planTier: "free", holdUpgrades: false });
     await expect(db.insert(jobs).values({ boxId: box!.id, kind: "teleport" as never })).rejects.toThrow();
+  });
+
+  it("defaults legacy invitations to self-hosted and rejects partial or wrong-purpose consumption", async () => {
+    const [acct] = await db.insert(accounts).values({ email: "invite-schema@example.test" }).returning();
+    const [box] = await db.insert(boxes).values({ accountId: acct!.id, slug: "invite-schema" }).returning();
+    const [legacy] = await db.insert(inviteCodes).values({ codeHash: "synthetic-legacy-hash" }).returning();
+    expect(legacy!.purpose).toBe("self_hosted");
+    await expect(db.insert(inviteCodes).values({ codeHash: "bad-purpose", purpose: "anything" as never })).rejects.toThrow();
+    await expect(db.update(inviteCodes).set({ consumedAt: new Date() }).where(eq(inviteCodes.id, legacy!.id))).rejects.toThrow();
+    await expect(db.update(inviteCodes).set({ consumedAt: new Date(), consumedByAccountId: acct!.id, consumedBoxId: box!.id }).where(eq(inviteCodes.id, legacy!.id))).rejects.toThrow();
+    const [hosted] = await db.insert(inviteCodes).values({ codeHash: "synthetic-hosted-hash", purpose: "hosted_beta" }).returning();
+    await expect(db.update(inviteCodes).set({ consumedAt: new Date(), consumedByAccountId: acct!.id, consumedBoxId: box!.id }).where(eq(inviteCodes.id, hosted!.id))).resolves.toBeDefined();
+    await expect(db.update(inviteCodes).set({ consumedByAccountId: null }).where(eq(inviteCodes.id, hosted!.id))).rejects.toThrow();
   });
 
   it("allow one live job per box and kind, and any number of finished ones", async () => {

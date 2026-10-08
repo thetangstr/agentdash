@@ -7,6 +7,8 @@
 export interface CloudConfig {
   turnstileSiteKey: string | null;
   signupOpen: boolean;
+  // AgentDash: optional for compatibility with older control planes.
+  invitationCodesEnabled?: boolean;
   waitlist: boolean;
   edgeDomain: string;
 }
@@ -62,11 +64,13 @@ export const cloudApi = {
   config: () => call<CloudConfig>("GET", "/config"),
   slugAvailable: (slug: string) =>
     call<{ slug: string; available: boolean; reason?: string; message?: string }>("GET", `/slug-available?slug=${encodeURIComponent(slug)}`),
-  signup: (input: { email: string; workspaceName: string; slug: string; acceptTerms: boolean; turnstileToken?: string }) =>
+  signup: (input: { email: string; workspaceName: string; slug: string; acceptTerms: boolean; invitationCode?: string; turnstileToken?: string }) =>
     call<{ ok: true }>("POST", "/signup", input),
   verify: (token: string) =>
     call<{ ok: true; outcome: "box_requested" | "existing" | "signed_in"; provisioning?: "queued" | "waitlisted"; reason?: string | null }>("POST", "/verify", { token }),
   mine: () => call<MyBoxes>("GET", "/boxes/mine"),
+  redeemInvitation: (code: string) =>
+    call<{ ok: true; provisioning: "queued" | "waitlisted" | "already_started"; reason?: string | null }>("POST", "/invitation/redeem", { code }),
   resend: (email?: string) => call<{ ok: true }>("POST", "/resend", email ? { email } : {}),
   find: (input: { email: string; turnstileToken?: string }) => call<{ ok: true }>("POST", "/find", input),
 };

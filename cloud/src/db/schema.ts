@@ -349,17 +349,31 @@ export const operatorAudit = pgTable(
   ],
 );
 
-/** The self-hosted invite validator's codes (§7). Only hashes are stored. */
+/** Purpose-separated self-hosted and hosted admission codes. Only HMACs are stored. */
+export const INVITE_PURPOSES = ["self_hosted", "hosted_beta"] as const;
+export type InvitePurpose = (typeof INVITE_PURPOSES)[number];
 export const inviteCodes = pgTable(
   "invite_codes",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     codeHash: text("code_hash").notNull(),
+    purpose: text("purpose").$type<InvitePurpose>().notNull().default("self_hosted"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    consumedByAccountId: uuid("consumed_by_account_id").references(() => accounts.id),
+    consumedBoxId: uuid("consumed_box_id").references(() => boxes.id),
     label: text("label"),
     createdAt: createdAt(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
-  (t) => [uniqueIndex("invite_codes_hash_uq").on(t.codeHash)],
+  (t) => [
+    uniqueIndex("invite_codes_hash_uq").on(t.codeHash),
+    check("invite_codes_purpose_ck", inList("purpose", INVITE_PURPOSES)),
+    check("invite_codes_consumption_ck", sql`(
+      (${t.consumedAt} is null and ${t.consumedByAccountId} is null and ${t.consumedBoxId} is null)
+      or (${t.purpose} = 'hosted_beta' and ${t.consumedAt} is not null and ${t.consumedByAccountId} is not null and ${t.consumedBoxId} is not null)
+    )`),
+  ],
 );
 
 export const waitlist = pgTable(
@@ -405,6 +419,7 @@ export const signupRequests = pgTable(
       .notNull()
       .references(() => accounts.id),
     emailTokenId: uuid("email_token_id").references(() => emailTokens.id),
+    hostedInviteId: uuid("hosted_invite_id").references(() => inviteCodes.id),
     slug: text("slug").notNull(),
     workspaceName: text("workspace_name").notNull(),
     /** The client address the signup came from (per-IP limits, spec §5.1). */
