@@ -23,12 +23,23 @@ import { settingsService } from "../settings.js";
 import { startTestDatabase, type TestDatabase } from "./embedded-pg.js";
 
 // The capabilities module is frozen in production; this suite swaps in a mutable stand-in.
-const caps = vi.hoisted(() => ({ claimTrackingReady: false, failBeforeQueue: false }));
+const caps = vi.hoisted(() => ({ claimTrackingReady: false, failBeforeQueue: false, terminalBeforeQueue: null as "failed" | "pending_delete" | "cleanup" | null }));
 vi.mock("../capabilities.js", () => ({ capabilities: caps }));
 vi.mock("../jobs/queue.js", async importOriginal => {
   const original = await importOriginal<typeof import("../jobs/queue.js")>();
   return { ...original, requestProvision: async (...args: Parameters<typeof original.requestProvision>) => {
     if (caps.failBeforeQueue) { caps.failBeforeQueue = false; throw new Error("synthetic interruption after admission commit"); }
+    if (caps.terminalBeforeQueue) {
+      const state = caps.terminalBeforeQueue;
+      caps.terminalBeforeQueue = null;
+      const [connection, boxId] = args;
+      await connection.update(boxes).set({ state: "provisioning" }).where(eq(boxes.id, boxId));
+      if (state === "pending_delete") {
+        await connection.update(boxes).set({ state: "awaiting_claim" }).where(eq(boxes.id, boxId));
+        await connection.update(boxes).set({ state: "active" }).where(eq(boxes.id, boxId));
+      } else await connection.update(boxes).set({ state: "failed" }).where(eq(boxes.id, boxId));
+      await connection.update(boxes).set({ state }).where(eq(boxes.id, boxId));
+    }
     return await original.requestProvision(...args);
   } };
 });
@@ -166,6 +177,7 @@ beforeEach(async () => {
   turnstileAnswer = true;
   caps.claimTrackingReady = false;
   caps.failBeforeQueue = false;
+  caps.terminalBeforeQueue = null;
   await db.execute(sql`truncate settings`);
   await db.execute(sql`update jobs set state = 'dead' where state in ('queued', 'running', 'failed')`);
 });
@@ -1028,6 +1040,56 @@ describe("hosted invitation admission", () => {
     expect(lastMailTo(first.email, "approved").text).toContain(first.slug);
     expect(lastMailTo(first.email, "approved").text).not.toContain(second.slug);
     expect(await db.select().from(boxes).where(eq(boxes.accountId, box!.accountId))).toHaveLength(1);
+  });
+
+  it.each(["failed", "pending_delete", "cleanup"] as const)("returns authenticated existing progress for a second invited link when its original box is %s", async state => {
+    const { app } = await build();
+    const first = who();
+    await signup(app, first);
+    const t1 = tokenFrom(lastMailTo(first.email, "verify"));
+    const c = await hosted(app);
+    await signup(app, { ...who(), email: first.email }, { invitationCode: c.code });
+    const t2 = tokenFrom(lastMailTo(first.email, "verify"));
+    expect((await verify(app, t1)).status).toBe(200);
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, first.slug));
+    await db.update(boxes).set({ state: "provisioning" }).where(eq(boxes.id, box!.id));
+    if (state === "pending_delete") {
+      await db.update(boxes).set({ state: "awaiting_claim" }).where(eq(boxes.id, box!.id));
+      await db.update(boxes).set({ state: "active" }).where(eq(boxes.id, box!.id));
+    } else await db.update(boxes).set({ state: "failed" }).where(eq(boxes.id, box!.id));
+    await db.update(boxes).set({ state }).where(eq(boxes.id, box!.id));
+    const v = await verify(app, t2);
+    expect(v.status).toBe(200);
+    expect(v.body).toEqual({ ok: true, outcome: "existing" });
+    const progress = await request(app).get("/api/cloud/boxes/mine").set("cookie", cookieOf(v));
+    expect(progress.status).toBe(200);
+    expect(progress.body.boxes).toHaveLength(1);
+    expect(progress.body.boxes[0]).toMatchObject({ slug: first.slug, phase: state === "failed" ? "failed" : "closing" });
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedAt).toBeNull();
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, box!.accountId))).toHaveLength(1);
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(0);
+  });
+
+  it.each(["failed", "pending_delete", "cleanup"] as const)("preserves the committed session when a parallel box lifecycle reaches %s before queueing", async state => {
+    const { app } = await build();
+    const first = who();
+    await signup(app, first);
+    const t1 = tokenFrom(lastMailTo(first.email, "verify"));
+    const c = await hosted(app);
+    await signup(app, { ...who(), email: first.email }, { invitationCode: c.code });
+    const t2 = tokenFrom(lastMailTo(first.email, "verify"));
+    await verify(app, t1);
+    caps.terminalBeforeQueue = state;
+    const v = await verify(app, t2);
+    expect(v.status).toBe(200);
+    expect(v.body).toEqual({ ok: true, outcome: "existing" });
+    const progress = await request(app).get("/api/cloud/boxes/mine").set("cookie", cookieOf(v));
+    expect(progress.status).toBe(200);
+    expect(progress.body.boxes[0].phase).toBe(state === "failed" ? "failed" : "closing");
+    const [box] = await db.select().from(boxes).where(eq(boxes.slug, first.slug));
+    expect((await db.select().from(inviteCodes).where(eq(inviteCodes.id, c.id)))[0]!.consumedBoxId).toBe(box!.id);
+    expect(await db.select().from(boxes).where(eq(boxes.accountId, box!.accountId))).toHaveLength(1);
+    expect(await db.select().from(jobs).where(eq(jobs.boxId, box!.id))).toHaveLength(0);
   });
 
   it("rejects blocked/unverified accounts and ignores client account/box/approval claims", async () => {

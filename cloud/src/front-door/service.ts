@@ -235,13 +235,13 @@ export function frontDoor(deps: FrontDoorDeps) {
     return true;
   }
 
-  /** A parallel release/retry may have started the box after the admission commit. */
+  /** A parallel lifecycle change may make the box non-queueable after the admission commit. */
   async function queueApproved(boxId: string, actor: string): Promise<ProvisionRequestResult | null> {
     try { return await requestProvision(db, boxId, { actor, approved: true }); }
     catch (err) {
       if (!(err instanceof ProvisionRequestError)) throw err;
       const [box] = await db.select({ state: boxes.state }).from(boxes).where(eq(boxes.id, boxId));
-      if (box && ["provisioning", "awaiting_claim", "active", "suspended"].includes(box.state)) return null;
+      if (box && box.state !== "requested" && box.state !== "waitlisted") return null;
       throw err;
     }
   }
@@ -395,7 +395,7 @@ export function frontDoor(deps: FrontDoorDeps) {
           if (existing) {
             const admitted = request.hostedInviteId ? await approveHosted(tx, request.hostedInviteId, acct, existing) : false;
             await tx.update(signupRequests).set({ verifiedAt: now() }).where(eq(signupRequests.id, request.id));
-            return { kind: "existing" as const, session, request, boxId: existing.id, slug: existing.slug, admitted };
+            return { kind: "existing" as const, session, request, boxId: existing.id, slug: existing.slug, state: existing.state, admitted };
           }
           if (request.ip && (await boxesFromIpToday(request.ip, tx)) >= BOXES_PER_IP_PER_DAY) throw new AdmissionRefused(refuse(429, "ip_daily_limit", "A workspace was already created from your network today. Sign up again tomorrow."));
           const domain = emailDomain(acct.email);
@@ -414,12 +414,14 @@ export function frontDoor(deps: FrontDoorDeps) {
       }
       if (verified.kind === "signed_in") return { ok: true, session: verified.session, outcome: "signed_in" };
       const { request, boxId, session, slug } = verified;
-      if (verified.kind === "existing" && !request.hostedInviteId) return { ok: true, session, outcome: "existing" };
+      if (verified.kind === "existing" && (!request.hostedInviteId || (verified.state !== "requested" && verified.state !== "waitlisted"))) {
+        return { ok: true, session, outcome: "existing" };
+      }
       const provisioning = request.hostedInviteId
         ? await queueApproved(boxId, "hosted-invitation")
         : await requestProvision(db, boxId, { actor: "signup", requireApproval: request.unverifiedHuman });
       log.info("signup verified", { slug, outcome: provisioning?.outcome ?? "already_started", reason: provisioning?.outcome === "waitlisted" ? provisioning.reason : null });
-      if (verified.admitted) await notifyApproved(request.accountId, slug, provisioning?.outcome === "queued");
+      if (verified.admitted && provisioning) await notifyApproved(request.accountId, slug, provisioning?.outcome === "queued");
       else if (!request.hostedInviteId && provisioning?.outcome === "waitlisted") {
         const [acct] = await db.select().from(accounts).where(eq(accounts.id, request.accountId));
         const t = await issueToken(request.accountId, "find");
