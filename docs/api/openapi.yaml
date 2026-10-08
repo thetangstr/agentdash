@@ -3869,6 +3869,8 @@ components:
           type:
             - string
             - "null"
+        assignToPerson:
+          type: boolean
         originKind:
           type: string
           enum: []
@@ -7916,6 +7918,8 @@ components:
           type:
             - string
             - "null"
+        assignToPerson:
+          type: boolean
         requestDepth:
           type: integer
           minimum: 0

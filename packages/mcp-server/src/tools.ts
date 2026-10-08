@@ -691,7 +691,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "create_issue",
-      "Create a new issue",
+      "Create a new issue. To give a colleague work, assign their agent (list_agents → steward.userId) via assigneeAgentId. assigneeUserId is for decisions only a human can make: when an agent assigns a person, the issue goes to the agent that person stewards unless assignToPerson is true.",
       createIssueToolSchema,
       async ({ companyId, ...input }) => {
         // AgentDash: enforce the refined create contract (see createIssueToolSchema).
@@ -701,7 +701,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "update_issue",
-      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work",
+      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true.",
       updateIssueToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("PATCH", `/issues/${encodeURIComponent(issueId)}`, { body }),
@@ -733,7 +733,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "suggest_tasks",
-      "Create a suggest_tasks interaction on an issue",
+      "Create a suggest_tasks interaction on an issue. For a colleague's task, set assigneeAgentId to their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment is drafted to that person's agent unless the task sets assignToPerson: true.",
       createSuggestTasksToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/interactions`, {
