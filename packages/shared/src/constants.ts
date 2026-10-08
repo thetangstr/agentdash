@@ -1191,6 +1191,21 @@ export const CONNECTION_PROVIDERS = [
 ] as const;
 export type ConnectionProvider = (typeof CONNECTION_PROVIDERS)[number] | (string & {});
 
+/**
+ * Document-store providers. A connection for one of these is a person's
+ * delegated access to their own files, so an agent may only ever resolve the
+ * private connection of the human who currently stewards it: never an
+ * agent-owned row, never a workspace-visible row, never another person's.
+ * `sharepoint` is the legacy on-behalf-of row; `microsoft` is OneDrive and
+ * SharePoint through the authorization-code flow.
+ */
+export const DOCUMENT_PROVIDERS = ["sharepoint", "microsoft"] as const;
+export type DocumentProvider = (typeof DOCUMENT_PROVIDERS)[number];
+
+export function isDocumentProvider(provider: string): provider is DocumentProvider {
+  return (DOCUMENT_PROVIDERS as readonly string[]).includes(provider);
+}
+
 /** Connection lifecycle statuses. */
 export const CONNECTION_STATUSES = ["active", "expired", "revoked", "error"] as const;
 export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];

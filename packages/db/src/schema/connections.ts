@@ -82,6 +82,18 @@ export const connections = pgTable(
     activeSharepointOwnerUq: uniqueIndex("connections_sharepoint_active_owner_uq")
       .on(table.companyId, table.ownerType, table.ownerId)
       .where(sql`${table.provider} = 'sharepoint' and ${table.revokedAt} is null`),
+    /**
+     * AgentDash: one active Microsoft document connection per owner per company.
+     *
+     * An agent reads its steward's documents through exactly one row, derived
+     * from the live stewardship. Two active rows for the same person would let
+     * resolution pick between grants silently, and revoking "the" connection
+     * would leave the other one working. Enforced in the database for the same
+     * race reason as the HubSpot and SharePoint indexes above.
+     */
+    activeMicrosoftOwnerUq: uniqueIndex("connections_microsoft_active_owner_uq")
+      .on(table.companyId, table.ownerType, table.ownerId)
+      .where(sql`${table.provider} = 'microsoft' and ${table.revokedAt} is null`),
   }),
 );
 
