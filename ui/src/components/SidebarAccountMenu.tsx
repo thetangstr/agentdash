@@ -214,8 +214,8 @@ export function SidebarAccountMenu({
                 href={PROFILE_SETTINGS_PATH}
                 onClick={closeNavigationChrome}
               />
-              {/* AgentDash: sidebar IA — My Agent is personal, so it lives with
-                  the account rather than in the sidebar. */}
+              {/* AgentDash: My Agent is personal, so it lives with the account;
+                  the sidebar also links it under Team. */}
               <MenuAction
                 label="My agent"
                 description="Your personal agent, its channels and connections."

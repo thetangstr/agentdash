@@ -241,7 +241,7 @@ describe("Sidebar", () => {
     const primaryHrefs = [...primaryBlock!.querySelectorAll("a")]
       .map((a) => a.getAttribute("href"))
       .filter((h) => !h?.startsWith("/agents/"));
-    expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents"]);
+    expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents", "/my-agent"]);
     const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     expect(hrefs).not.toContain("/inbox");
     const dashboard = [...container.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === "/dashboard");
@@ -302,21 +302,20 @@ describe("Sidebar", () => {
       // anchor's textContent ("Decisions2").
       expect(linkTexts.some((text) => text?.includes(label)), `expected "${label}"`).toBe(true);
     }
-    // My Agent, Evaluation and the per-project list are not in the sidebar
-    // at all (account menu, Settings hub, command palette); no Inbox item.
-    expect(linkTexts).not.toContain("My Agent");
+    // Evaluation and the per-project list are not in the sidebar at all
+    // (Settings hub, command palette); no Inbox item. My agent nests under Team.
     expect(linkTexts).not.toContain("Inbox");
     expect(linkTexts).not.toContain("Evaluation");
     expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
 
-    // The agent list nests under Team (expanded by default), so apart from the
-    // per-agent rows the primary block's links are still exactly the six
-    // primary destinations (Settings sits in the footer).
+    // My agent and the agent list nest under Team (expanded by default), so
+    // apart from the per-agent rows the primary block's links are the six
+    // primary destinations plus My agent (Settings sits in the footer).
     const primaryBlock = container.querySelector("nav > div");
     const primaryHrefs = [...primaryBlock!.querySelectorAll("a")]
       .map((a) => a.getAttribute("href"))
       .filter((h) => !h?.startsWith("/agents/"));
-    expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents"]);
+    expect(primaryHrefs).toEqual(["/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents", "/my-agent"]);
     await act(async () => root.unmount());
   });
 
@@ -412,12 +411,25 @@ describe("Sidebar", () => {
       await act(async () => root.unmount());
     });
 
-    it("hides the toggle when the company has no agents", async () => {
+    it("puts My agent first under Team, above the agent rows", async () => {
+      const root = await renderSidebar();
+      const contentId = findToggle()?.getAttribute("aria-controls");
+      const nested = [...(document.getElementById(contentId!)?.querySelectorAll("a") ?? [])]
+        .map((a) => a.getAttribute("href"));
+      expect(nested).toEqual(["/my-agent", "/agents/maya", "/agents/priya"]);
+      const myAgent = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/my-agent");
+      expect(myAgent?.textContent).toContain("My agent");
+      await act(async () => root.unmount());
+    });
+
+    it("keeps My agent under Team when the company has no agents", async () => {
       mockAgentRows.agents = [];
       const root = await renderSidebar();
-      expect(findToggle()).toBeUndefined();
+      expect(findToggle()?.getAttribute("aria-expanded")).toBe("true");
       const team = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/agents");
       expect(team?.textContent).toContain("Team");
+      expect(agentHrefs()).toEqual([]);
+      expect([...container.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toContain("/my-agent");
       await act(async () => root.unmount());
     });
   });
@@ -518,7 +530,7 @@ describe("Sidebar", () => {
     await toggleMore();
     const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     for (const href of [
-      "/my-agent", "/inbox/override", "/guides", "/org", "/skills", "/evaluation", "/billing",
+      "/inbox/override", "/guides", "/org", "/skills", "/evaluation", "/billing",
       "/company/import", "/company/export", "/company/settings/environments", "/company/settings/health",
       "/workspaces",
     ]) {
@@ -526,9 +538,9 @@ describe("Sidebar", () => {
     }
     expect(hrefs.some((h) => h?.startsWith("/instance/"))).toBe(false);
     expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
-    // Six primary + four More + Settings (plus the per-agent rows under Team).
+    // Six primary + My agent + four More + Settings (plus the per-agent rows under Team).
     expect(hrefs.filter((h) => !h?.startsWith("/agents/"))).toEqual([
-      "/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents",
+      "/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents", "/my-agent",
       "/goals", "/routines", "/costs", "/activity",
       "/company/settings",
     ]);

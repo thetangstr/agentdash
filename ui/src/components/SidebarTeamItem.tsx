@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Users } from "lucide-react";
+import { Bot, ChevronRight, Users } from "lucide-react";
 import { useLocation } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -15,8 +15,8 @@ import { SidebarNavItem } from "./SidebarNavItem";
 // AgentDash: UX-6 follow-up — the "Team" item with the per-agent list nested
 // under it, grouped by reporting line and expanded by default so agents are
 // visible in the left bar; a collapse is remembered. The Team link still
-// navigates to /agents; only the chevron toggles the list. With no agents
-// there is nothing to disclose, so the chevron is not rendered.
+// navigates to /agents; only the chevron toggles the list. "My agent" is
+// the first row under Team, so the list always has something to disclose.
 export function SidebarTeamItem() {
   const { selectedCompanyId } = useCompany();
   const rows = useSidebarAgentRows();
@@ -39,10 +39,6 @@ export function SidebarTeamItem() {
     setExpanded(readSidebarTeamAgentsExpanded(storageKey));
   }, [storageKey]);
 
-  if (rows.orderedAgents.length === 0) {
-    return <SidebarNavItem to="/agents" label="Team" icon={Users} className={activeClass} />;
-  }
-
   return (
     <Collapsible
       open={expanded}
@@ -61,7 +57,8 @@ export function SidebarTeamItem() {
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent className="pl-4">
-        <SidebarAgentRows {...rows} />
+        <SidebarNavItem to="/my-agent" label="My agent" icon={Bot} className="mt-0.5 py-1.5" />
+        {rows.orderedAgents.length > 0 ? <SidebarAgentRows {...rows} /> : null}
       </CollapsibleContent>
     </Collapsible>
   );
