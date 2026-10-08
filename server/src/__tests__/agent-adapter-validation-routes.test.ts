@@ -208,18 +208,28 @@ async function createApp() {
     };
     next();
   });
+  const companies = [{ id: "company-1", requireBoardApprovalForNewAgents: false }];
+  let transactionOpen = false;
+  // Adapter switches recheck the current agent under the production company
+  // lock. Model that DB seam here; real contention is covered by the PG suite.
+  const lockCompany = vi.fn(async () => {
+    expect(transactionOpen).toBe(true);
+    return companies;
+  });
   const db = {
+    transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => {
+      transactionOpen = true;
+      try { return await work(db); }
+      finally { transactionOpen = false; }
+    }),
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(async () => [
-          {
-            id: "company-1",
-            requireBoardApprovalForNewAgents: false,
-          },
-        ]),
+        where: vi.fn(() => Object.assign(Promise.resolve(companies), { for: lockCompany })),
       })),
     })),
   };
+  app.locals.companyTransaction = db.transaction;
+  app.locals.lockCompany = lockCompany;
   app.use("/api", agentRoutes(db as any));
   app.use(errorHandler);
   return app;
@@ -1278,6 +1288,9 @@ describe("agent routes hermes model tiers", () => {
         .send({ adapterType: "hermes_local" }),
     );
     expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(app.locals.companyTransaction).toHaveBeenCalledTimes(1);
+    expect(app.locals.lockCompany).toHaveBeenCalledExactlyOnceWith("no key update");
+    expect(app.locals.lockCompany.mock.invocationCallOrder[0]).toBeLessThan(mockAgentService.update.mock.invocationCallOrder[0]);
     const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
     expect(patch?.adapterConfig).toMatchObject({ model: "deepseek-v4.1-flash" });
     expect(patch?.metadata).toMatchObject({ modelTier: "low" });
@@ -1374,6 +1387,9 @@ describe("agent routes hermes model tiers", () => {
         .send({ adapterType: "external_test", adapterConfig: {} }),
     );
     expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(app.locals.companyTransaction).toHaveBeenCalledTimes(1);
+    expect(app.locals.lockCompany).toHaveBeenCalledExactlyOnceWith("no key update");
+    expect(app.locals.lockCompany.mock.invocationCallOrder[0]).toBeLessThan(mockAgentService.update.mock.invocationCallOrder[0]);
     const [patch] = mockAgentService.update.mock.calls.map(([, p]: unknown[]) => p as Record<string, unknown>);
     expect(patch?.metadata).toMatchObject({ other: "kept" });
     expect(patch?.metadata).not.toHaveProperty("modelTier");
