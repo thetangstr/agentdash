@@ -283,6 +283,8 @@ export {
   isSecretName,
   isSecretValueKey,
   redactSecrets,
+  redactSecretsAsync,
+  type AsyncRedactionOptions,
   containsSecrets,
   redactSecretsInValue,
   createSecretStreamRedactor,

@@ -160,6 +160,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 // worker bundle: secrets in run output are scrubbed server-side before storage
 // and again when served, never rely on echoing a credential to read it back.
 // Proposal-created hires add nothing to that.
+// AgentDash: cooperative-log-reads applies via the canonical bundle below;
+// scheduling/whole-record feedback truncation grants no additional capability.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")

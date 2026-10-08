@@ -1,7 +1,8 @@
+import type { AsyncRedactionOptions } from "@paperclipai/shared";
 import { createHash } from "node:crypto";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
-import { redactRunLogText } from "./run-log-redaction.js";
+import { redactRunLogText, redactRunLogTextAsync } from "./run-log-redaction.js";
 
 export type FeedbackRedactionState = {
   redactedFields: Set<string>;
@@ -142,6 +143,157 @@ export function sanitizeFeedbackText(
   }
 
   return output;
+}
+
+// AgentDash: keep whole-input regex context (PEM, quoted multiline values and
+// whitespace-separated labels). Checkpoints never split a credential match.
+function mergeState(target: FeedbackRedactionState, source: FeedbackRedactionState) {
+  for (const key of ["redactedFields", "truncatedFields", "omittedFields", "notes"] as const) {
+    for (const value of source[key]) target[key].add(value);
+  }
+  for (const [kind, count] of source.counts) increment(target, kind, count);
+}
+
+function feedbackCheckpoint(opts?: AsyncRedactionOptions) {
+  let started = performance.now();
+  return async () => {
+    opts?.signal?.throwIfAborted();
+    if (performance.now() - started < (opts?.sliceMs ?? 8)) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    opts?.signal?.throwIfAborted();
+    started = performance.now();
+  };
+}
+
+export async function sanitizeFeedbackTextAsync(
+  input: string,
+  state: FeedbackRedactionState,
+  fieldPath: string,
+  maxLength: number,
+  opts?: AsyncRedactionOptions,
+): Promise<string> {
+  opts?.signal?.throwIfAborted();
+  const pending = createFeedbackRedactionState();
+  const checkpoint = feedbackCheckpoint(opts);
+  let output = redactCurrentUserText(input);
+  if (output !== input) {
+    recordField(pending, fieldPath);
+    increment(pending, "current_user", 1);
+  }
+  await checkpoint();
+  const secretResult = await redactRunLogTextAsync(output, undefined, opts);
+  if (secretResult !== output) {
+    output = secretResult;
+    recordField(pending, fieldPath);
+    increment(pending, "shared_secret", 1);
+  }
+  for (const pattern of FREE_TEXT_PATTERNS) {
+    await checkpoint();
+    // matchAll owns its regex cursor; no shared lastIndex survives an await.
+    const parts: string[] = [];
+    let cursor = 0;
+    let count = 0;
+    for (const match of output.matchAll(pattern.regex)) {
+      parts.push(output.slice(cursor, match.index));
+      parts.push(typeof pattern.replacement === "string"
+        ? pattern.replacement
+        : pattern.replacement(match[0], ...match.slice(1)));
+      cursor = match.index + match[0].length;
+      if (++count % 128 === 0) await checkpoint();
+    }
+    if (count > 0) {
+      parts.push(output.slice(cursor));
+      output = parts.join("");
+      recordField(pending, fieldPath);
+      increment(pending, pattern.kind, count);
+    }
+  }
+  if (output.length > maxLength) {
+    output = `${output.slice(0, Math.max(0, maxLength - 1))}...`;
+    pending.truncatedFields.add(fieldPath);
+  }
+  opts?.signal?.throwIfAborted();
+  mergeState(state, pending);
+  return output;
+}
+
+/** Same structured-key policy as sanitizeFeedbackValue, yielding between values. */
+export async function sanitizeFeedbackValueAsync(
+  value: unknown,
+  state: FeedbackRedactionState,
+  fieldPath: string,
+  maxStringLength: number,
+  opts?: AsyncRedactionOptions & { sanitizeKeys?: boolean },
+): Promise<unknown> {
+  if (typeof value === "string") return sanitizeFeedbackTextAsync(value, state, fieldPath, maxStringLength, opts);
+  const checkpoint = feedbackCheckpoint(opts);
+  if (Array.isArray(value)) {
+    const output: unknown[] = [];
+    for (let i = 0; i < value.length; i++) {
+      await checkpoint();
+      output.push(await sanitizeFeedbackValueAsync(value[i], state, `${fieldPath}[${i}]`, maxStringLength, opts));
+    }
+    return output;
+  }
+  if (!isPlainRecord(value)) return value;
+  const structurallySanitized = sanitizeRecord(value);
+  if (stableStringify(structurallySanitized) !== stableStringify(value)) {
+    recordField(state, fieldPath);
+    increment(state, "structured_secret", 1);
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(structurallySanitized)) {
+    await checkpoint();
+    const safeKey = opts?.sanitizeKeys
+      ? await sanitizeFeedbackTextAsync(key, state, fieldPath, Infinity, opts)
+      : key;
+    output[safeKey] = await sanitizeFeedbackValueAsync(entry, state, `${fieldPath}.${safeKey}`, maxStringLength, opts);
+  }
+  return output;
+}
+
+/**
+ * Sanitize decoded records before encoding: feedback patterns must not consume
+ * JSON delimiters or leave an escaped quote behind. Legacy partial lines keep
+ * the whole-text fallback. Truncation retains complete NDJSON records.
+ */
+export async function sanitizeFeedbackNdjsonAsync(
+  input: string,
+  state: FeedbackRedactionState,
+  fieldPath: string,
+  maxLength: number,
+  opts?: AsyncRedactionOptions,
+): Promise<string> {
+  const pending = createFeedbackRedactionState();
+  const checkpoint = feedbackCheckpoint(opts);
+  const lines: string[] = [];
+  let length = 0;
+  let truncated = false;
+  for (const line of input.split("\n")) {
+    await checkpoint();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // One malformed record means the input is not safely separable NDJSON:
+      // a PEM or quoted/known secret may span its physical lines. Discard the
+      // unpublished per-record counts and preserve the old whole-text policy.
+      if (line.trim()) return sanitizeFeedbackTextAsync(input, state, fieldPath, maxLength, opts);
+    }
+    const safe = parsed === undefined
+      ? line
+      : JSON.stringify(await sanitizeFeedbackValueAsync(parsed, pending, fieldPath, Infinity, { ...opts, sanitizeKeys: true }));
+    const nextLength = length + (lines.length > 0 ? 1 : 0) + safe.length;
+    if (nextLength > maxLength) truncated = true;
+    if (!truncated) {
+      lines.push(safe);
+      length = nextLength;
+    }
+  }
+  if (truncated) pending.truncatedFields.add(fieldPath);
+  opts?.signal?.throwIfAborted();
+  mergeState(state, pending);
+  return lines.join("\n");
 }
 
 export function sanitizeFeedbackValue(

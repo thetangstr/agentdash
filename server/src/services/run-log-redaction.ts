@@ -20,6 +20,8 @@ import {
   REDACTION_RULES_VERSION,
   createSecretStreamRedactor,
   redactSecrets,
+  redactSecretsAsync,
+  type AsyncRedactionOptions,
   redactSecretsInValue,
   type KnownSecrets,
 } from "@paperclipai/shared";
@@ -79,6 +81,11 @@ function mergeSecrets(extra?: KnownSecrets): string[] {
 export function redactRunLogText(text: string, extraSecrets?: KnownSecrets): string {
   if (!text) return text;
   return redactSecrets(text, mergeSecrets(extraSecrets));
+}
+
+/** Cooperative whole-text pass: crossline patterns retain their full context. */
+export function redactRunLogTextAsync(text: string, extraSecrets?: KnownSecrets, opts?: AsyncRedactionOptions): Promise<string> {
+  return redactSecretsAsync(text, mergeSecrets(extraSecrets), { yieldToEventLoop, ...opts });
 }
 
 /** `redactSecretsInValue` with this instance's known keys always included. */

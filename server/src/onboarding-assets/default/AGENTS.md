@@ -599,3 +599,10 @@ Run transcripts, run events, workspace-operation logs and issue comments are scr
 - Do not comment asking for a credential to be "unredacted"; there is no unredacted copy by design.
 - This redaction is not permission to print secrets carelessly — a credential shape the scrubber does not recognize could still be persisted. Keep secrets out of run output regardless.
 <!-- /AgentDash: run-log-secret-redaction -->
+
+<!-- AgentDash: cooperative-log-reads — DO NOT REMOVE OR REORDER THIS BLOCK -->
+<!-- Cooperative log processing changes scheduling, not agent permissions or
+secret-handling responsibilities. Follow returned nextOffset values for log
+paging; offsets refer to raw stored bytes, not the redacted response length.
+Feedback NDJSON truncation retains whole records and reports truncatedFields. -->
+<!-- /AgentDash: cooperative-log-reads -->
