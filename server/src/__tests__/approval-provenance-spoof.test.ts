@@ -267,18 +267,18 @@ describeEmbeddedPostgres("approval provenance spoofing", () => {
     expect(await storedChannel(approval.id)).toEqual({ status: "approved", decisionChannel: "assistant" });
   });
 
-  it("still lets a board user decide on an ordinary channel", async () => {
+  it("still lets a board user decide through the REST web channel", async () => {
     const { company, steward, approval } = await seed();
     const app = await createApp(db, makeBoardActor(company.id, steward.principalId));
 
     const res = await requestApp(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/approvals/${approval.id}/approve`)
-        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "bridge_inbox" }),
+        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "web" }),
     );
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(await storedChannel(approval.id)).toEqual({ status: "approved", decisionChannel: "bridge_inbox" });
+    expect(await storedChannel(approval.id)).toEqual({ status: "approved", decisionChannel: "web" });
   });
 
   it("refuses a free-form approval payload stamped with the assistant_hire_request tag", async () => {

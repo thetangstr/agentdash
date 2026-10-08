@@ -3,6 +3,19 @@
 Base for independent review: `97ec8e21f`. Initial implementation head: `7c63d332f`; subsequent correction evidence appears below.
 
 
+## CI fixture correction after security review
+
+Base: `06fd244c7168f3443fda1fe2c5fafb9e6bd0ab8b` (PR #1074). Completed CI shards identified four stale test expectations: approval-provenance-spoof's ordinary REST success supplied `bridge_inbox`, and three activity-list expectations omitted `visibleWhere`, `includeSystem`, and/or `since`.
+
+Only test fixtures/assertions changed. The success control now requests and checks persisted `web` provenance. Activity expectations include the current arguments and require a SQL visibility condition; a compiled-query assertion verifies the financial event/action exclusions remain in that condition. Production permission and filtering code is untouched.
+
+Validation used `/tmp/agentdash-security-ci-fixtures.py`, a disposable HOME/XDG/PAPERCLIP_HOME wrapper with explicitly allowlisted environment variables (PATH, synthetic home paths, TMPDIR, NODE_ENV, billing-disabled test flag and synthetic user names). The wrapper runs `pnpm -C server exec vitest run <paths> --maxWorkers=1 --fileParallelism=false`; real database suites retain the disposable PostgreSQL helper excluding 54329.
+
+- Red: `approval-provenance-spoof.test.ts` and `activity-routes.test.ts`: **4 failed / 29 passed**, matching CI exactly (`/tmp/task2-ci-fixture-red.log`).
+- Green: those two suites plus `agentdash-mk-approval-authority.test.ts`, `budget-activity-visibility.test.ts`, and `dashboard-cost-visibility.test.ts`: **90/90 passed** (`/tmp/task2-ci-fixture-green.log`).
+- `pnpm -C server typecheck` under the same synthetic-home/allowlisted environment: **exit 0** (`/tmp/task2-ci-fixture-typecheck.log`); `git diff --check` clean.
+- No sensitive configuration reads, live provider probes, broad suite, push or integration-branch changes. Root owns independent correction review and hosted CI confirmation.
+
 ## Security review correction round 2
 
 Correction base: `b1dc5e37c48abd875299b0eda058fe3e55e69564`. Independent re-review found an additional HIGH bypass: a creator/current steward without spend authority could read monthly amounts through an allowed agent PATCH or configuration revision snapshots. This round closes those response paths; root must independently re-review the new commit before landing draft PR #1074.
