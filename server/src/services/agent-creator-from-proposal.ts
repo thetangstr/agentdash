@@ -109,6 +109,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
 // AgentDash: current-source authority, separate guarded skill stages and unknown-outcome
 // recovery are inherited with human-control-transport; generated hires get no private-owner override.
+// AgentDash: inactive-question-owner-recovery is inherited verbatim from the default
+// bundle: safe discovery, current-human confirmed cancellation, no implicit answer,
+// canonical replacement, and no replay after unknown acknowledgment.
 // AgentDash: human-control-transport is inherited from the unified default worker,
 // including named-owner questions, private sharing and recovery boundaries.
 // AgentDash: issue-mutation-acceptance (comment and PATCH) recovery/no-blind-retry guidance is

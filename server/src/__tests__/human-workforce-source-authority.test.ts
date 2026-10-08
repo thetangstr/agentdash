@@ -153,10 +153,10 @@ describe('current authority for actual readiness sources', () => {
     expect((await db.select().from(activityLog).where(eq(activityLog.companyId, company.id))).map(value => value.action)).toEqual(['workforce.enrolled']);
   });
 
-  it('characterizes the inactive pinned owner recovery conflict without granting answer access', async () => {
+  async function inactiveQuestion() {
     const alice = await credential(), bob = await credential();
     const [company] = await db.insert(companies).values({ name: 'Pinned owner recovery', issuePrefix: randomUUID().slice(0,8) }).returning();
-    const members = await db.insert(companyMemberships).values([alice,bob].map(person => ({ companyId: company.id, principalType: 'user', principalId: person.userId, membershipRole: 'admin', status: 'active' }))).returning();
+    const members = await db.insert(companyMemberships).values([alice,bob].map(person => ({ companyId: company.id, principalType: 'user', principalId: person.userId, membershipRole: 'member', status: 'active' }))).returning();
     const [agent] = await db.insert(agents).values({ companyId: company.id, name: 'Recovery worker', adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: alice.userId }).returning();
     const svc = workforceService(db);
     await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, { userId: alice.userId });
@@ -164,7 +164,13 @@ describe('current authority for actual readiness sources', () => {
     const question = await issueThreadInteractionService(db).create(issue, { kind: 'ask_user_questions', payload: { version: 1, questions: [{ id: 'private-required', prompt: 'PRIVATE_ALICE_RECOVERY', required: true, selectionMode: 'text', options: [] }] } }, { agentId: agent.id });
     await db.update(companyMemberships).set({ status: 'inactive' }).where(eq(companyMemberships.id, members.find(value => value.principalId === alice.userId)!.id));
     await db.update(agents).set({ accountableUserId: bob.userId }).where(eq(agents.id, agent.id));
+    return { alice, bob, company, members, agent, issue, question };
+  }
+  it('recovers an inactive pinned owner through safe metadata and confirmed cancellation while required input stays held', async () => {
+    const { alice, bob, company, agent, issue, question } = await inactiveQuestion();
     const application = app(), target = { kind: 'company', companyId: company.id };
+    expect((await request(application).get(`/api/issues/${issue.id}`).set('authorization', `Bearer ${bob.token}`)).status).toBe(200);
+    expect((await request(application).get(`/api/companies/${company.id}/workforce/agents/${agent.id}/readiness`).set('authorization', `Bearer ${bob.token}`)).status).toBe(404);
     const cancel = await request(application).post(`/api/issues/${issue.id}/interactions/${question.id}/cancel`).set('authorization', `Bearer ${bob.token}`).send({});
     expect(cancel.status).toBe(403);
     const replacement = await request(application).post('/human/prepare').set('authorization', `Bearer ${bob.token}`).send({ target, operationId: 'human_questions.replace', version: 1, input: { issueId: issue.id, interactionId: question.id } });
@@ -177,6 +183,100 @@ describe('current authority for actual readiness sources', () => {
     const [current] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, question.id));
     expect(current.status).toBe('pending');
     expect((await workforceIssueInputs(db, company.id, agent.id, issue.id)).pendingQuestionIds).toContain(question.id);
+    const recovery = await request(application).post('/human/read').set('authorization', `Bearer ${bob.token}`).send({ target, operationId: 'human_questions.recovery.list', version: 1, input: { issueId: issue.id } });
+    expect(recovery.status).toBe(200);
+    expect(recovery.body.questions).toEqual([{ issueId: issue.id, interactionId: question.id, status: 'pending', resolvedByUserId: null, resolvedAt: null }]);
+    expect(JSON.stringify(recovery.body)).not.toContain('PRIVATE_ALICE_RECOVERY');
+    const prepared = await request(application).post('/human/prepare').set('authorization', `Bearer ${bob.token}`).send({ target, operationId: 'human_questions.recovery.cancel', version: 1, input: { issueId: issue.id, interactionId: question.id } });
+    expect(prepared.status).toBe(200);
+    expect(JSON.stringify(prepared.body)).not.toContain('PRIVATE_ALICE_RECOVERY');
+    effects.wakeup.mockClear();
+    const confirmed = await request(application).post('/human/confirm').set('authorization', `Bearer ${bob.token}`).send({ target, handle: prepared.body.handle });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body.result).toMatchObject({ issueId: issue.id, interactionId: question.id, status: 'cancelled', resolvedByUserId: bob.userId });
+    expect(JSON.stringify(confirmed.body)).not.toContain('PRIVATE_ALICE_RECOVERY');
+    expect((await workforceIssueInputs(db, company.id, agent.id, issue.id)).pendingQuestionIds).toContain(question.id);
+    expect(effects.wakeup).not.toHaveBeenCalled();
+    const replay = await request(application).post('/human/confirm').set('authorization', `Bearer ${bob.token}`).send({ target, handle: prepared.body.handle });
+    expect(replay.status).toBe(409);
+    const receipt = await issueThreadInteractionService(db).getById(question.id);
+    expect(receipt).toMatchObject({ status: 'cancelled', resolvedByUserId: bob.userId, payload: { answerOwnerUserId: alice.userId }, result: { cancelled: true, answers: [] } });
+    const cancellationAudit = await db.select().from(activityLog).where(eq(activityLog.companyId, company.id));
+    expect(cancellationAudit.filter(row => (row.details as Record<string, unknown>)?.inactiveOwnerRecovery === true)).toHaveLength(1);
+    const nextPrepared = await request(application).post('/human/prepare').set('authorization', `Bearer ${bob.token}`).send({ target, operationId: 'human_questions.replace', version: 1, input: { issueId: issue.id, interactionId: question.id } });
+    expect(nextPrepared.status).toBe(200);
+    const next = await request(application).post('/human/confirm').set('authorization', `Bearer ${bob.token}`).send({ target, handle: nextPrepared.body.handle });
+    expect(next.status).toBe(200);
+    expect(next.body.result.payload.answerOwnerUserId).toBe(bob.userId);
+    const response = await request(application).post('/human/prepare').set('authorization', `Bearer ${bob.token}`).send({ target, operationId: 'human_questions.respond', version: 1, input: { issueId: issue.id, interactionId: next.body.result.interactionId, answers: [{ questionId: 'private-required', optionIds: [], text: 'Genuine replacement answer' }] } });
+    expect(response.status).toBe(200);
+    expect((await request(application).post('/human/confirm').set('authorization', `Bearer ${bob.token}`).send({ target, handle: response.body.handle })).status).toBe(200);
+    expect((await workforceIssueInputs(db, company.id, agent.id, issue.id)).pendingQuestionIds).toEqual([]);
+    expect(effects.wakeup).toHaveBeenCalledTimes(1);
+    expect(effects.wakeup.mock.calls[0]).toMatchObject([agent.id, { payload: { issueId: issue.id, interactionStatus: 'answered' } }]);
+    expect((await request(application).post('/human/confirm').set('authorization', `Bearer ${bob.token}`).send({ target, handle: response.body.handle })).status).toBe(409);
+    expect(effects.wakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['owner-reactivated', 'accountability-changed', 'member-revoked', 'key-revoked', 'project-revoked'] as const)('refuses recovery confirmation after %s and preserves the held private question', async change => {
+    const f = await inactiveQuestion();
+    const [project] = await db.insert(projects).values({ companyId: f.company.id, name: 'Recovery project', visibility: 'restricted', createdByUserId: f.alice.userId }).returning();
+    await db.insert(projectAccess).values({ projectId: project.id, principalType: 'user', principalId: f.bob.userId, grantedByUserId: f.alice.userId });
+    await db.update(issues).set({ projectId: project.id }).where(eq(issues.id, f.issue.id));
+    const application = app(), target = { kind: 'company', companyId: f.company.id };
+    const prepared = await request(application).post('/human/prepare').set('authorization', `Bearer ${f.bob.token}`).send({ target, operationId: 'human_questions.recovery.cancel', version: 1, input: { issueId: f.issue.id, interactionId: f.question.id } });
+    expect(prepared.status).toBe(200);
+    if (change === 'owner-reactivated') await db.update(companyMemberships).set({ status: 'active' }).where(eq(companyMemberships.id, f.members.find(m => m.principalId === f.alice.userId)!.id));
+    if (change === 'accountability-changed') await db.update(agents).set({ accountableUserId: f.alice.userId }).where(eq(agents.id, f.agent.id));
+    if (change === 'member-revoked') await db.update(companyMemberships).set({ status: 'inactive' }).where(eq(companyMemberships.id, f.members.find(m => m.principalId === f.bob.userId)!.id));
+    if (change === 'key-revoked') await db.update(boardApiKeys).set({ revokedAt: new Date() }).where(eq(boardApiKeys.id, f.bob.key.id));
+    if (change === 'project-revoked') await db.delete(projectAccess).where(eq(projectAccess.projectId, project.id));
+    const confirmed = await request(application).post('/human/confirm').set('authorization', `Bearer ${f.bob.token}`).send({ target, handle: prepared.body.handle });
+    expect([401,403,404,409]).toContain(confirmed.status);
+    expect(JSON.stringify(confirmed.body)).not.toContain('PRIVATE_ALICE_RECOVERY');
+    expect((await issueThreadInteractionService(db).getById(f.question.id))?.status).toBe('pending');
+    expect((await workforceIssueInputs(db, f.company.id, f.agent.id, f.issue.id)).pendingQuestionIds).toContain(f.question.id);
+  });
+
+  it('refuses mere administrators and cross-company recovery, and keeps the original owner-only read boundary', async () => {
+    const f = await inactiveQuestion(), admin = await credential();
+    await db.insert(companyMemberships).values({ companyId: f.company.id, principalType: 'user', principalId: admin.userId, status: 'active', membershipRole: 'admin' });
+    const application = app(), target = { kind: 'company', companyId: f.company.id };
+    const body = { target, operationId: 'human_questions.recovery.cancel', version: 1, input: { issueId: f.issue.id, interactionId: f.question.id } };
+    expect((await request(application).post('/human/prepare').set('authorization', `Bearer ${admin.token}`).send(body)).status).toBe(403);
+    const empty = await request(application).post('/human/read').set('authorization', `Bearer ${admin.token}`).send({ ...body, operationId: 'human_questions.recovery.list', input: { issueId: f.issue.id } });
+    expect(empty.body).toEqual({ questions: [] });
+    const other = await inactiveQuestion();
+    expect((await request(application).post('/human/prepare').set('authorization', `Bearer ${f.bob.token}`).send({ ...body, input: { issueId: other.issue.id, interactionId: other.question.id } })).status).toBe(404);
+    expect((await request(application).post('/human/read').set('authorization', `Bearer ${f.bob.token}`).send({ ...body, operationId: 'human_questions.read' })).status).toBe(403);
+  });
+
+  it('uses browser session readback and durable receipts; repeating an uncertain confirm cannot cancel or replace twice', async () => {
+    const f = await inactiveQuestion(), sessionId = randomUUID();
+    await db.insert(authSessions).values({ id: sessionId, token: randomUUID(), userId: f.bob.userId, expiresAt: new Date(Date.now()+60000), createdAt: new Date(), updatedAt: new Date() });
+    const application = app(undefined, db, { deploymentMode: 'authenticated', resolveSession: async () => ({ session: { id: sessionId, userId: f.bob.userId }, user: { id: f.bob.userId, name: 'Recovery human', email: 'recovery@test.invalid' } }) });
+    const url = `/human/issues/${f.issue.id}/question-recovery`;
+    const discovered = await request(application).get(url);
+    expect(discovered.status).toBe(200);
+    expect(discovered.body.questions).toHaveLength(1);
+    expect(JSON.stringify(discovered.body)).not.toContain('PRIVATE_ALICE_RECOVERY');
+    for (const action of ['cancel', 'replace']) {
+      const input = { interactionId: f.question.id, action };
+      const preview = await request(application).post(`${url}/preview`).send(input);
+      expect(preview.status).toBe(200);
+      const body = { ...input, preconditions: preview.body.preconditions };
+      const confirmed = await request(application).post(`${url}/confirm`).send(body);
+      expect(confirmed.status).toBe(200);
+      expect((await request(application).post(`${url}/confirm`).send(body)).status).toBe(409);
+      if (action === 'cancel') {
+        const receipt = await request(application).get(url);
+        expect(receipt.body.questions[0]).toMatchObject({ status: 'cancelled', resolvedByUserId: f.bob.userId });
+        expect((await workforceIssueInputs(db, f.company.id, f.agent.id, f.issue.id)).pendingQuestionIds).toContain(f.question.id);
+      }
+    }
+    const rows = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, f.issue.id));
+    expect(rows).toHaveLength(2);
+    expect(rows.filter(row => row.status === 'pending')).toHaveLength(1);
   });
 
   async function adminWorker() {

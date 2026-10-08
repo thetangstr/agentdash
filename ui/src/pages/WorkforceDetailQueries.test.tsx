@@ -79,3 +79,19 @@ it.each([
   expect(client.getQueryState(otherKey)?.isInvalidated).toBe(false);
   expect(client.getQueryState(siblingKey)?.isInvalidated).toBe(false);
 });
+
+it('keeps inactive-owner recovery reachable when readiness refuses private-source access', async () => {
+  agent = { ...agent, accountable: { userId: 'active-human', name: 'Nora', via: 'assignment' } };
+  const ordinaryFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/readiness')) return new Response(JSON.stringify({ error: 'Question not found' }), { status: 404 });
+    if (url.endsWith('/interactions')) return new Response('[]', { status: 200 });
+    if (url.endsWith('/question-recovery')) return new Response(JSON.stringify({ questions: [{ issueId: 'job', interactionId: 'question', status: 'pending', resolvedByUserId: null, resolvedAt: null }] }), { status: 200 });
+    return ordinaryFetch(url, init);
+  }));
+  act(() => root.render(<QueryClientProvider client={client}><MemoryRouter><CompanyProvider><TooltipProvider><DetailConsumer routeRef="mira" /></TooltipProvider></CompanyProvider></MemoryRouter></QueryClientProvider>));
+  await flush(); await flush(); await flush();
+  expect(host.textContent).toContain('Question not found');
+  expect(host.textContent).toContain('Review inactive-owner cancellation');
+  expect(host.textContent).not.toContain('Who is the audience?');
+});

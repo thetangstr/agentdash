@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import type { Agent, WaitingOnYouQuestion } from '@paperclipai/shared';
 import { Link } from '@/lib/router';
-import { issuesApi } from '@/api/issues';
+import { issuesApi, type QuestionRecoveryPreview } from '@/api/issues';
 import { authApi } from '@/api/auth';
 import { accessApi } from '@/api/access';
 import { queryKeys } from '@/lib/queryKeys';
@@ -41,6 +41,37 @@ export function PendingQuestionRow({ companyId, question }: { companyId: string;
       <p className="text-muted-foreground">Answer owner: {question.answerOwnerName} · {question.questionSummary}</p>
     </div>{interactions.error && <p role="alert" className="text-sm text-destructive">{interactions.error.message}</p>}{interaction?.kind === 'ask_user_questions' && interaction.status === 'pending' && <QuestionCard key={interaction.id} companyId={companyId} question={interaction} />}</li>;
 }
+function QuestionRecovery({ companyId, issueId }: { companyId: string; issueId: string }) {
+  const refresh = useQuestionActions(companyId, issueId);
+  const recovery = useQuery({ queryKey: ['question-recovery', companyId, issueId], queryFn: () => issuesApi.questionRecovery(issueId) });
+  const [review, setReview] = useState<{ interactionId: string; action: 'cancel' | 'replace'; preview: QuestionRecoveryPreview } | null>(null);
+  const prepare = useMutation({ mutationFn: async ({ interactionId, action }: { interactionId: string; action: 'cancel' | 'replace' }) => {
+    setReview(null);
+    const preview = await issuesApi.previewQuestionRecovery(issueId, interactionId, action);
+    setReview({ interactionId, action, preview });
+  } });
+  const confirm = useMutation({ retry: false, mutationFn: async () => {
+    if (!review) return;
+    // Clear the reviewed action before sending. An unknown acknowledgment must
+    // require reading current state, never a second click/replayed mutation.
+    const current = review; setReview(null);
+    try { await issuesApi.confirmQuestionRecovery(issueId, current.interactionId, current.action, current.preview.preconditions); }
+    finally { await recovery.refetch(); await refresh(); }
+  } });
+  return <div className="space-y-2">
+    {(recovery.error || prepare.error || confirm.error) && <p role="alert" className="text-sm text-destructive">{(recovery.error || prepare.error || confirm.error)?.message} Read current question state before trying another action.</p>}
+    {recovery.data?.questions?.map(q => <div key={q.interactionId} className="space-y-2 rounded border p-3">
+      <p className="text-sm">{q.status === 'pending' ? 'A required question belongs to someone who is no longer active.' : 'The inactive-owner question was cancelled. Required input still holds this task.'}</p>
+      <Button variant="outline" disabled={prepare.isPending || confirm.isPending} onClick={() => prepare.mutate({ interactionId: q.interactionId, action: q.status === 'pending' ? 'cancel' : 'replace' })}>{q.status === 'pending' ? 'Review inactive-owner cancellation' : 'Review replacement'}</Button>
+    </div>)}
+    {review && <div className="space-y-2 rounded border p-3" role="group" aria-label="Review question recovery">
+      {review.preview.readback.context.effects?.map(effect => <p key={effect} className="text-sm">{effect}</p>)}
+      {review.preview.readback.context.replacement?.payload.questions.map(q => <p key={q.id} className="text-sm">{q.prompt}</p>)}
+      <Button disabled={confirm.isPending} onClick={() => confirm.mutate()}>{review.action === 'cancel' ? 'Confirm cancellation' : 'Confirm replacement'}</Button>
+      <Button variant="ghost" onClick={() => setReview(null)}>Dismiss</Button>
+    </div>}
+  </div>;
+}
 export function WorkforceQuestions({ companyId, issueId, agent, requiredIds }: { companyId: string; issueId: string; agent: Agent; requiredIds: string[] }) {
   const refresh = useQuestionActions(companyId, issueId);
   const interactions = useQuery({ queryKey: queryKeys.issues.interactions(issueId), queryFn: () => issuesApi.listInteractions(issueId) });
@@ -56,6 +87,7 @@ export function WorkforceQuestions({ companyId, issueId, agent, requiredIds }: {
   });
   return <div className="space-y-3">
     <h3 className="font-medium">Questions holding this job</h3>
+    <QuestionRecovery companyId={companyId} issueId={issueId} />
     <p className="text-sm text-muted-foreground">Cancelling a required question does not release work. Replace it explicitly after assigning an active accountable person.</p>{(interactions.error || members.error || replace.error) && <p role="alert" className="text-sm text-destructive">{(interactions.error || members.error || replace.error)?.message}</p>}{interactions.data?.filter(q => requiredIds.includes(q.id) && q.kind === 'ask_user_questions').map(q => q.kind === 'ask_user_questions' && <div key={q.id} className="space-y-2">
       <QuestionCard companyId={companyId} question={q} />{q.payload.answerOwnerUserId && members.data && !activeIds.has(q.payload.answerOwnerUserId) && <p role="alert" className="text-sm">This question's original owner is no longer active. Cancel it, then replace it for the current accountable person.</p>}{q.status === 'cancelled' && (agent.accountable && activeIds.has(agent.accountable.userId) ? <Button variant="outline" disabled={replace.isPending} onClick={() => replace.mutate(q)}>Replace question for current accountable person</Button> : <a className="text-sm underline" href="#workforce-accountability">Assign an active accountable person to replace this question</a>)}</div>)}</div>;
 }

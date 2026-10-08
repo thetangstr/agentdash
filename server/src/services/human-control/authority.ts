@@ -119,6 +119,7 @@ export function foundationAuthority(req: Request) {
         const [profile] = await reader.select({ id: authUsers.id }).from(authUsers).where(eq(authUsers.id, owner));
         if (profile) row(state, '00:user', authUsers, profile.id);
       }
+      return owner;
     }
     async function creation(issueId: string, input: CreateIssueThreadInteraction) {
       const job = await issue(issueId);
@@ -144,6 +145,21 @@ export function foundationAuthority(req: Request) {
       const privateQuestion = Boolean(q.payload.answerOwnerUserId || q.payload.workforceAgentId || q.payload.workforceEnrollmentId || q.payload.workforceTemplateId || q.payload.questions.some(value => value.companyFactKey));
       if (ordinary && !privateQuestion) return { issue: job, q };
       await member(req.actor.userId);
+      // AgentDash: recovery grants structural cancellation only, never the old
+      // owner's private question/answer. Witness inactive membership too: its
+      // reactivation must serialize against confirmation, not race a negative read.
+      if (selection.operationId.startsWith('human_questions.recovery.')) {
+        if (!job.assigneeAgentId || q.payload.workforceAgentId !== job.assigneeAgentId
+          || !q.payload.answerOwnerUserId || !q.payload.questions.some(value => value.required) || !['pending', 'cancelled'].includes(q.status)) throw notFound('Recoverable question not found');
+        const owner = await ownerFacts(job.assigneeAgentId);
+        if (owner !== req.actor.userId) throw forbidden('Only the current accountable human may recover this question');
+        const priorMembers = await reader.select().from(companyMemberships).where(and(
+          eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'),
+          eq(companyMemberships.principalId, q.payload.answerOwnerUserId)));
+        for (const value of priorMembers) row(state, '09:membership', companyMemberships, value.id);
+        if (priorMembers.some(value => value.status === 'active')) throw conflict('The original question owner is active');
+        return { issue: job, q };
+      }
       if (q.payload.answerOwnerUserId === req.actor.userId) return { issue: job, q };
       if (structural && q.status === 'cancelled') {
         const resolved = await creation(job.id, questionReplacement(q));
@@ -157,11 +173,26 @@ export function foundationAuthority(req: Request) {
       if (selection.operationId === 'workforce.readiness.read' || selection.operationId === 'native.question.list') throw notFound('Question not found');
       throw forbidden('Only the named human answer owner may access this question');
     }
+    async function recoveryQuestions(issueId: string) {
+      await issue(issueId);
+      await member(req.actor.userId);
+      const values = await reader.select().from(issueThreadInteractions).where(and(
+        eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.issueId, issueId),
+        eq(issueThreadInteractions.kind, 'ask_user_questions')));
+      const replaced = new Set(values.map(value => (value.payload as { replacesInteractionId?: string }).replacesInteractionId));
+      const result: AskUserQuestionsInteraction[] = [];
+      for (const value of values) {
+        if (replaced.has(value.id) || !['pending', 'cancelled'].includes(value.status)) continue;
+        try { result.push((await question(value.id, issueId)).q); }
+        catch (error) { if (![403,404,409].includes((error as { status?: number }).status ?? 0)) throw error; }
+      }
+      return result;
+    }
     async function brief() {
       const values = await reader.select().from(companyContext).where(and(eq(companyContext.companyId, companyId), eq(companyContext.contextType, 'workforce_brief'), eq(companyContext.key, 'current')));
       for (const value of values) row(state, '13:context', companyContext, value.id);
     }
-    return { member, agent, enrollment, enrollmentRow, goal, issue, ownerFacts, creation, question, brief };
+    return { member, agent, enrollment, enrollmentRow, goal, issue, ownerFacts, creation, question, recoveryQuestions, brief };
   }
   async function collect(executor: Db, selection: FoundationSelection, state: Collection) {
     const { companyId, operationId: op, input } = selection;
@@ -247,6 +278,8 @@ export function foundationAuthority(req: Request) {
         const grants = await executor.select().from(principalPermissionGrants).where(and(eq(principalPermissionGrants.companyId, companyId), eq(principalPermissionGrants.principalType, 'user'), eq(principalPermissionGrants.principalId, facts.userId), eq(principalPermissionGrants.permissionKey, 'agents:create')));
         for (const value of grants) row(state, '10:permission', principalPermissionGrants, value.id);
       }
+    } else if (op === 'human_questions.recovery.list') {
+      await source.recoveryQuestions(input.issueId as string);
     } else if (op === 'human_questions.pending.list') {
       const pending = await waitingOnYouService(executor).pendingQuestions(companyId, req.actor, { limit: 2147483647 }, req);
       for (const value of pending.items) await source.question(value.interactionId, value.issueId);
@@ -392,6 +425,9 @@ export function foundationAuthority(req: Request) {
           await sources(executor, selection, state).issue(issue.id);
         },
         async seal() { await collect(executor, selection, state); identity.checkTime(); },
+        async recoveryQuestions(issueId: string) {
+          return sources(executor, selection, state).recoveryQuestions(issueId);
+        },
         async visibleQuestion(id: string, issueId: string) {
           return sources(executor, selection, state).question(id, issueId, false, selection.native);
         },

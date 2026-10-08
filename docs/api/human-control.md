@@ -88,7 +88,7 @@ Each entry in `operations` (`HumanOperationDescriptor` in `packages/shared/src/h
 | `actionId` | string | |
 | `targetKind` | `company` · `self` · `instance` · `public` | |
 | `behavior` | `read` · `prepare_confirm` | `read`: call `/read`. `prepare_confirm`: call `/prepare`, then `/confirm`. |
-| `authority` | `company_access` · `company_direction` · `exact_question_owner` · `agent_management` | The kind of permission the operation checks. |
+| `authority` | `company_access` · `company_direction` · `exact_question_owner` · `current_accountable_human` · `agent_management` | The kind of permission the operation checks. |
 | `confirmation` | `none` · `human_readback` | |
 | `inputSchema`, `outputSchema` | JSON schema | The operation's exact input and output. Use these, not guesses. |
 | `content` | `{ fullText: true, pagination: "none" \| "cursor" \| "offset" }` | |
@@ -105,12 +105,13 @@ Each entry in `operations` (`HumanOperationDescriptor` in `packages/shared/src/h
 
 ### The operations
 
-There are 22, all version 1 and company-targeted (`HUMAN_OPERATION_IDS` in `packages/shared/src/human-control.ts`; registered in `server/src/services/human-control/`). Discovery shows only the ones you may run.
+There are 24, all version 1 and company-targeted (`HUMAN_OPERATION_IDS` in `packages/shared/src/human-control.ts`; registered in `server/src/services/human-control/`). Discovery shows only the ones you may run.
 
 | Area | Read (`/read`) | Write (`/prepare`, then `/confirm`) |
 | --- | --- | --- |
 | Workforce | `workforce.templates.list`, `workforce.brief.read`, `workforce.proposals.list`, `workforce.enrollment.read`, `workforce.readiness.read` | `workforce.brief.publish`, `workforce.proposals.review`, `workforce.enrollment.create`, `workforce.enrollment.update`, `workforce.learning.acknowledge`, `workforce.skills.retry`, `workforce.first_job.start` |
 | Questions for a person | `human_questions.pending.list`, `human_questions.read` | `human_questions.respond`, `human_questions.cancel`, `human_questions.replace` |
+| Inactive question owner recovery | `human_questions.recovery.list` (issueId; safe IDs/state/receipt only) | `human_questions.recovery.cancel` (issueId, interactionId; exact active current accountable human) |
 | Agent owners | — | `human_questions.owner.assign`, `human_questions.stewardship.assign`, `human_questions.stewardship.transfer` |
 | Task recovery | `task_recovery.exhausted.read` | `task_recovery.remediate` |
 
@@ -137,7 +138,7 @@ curl -X POST https://your-instance.example/api/human-control/read \
 | Field | Type | Notes |
 | --- | --- | --- |
 | `target` | target object | Required. As for discover. |
-| `operationId` | one of the 22 operation ids | Required. |
+| `operationId` | one of the 24 operation ids | Required. |
 | `version` | `1` | Required. |
 | `input` | object | Required. Validated against the operation's own strict input schema (its `inputSchema` from discovery). |
 
@@ -281,3 +282,11 @@ Any operation can also answer 401 when the credential stops resolving and 429 wh
 The same operations are available over MCP: `AGENTDASH_TOOLSET=human` exposes matching tools — see [the human toolset](/mcp/tools/human) and [Toolsets](/mcp/toolsets).
 
 Other routes on this resource (the recovery-run preview and authorize routes, which the web app uses) are internal — see [the route index](/api/route-index), under `human-control`.
+
+### Recover an inactive question owner
+
+Safe recovery discovery works independently of readiness, including when private-source readiness returns 404. Only the exact active current accountable human with current company, issue and project access receives recovery metadata; being an administrator is insufficient. The original pinned owner must remain inactive at confirmation. Readbacks contain no original prompt, answer, title or source content.
+
+Prepare and confirm `human_questions.recovery.cancel`, then use the existing `human_questions.replace` operation and answer the replacement genuinely. Cancellation persists the canonical cancelled interaction and attributed activity receipt, keeps required input holding the same task, and creates no continuation. The replacement answer uses the ordinary continuation path. Reactivation, changed accountability or revoked access refuses a stale confirmation.
+
+The web workforce panel uses the same operations through session `GET /api/human-control/issues/:issueId/question-recovery` and `POST .../preview` / `POST .../confirm`. Preview takes `{ interactionId, action: "cancel" | "replace" }`; confirm adds the exact returned `preconditions`. A session cancellation receipt is the persisted interaction, not a board-key handle. If acknowledgment is lost, read current state; never replay a mutation. This addition covers this recovery slice only; historical transport proof counts remain historical.

@@ -157,7 +157,7 @@ export function WorkforceAgentPanel({ companyId, agent }: { companyId: string; a
         <p className="text-sm">{r.reason}</p>{r.missingFactKeys.length > 0 && <p className="text-sm">Missing facts: {r.missingFactKeys.join(', ')}</p>}<p className="text-sm">{r.acceptedVerdictId ? 'Neutral review accepted' : 'First-job acceptance not yet established'}</p>{r.firstJobIssueId && <Link disableIssueQuicklook to={`/issues/${r.firstJobIssueId}`} className="text-sm underline">Open first job, artifacts and review</Link>}</div>}{e.skillInstallError && <WorkforceError error={e.skillInstallError} />}<div className="flex flex-wrap gap-2">
         {r?.phase !== 'ready' && <Button disabled={action.isPending || !ownerActive} onClick={() => action.mutate('start')}>{e.firstJobIssueId ? 'Resume first job' : 'Start first job'}</Button>}
         <Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('retry')}>Retry skill installation</Button>
-      </div>{!ownerActive && <a className="text-sm underline" href="#workforce-accountability">Assign an active person before starting a job that needs input</a>}{r?.firstJobIssueId && <WorkforceQuestions companyId={companyId} issueId={r.firstJobIssueId} agent={agent} requiredIds={r.pendingQuestionIds} />}</>}
+      </div>{!ownerActive && <a className="text-sm underline" href="#workforce-accountability">Assign an active person before starting a job that needs input</a>}{e.firstJobIssueId && <WorkforceQuestions companyId={companyId} issueId={e.firstJobIssueId} agent={agent} requiredIds={r?.pendingQuestionIds ?? []} />}</>}
   </section>;
 }
 export function WorkforceWorkspace({ companyId }: { companyId: string }) {

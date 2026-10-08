@@ -260,6 +260,56 @@ describe('human control HTTP contract with current named authority', () => {
     }
   });
 
+  it('recovers inactive owner input over the real MCP bridge and queues the same task once despite lost answer acknowledgment', async () => {
+    const old = await human('member'), current = await human('member');
+    await db.insert(companyMemberships).values({ companyId: old.company.id, principalType: 'user', principalId: current.userId, membershipRole: 'member', status: 'active' });
+    const target = old.target;
+    const [worker] = await db.insert(agents).values({ companyId: old.company.id, name: 'Inactive-owner SDK worker', adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: old.userId }).returning();
+    const workforce = workforceService(db);
+    await workforce.enroll(old.company.id, worker.id, { templateId: 'marketing-content' }, { userId: old.userId });
+    const issue = await workforce.startFirstJob(old.company.id, worker.id, { userId: old.userId });
+    const question = await issueThreadInteractionService(db).create(issue, { kind: 'ask_user_questions', continuationPolicy: 'wake_assignee', payload: { version: 1, questions: [{ id: 'needed', prompt: 'Original private question', selectionMode: 'text', options: [], required: true }] } }, { agentId: worker.id });
+    await db.update(companyMemberships).set({ status: 'inactive' }).where(and(eq(companyMemberships.companyId, old.company.id), eq(companyMemberships.principalId, old.userId)));
+    await db.update(agents).set({ accountableUserId: current.userId }).where(eq(agents.id, worker.id));
+    const mcp = createAgentDashServer({ apiUrl: base.replace('/human-control', ''), apiKey: current.token, companyId: old.company.id, agentId: null, runId: null }, { toolset: 'human' });
+    const client = new Client({ name: 'inactive-owner-recovery', version: '1' });
+    const [a,b] = InMemoryTransport.createLinkedPair(); await mcp.connect(a); await client.connect(b);
+    async function invoke(name: string, args: Record<string, unknown>) {
+      const response = await client.callTool({ name, arguments: { target, ...args } });
+      return { error: response.isError, body: JSON.parse((response.content as Array<{ text: string }>)[0].text) };
+    }
+    async function prepare(operationId: string, input: Record<string, unknown>) {
+      const result = await invoke('human_prepare', { operationId, version: 1, input });
+      expect(result.error, JSON.stringify(result.body)).not.toBe(true);
+      return result.body;
+    }
+    try {
+      const found = await invoke('human_read', { operationId: 'human_questions.recovery.list', version: 1, input: { issueId: issue.id } });
+      expect(found.body.questions).toHaveLength(1);
+      expect(JSON.stringify(found.body)).not.toContain('Original private question');
+      const cancellation = await prepare('human_questions.recovery.cancel', { issueId: issue.id, interactionId: question.id });
+      expect((await invoke('human_confirm', { handle: cancellation.handle })).body.result.status).toBe('cancelled');
+      expect((await workforce.getReadiness(old.company.id, worker.id))?.pendingQuestionIds).toContain(question.id);
+      expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, worker.id))).toHaveLength(0);
+      const replacement = await prepare('human_questions.replace', { issueId: issue.id, interactionId: question.id });
+      const replaced = await invoke('human_confirm', { handle: replacement.handle });
+      expect(replaced.error).not.toBe(true);
+      const answer = await prepare('human_questions.respond', { issueId: issue.id, interactionId: replaced.body.result.interactionId, answers: [{ questionId: 'needed', optionIds: [], text: 'Genuine scoped answer' }] });
+      failAfterWake = true;
+      const uncertain = await invoke('human_confirm', { handle: answer.handle });
+      failAfterWake = false;
+      expect(uncertain.body.status).toBe('recovery_required');
+      expect((await invoke('human_confirm', { handle: answer.handle })).body.status).toBe('recovery_required');
+      const wakeups = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, worker.id));
+      const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, worker.id));
+      expect(wakeups).toHaveLength(1); expect(runs).toHaveLength(1);
+      expect(wakeups[0].payload).toMatchObject({ issueId: issue.id, interactionStatus: 'answered' });
+      expect(runs[0].contextSnapshot).toMatchObject({ issueId: issue.id, taskId: issue.id });
+      expect((await workforce.getReadiness(old.company.id, worker.id))?.pendingQuestionIds).toEqual([]);
+      expect((await issueThreadInteractionService(db).getById(question.id))?.payload.answerOwnerUserId).toBe(old.userId);
+    } finally { failAfterWake = false; await client.close(); await mcp.close(); }
+  });
+
   it('executes real SDK tools/list and tools/call through HTTP, and exposes durable recovery after a committed wake failure', async () => {
     const h = await human();
     const [worker] = await db.insert(agents).values({ companyId: h.company.id, name: 'Recovery worker', adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: h.userId }).returning();
@@ -276,7 +326,7 @@ describe('human control HTTP contract with current named authority', () => {
       expect((await client.listTools()).tools).toHaveLength(6);
       expect((await invoke('human_select_target', { target: h.target })).error).not.toBe(true);
       const found = await invoke('human_discover', { target: h.target });
-      expect(found.body.operations).toHaveLength(22);
+      expect(found.body.operations).toHaveLength(24);
       const p = await invoke('human_prepare', { target: h.target, operationId: 'workforce.first_job.start', version: 1, input: { agentId: worker.id } });
       expect(await db.select().from(issues).where(eq(issues.companyId, h.company.id))).toHaveLength(0);
       failAfterWake = true;

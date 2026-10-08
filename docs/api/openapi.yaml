@@ -5214,6 +5214,8 @@ components:
             - human_questions.respond
             - human_questions.cancel
             - human_questions.replace
+            - human_questions.recovery.list
+            - human_questions.recovery.cancel
             - human_questions.owner.assign
             - human_questions.stewardship.assign
             - human_questions.stewardship.transfer
