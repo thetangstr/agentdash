@@ -1,7 +1,26 @@
 # Task 2 implementation report — 2026-10-07
 
-Base for independent review: `97ec8e21f`. Implementation head: `7c63d332f` (report commit follows).
+Base for independent review: `97ec8e21f`. Initial implementation head: `7c63d332f`; subsequent correction evidence appears below.
 
+
+## Security review correction round 2
+
+Correction base: `b1dc5e37c48abd875299b0eda058fe3e55e69564`. Independent re-review found an additional HIGH bypass: a creator/current steward without spend authority could read monthly amounts through an allowed agent PATCH or configuration revision snapshots. This round closes those response paths; root must independently re-review the new commit before landing draft PR #1074.
+
+A pure `redactMonthlySpendForReader` now handles structured monthly fields, with the existing `canReadCompanySpend` resolved at each route boundary. Agent list/detail, PATCH, create/hire, rollback, preflight and lifecycle mutation envelopes use it. Revision list/detail redact both before/after response snapshots while preserving stored history and existing credential sanitization. Configuration authority and all action gates remain unchanged. Authorized owner/agent controls retain actual amounts; unavailable values are null, never zero.
+
+The hire envelope also uses the existing approval response redactor. Its explicitly typed `hire_agent` payload hides monthly fields for denied readers everywhere that helper is used, retaining credential protection. Arbitrary approval types and user prose are untouched. Direct creation still returns its one-time API key. The canonical default prompt and inherited `renderAgents` guidance explain configuration/history versus spend access; no deleted role bundles were recreated.
+
+Fresh evidence (all Vitest commands use `pnpm -C server exec vitest run` and `--maxWorkers=1 --fileParallelism=false`):
+
+- Before correction, `agent-config-read-steward-routes.test.ts`: **6 meaningful failures / 13 passes**. Steward and creator each leaked 876543 through PATCH, revision list and revision detail. `/tmp/task2-round2-red.log` also records an unrelated initial create-fixture missing timestamp; that fixture was fixed before its red evidence was collected.
+- Before correction, `agent-create-authority.test.ts`: **2 failures / 32 passes**, both ordinary-member create/hire envelopes returned 876543 instead of null (`/tmp/task2-round2-create-red.log`).
+- Core routes after correction: **53/53 passed** (`/tmp/task2-round2-green.log`). The new history cases verify actual stored snapshots remain unchanged, credential fields remain sanitized, and owner/agent readers retain actual amounts.
+- Bounded existing controls: `agent-permissions-routes.test.ts` **79/79**, `onboarding-accepted-hire.test.ts` **22/22**, `budget-approval-spend-visibility.test.ts` **16/16**, plus core and redaction controls passed (`/tmp/task2-round2-controls.log`). One existing governance assertion expected a steward's submitted budget echoed; it now checks the null response and separately verifies the accepted 9000 value persists, while the ceiling refusal remains asserted.
+- Final focused rerun: governance (54), configuration reads/history (19), creation authority (34) and redaction (8): **115/115 passed** (`/tmp/task2-round2-freeze.log`). Together with the unchanged passing controls above, **232 distinct scoped tests passed** after the governance expectation correction.
+- `pnpm -C server typecheck`: **exit 0** on final code (`/tmp/task2-round2-typecheck-final.log`). `git diff --check`: clean.
+
+No UI implementation or shared schema changed. Configuration history UI displays metadata/changed-key names rather than monetary snapshot values. Existing revision records and rollback semantics, approval provenance/idempotency and accepted-hire replay logic were not changed. This round used disposable PostgreSQL, ephemeral HTTP and synthetic filesystem state only; no provider calls, production contact, broad suite/build, push or merge. Root owns independent re-review and combined landing gates.
 
 ## Security review correction round 1
 

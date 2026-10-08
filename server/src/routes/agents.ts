@@ -143,7 +143,7 @@ import {
   refreshAdapterModels,
   requireServerAdapter,
 } from "../adapters/index.js";
-import { redactEventPayload } from "../redaction.js";
+import { redactApprovalForReader, redactEventPayload, redactMonthlySpendForReader } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
@@ -904,6 +904,11 @@ export function agentRoutes(
     };
   }
 
+  // AgentDash (#1057): configuration/mutation authority does not grant spend reads.
+  async function agentForReader<T extends { companyId: string }>(req: Request, agent: T) {
+    return redactMonthlySpendForReader(agent, await canReadCompanySpend(db, req, agent.companyId));
+  }
+
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     // AgentDash (GH #505): the caller, so steward/accountable emails follow
@@ -949,14 +954,13 @@ export function agentRoutes(
     ]);
 
     return {
-      ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
+      ...await agentForReader(req, options?.restricted ? redactForRestrictedAgentView(agent)! : agent),
       // Computed from the UNREDACTED agent, deliberately: the digest needs the
       // adapter configuration, and the restricted view strips it. The verdict
       // itself carries no configuration, so it is safe on both views — and a
       // restricted reader is exactly the one who cannot tell staleness alone.
       harnessReadiness: withHarnessReadiness(agent).harnessReadiness,
       chainOfCommand,
-      ...(!(await canReadCompanySpend(db, req, agent.companyId)) ? { budgetMonthlyCents: null, spentMonthlyCents: null } : {}),
       // Present and null when nobody stewards this agent, never absent: an
       // agent reading a missing key cannot tell "unstewarded" from "this
       // build does not report stewards".
@@ -2136,11 +2140,11 @@ export function agentRoutes(
     };
   }
 
-  function redactRevisionSnapshot(snapshot: unknown): Record<string, unknown> {
+  function redactRevisionSnapshot(snapshot: unknown, canReadSpend: boolean): Record<string, unknown> {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return {};
     const record = snapshot as Record<string, unknown>;
     return {
-      ...record,
+      ...redactMonthlySpendForReader(record, canReadSpend),
       adapterConfig: redactEventPayload(
         typeof record.adapterConfig === "object" && record.adapterConfig !== null
           ? (record.adapterConfig as Record<string, unknown>)
@@ -2160,11 +2164,12 @@ export function agentRoutes(
 
   function redactConfigRevision(
     revision: Record<string, unknown> & { beforeConfig: unknown; afterConfig: unknown },
+    canReadSpend: boolean,
   ) {
     return {
       ...revision,
-      beforeConfig: redactRevisionSnapshot(revision.beforeConfig),
-      afterConfig: redactRevisionSnapshot(revision.afterConfig),
+      beforeConfig: redactRevisionSnapshot(revision.beforeConfig, canReadSpend),
+      afterConfig: redactRevisionSnapshot(revision.afterConfig, canReadSpend),
     };
   }
 
@@ -2482,7 +2487,7 @@ export function agentRoutes(
       .map((agent) => withHarnessReadiness(agent));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     const canReadSpend = await canReadCompanySpend(db, req, companyId);
-    const redactSpend = <T extends object>(row: T) => canReadSpend ? row : { ...row, budgetMonthlyCents: null, spentMonthlyCents: null };
+    const redactSpend = <T extends object>(row: T) => redactMonthlySpendForReader(row, canReadSpend);
     if (canReadConfigs) {
       res.json((await attachHumanContext(req, companyId, result)).map(redactSpend));
       return;
@@ -2716,7 +2721,8 @@ export function agentRoutes(
     }
     await assertCanReadAgentConfiguration(req, agent);
     const revisions = await svc.listConfigRevisions(id);
-    res.json(revisions.map((revision) => redactConfigRevision(revision)));
+    const canReadSpend = await canReadCompanySpend(db, req, agent.companyId);
+    res.json(revisions.map((revision) => redactConfigRevision(revision, canReadSpend)));
   });
 
   router.get("/agents/:id/config-revisions/:revisionId", async (req, res) => {
@@ -2733,7 +2739,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Revision not found" });
       return;
     }
-    res.json(redactConfigRevision(revision));
+    res.json(redactConfigRevision(revision, await canReadCompanySpend(db, req, agent.companyId)));
   });
 
   router.post("/agents/:id/config-revisions/:revisionId/rollback", async (req, res) => {
@@ -2802,7 +2808,7 @@ export function agentRoutes(
       details: { revisionId },
     });
 
-    res.json(updated);
+    res.json(await agentForReader(req, updated));
   });
 
   router.get("/agents/:id/runtime-state", async (req, res) => {
@@ -2975,7 +2981,7 @@ export function agentRoutes(
     });
 
     res.json({
-      agent: updated ?? { ...agent, metadata },
+      agent: await agentForReader(req, updated ?? { ...agent, metadata }),
       result,
       readiness,
     });
@@ -3238,7 +3244,11 @@ export function agentRoutes(
       });
     }
 
-    res.status(201).json({ agent, approval });
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
+    res.status(201).json({
+      agent: redactMonthlySpendForReader(agent, canReadSpend),
+      approval: approval ? redactApprovalForReader(approval, canReadSpend) : null,
+    });
   });
 
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
@@ -3527,7 +3537,7 @@ export function agentRoutes(
 
     // AgentDash (AGE-24): say plainly that this key was minted with the agent,
     // so nobody finds a "default" key later and wonders who holds it.
-    res.status(201).json({ ...agent, apiKey: apiKey ? { ...apiKey, autoCreated: true } : null });
+    res.status(201).json({ ...await agentForReader(req, agent), apiKey: apiKey ? { ...apiKey, autoCreated: true } : null });
   });
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {
@@ -4353,7 +4363,7 @@ export function agentRoutes(
       await recordAccountabilityChange(db, req, existing, agent);
     }
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/pause", async (req, res) => {
@@ -4379,7 +4389,7 @@ export function agentRoutes(
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/resume", async (req, res) => {
@@ -4403,7 +4413,7 @@ export function agentRoutes(
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/approve", async (req, res) => {
@@ -4497,7 +4507,7 @@ export function agentRoutes(
       );
     }
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.post("/agents/:id/terminate", async (req, res) => {
@@ -4523,7 +4533,7 @@ export function agentRoutes(
       entityId: agent.id,
     });
 
-    res.json(agent);
+    res.json(await agentForReader(req, agent));
   });
 
   router.delete("/agents/:id", async (req, res) => {

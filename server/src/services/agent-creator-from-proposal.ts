@@ -106,7 +106,7 @@ export function agentCreatorFromProposal(deps: Deps) {
 // AgentDash: operation-log-visibility is inherited from the canonical default bundle;
 // workers must not probe alternate run/workspace routes after an unavailable operation.
 // AgentDash: spend-visibility is inherited from the canonical default;
-// null/omitted amounts stay unavailable in approvals, inboxes and mutation responses too;
+// null/omitted amounts stay unavailable in approvals, inboxes, agent history and mutation/create/hire responses too;
 // 403 readers ask an administrator about budget stops.
 // AgentDash: approval-channel-provenance is inherited from the canonical default bundle;
 // synthesized workers cannot claim connector provenance through REST decisions.

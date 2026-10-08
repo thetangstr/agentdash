@@ -93,6 +93,18 @@ export function redactEventPayload(payload: Record<string, unknown> | null): Rec
   return sanitizeRecord(payload);
 }
 
+/** AgentDash (#1057): apply only to structured financial rows/snapshots.
+ * Keep absent keys absent and leave the persisted object untouched.
+ */
+export function redactMonthlySpendForReader<T extends object>(value: T, canReadSpend: boolean) {
+  if (canReadSpend) return value;
+  return {
+    ...value,
+    ...("budgetMonthlyCents" in value ? { budgetMonthlyCents: null } : {}),
+    ...("spentMonthlyCents" in value ? { spentMonthlyCents: null } : {}),
+  };
+}
+
 /** AgentDash (#1057): response-only redaction; the reader's spend authority
  * is resolved at the route boundary. Never reinterpret arbitrary user prose.
  */
@@ -105,7 +117,7 @@ export function redactApprovalForReader<T extends { type: string; payload: Recor
     const { budgetAmount: _budget, observedAmount: _observed, ...visiblePayload } = payload;
     return { ...approval, payload: visiblePayload };
   }
-  return { ...approval, payload };
+  return { ...approval, payload: approval.type === "hire_agent" ? redactMonthlySpendForReader(payload, canReadSpend) : payload };
 }
 
 export function redactSensitiveText(input: string): string {
