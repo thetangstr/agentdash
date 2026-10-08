@@ -177,6 +177,9 @@ export function agentCreatorFromProposal(deps: Deps) {
 // unknown remote spend/cleanup reporting must never be overridden by a hire.
 // AgentDash: cooperative-log-reads applies via the canonical bundle below;
 // scheduling/whole-record feedback truncation grants no additional capability.
+// AgentDash: request-timeout-config is inherited by proposal-created workers
+// from the canonical default bundle: seconds precedence and legacy fallback;
+// a request deadline does not prove remote work stopped or authorize a retry.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
   const userVoice = transcript
     .filter(turn => turn.role === "user")
