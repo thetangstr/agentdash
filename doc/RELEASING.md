@@ -103,6 +103,22 @@ Inputs:
 - `dry_run`
   - preview only when true
 
+Stable verification runs four deterministic `pnpm test:run` shards beside a
+build job for typecheck, Hermes onboarding regression, release-control contract
+tests, source-runner coverage checks, and build. Every job checks out the same
+immutable `source_ref`. The aggregate `verify_stable` gate requires both the
+complete test matrix and build job to succeed; failure, cancellation or a skipped
+dependency blocks preview and publication. Older source runners that ignore
+`SHARD_*` run the full suite on every shard. Canary verification stays serial.
+
+Check the workflow gate and inventory locally:
+
+```bash
+node --test scripts/release-control-contract.test.mjs scripts/release-sharding.test.mjs scripts/lib/shard.test.mjs
+```
+ `RELEASE_SOURCE_ROOT=/path/to/source` selects a
+different immutable checkout for the coverage check without invoking real tests.
+
 Before running stable:
 
 1. pick the canary commit or tag you trust
