@@ -142,6 +142,8 @@ describe("guide URLs", () => {
     for (const guide of guides) {
       expect(prefixed.text).toContain(guide.title);
     }
+    // /docs is a global root: the link to the full documentation is never company-prefixed.
+    expect(container.querySelector('a[href="/docs"]')?.textContent).toBe("the full documentation");
     const unprefixed = await visit("/guides");
     expect(unprefixed.pathname).toBe(`/${PREFIX}/guides`);
     expect(unprefixed.heading).toBe("Guides");

@@ -87,6 +87,13 @@ describe("vercel.json redirects for the old app (GH #837 review)", () => {
     }
   });
 
+  it("serves docs and its deep links without admitting unrelated prefixes", () => {
+    for (const path of ["/docs", "/docs/", "/docs/start/what-is-agentdash", "/docs/mcp/overview", "/docs/api/reference"]) {
+      expect(redirectFor(path), path).toBeNull();
+    }
+    for (const path of ["/docsx", "/documents"]) expect(redirectFor(path), path).toBe("/find");
+  });
+
   it("sends /assess to /start until assess is re-homed (GH #838)", () => {
     expect(redirectFor("/assess")).toBe("/start");
   });
