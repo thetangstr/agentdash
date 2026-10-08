@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,7 +73,9 @@ test("upstream attribution and identifiers are allowed; retired organization lin
 
 test("every page may credit the public upstream without weakening private-token checks", () => {
   assert.deepEqual(scanText("docs/start/what-is-agentdash.md", "Built on [Paperclip](https://github.com/paperclipai/paperclip).\n"), []);
-  assert.deepEqual(scanText("docs/start/what-is-agentdash.md", "Built on Paperclip. Ask Ross first.\n"), [{ line: 1, rule: "token" }]);
+  const historicalPrivateSource = readFileSync(path.join(REPO_ROOT, "releases/v2026.1001.0.md"), "utf8");
+  assert.ok(scanText(FORK_PAGE, historicalPrivateSource).some((finding) => finding.rule === "token"));
+  assert.deepEqual(scanText(FORK_PAGE, "See github.com/paperclip-ai/paperclip.\n"), [{ line: 1, rule: "paperclip" }]);
   assert.deepEqual(scanText(FORK_PAGE, "AgentDash is a fork of Paperclip.\n"), []);
 });
 

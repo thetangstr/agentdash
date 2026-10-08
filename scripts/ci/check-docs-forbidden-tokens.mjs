@@ -72,9 +72,7 @@ function lineAt(text, offset) {
 export function scanText(rel, text) {
   const findings = [];
   for (const offset of forbiddenTokenOffsets(text)) findings.push({ line: lineAt(text, offset), rule: "token" });
-  if (rel !== FORK_PAGE) {
-    for (const match of text.matchAll(UPSTREAM_ORG)) findings.push({ line: lineAt(text, match.index), rule: "paperclip" });
-  }
+  for (const match of text.matchAll(UPSTREAM_ORG)) findings.push({ line: lineAt(text, match.index), rule: "paperclip" });
   const seen = new Set();
   return findings
     .sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule))
