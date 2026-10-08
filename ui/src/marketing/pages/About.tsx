@@ -26,10 +26,16 @@ export function About() {
             lands in a log you could hand to your board.
           </p>
           <p className="mkt-body-lg">
-            It is built on <a href={PAPERCLIP_URL} target="_blank" rel="noreferrer">Paperclip</a>,
-            an open-source control plane for agent companies, and adds the steward
-            relationship, a harness-side inbox for Claude Code and Codex, and the
-            human-in-the-loop controls. The code is <a href={GITHUB_URL} target="_blank" rel="noreferrer">on GitHub</a>.
+            AgentDash is built on <a href={PAPERCLIP_URL} target="_blank" rel="noreferrer">Paperclip</a>,
+            the open-source control plane for agent companies. Its contributors
+            built the agent harness, heartbeat scheduler, adapter framework and
+            plugin SDK that AgentDash extends. Thank you to the Paperclip team
+            and contributors.
+          </p>
+          <p className="mkt-body-lg">
+            AgentDash extends that foundation with the steward relationship,
+            a harness-side inbox for Claude Code and Codex, and its own web app.
+            The code is <a href={GITHUB_URL} target="_blank" rel="noreferrer">on GitHub</a>.
           </p>
           <p className="mkt-body-lg">{READINESS_LINE}</p>
         </div>

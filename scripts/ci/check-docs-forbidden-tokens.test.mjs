@@ -55,7 +55,7 @@ test("masking code keeps line numbers and blanks fences and spans", () => {
   assert.equal(masked.split("\n")[4], "e");
 });
 
-test("prose Paperclip is a finding; identifiers and code are not", () => {
+test("upstream attribution and identifiers are allowed; retired organization links are refused", () => {
   const text = [
     "Intro.",
     "Paperclip is the old name.", // 2: prose
@@ -67,12 +67,13 @@ test("prose Paperclip is a finding; identifiers and code are not", () => {
     "See github.com/paperclip-ai/paperclip.", // 8: retired org
   ].join("\n");
   assert.deepEqual(scanText("docs/x.md", text), [
-    { line: 2, rule: "paperclip" },
     { line: 8, rule: "paperclip" },
   ]);
 });
 
-test("the fork page may name the upstream project", () => {
+test("every page may credit the public upstream without weakening private-token checks", () => {
+  assert.deepEqual(scanText("docs/start/what-is-agentdash.md", "Built on [Paperclip](https://github.com/paperclipai/paperclip).\n"), []);
+  assert.deepEqual(scanText("docs/start/what-is-agentdash.md", "Built on Paperclip. Ask Ross first.\n"), [{ line: 1, rule: "token" }]);
   assert.deepEqual(scanText(FORK_PAGE, "AgentDash is a fork of Paperclip.\n"), []);
 });
 
@@ -86,7 +87,7 @@ test("it scans every nav page — denylisted or not — and reports unresolved e
   const root = fixture({
     "docs/docs.json": nav(["a/one", "superpowers/two", "a/missing", "a/one"]),
     "docs/a/one.md": "# One\n",
-    "docs/superpowers/two.md": "# Two\nPaperclip here.\n",
+    "docs/superpowers/two.md": "# Two\nSee github.com/paperclip-ai/paperclip.\n",
   });
   assert.deepEqual(navFiles(root), { files: ["docs/a/one.md", "docs/superpowers/two.md"], missing: ["a/missing"] });
   const { problems } = run(root);
@@ -99,7 +100,7 @@ test("it scans every nav page — denylisted or not — and reports unresolved e
 });
 
 test("explicit files are scanned on their own", () => {
-  const root = fixture({ "docs/a.md": "Fine.\n", "docs/b.md": "Paperclip.\n" });
+  const root = fixture({ "docs/a.md": "Fine.\n", "docs/b.md": "See github.com/paperclip-ai/paperclip.\n" });
   assert.deepEqual(run(root, ["docs/a.md"]), { scanned: 1, problems: [] });
   assert.equal(run(root, ["docs/b.md"]).problems.length, 1);
 });
