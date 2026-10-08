@@ -1,3 +1,4 @@
+import { companyLockQuery, observeExpectedWaiter } from './helpers/observed-lock-wait.js';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import express from 'express';
@@ -79,13 +80,8 @@ describe('canonical routine HTTP acceptance and readback', () => {
     await Promise.race([readyPromise, pause.then(() => { throw new Error('Pause escaped barrier'); })]);
     const pending = fire(); let blocked: any;
     try {
-      const deadline = Date.now() + 4000;
-      while (Date.now() < deadline) {
-        const [row] = await db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`);
-        if (row) { blocked = row; break; }
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    } finally { release(); }
+      blocked = await observeExpectedWaiter({ sample: () => db.execute(sql`select pid, query, pg_blocking_pids(pid) blockers from pg_stat_activity where ${ownerPid} = any(pg_blocking_pids(pid))`), ownerPid, contender: pending, label: `webhook-${kind}`, expectedQuery: companyLockQuery, timeoutMs: 4000 });
+    } finally { release(); await Promise.allSettled([pause, pending]); }
     await pause; const response = await pending;
     expect(blocked).toBeTruthy(); expect(Number(blocked.pid)).not.toBe(ownerPid);
     expect(blocked.query).toMatch(/companies.*for (?:no key )?update/i);
