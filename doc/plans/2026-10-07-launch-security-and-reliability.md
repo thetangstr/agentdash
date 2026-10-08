@@ -10,6 +10,23 @@
 
 **Spec:** `doc/GOAL.md`, `doc/PRODUCT.md`, `doc/SPEC-implementation.md`, `doc/DEVELOPING.md`, `doc/DATABASE.md`; GitHub issues #1053, #1054, #1057, #1062–1065; PR #928 and merged #881–883; the original handoff plus the founder's current instruction to create a plan and do the remaining work.
 
+## Current status — 2026-10-07
+
+This status supplements the original task checklists below; their planning steps remain historical.
+
+| Task | Landed source |
+| --- | --- |
+| 1 — generic marketing publication | #1072, `0efe570ea46e5204f8ea1b5297ee8908f9f3916e` |
+| 2 — access security | #1074, `c557176cf807c370c0463f75811bc316a4cc7806` |
+| 3 — Hermes SSH safeguards | #1075, `b71d558e0da807cf216d2257f8d03430d5f06c6c` |
+| 4 — lock-order observation reliability | #1073, `052acc60edb022d77e874386a593ca51e33dfb9e` |
+| 5 — cooperative log sanitization | #1077, `8bc372e647bf70a92cea47a5a4f931949a6d8ce0` |
+| 6 — public documentation and Paperclip credit | #1076, `4ddbcb9c4d920d5acb9f88a1bd1ca12c141c5a4e` |
+
+Tasks 1–6 are source-complete and landed. Marketing, public docs and visible Paperclip credit are also **live**, with actual desktop/mobile public verification recorded in `.omc/qa/2026-10-07-whats-new-public.md` and `.omc/qa/2026-10-07-docs-public/verified-public.md`. Those public-site results do not imply an HQ application source deployment: HQ still runs `89fc504dbe87e6abbd16911b8377b778859794c7`; `/api/health` reports `signUpDisabled=true`, `trialAnonymousEnabled=false`, `instanceId=default` and `dataDirName=.paperclip`. The approved flags were applied after 17:40 PT while the broker was idle (evidence: `.omc/qa/2026-10-07-hq-access-closure`). SSH/Q3 changes remain source-only.
+
+Task 7's foundation audit is complete; superseded #859 and #928 are closed with their branches preserved. Additional inactive-question-owner recovery in #1078 remains source-current but pending final CI and landing. Its reviewed behavior retains private-question visibility, explicit human cancellation/replacement/answer and exactly-one continuation of the original task. Broader workforce quality and customer acceptance remain held. The coordinator's full composed verification gate is still pending at this status update; focused recovery and dependency checks do not substitute for that gate.
+
 ## Global constraints
 
 - MKThink production: zero contact. Never print/copy credentials, provider config, existing transcripts or process environments.
