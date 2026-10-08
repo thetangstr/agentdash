@@ -3,13 +3,13 @@ title: About this fork
 summary: The open-source project AgentDash is forked from, and why some names in the code still carry its name
 ---
 
-AgentDash is a fork of an open-source control plane for AI agents, released under the MIT license. This page names that project and explains the names it left behind in the code.
+AgentDash is a fork of [Paperclip](https://github.com/paperclipai/paperclip), the open-source control plane for AI agents. We thank the Paperclip team and contributors for the agent harness, heartbeat scheduler, adapter framework and plugin SDK that AgentDash builds on. The project retains Paperclip's MIT license and copyright notice.
 
 ## The upstream project
 
 The upstream project is [Paperclip](https://github.com/paperclipai/paperclip). AgentDash keeps its agent harness — heartbeats, adapters, the plugin SDK — and builds its own product on top: the Chief of Staff and its onboarding, stewardship and the steward inbox, `agentdash-connect`, AgentDash Cloud, and a redesigned web app. Changes from upstream are picked one at a time, not merged in bulk.
 
-This is the only page in these docs that names the upstream project. Everywhere else, the product is AgentDash.
+AgentDash is the product name; attribution to Paperclip acknowledges the foundation it inherits.
 
 ## Names that still carry the upstream name
 

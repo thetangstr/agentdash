@@ -15,7 +15,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node ../scripts/ci/check-public-assets.mjs dist",
     "storybook": "storybook dev -p 6006 -c storybook/.storybook",
     "build-storybook": "storybook build -c storybook/.storybook -o storybook-static",
     "preview": "vite preview",

@@ -14,6 +14,10 @@ export function MarketingFooter() {
               A Chief of Staff agent for your company, stewarded by you, run from
               the tools you already use.
             </p>
+            <p className="mkt-footer__tagline">
+              Built on <a href={PAPERCLIP_URL} target="_blank" rel="noreferrer">Paperclip</a>.
+              {" "}With thanks to its team and open-source contributors.
+            </p>
             <p className="mkt-footer__status">{READINESS_LINE}</p>
           </div>
           <div className="mkt-footer__col">
@@ -23,6 +27,7 @@ export function MarketingFooter() {
               <li><a href="/demo">Interactive demo</a></li>
               <li><a href="/whats-new">What’s new</a></li>
               <li><a href="/mcp">MCP setup</a></li>
+              <li><a href="/docs">Docs</a></li>
               <li><a href={CTA.selfHost.href} target="_blank" rel="noreferrer">Self-host on GitHub</a></li>
               <li><a href={CTA.signIn.href}>Sign in</a></li>
             </ul>
@@ -40,7 +45,6 @@ export function MarketingFooter() {
             <ul>
               <li><a href="/terms">Terms</a></li>
               <li><a href="/privacy">Privacy</a></li>
-              <li><a href={PAPERCLIP_URL} target="_blank" rel="noreferrer">Built on Paperclip</a></li>
               <li><a href={GITHUB_URL} target="_blank" rel="noreferrer">Source</a></li>
             </ul>
           </div>

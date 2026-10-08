@@ -25,4 +25,4 @@ AgentDash does not contain the model. An agent runs in an agent runtime — Clau
 - **AgentDash Cloud** — a hosted workspace at `your-name.agentdash.cloud`. This is the quickest way in: [Start on AgentDash Cloud](/start/quickstart).
 - **Self-hosted** — AgentDash is open source; you can run it on your own machine or server. See [Deploy](/deploy/overview).
 
-AgentDash is a fork of an open-source project; [About this fork](/start/about-this-fork) explains the relationship.
+AgentDash builds on [Paperclip](https://github.com/paperclipai/paperclip), the open-source agent control plane. [About this fork](/start/about-this-fork) credits the foundation and explains what AgentDash extends.

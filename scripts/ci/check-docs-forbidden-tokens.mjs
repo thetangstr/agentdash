@@ -8,11 +8,9 @@
 //   1. No forbidden token. Customer, instance and people identifiers, hashed in
 //      scripts/docs/forbidden-tokens.mjs (the one list; the UI test uses
 //      it too). A hit is reported as file:line only — never the token.
-//   2. No "Paperclip" outside code, except on the one page that explains the
-//      fork. AgentDash is a fork of Paperclip; identifiers that still carry the
-//      upstream name (`PAPERCLIP_API_KEY`, `X-Paperclip-Run-Id`, the
-//      `paperclipai` CLI) are real and are written as code, which this allows.
-//      The retired upstream org link (`paperclip-ai`) is refused everywhere.
+//   2. Refuse the retired upstream org link. Paperclip attribution is allowed
+//      throughout public docs: the founder explicitly requested clear credit
+//      for the upstream foundation. This does not exempt any private token.
 //
 // Usage: node scripts/ci/check-docs-forbidden-tokens.mjs [file ...]
 //   With no arguments: the nav's pages, docs/docs.json and the shipped
@@ -24,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { navPageEntries } from "../docs/build-search-index.mjs";
 import { forbiddenTokenOffsets } from "../docs/forbidden-tokens.mjs";
 
-/** The one page allowed to name the upstream project in prose. */
+/** The page that explains the upstream relationship and retained identifiers. */
 export const FORK_PAGE = "docs/start/about-this-fork.md";
 
 /** Shipped alongside the pages: the nav, the search index, the slug list, the OpenAPI file. */
@@ -35,9 +33,6 @@ export const SHIPPED_FILES = [
   "docs/api/openapi.yaml",
 ];
 
-// "Paperclip" as a word of its own: not part of an identifier such as
-// X-Paperclip-Run-Id, @paperclipai/shared or PAPERCLIP_API_KEY (case-sensitive).
-const PROSE_NAME = /(?<![\w@./-])Paperclip(?![\w-])/g;
 const UPSTREAM_ORG = /paperclip-ai/gi;
 
 /** Every page file the nav lists, repo-relative, in nav order, once. Unresolved entries are reported. */
@@ -77,11 +72,7 @@ function lineAt(text, offset) {
 export function scanText(rel, text) {
   const findings = [];
   for (const offset of forbiddenTokenOffsets(text)) findings.push({ line: lineAt(text, offset), rule: "token" });
-  if (rel !== FORK_PAGE) {
-    const prose = /\.mdx?$/.test(rel) ? maskCode(text) : text;
-    for (const match of prose.matchAll(PROSE_NAME)) findings.push({ line: lineAt(text, match.index), rule: "paperclip" });
-    for (const match of text.matchAll(UPSTREAM_ORG)) findings.push({ line: lineAt(text, match.index), rule: "paperclip" });
-  }
+  for (const match of text.matchAll(UPSTREAM_ORG)) findings.push({ line: lineAt(text, match.index), rule: "paperclip" });
   const seen = new Set();
   return findings
     .sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule))
@@ -95,7 +86,7 @@ export function scanText(rel, text) {
 
 const MESSAGES = {
   token: "forbidden token (see scripts/docs/forbidden-tokens.mjs)",
-  paperclip: `names the upstream project outside code — write AgentDash, put an identifier in backticks, or move the sentence to ${FORK_PAGE}`,
+  paperclip: "uses the retired upstream organization link; use github.com/paperclipai/paperclip",
 };
 
 export function formatFinding(rel, finding) {
@@ -133,7 +124,7 @@ function main() {
     console.error(`\n${problems.length} problem(s) in the public docs (${scanned} files scanned).`);
     process.exit(1);
   }
-  console.log(`Public docs content scan: ${scanned} files, no forbidden token, no "Paperclip" outside code or ${FORK_PAGE}.`);
+  console.log(`Public docs content scan: ${scanned} files, no forbidden token or retired upstream organization link.`);
 }
 
 // Entry guard: resolve symlinks on both sides, or a symlinked invocation

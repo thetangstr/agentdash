@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { compareReleaseNotes, listReleaseNotes, parseReleaseMarkdown, parseReleasedDate } from "./release-notes";
 
+import { forbiddenTokenOffsets } from "../../../scripts/docs/forbidden-tokens.mjs";
+
 describe("release notes", () => {
+  it("ships no denied identifier in any release metadata, section or body", () => {
+    const counts = listReleaseNotes().map((note) => forbiddenTokenOffsets(JSON.stringify(note)).length);
+    expect(counts.reduce((total, count) => total + count, 0)).toBe(0);
+  });
   it("parses version, release date, and summary sections from release markdown", () => {
     const note = parseReleaseMarkdown(`\
 # v2026.428.0

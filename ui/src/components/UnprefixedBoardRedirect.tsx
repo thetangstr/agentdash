@@ -46,26 +46,14 @@ export function NoCompaniesStartPage() {
   // run anywhere. The six-step wizard is not an entry point any more.
   const navigate = useNavigate();
 
-  // MKThink is the first customer, so their brief is the default prose. Any
-  // other instance still gets a working prompt — just a generic description.
-  const brief = `MKThink is a strategy, design and innovation consultancy. We help
-organizations solve complex problems.
+  // AgentDash: public first-run examples must not describe an existing customer.
+  const brief = `Help me describe my organization, the people responsible for its work,
+and the first outcome we want to achieve. Set up a Chief of Staff and propose
+agents with clear responsibilities based on the needs I provide.
 
-I want a Chief of Staff for myself, plus three agents each belonging to one of my
-leads: Delivery (live client project status and commitments at risk), Platform
-(our SharePoint estate and code repositories), and People (recruiting pipeline
-and who is waiting on us).
-
-Set up three goals with tasks under them:
-  1. Monthly board pack, assembled without a fire drill — the Chief assembles it
-     and the other three each contribute their part, attributed.
-  2. SharePoint and repository cleanup — inventory what is stale, then a deletion
-     proposal a human approves. An agent must NEVER delete anything itself.
-  3. Recruiting pipeline that never silently stalls — weekly review of who is
-     waiting on us and which roles block delivery.
-
-No agent may contact a client or a candidate directly; they draft and a human
-sends. No agent reports a number it cannot source.`;
+Ask for human approval before deleting data or sending any external message.
+Agents should draft proposals for review and cite a source for every reported
+number. If information is missing, ask me rather than inventing it.`;
 
   return <FirstRunStart onCreateManually={() => navigate(FIRST_COMPANY_PATH)} companyBrief={brief} />;
 }
