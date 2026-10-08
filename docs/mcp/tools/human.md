@@ -3,7 +3,7 @@ title: "Human toolset"
 summary: "The trusted-local-human toolset: the signed-in person's own board key, over stdio."
 ---
 
-> Generated at commit `c69c37f49` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `052acc60e` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **6 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "human")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/human.ts`, their input schemas in `packages/shared/src/validators/human-control.ts`.
@@ -52,7 +52,7 @@ Annotations: `destructiveHint: false`, `openWorldHint: false`, `readOnlyHint: tr
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `target` | { kind: `"company"`, companyId: string (uuid) } \| { kind: `"self"` } \| { kind: `"instance"` } \| { kind: `"public"` } | yes |  |
-| `operationId` | `"workforce.templates.list"` \| `"workforce.brief.read"` \| `"workforce.brief.publish"` \| `"workforce.proposals.list"` \| `"workforce.proposals.review"` \| `"workforce.enrollment.read"` \| `"workforce.enrollment.create"` \| `"workforce.enrollment.update"` \| `"workforce.readiness.read"` \| `"workforce.learning.acknowledge"` \| `"workforce.skills.retry"` \| `"workforce.first_job.start"` \| `"human_questions.pending.list"` \| `"human_questions.read"` \| `"human_questions.respond"` \| `"human_questions.cancel"` \| `"human_questions.replace"` \| `"human_questions.owner.assign"` \| `"human_questions.stewardship.assign"` \| `"human_questions.stewardship.transfer"` \| `"task_recovery.exhausted.read"` \| `"task_recovery.remediate"` | yes |  |
+| `operationId` | `"workforce.templates.list"` \| `"workforce.brief.read"` \| `"workforce.brief.publish"` \| `"workforce.proposals.list"` \| `"workforce.proposals.review"` \| `"workforce.enrollment.read"` \| `"workforce.enrollment.create"` \| `"workforce.enrollment.update"` \| `"workforce.readiness.read"` \| `"workforce.learning.acknowledge"` \| `"workforce.skills.retry"` \| `"workforce.first_job.start"` \| `"human_questions.pending.list"` \| `"human_questions.read"` \| `"human_questions.respond"` \| `"human_questions.cancel"` \| `"human_questions.replace"` \| `"human_questions.recovery.list"` \| `"human_questions.recovery.cancel"` \| `"human_questions.owner.assign"` \| `"human_questions.stewardship.assign"` \| `"human_questions.stewardship.transfer"` \| `"task_recovery.exhausted.read"` \| `"task_recovery.remediate"` | yes |  |
 | `version` | `1` | yes |  |
 | `input` | map of any | yes |  |
 
@@ -65,7 +65,7 @@ Annotations: `destructiveHint: false`, `openWorldHint: false`, `readOnlyHint: fa
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `target` | { kind: `"company"`, companyId: string (uuid) } \| { kind: `"self"` } \| { kind: `"instance"` } \| { kind: `"public"` } | yes |  |
-| `operationId` | `"workforce.templates.list"` \| `"workforce.brief.read"` \| `"workforce.brief.publish"` \| `"workforce.proposals.list"` \| `"workforce.proposals.review"` \| `"workforce.enrollment.read"` \| `"workforce.enrollment.create"` \| `"workforce.enrollment.update"` \| `"workforce.readiness.read"` \| `"workforce.learning.acknowledge"` \| `"workforce.skills.retry"` \| `"workforce.first_job.start"` \| `"human_questions.pending.list"` \| `"human_questions.read"` \| `"human_questions.respond"` \| `"human_questions.cancel"` \| `"human_questions.replace"` \| `"human_questions.owner.assign"` \| `"human_questions.stewardship.assign"` \| `"human_questions.stewardship.transfer"` \| `"task_recovery.exhausted.read"` \| `"task_recovery.remediate"` | yes |  |
+| `operationId` | `"workforce.templates.list"` \| `"workforce.brief.read"` \| `"workforce.brief.publish"` \| `"workforce.proposals.list"` \| `"workforce.proposals.review"` \| `"workforce.enrollment.read"` \| `"workforce.enrollment.create"` \| `"workforce.enrollment.update"` \| `"workforce.readiness.read"` \| `"workforce.learning.acknowledge"` \| `"workforce.skills.retry"` \| `"workforce.first_job.start"` \| `"human_questions.pending.list"` \| `"human_questions.read"` \| `"human_questions.respond"` \| `"human_questions.cancel"` \| `"human_questions.replace"` \| `"human_questions.recovery.list"` \| `"human_questions.recovery.cancel"` \| `"human_questions.owner.assign"` \| `"human_questions.stewardship.assign"` \| `"human_questions.stewardship.transfer"` \| `"task_recovery.exhausted.read"` \| `"task_recovery.remediate"` | yes |  |
 | `version` | `1` | yes |  |
 | `input` | map of any | yes |  |
 

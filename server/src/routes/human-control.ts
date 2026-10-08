@@ -2,6 +2,7 @@ import { ownershipHumanOperations } from "../services/human-control/ownership.js
 import { questionHumanOperations } from "../services/human-control/questions.js";
 import { taskRecoveryHumanOperations } from "../services/human-control/task-recovery.js";
 // AgentDash: trusted local human bridge; canonical REST authority is unchanged.
+import { z } from 'zod';
 import { Router, type Request } from 'express';
 import type { Db } from '@paperclipai/db';
 import { eq } from 'drizzle-orm';
@@ -42,6 +43,24 @@ export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnTyp
     }
     return { kind: 'company' as const, companyId: issue.companyId };
   }
+  // AgentDash: browser recovery uses the same finite operations as human MCP.
+  // Session apply consumes fresh readback preconditions. On unknown outcomes,
+  // read the durable cancellation/replacement before any further user action.
+  router.get('/issues/:issueId/question-recovery', async (req, res) => {
+    const issueId = req.params.issueId as string, target = await recoveryTarget(req, issueId);
+    res.json(await svc.sessionRead(req, { target, operationId: 'human_questions.recovery.list', version: 1, input: { issueId } }));
+  });
+  const questionRecoveryInput = z.object({ interactionId: z.string().uuid(), action: z.enum(['cancel', 'replace']) }).strict();
+  router.post('/issues/:issueId/question-recovery/preview', async (req, res) => {
+    const issueId = req.params.issueId as string, target = await recoveryTarget(req, issueId);
+    const { action, interactionId } = questionRecoveryInput.parse(req.body);
+    res.json(await svc.sessionPreview(req, { target, operationId: action === 'cancel' ? 'human_questions.recovery.cancel' : 'human_questions.replace', version: 1, input: { issueId, interactionId } }));
+  });
+  router.post('/issues/:issueId/question-recovery/confirm', async (req, res) => {
+    const issueId = req.params.issueId as string, target = await recoveryTarget(req, issueId);
+    const { action, interactionId, preconditions } = questionRecoveryInput.extend({ preconditions: z.record(z.unknown()) }).strict().parse(req.body);
+    res.json(await svc.sessionApply(req, { target, operationId: action === 'cancel' ? 'human_questions.recovery.cancel' : 'human_questions.replace', version: 1, input: { issueId, interactionId }, preconditions }));
+  });
   router.post('/issues/:issueId/recovery-run/preview', async (req, res) => {
     const issueId = req.params.issueId as string;
     const body = taskRecoveryAuthorizeRunPreviewSchema.parse(req.body ?? {});

@@ -1062,7 +1062,8 @@
         "Confirm a prepared operation",
         "Handles",
         "Refusals and recovery",
-        "Everything else"
+        "Everything else",
+        "Recover an inactive question owner"
       ],
       "firstParagraph": "Human control lets a person act through their own board key — usually from a local MCP client — using a fixed list of versioned operations instead of arbitrary API calls. Reads answer directly; every change is prepared first, shown back to the person in full, and runs only when…"
     },
@@ -1222,7 +1223,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 609 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest a0651bd59262; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 612 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest f4393383b0e2; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

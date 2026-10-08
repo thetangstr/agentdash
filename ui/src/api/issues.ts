@@ -27,7 +27,15 @@ export type IssueUpdateResponse = Issue & {
   comment?: IssueComment | null;
 };
 
+export interface QuestionRecoveryReceipt { issueId: string; interactionId: string; status: 'pending' | 'cancelled'; resolvedByUserId: string | null; resolvedAt: string | null }
+export interface QuestionRecoveryPreview {
+  preconditions: Record<string, unknown>;
+  readback: { context: { effects?: string[]; replacement?: { payload: { questions: Array<{ id: string; prompt: string }> } } | null } };
+}
 export const issuesApi = {
+  questionRecovery: (id: string) => api.get<{ questions: QuestionRecoveryReceipt[] }>(`/human-control/issues/${id}/question-recovery`),
+  previewQuestionRecovery: (id: string, interactionId: string, action: 'cancel' | 'replace') => api.post<QuestionRecoveryPreview>(`/human-control/issues/${id}/question-recovery/preview`, { interactionId, action }),
+  confirmQuestionRecovery: (id: string, interactionId: string, action: 'cancel' | 'replace', preconditions: Record<string, unknown>) => api.post<{ status: 'completed' }>(`/human-control/issues/${id}/question-recovery/confirm`, { interactionId, action, preconditions }),
   list: (
     companyId: string,
     filters?: {

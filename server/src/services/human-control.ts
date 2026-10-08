@@ -21,7 +21,7 @@ const recoveryReferenceSchema = z.object({
 }).strict().refine(value => Object.keys(value).length > 0);
 export type HumanRecoveryReference = z.infer<typeof recoveryReferenceSchema>;
 
-export interface HumanOperationContext { db: Db; req: Request; target: HumanTarget; lock?: boolean; acceptance?: ActivityAcceptance; beforeWrite?: () => void; assertQuestionSource?: import("./issue-thread-interactions.js").QuestionWriteGuards["assertSource"]; authority?: ReturnType<typeof foundationAuthority> }
+export interface HumanOperationContext { db: Db; req: Request; target: HumanTarget; lock?: boolean; acceptance?: ActivityAcceptance; beforeWrite?: () => void; assertQuestionSource?: import("./issue-thread-interactions.js").QuestionWriteGuards["assertSource"]; authority?: ReturnType<typeof foundationAuthority>; recoveryQuestions?: (issueId: string) => Promise<import('@paperclipai/shared').AskUserQuestionsInteraction[]> }
 export interface HumanOperation {
   descriptor: HumanOperationDescriptor;
   // Omitted policy always retains canonical membership access.
@@ -49,7 +49,7 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
   // AgentDash (GH #891): operations a signed-in board SESSION user may apply
   // from the web app, through the same resolve/execute as the board-key
   // prepare/confirm path. Finite on purpose — adding one is a reviewed change.
-  const sessionOperations = new Set<string>(['task_recovery.remediate']);
+  const sessionOperations = new Set<string>(['task_recovery.remediate', 'human_questions.recovery.cancel', 'human_questions.replace']);
   function captureSession(req: Request) {
     // Only an interactive browser session of a named user. Board keys use the
     // handle-bound prepare/confirm transport; assistant grants, agents and the
@@ -87,7 +87,7 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
       // Review P1 (#859): read-only callbacks (read, recovery readback,
       // current output) do not take row write locks; the stage witnesses
       // (FOR SHARE) already pin what they read.
-      const ctx = { ...context(req, target, connection, lock), authority, beforeWrite: guard.checkTime, assertQuestionSource: guard.assertSource };
+      const ctx = { ...context(req, target, connection, lock), authority, beforeWrite: guard.checkTime, assertQuestionSource: guard.assertSource, recoveryQuestions: guard.recoveryQuestions };
       await authorize(op, ctx);
       const result = await work(ctx, guard.seal);
       guard.checkTime();
@@ -136,6 +136,17 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
   }
   return {
     identity,
+    // AgentDash: finite safe recovery discovery for a named browser session.
+    async sessionRead(req: Request, input: { target: HumanTarget; operationId: string; version: number; input: Record<string, unknown> }) {
+      const authority = captureSession(req), op = operation(input.operationId, input.version);
+      if (op.descriptor.operationId !== 'human_questions.recovery.list' || !op.read) throw badRequest('This read is not available to board sessions');
+      const parsed = op.input.parse(input.input);
+      return protectedOperation(req, input.target, op, parsed, authority, async (ctx, seal) => {
+        const result = op.output.parse(JSON.parse(JSON.stringify(await op.read!(ctx, parsed))));
+        await seal();
+        return result;
+      }, false, false);
+    },
     /**
      * AgentDash (GH #891): the readback a session user reviews before applying
      * a session operation. Read-only; returns the exact preconditions the
@@ -173,8 +184,10 @@ export function humanControlService(db: Db, operations: HumanOperation[]) {
       });
       for (const publication of publications) publishActivity(publication);
       if (op.afterCommit) result = await op.afterCommit({ ...context(req, input.target), authority }, payload, result);
-      const output = await protectedOperation(req, input.target, op, payload, authority, async (ctx, seal) => {
-        const current = op.currentOutput ? await op.currentOutput(ctx, payload, result) : result;
+      const outputPayload = op.descriptor.operationId === 'human_questions.replace' && result && typeof result === 'object'
+        ? { ...payload, interactionId: (result as { interactionId: string }).interactionId } : payload;
+      const output = await protectedOperation(req, input.target, op, outputPayload, authority, async (ctx, seal) => {
+        const current = op.currentOutput ? await op.currentOutput(ctx, outputPayload, result) : result;
         await seal();
         return op.output.parse(JSON.parse(JSON.stringify(current)));
       }, true, false);

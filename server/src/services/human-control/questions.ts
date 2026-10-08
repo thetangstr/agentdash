@@ -61,6 +61,13 @@ async function visible(ctx: HumanOperationContext, p: Record<string, unknown>, e
   }
   return { issue, q };
 }
+// Safe structural receipt: never include the original owner's title, prompts,
+// options, answer, cancellation text or source IDs in recovery discovery.
+const recoveryReceipt = reference.extend({ status: z.enum(['pending', 'cancelled']), resolvedByUserId: text.nullable(), resolvedAt: text.nullable() }).strict();
+function recoveryProject(q: AskUserQuestionsInteraction) {
+  return { issueId: q.issueId, interactionId: q.id, status: q.status,
+    resolvedByUserId: q.resolvedByUserId ?? null, resolvedAt: q.resolvedAt ? new Date(q.resolvedAt).toISOString() : null };
+}
 export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartbeatService>, 'wakeup'>): HumanOperation[] {
   function operation(operationId: HumanOperationDescriptor['operationId'], input: z.AnyZodObject, output: z.ZodTypeAny, handler: Pick<HumanOperation, 'read' | 'execute' | 'afterCommit'>): HumanOperation {
     return {
@@ -109,7 +116,34 @@ export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartb
     if (issue && q.status !== 'pending') await dispatchResolvedInteractionContinuation({ heartbeat, issue, interaction: q, actor: { actorType: 'user', actorId: ctx.req.actor.userId! }, source: `issue.interaction.${q.status === 'answered' ? 'respond' : 'cancel'}` });
     return project(q);
   }
+  const recoveryCancel: HumanOperation = {
+    descriptor: { operationId: 'human_questions.recovery.cancel', version: 1, pageId: 'inbox', actionId: 'recovery.cancel', targetKind: 'company', behavior: 'prepare_confirm', authority: 'current_accountable_human', confirmation: 'human_readback', inputSchema: humanJsonSchema(reference), outputSchema: humanJsonSchema(recoveryReceipt), content: { fullText: true, pagination: 'none' } },
+    input: reference, output: recoveryReceipt, authorize() {},
+    async resolve(ctx, p) {
+      const { issue, q } = await visible(ctx, p, false);
+      if (q.status !== 'pending') throw conflict('Question is no longer pending');
+      return { payload: p, preconditions: { interactionUpdatedAt: new Date(q.updatedAt).toISOString(), issueUpdatedAt: issue.updatedAt.toISOString(), assigneeAgentId: issue.assigneeAgentId, answerOwnerUserId: q.payload.answerOwnerUserId, accountableUserId: ctx.req.actor.userId },
+        readback: { question: recoveryProject(q), effects: ['Cancel this inactive-owner question without reading or answering it. Required input continues holding the same task. Explicitly replace it, then provide a genuine answer.'] } };
+    },
+    async execute(ctx, p) {
+      const { issue, q } = await visible(ctx, p, false);
+      const updated = await issueThreadInteractionService(ctx.db).cancelQuestions(issue, q.id, { reason: 'Explicit current-accountable-human recovery of an inactive question owner' }, { userId: ctx.req.actor.userId! }, ctx.acceptance, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite });
+      ctx.acceptance!.publications.push(await insertActivity(ctx.acceptance!.executor, { companyId: issue.companyId, actorType: 'user', actorId: ctx.req.actor.userId!, action: 'issue.thread_interaction_cancelled', entityType: 'issue', entityId: issue.id, details: { interactionId: q.id, interactionKind: q.kind, interactionStatus: updated.status, inactiveOwnerRecovery: true } }, ctx.beforeWrite));
+      // No wake: cancellation is a receipt, never sufficient input.
+      return recoveryProject(updated as AskUserQuestionsInteraction);
+    },
+    async currentOutput(ctx, p) { return recoveryProject((await visible(ctx, p, false)).q); },
+    recoveryReference: value => ({ issueId: (value as { issueId: string }).issueId, interactionId: (value as { interactionId: string }).interactionId }),
+    async authorizeRecovery(ctx, p, saved) {
+      const { issue, q } = await visible(ctx, p, false);
+      return saved.issueId === issue.id && saved.interactionId === q.id ? { issueId: issue.id, interactionId: q.id } : null;
+    },
+  };
   return [
+    { ...operation('human_questions.recovery.list', z.object({ issueId: id }).strict(), z.object({ questions: z.array(recoveryReceipt) }).strict(), {
+      read: async (ctx, p) => ({ questions: (await ctx.recoveryQuestions!(p.issueId as string)).map(recoveryProject) }),
+    }), descriptor: { ...recoveryCancel.descriptor, operationId: 'human_questions.recovery.list', actionId: 'recovery.list', behavior: 'read', confirmation: 'none', inputSchema: humanJsonSchema(z.object({ issueId: id }).strict()), outputSchema: humanJsonSchema(z.object({ questions: z.array(recoveryReceipt) }).strict()) } },
+    recoveryCancel,
     operation('human_questions.pending.list', listInput, listOutput, { read: async (ctx, p) => {
       const result = await waitingOnYouService(ctx.db).pendingQuestions(humanCompany(ctx), ctx.req.actor, { offset: p.offset as number, limit: p.limit as number }, ctx.req);
       return { questions: result.items, total: result.total, nextOffset: (p.offset as number) + result.items.length < result.total ? (p.offset as number) + result.items.length : null };
