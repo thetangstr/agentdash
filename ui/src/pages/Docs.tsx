@@ -11,8 +11,8 @@
 // putting it on a fixed-light surface would print light prose on cream in dark
 // mode.
 //
-// Until vercel.json lets /docs through (PR 4), www.agentdash.cloud never serves
-// this route; it is reachable on instances and local builds only.
+// Served on the public marketing site and on instances. Public-site examples
+// use an instance placeholder, regardless of what the health endpoint returns.
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -36,7 +36,7 @@ import {
   type DocTab,
 } from "@/lib/docs";
 import { docSlugFromPathname } from "@/lib/docs-nav";
-import { referenceInstanceUrl } from "@/lib/api-reference-server";
+import { INSTANCE_URL_PLACEHOLDER, referenceInstanceUrl } from "@/lib/api-reference-server";
 
 /**
  * Two adjustments to MarkdownBody for reference pages, made here rather than
@@ -99,7 +99,8 @@ function useInstanceUrl(): string {
     staleTime: 5 * 60_000,
   });
   const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
-  return health?.publicBaseUrl?.trim() || browserOrigin;
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "";
+  return referenceInstanceUrl(hostname, health?.publicBaseUrl?.trim() || browserOrigin) ?? INSTANCE_URL_PLACEHOLDER;
 }
 
 function DocsLayout({

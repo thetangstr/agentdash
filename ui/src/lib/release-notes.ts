@@ -17,7 +17,8 @@ export interface ReleaseNote {
 
 const releaseModules = import.meta.glob("../../../releases/v*.md", {
   eager: true,
-  query: "?raw",
+  // AgentDash: sanitized at build time; raw historical markdown never ships.
+  query: "?public-release-note",
   import: "default",
 }) as Record<string, string>;
 

@@ -45,6 +45,41 @@ This starts:
 
 Issue execution may also use project execution workspace policies and workspace runtime services for per-project worktrees, preview servers, and managed dev commands. Configure those through the project workspace/runtime surfaces rather than starting long-running unmanaged processes when a task needs a reusable service.
 
+## Public docs and release-note privacy
+
+`/docs` is available on the public marketing site and on installed instances.
+Public-site examples use `https://your-instance.example`, following the API
+reference's host policy. On an instance, examples use the published health URL
+or the browser origin.
+
+Keep canonical `releases/v*.md` unchanged when repairing public exposure. The
+UI imports them with `?public-release-note`; the Vite loader in
+`scripts/docs/public-release-notes.mjs` selects structured version/date metadata
+and public bullets before creating browser modules. It reuses the API changelog
+parser and withholding policy, drops unstructured prose and fenced content,
+and withholds descendants of a private bullet. The in-app changelog retains
+public sections and upstream/withdrawn metadata; it is a public summary, not a
+complete historical record. Never replace this with client-side filtering of
+raw release files, which would still ship those files in browser chunks.
+
+`pnpm --filter @paperclipai/ui build` scans every output file with the existing
+hashed forbidden-token policy after building. The scan reports paths/counts
+only and fails on missing or empty output. Reviewed exceptions match exact
+existing protocol-code contexts and one third-party language keyword in their
+expected chunk families. They are reported separately, never as zero raw hits;
+the same values in prose or unexpected chunks still fail. To repeat it independently:
+
+```sh
+node scripts/ci/check-public-assets.mjs ui/dist
+node scripts/ci/check-docs-forbidden-tokens.mjs
+node scripts/ci/check-api-reference-drift.mjs
+```
+
+The full-asset scan includes lazy chunks, source maps and copied static files;
+the docs scan separately covers every navigation-listed page and generated
+reference/search content. These checks enforce known content rules and do not
+replace review of newly written public copy.
+
 ## Storybook
 
 The board UI Storybook keeps stories and Storybook config under `ui/storybook/` so component review files stay out of the app source routes.
