@@ -129,7 +129,9 @@ describe("document text stripping", () => {
     const anomalies: DocumentStripAnomaly[] = [];
     const out = strip([truncated], anomalies);
     expect(out).not.toContain(SENTINEL);
-    expect(out).toContain("[document text withheld: item-7 Cut.docx unterminated]");
+    // The count is what was withheld after the begin marker, never the text.
+    const held = truncated.length - truncated.indexOf("]]", truncated.indexOf("[[agentdash-untrusted-document:begin")) - 2;
+    expect(out).toContain(`[output withheld after unterminated document frame: item-7 Cut.docx ${held} chars]`);
     expect(anomalies.map((a) => a.kind)).toEqual(["unterminated"]);
     expect(anomalies[0]!.noncePrefix).toMatch(/^[0-9a-f]{8}$/);
   });
@@ -142,19 +144,24 @@ describe("document text stripping", () => {
     const end = framed.slice(framed.indexOf("[[agentdash-untrusted-document:end"));
     const anomalies: DocumentStripAnomaly[] = [];
     const stripper = createDocumentTextStripper({ runId: RUN, maxPendingChars: 2_000, onAnomaly: (a) => anomalies.push(a) });
+    const lateText = `late document text ${SENTINEL}-late `.repeat(200);
     const out =
       stripper.push(begin) +
       stripper.push(`${SENTINEL}${"z".repeat(3_000)}`) +
-      stripper.push(`late document text ${SENTINEL}-late `.repeat(200)) +
+      stripper.push(lateText) +
       stripper.push(end.slice(0, 10)) +
       stripper.push(`${end.slice(10)}\nlater output\n`) +
       stripper.flush();
     expect(out).not.toContain(SENTINEL);
     expect(out).not.toContain("late document text");
-    expect(out.match(/document text withheld/g)).toHaveLength(1);
-    expect(out).toContain("[document text withheld: item-8 Big.docx unterminated]");
+    expect(out.match(/withheld/g)).toHaveLength(1);
+    // Everything between the begin and end markers, counted.
+    const withheld = (begin.length - begin.indexOf("]]", begin.indexOf("[[agentdash-untrusted-document:begin")) - 2)
+      + SENTINEL.length + 3_000 + lateText.length;
+    expect(out).toContain(`[output withheld after unterminated document frame: item-8 Big.docx ${withheld} chars]`);
     expect(out).toContain("later output");
     expect(anomalies.map((a) => a.kind)).toEqual(["overflow"]);
+    expect(stripper.stats()).toEqual({ overflow: 1, unterminated: 0, truncated: 0, forged: 0, unmatchedEnd: 0, withheldChars: withheld });
   });
 
   it("an overflowed frame with no end marker withholds everything to end of stream", () => {
@@ -163,8 +170,18 @@ describe("document text stripping", () => {
     const begin = framed.slice(beginAt, framed.indexOf("]]", beginAt) + 2);
     const anomalies: DocumentStripAnomaly[] = [];
     const out = strip([`${begin}${"y".repeat(5_000)}`, "tail-after-cap"], anomalies);
-    expect(out).toBe("[document text withheld: item-4 untitled unterminated]");
+    expect(out).toBe(`[output withheld after unterminated document frame: item-4 untitled ${5_000 + "tail-after-cap".length} chars]`);
     expect(anomalies.map((a) => a.kind)).toEqual(["overflow"]);
+  });
+
+  // Mitigation: per-stripper counts, numbers only, for the run record.
+  it("counts withheld frames, characters and anomalies", () => {
+    const stripper = createDocumentTextStripper({ runId: RUN });
+    const ok = frame(BODY);
+    const forged = frame(BODY, { runId: OTHER_RUN });
+    stripper.push(`${ok}\n${forged}\n`);
+    stripper.flush();
+    expect(stripper.stats()).toEqual({ overflow: 0, unterminated: 0, truncated: 0, forged: 1, unmatchedEnd: 1, withheldChars: BODY.length + 2 });
   });
 
   it("the default hold limit is sized to a capped document read", () => {

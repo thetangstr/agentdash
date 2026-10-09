@@ -308,6 +308,43 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     expect(rawLog).toContain("[document text withheld: item-5");
   }, 30_000);
 
+  // Mitigation for fail-closed withholding: visible as a count, never as text.
+  it("an unterminated replayed frame leaves a counted placeholder and the run's documentFrameAnomalies (both result paths)", async () => {
+    async function runWith(throwAfter: boolean) {
+      const agentId = randomUUID();
+      await seedAgent(agentId, FLAGGED, "", `anomaly-steward-${throwAfter ? "throw" : "ok"}`, FAKE_ADAPTER);
+      const tail = `agent output after replay ${SENTINEL} `.repeat(100);
+      behaviours.set(agentId, async (ctx) => {
+        const framed = frameUntrustedDocumentText("microsoft", "tiny", { runId: ctx.runId, docId: "item-11" });
+        const beginAt = framed.indexOf("[[agentdash-untrusted-document:begin");
+        const begin = framed.slice(beginAt, framed.indexOf("]]", beginAt) + 2);
+        await ctx.onLog("stdout", `before\n${begin}${tail}`);
+        if (throwAfter) throw new Error("adapter crashed mid-run");
+        return { exitCode: 0, signal: null, timedOut: false };
+      });
+      const heartbeat = heartbeatService(db);
+      const queued = await heartbeat.invoke(agentId, "on_demand", {}, "manual");
+      const finished = await waitForRunToFinish(heartbeat, queued!.id);
+      return { finished: finished!, tailLength: tail.length };
+    }
+    for (const throwAfter of [false, true]) {
+      const { finished, tailLength } = await runWith(throwAfter);
+      const rawLog = await readFile(join(runLogBasePath(), finished.logRef!), "utf8");
+      expect(rawLog).not.toContain(SENTINEL);
+      expect(rawLog).toContain(`[output withheld after unterminated document frame: item-11 untitled ${tailLength} chars]`);
+      expect(rawLog).toContain("before");
+      const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, finished.id));
+      expect((row!.resultJson as Record<string, unknown>).documentFrameAnomalies, `throwAfter=${throwAfter}`).toEqual({
+        overflow: 1, unterminated: 0, truncated: 0, forged: 0, unmatchedEnd: 0, withheldChars: tailLength,
+      });
+      if (!throwAfter) {
+        const detail = await request(appAs(asUser("anomaly-steward-ok", "member"))).get(`/api/heartbeat-runs/${finished.id}`);
+        expect(detail.status).toBe(200);
+        expect(detail.body.resultJson.documentFrameAnomalies.withheldChars).toBe(tailLength);
+      }
+    }
+  }, 30_000);
+
   it("run detail, events and log are steward-only while the flag is on", async () => {
     expect(flaggedRunId).not.toBe("");
     const paths = [`/api/heartbeat-runs/${flaggedRunId}`, `/api/heartbeat-runs/${flaggedRunId}/events`, `/api/heartbeat-runs/${flaggedRunId}/log`];
@@ -512,6 +549,7 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
           workspacePersistence: { workspaceId: `ws-${id}`, issueId: null, recoveryRequired: true, outcome: "uncertain" },
           runFacts: { outcome: "no_op", meteringStatus: "metered", inputTokens: 10 },
           total_cost_usd: 1.25,
+          documentFrameAnomalies: { overflow: 1, unterminated: 0, truncated: 0, forged: 0, unmatchedEnd: 0, withheldChars: 42 },
         },
         usageJson: { workspacePersistenceAttemptId: `ws-${id}` },
         nextAction: "next quoting figures",
@@ -559,6 +597,7 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     expect((keptResult.workspacePersistence as Record<string, unknown>).recoveryRequired).toBe(true);
     expect((keptResult.runFacts as Record<string, unknown>).inputTokens).toBe(10);
     expect(keptResult.total_cost_usd).toBe(1.25);
+    expect((keptResult.documentFrameAnomalies as Record<string, unknown>).withheldChars).toBe(42);
     expect(keptResult.summary).toBeUndefined();
     expect(await workspacePersistenceHold(db, FLAGGED, FLAGGED_AGENT, null)).toMatchObject({ runId: flaggedOld.id });
     const listed = (await request(appAs(asUser(STEWARD, "member"))).get(`/api/companies/${FLAGGED}/heartbeat-runs`)).body as Array<Record<string, unknown>>;

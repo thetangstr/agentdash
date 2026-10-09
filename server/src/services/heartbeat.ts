@@ -66,6 +66,7 @@ import {
   stripFramedDocumentTextInValue,
   type DocumentStripAnomaly,
   type DocumentStripOptions,
+  emptyDocumentFrameAnomalies,
 } from "./document-content.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
@@ -235,6 +236,15 @@ const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
  * marker is left in the stored output and logged here — run id, where it was
  * seen and a nonce prefix only, never the surrounding text.
  */
+/** Add the run's document-frame counts to a result (numbers only). */
+function withDocumentFrameAnomalies<T extends Record<string, unknown> | null | undefined>(
+  resultJson: T,
+  anomalies: Record<string, number> | null,
+): T {
+  if (!anomalies) return resultJson;
+  return { ...(resultJson ?? {}), documentFrameAnomalies: anomalies } as unknown as T;
+}
+
 function documentStripOptions(
   runId: string,
   where: "stdout" | "stderr" | "event" | "run_row" | "runtime_state",
@@ -7300,6 +7310,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       stdout: createRunLogStreamRedactor(runKnownSecrets),
       stderr: createRunLogStreamRedactor(runKnownSecrets),
     };
+    // AgentDash (document access, slice 6b): document text a read tool
+    // framed for the agent is replaced by a withheld placeholder before
+    // anything stores or streams it (log, events, live websocket). First in
+    // the chain, on the raw chunk, so no other pass can alter a marker.
+    // Stateful per stream: a marker split across chunks is buffered, not
+    // missed. Only the agent's own stdin/stdout is untouched.
+    const documentTextStrippers = {
+      stdout: createDocumentTextStripper(documentStripOptions(run.id, "stdout")),
+      stderr: createDocumentTextStripper(documentStripOptions(run.id, "stderr")),
+    };
+    // Numbers only, for the run's result: null when nothing was withheld or
+    // went wrong, so ordinary runs carry no extra key.
+    const documentFrameAnomaliesForResult = (): Record<string, number> | null => {
+      const total = emptyDocumentFrameAnomalies();
+      for (const stripper of Object.values(documentTextStrippers)) {
+        const stats = stripper.stats();
+        for (const key of Object.keys(total) as Array<keyof typeof total>) total[key] += stats[key];
+      }
+      const anomalous = total.overflow + total.unterminated + total.truncated + total.forged + total.unmatchedEnd > 0;
+      return anomalous ? { ...total } : null;
+    };
     const flushOutputProgress = async (opts?: { force?: boolean }) => {
       const pendingOutputProgress = outputProgressState.pending;
       if (!pendingOutputProgress) return;
@@ -7396,16 +7427,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const githubTokenRedactors = {
         stdout: createGitHubTokenStreamRedactor(),
         stderr: createGitHubTokenStreamRedactor(),
-      };
-      // AgentDash (document access, slice 6b): document text a read tool
-      // framed for the agent is replaced by a withheld placeholder before
-      // anything below stores or streams it. First in the chain, on the raw
-      // chunk, so no other pass can alter a marker. Stateful per stream: a
-      // marker split across chunks is buffered, not missed. The agent's own
-      // stdin/stdout is untouched — this is the server's copy of the output.
-      const documentTextStrippers = {
-        stdout: createDocumentTextStripper(documentStripOptions(run.id, "stdout")),
-        stderr: createDocumentTextStripper(documentStripOptions(run.id, "stderr")),
       };
       // While a frame is held the strippers emit nothing, so liveness (the
       // run row's lastOutput* fields, which the stale-run watchdog and the
@@ -7804,7 +7825,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // AgentDash (document access, slice 6b): stripped here too, because the
       // run-facts write below stores this value without going through
       // setRunStatus.
-      let persistedResultJson = stripFramedDocumentTextInValue(mergeHeartbeatRunResultJson(
+      const documentFrameAnomalies = documentFrameAnomaliesForResult();
+      let persistedResultJson = withDocumentFrameAnomalies(stripFramedDocumentTextInValue(mergeHeartbeatRunResultJson(
         mergeRunStopMetadataForAgent(agent, outcome, {
           resultJson: mergeModelProfileRunMetadata(
             mergeAdapterRecoveryMetadata({
@@ -7819,7 +7841,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }),
         adapterResult.summary ?? null,
         agent.adapterType,
-      ), documentStripOptions(run.id, "run_row"));
+      ), documentStripOptions(run.id, "run_row")), documentFrameAnomalies);
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
       // owns the terminal write — the cancel path commits "cancelled" with
@@ -8086,10 +8108,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // OBS-1: a run that threw before producing a result is unmetered —
         // record that explicitly rather than leaving usage_json absent.
         usageJson: { meteringStatus: "unmetered_no_session" },
-        resultJson: mergeRunStopMetadataForAgent(agent, "failed", {
+        resultJson: withDocumentFrameAnomalies(mergeRunStopMetadataForAgent(agent, "failed", {
           errorCode: "adapter_failed",
           errorMessage: message,
-        }),
+        }), documentFrameAnomaliesForResult()),
         stdoutExcerpt,
         stderrExcerpt,
         logBytes: logSummary?.bytes,

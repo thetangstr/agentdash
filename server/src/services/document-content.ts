@@ -27,8 +27,9 @@
 //   copy. The amount is bounded: a frame whose end marker arrives within
 //   `SPAN_MAX_FACTOR`×`chars` + `SPAN_OVERHEAD_CHARS` characters hides at most
 //   that span; one that overflows hides everything up to its end marker or
-//   the end of the stream (fail closed beats leaking). The live stream and the
-//   agent's own view are never affected, and every such case is reported.
+//   the end of the stream (fail closed beats leaking). Every such case is
+//   reported, counted in the run's `documentFrameAnomalies`, and leaves a
+//   placeholder carrying the withheld character count (never the text).
 // - Everything after a verified begin marker fails CLOSED. A span SHORTER than
 //   the declared `chars` (an adapter that truncates a long tool result but
 //   keeps its head and tail) is withheld as "truncated". A frame whose end
@@ -54,8 +55,11 @@
 // `DOCUMENT_STRIP_MAX_PENDING_CHARS`; past that, discarded until the end). Every anomaly is reported through
 // `onAnomaly` — never silently dropped.
 //
-// The agent is unaffected: this runs on the server's copy of the adapter's
-// output (the onLog tap), not on the agent's own stdin/stdout.
+// Only the agent itself is unaffected: this runs on the server's copy of the
+// adapter's output (the onLog tap), not on the agent's own stdin/stdout. Every
+// other consumer of that copy sees the stripped text — the stored log, the run
+// events, AND the live websocket log stream (published after stripping), so a
+// steward watching a run live sees the same placeholders and gaps.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const MARKER_PREFIX = "[[agentdash-untrusted-document:";
@@ -193,9 +197,8 @@ export function frameUntrustedDocumentText(provider: string, text: string, meta:
   ].join("\n");
 }
 
-type ParsedMarker =
-  | { kind: "end"; nonce: string }
-  | { kind: "begin"; nonce: string; valid: boolean; docId: string; title: string; chars: string };
+type ParsedBegin = { kind: "begin"; nonce: string; valid: boolean; docId: string; title: string; chars: string };
+type ParsedMarker = { kind: "end"; nonce: string } | ParsedBegin;
 
 function parseMarker(text: string, runId: string): ParsedMarker | null {
   const end = END_RE.exec(text);
@@ -223,9 +226,16 @@ function placeholderText(value: string, fallback: string, max: number): string {
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
+/** Fail-closed placeholder: how much was withheld after an open frame, never what. */
+function withheldAfterUnterminatedPlaceholder(marker: { docId: string; title: string }, withheldChars: number): string {
+  const id = placeholderText(marker.docId, "unknown-item", MAX_ID_CHARS);
+  const title = placeholderText(marker.title, "untitled", MAX_TITLE_CHARS);
+  return `[output withheld after unterminated document frame: ${id} ${title} ${withheldChars} chars]`;
+}
+
 function withheldPlaceholder(
   marker: { docId: string; title: string; chars: string },
-  state: "complete" | "unterminated" | "truncated" = "complete",
+  state: "complete" | "truncated" = "complete",
 ): string {
   const id = placeholderText(marker.docId, "unknown-item", MAX_ID_CHARS);
   const title = placeholderText(marker.title, "untitled", MAX_TITLE_CHARS);
@@ -241,11 +251,28 @@ function partialPrefixLength(text: string): number {
   return 0;
 }
 
+/** Numbers only, never text: what one stripper withheld and why. */
+export type DocumentFrameAnomalies = {
+  overflow: number;
+  unterminated: number;
+  truncated: number;
+  forged: number;
+  unmatchedEnd: number;
+  /** Characters withheld between begin and end markers (all cases). */
+  withheldChars: number;
+};
+
+export function emptyDocumentFrameAnomalies(): DocumentFrameAnomalies {
+  return { overflow: 0, unterminated: 0, truncated: 0, forged: 0, unmatchedEnd: 0, withheldChars: 0 };
+}
+
 export type DocumentTextStripper = {
   /** Feed one chunk; returns what is safe to persist now (possibly ""). */
   push(chunk: string): string;
   /** End of stream: release everything still held (an open frame stays withheld). */
   flush(): string;
+  /** Running counts so far. */
+  stats(): DocumentFrameAnomalies;
 };
 
 export type DocumentStripOptions = {
@@ -257,7 +284,10 @@ export type DocumentStripOptions = {
 export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPendingChars?: number }): DocumentTextStripper {
   const maxPending = Math.max(1, opts.maxPendingChars ?? DOCUMENT_STRIP_MAX_PENDING_CHARS);
   const runId = opts.runId;
+  const counts = emptyDocumentFrameAnomalies();
   const report = (kind: DocumentStripAnomaly["kind"], nonce: string | null) => {
+    if (kind === "unmatched_end") counts.unmatchedEnd += 1;
+    else counts[kind] += 1;
     try {
       opts.onAnomaly?.({ kind, noncePrefix: nonce ? nonce.slice(0, 8) : null });
     } catch {
@@ -269,29 +299,44 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
     beginLength: number;
     nonce: string;
     end: string;
+    marker: ParsedBegin;
     placeholder: string;
-    unterminatedPlaceholder: string;
     truncatedPlaceholder: string;
     minSpan: number;
     holdLimit: number;
     scanFrom: number;
   } | null = null;
-  // After an overflow: input is discarded, not buffered, until this end marker.
-  let discardUntil: string | null = null;
+  // After an overflow: input is discarded, not buffered, until this end
+  // marker; the counted placeholder goes out when it (or end of stream) does.
+  let discard: { end: string; marker: ParsedBegin; withheld: number } | null = null;
+
+  function unterminatedPlaceholder(marker: ParsedBegin, withheld: number): string {
+    counts.withheldChars += withheld;
+    return withheldAfterUnterminatedPlaceholder(marker, withheld);
+  }
 
   function drain(final: boolean): string {
     let out = "";
     for (;;) {
-      if (discardUntil) {
-        const at = buf.indexOf(discardUntil);
+      if (discard) {
+        const d = discard;
+        const at = buf.indexOf(d.end);
         if (at >= 0) {
-          buf = buf.slice(at + discardUntil.length);
-          discardUntil = null;
+          out += unterminatedPlaceholder(d.marker, d.withheld + at);
+          buf = buf.slice(at + d.end.length);
+          discard = null;
           continue;
         }
+        if (final) {
+          out += unterminatedPlaceholder(d.marker, d.withheld + buf.length);
+          buf = "";
+          discard = null;
+          return out;
+        }
         // Keep only what could be the start of a split end marker.
-        buf = final ? "" : buf.slice(Math.max(0, buf.length - discardUntil.length + 1));
-        if (final) discardUntil = null;
+        const keep = Math.min(buf.length, d.end.length - 1);
+        d.withheld += buf.length - keep;
+        buf = buf.slice(buf.length - keep);
         return out;
       }
 
@@ -300,8 +345,10 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
         const at = buf.indexOf(p.end, p.scanFrom);
         if (at >= 0 && at - p.beginLength <= p.holdLimit) {
           // Shorter than declared: an adapter truncated the result. Withhold.
-          const truncated = at - p.beginLength < p.minSpan;
+          const span = at - p.beginLength;
+          const truncated = span < p.minSpan;
           if (truncated) report("truncated", p.nonce);
+          counts.withheldChars += span;
           out += truncated ? p.truncatedPlaceholder : p.placeholder;
           buf = buf.slice(at + p.end.length);
           pending = null;
@@ -317,7 +364,7 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
         if (at < 0 && final && held <= p.holdLimit) {
           // Stream ended inside the frame: withhold all of it (fail closed).
           report("unterminated", p.nonce);
-          out += p.unterminatedPlaceholder;
+          out += unterminatedPlaceholder(p.marker, held);
           buf = "";
           pending = null;
           continue;
@@ -326,11 +373,13 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
         // discard everything up to the end marker (or end of stream). The
         // held text is dropped now; nothing after it is buffered.
         report("overflow", p.nonce);
-        out += p.unterminatedPlaceholder;
         if (at >= 0) {
+          out += unterminatedPlaceholder(p.marker, at - p.beginLength);
           buf = buf.slice(at + p.end.length);
         } else {
-          discardUntil = p.end;
+          // The counted placeholder goes out with the end marker (or at end
+          // of stream); the discard branch above counts what it drops.
+          discard = { end: p.end, marker: p.marker, withheld: 0 };
           buf = buf.slice(p.beginLength);
         }
         pending = null;
@@ -373,8 +422,8 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
         beginLength: markerText.length,
         nonce: marker.nonce,
         end: endMarker(marker.nonce),
+        marker,
         placeholder: withheldPlaceholder(marker),
-        unterminatedPlaceholder: withheldPlaceholder(marker, "unterminated"),
         truncatedPlaceholder: withheldPlaceholder(marker, "truncated"),
         minSpan: chars,
         holdLimit: Math.min(maxPending, chars * SPAN_MAX_FACTOR + SPAN_OVERHEAD_CHARS),
@@ -391,6 +440,9 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
     },
     flush() {
       return drain(true);
+    },
+    stats() {
+      return { ...counts };
     },
   };
 }

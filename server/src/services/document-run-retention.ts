@@ -85,6 +85,8 @@ const RETAINED_RESULT_KEYS = [
   "timeoutConfigured",
   "effectiveTimeoutSec",
   "effectiveTimeoutMs",
+  // Numbers only: how much document text the strip pass withheld and why.
+  "documentFrameAnomalies",
 ] as const;
 
 /** The object with only `keys` (values untouched, nested nulls included). */
