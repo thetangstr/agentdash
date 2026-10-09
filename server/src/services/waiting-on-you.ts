@@ -180,17 +180,18 @@ export function waitingOnYouService(db: Db) {
     const mine = await digest.audienceAgents(companyId, userId);
     if (mine.length === 0) return { items: [], total: 0 };
     const scope = await resolveAgentVisibility(db, req, companyId);
-    const rows = await listStoppedAgentIssues(db, {
+    const { items: rows, total } = await listStoppedAgentIssues(db, {
       companyId,
       agentIds: mine.map((agent) => agent.id),
       visibleWhere: issueVisibilityCondition(req, companyId),
+      limit,
     });
     const nameById = new Map(mine.map((agent) => [agent.id, agent.name]));
     const named = (agentId: string | null) =>
       agentId && (scope.mode === 'all' || scope.visibleAgentIds.has(agentId)) ? nameById.get(agentId) ?? null : null;
     return {
-      total: rows.length,
-      items: rows.slice(0, limit).map((row) => ({
+      total,
+      items: rows.map((row) => ({
         issueId: row.id,
         identifier: row.identifier,
         title: row.title,

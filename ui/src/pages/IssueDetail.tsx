@@ -1901,7 +1901,9 @@ export function IssueDetail() {
 
   const updateChildIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => issuesApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      const routedNotice = stewardedRoutingNotice(response.routedToStewardedAgent, agentMap, userLabelMap);
+      if (routedNotice) pushToast({ title: routedNotice, tone: "info" });
       if (resolvedCompanyId) {
         queryClient.invalidateQueries({ queryKey: ["issues", resolvedCompanyId] });
         queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(resolvedCompanyId) });

@@ -597,7 +597,7 @@ export function stewardInboxService(db: Db) {
     //    know: somebody is waiting on a person, and the mandate tells agents
     //    that reporting blocked is a respected outcome rather than a failure.
     //    The definition is shared with the web "waiting on you" list.
-    const blocked = await listStoppedAgentIssues(db, { companyId: endpoint.companyId, agentIds });
+    const blocked = await listStoppedAgentIssues(db, { companyId: endpoint.companyId, agentIds, limit: DIGEST_LIMITS.blockers });
 
     // 3. Completions last, and capped hardest. Finished work is the least
     //    urgent thing in a digest; it is here so a steward can see progress,
@@ -634,17 +634,17 @@ export function stewardInboxService(db: Db) {
       updatedAt: row.updatedAt.toISOString(),
     });
 
-    const blockerItems = blocked.slice(0, DIGEST_LIMITS.blockers).map(issueItem);
+    const blockerItems = blocked.items.map(issueItem);
     const completionItems = done.slice(0, DIGEST_LIMITS.completions).map(issueItem);
 
     return {
       agentsAnsweredFor: mine.length,
       approvals: { total: ranked.length, shown: approvalItems.length, items: approvalItems },
-      blockers: { total: blocked.length, shown: blockerItems.length, items: blockerItems },
+      blockers: { total: blocked.total, shown: blockerItems.length, items: blockerItems },
       completions: { total: done.length, shown: completionItems.length, items: completionItems },
       truncated:
         ranked.length > approvalItems.length ||
-        blocked.length > blockerItems.length ||
+        blocked.total > blockerItems.length ||
         done.length > completionItems.length,
     };
   }

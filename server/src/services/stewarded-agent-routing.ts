@@ -135,6 +135,13 @@ export async function isActiveStewardOf(
  * is a status change, and without this it would not say the work came via the
  * steward. The latest assignment record decides: if it was the routing to
  * this agent, and that person still stewards it, the context carries over.
+ *
+ * Known limitations, accepted: an update that resends the unchanged assignee
+ * writes a newer assignment record without the routing, so a later start from
+ * backlog loses the context; and a suggested-task draft accepted and then
+ * moved to backlog has no routing record at all (acceptance carries the
+ * context only on its own assignment wake). Both start the agent normally,
+ * just without the steward line.
  */
 export async function routedStewardForCurrentAssignment(
   db: Pick<Db, "select">,

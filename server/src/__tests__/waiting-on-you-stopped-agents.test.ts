@@ -2,12 +2,13 @@ import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, agentStewardships, companies, companyMemberships, createDb, issues, projects } from "@paperclipai/db";
+import { agents, agentStewardships, companies, companyMemberships, createDb, issueRelations, issues, projects } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { assistantRoutes } from "../routes/assistant.js";
 import { errorHandler } from "../middleware/index.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
 import { waitingOnYouService } from "../services/waiting-on-you.js";
+import { listStoppedAgentIssues } from "../services/stopped-agent-issues.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -129,5 +130,64 @@ describeEmbeddedPostgres("waiting on you: issues a person's agent has blocked", 
     const body = await pending(f.companyId, f.actor(f.stewardA));
     expect(body.stoppedAgentIssues.map((item) => item.issueId)).not.toContain(restricted);
     expect(JSON.stringify(body)).not.toContain("Restricted stop");
+  });
+
+  it("leaves out an issue still waiting on an unresolved blocker issue, in both lists", async () => {
+    const f = await fixture();
+    const dependent = randomUUID();
+    const blocker = randomUUID();
+    const unblocked = randomUUID();
+    const doneBlocker = randomUUID();
+    await db.insert(issues).values([
+      { id: blocker, companyId: f.companyId, title: "Upstream work", status: "in_progress", assigneeAgentId: f.agentB },
+      { id: dependent, companyId: f.companyId, title: "Waits on upstream", status: "blocked", assigneeAgentId: f.agentA },
+      { id: doneBlocker, companyId: f.companyId, title: "Finished upstream", status: "done", assigneeAgentId: f.agentB },
+      { id: unblocked, companyId: f.companyId, title: "Needs Steward A now", status: "blocked", assigneeAgentId: f.agentA },
+    ]);
+    await db.insert(issueRelations).values([
+      { companyId: f.companyId, issueId: blocker, relatedIssueId: dependent, type: "blocks" },
+      // A finished blocker no longer holds anything up: the stop is the person's.
+      { companyId: f.companyId, issueId: doneBlocker, relatedIssueId: unblocked, type: "blocks" },
+    ]);
+
+    const web = await waitingOnYouService(db).list(f.companyId, f.actor(f.stewardA));
+    const digest = await stewardInboxService(db).buildDigest({ id: null, companyId: f.companyId, userId: f.stewardA });
+    expect(web.stoppedAgentIssues.map((item) => item.issueId)).toEqual([unblocked]);
+    expect((digest.blockers.items as Array<{ issueId: string }>).map((item) => item.issueId)).toEqual([unblocked]);
+  });
+
+  it("leaves out issues the server blocked for recovery, in both lists", async () => {
+    const f = await fixture();
+    const exhausted = randomUUID();
+    const recoveryIssue = randomUUID();
+    const needsPerson = randomUUID();
+    await db.insert(issues).values([
+      {
+        id: exhausted, companyId: f.companyId, title: "Retries ran out", status: "blocked", assigneeAgentId: f.agentA,
+        executionState: { recoveryBudget: { status: "exhausted", exhaustedAt: new Date().toISOString() } },
+      },
+      { id: recoveryIssue, companyId: f.companyId, title: "Recover stranded work", status: "blocked", assigneeAgentId: f.agentA, originKind: "stranded_issue_recovery" },
+      { id: needsPerson, companyId: f.companyId, title: "Needs Steward A", status: "blocked", assigneeAgentId: f.agentA },
+    ]);
+
+    const web = await waitingOnYouService(db).list(f.companyId, f.actor(f.stewardA));
+    const digest = await stewardInboxService(db).buildDigest({ id: null, companyId: f.companyId, userId: f.stewardA });
+    expect(web.stoppedAgentIssues.map((item) => item.issueId)).toEqual([needsPerson]);
+    expect((digest.blockers.items as Array<{ issueId: string }>).map((item) => item.issueId)).toEqual([needsPerson]);
+    expect(web.stoppedAgentIssuesTotal).toBe(1);
+  });
+
+  it("caps the rows it reads but still reports the full count", async () => {
+    const f = await fixture();
+    const count = 30;
+    await db.insert(issues).values(Array.from({ length: count }, (_, index) => ({
+      id: randomUUID(), companyId: f.companyId, title: `Stop ${index}`, status: "blocked", assigneeAgentId: f.agentA,
+    })));
+    const rows = await listStoppedAgentIssues(db, { companyId: f.companyId, agentIds: [f.agentA], limit: 5 });
+    expect(rows.items).toHaveLength(5);
+    expect(rows.total).toBe(count);
+    const digest = await stewardInboxService(db).buildDigest({ id: null, companyId: f.companyId, userId: f.stewardA });
+    expect(digest.blockers.total).toBe(count);
+    expect(digest.blockers.shown).toBe(10);
   });
 });
