@@ -44,6 +44,7 @@ const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
   issue_reopened_via_comment: "comment",
   issue_comment_mentioned: "mention",
   approval_approved: "approval",
+  approval_rejected: "approval",
   // An approved connector_send that did not deliver wakes its requester with
   // one of these instead of `approval_approved`; it is still that decision.
   connector_send_failed: "approval",

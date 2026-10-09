@@ -192,6 +192,8 @@
       "headings": [
         "Acting on it",
         "Three rules",
+        "Questions from your agents",
+        "Email",
         "Optional: have your agent keep watch"
       ],
       "firstParagraph": "Open ~/agentdash-inbox in Claude Code and what is waiting on you appears as the session starts. You can decide it right there, as yourself."
@@ -1198,6 +1200,7 @@
         "mcp",
         "me-capabilities",
         "msp",
+        "notification-preferences",
         "oauth",
         "onboarding-mcp-signup",
         "onboarding-v2",
@@ -1225,7 +1228,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 612 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest f4393383b0e2; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 615 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 640e5dacbd9e; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
@@ -1450,9 +1453,10 @@
         "inboxconfirm",
         "inboxack",
         "inboxdecide",
+        "inboxanswer",
         "bridgesubmitresult"
       ],
-      "firstParagraph": "8 tools — measured: the length of the tools/list response. Source: buildToolSurface in packages/mcp-server/src/index.ts, which returns these for any credential isControlPlaneCredential (src/config.ts) rejects, whatever the toolset except human; the tools are defined in…"
+      "firstParagraph": "9 tools — measured: the length of the tools/list response. Source: buildToolSurface in packages/mcp-server/src/index.ts, which returns these for any credential isControlPlaneCredential (src/config.ts) rejects, whatever the toolset except human; the tools are defined in…"
     },
     {
       "slug": "cli/agentdash-connect",
@@ -1463,6 +1467,7 @@
         "What it actually does",
         "The inbox",
         "Deciding from your own session",
+        "Answering your agents",
         "Nothing left running",
         "Where the key goes",
         "Commands",

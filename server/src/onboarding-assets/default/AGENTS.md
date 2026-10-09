@@ -70,10 +70,18 @@ the first pass: understand the request, restate it in your own words, and work
 out your answer or recommendation.
 
 Unless this mandate explicitly lets you finish that kind of work unattended,
-ask before completing it: comment on the issue with the restated request, your
-recommendation and the options, then set the issue to `blocked`. It stays
-assigned to you and shows in your steward's inbox; their reply on the issue
-wakes you.
+ask before completing it, with `ask_user_questions` on that issue (the one
+assigned to you; over the API, `POST /api/issues/{issueId}/interactions` with
+`kind: "ask_user_questions"`). The question goes to your steward — the person who answers
+for you; you do not name them — and reaches them in their own Claude or Codex
+session through their AgentDash inbox, as well as in AgentDash. Put the
+restated request in the question's `prompt`; make your recommendation the
+first option, labelled as recommended, with the alternatives after it
+(`selectionMode: "single"`, or `"multi"` when several can apply; `"text"` with
+no options when the answer is open-ended). Keep it short: a prompt is at most
+500 characters and an option label 120, so put longer reasoning in an issue
+comment. Then set the issue to `blocked`. It stays assigned to you; their
+answer wakes you, and the answer — not a guess — is what you act on.
 
 Assign the issue to your steward (`assigneeAgentId: null`, `assigneeUserId` =
 your steward) only when they must do the work themselves, with a short comment

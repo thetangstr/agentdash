@@ -9,6 +9,7 @@ import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ConnectYourTerminal } from "../components/agent/ConnectYourTerminal";
 import { DecisionsNeedingYou } from "../components/agent/DecisionsNeedingYou";
 import { QuestionsForYou } from "../components/agent/QuestionsForYou";
+import { InboxEmailToggle } from "../components/agent/InboxEmailToggle";
 import { AvailableOnRequest, isCapabilityNotFound } from "../components/AvailableOnRequest";
 import { useStewardshipFeature } from "../hooks/useStewardshipCapability";
 import { useCompany } from "../context/CompanyContext";
@@ -390,6 +391,8 @@ export default function MyAgent() {
         agentName={agent.name}
         companyId={selectedCompanyId!}
       />
+
+      <InboxEmailToggle />
 
       <section aria-labelledby="my-agent-work-heading" className="rounded-lg border">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">

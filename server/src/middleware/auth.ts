@@ -83,6 +83,10 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   "/api/bridge/inbox/agents",
   "/api/bridge/inbox/propose",
   "/api/bridge/inbox/confirm",
+  // Spends a handle minted for one question to this endpoint's owner, and
+  // answers it through the canonical answer path after re-checking that the
+  // question is still theirs -- see steward-inbox-answers.ts.
+  "/api/bridge/inbox/answer",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

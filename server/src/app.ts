@@ -79,6 +79,7 @@ import { mspRoutes } from "./routes/msp.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
+import { notificationPreferenceRoutes } from "./routes/notification-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { issueReportRoutes } from "./routes/issue-reports.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
@@ -502,6 +503,7 @@ export async function createApp(
   api.use(meCapabilityRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(sidebarPreferenceRoutes(db));
+  api.use(notificationPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
   // AgentDash: user-filed bug reports / feature requests -> GitHub issues.
   // Every POST creates a real issue under one shared credential, so it gets

@@ -214,9 +214,11 @@ ${userVoice || "No interview context was captured."}
 // bundle (the `steward-first-pass` block): any assignment of a person who
 // stewards an agent — by a person or an agent — is routed server-side to that
 // agent unless `assignToPerson: true`. The agent takes the first pass, asks its
-// steward before completing (comment + blocked) unless its mandate lets it
-// finish unattended, and assigns the issue to its steward only when they must
-// do the work themselves.
+// steward before completing unless its mandate lets it finish unattended
+// (`ask_user_questions` on the issue with its recommendation as the first
+// option, then blocked; the question reaches the steward's own Claude or Codex
+// session through the bridge inbox and their answer wakes the agent), and
+// assigns the issue to its steward only when they must do the work themselves.
 
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
