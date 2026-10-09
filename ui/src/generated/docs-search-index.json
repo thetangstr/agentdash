@@ -1114,6 +1114,7 @@
       "title": "API changelog",
       "summary": "The API-affecting lines of every AgentDash release note, newest first. Generated from releases/*.md.",
       "headings": [
+        "v2026.1009.0 — 2026-10-09",
         "v2026.1008.0 — 2026-10-08",
         "v2026.1007.1 — 2026-10-07",
         "v2026.1007.0 — 2026-10-07",
@@ -1137,7 +1138,7 @@
         "v2026.827.1 — 2026-08-27",
         "v2026.827.0 — 2026-08-27"
       ],
-      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 84 lines from 22 releases, out of 32 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words route,…"
+      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 86 lines from 23 releases, out of 33 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words route,…"
     },
     {
       "slug": "api/route-index",
