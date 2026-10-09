@@ -52,6 +52,18 @@ type TestDb = ReturnType<typeof createDb>;
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const TENANT = "tenant-under-test";
 const REDIRECT_URI = "https://agentdash.example.test/connect/microsoft/callback";
+const PUBLIC_URL = "https://agentdash.example.test";
+// Every variable `mintingOrigins()` / `configuredPublicBaseUrl()` read, so the
+// host environment never decides which redirect URI these tests accept.
+const ORIGIN_ENV_KEYS = [
+  "PAPERCLIP_PUBLIC_URL",
+  "PAPERCLIP_CANONICAL_ORIGIN",
+  "PAPERCLIP_ORIGINS",
+  "PAPERCLIP_AUTH_PUBLIC_BASE_URL",
+  "BETTER_AUTH_URL",
+  "BETTER_AUTH_BASE_URL",
+  "BETTER_AUTH_TRUSTED_ORIGINS",
+] as const;
 const ENV_KEYS = [
   "ENTRA_TENANT_ID",
   "ENTRA_CLIENT_ID",
@@ -61,7 +73,21 @@ const ENV_KEYS = [
   "PAPERCLIP_HOME",
   "PAPERCLIP_INSTANCE_ID",
   "PAPERCLIP_SECRETS_MASTER_KEY",
+  ...ORIGIN_ENV_KEYS,
 ] as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+async function waitUntil(condition: () => boolean, what: string) {
+  for (let i = 0; i < 300 && !condition(); i += 1) await new Promise((r) => setTimeout(r, 10));
+  if (!condition()) throw new Error(`timed out waiting for ${what}`);
+}
 
 function base64Url(buffer: Buffer): string {
   return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -94,7 +120,10 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
   type GraphCall = { method: string; path: string; bearer: string };
   let tokenCalls: TokenCall[] = [];
   let graphCalls: GraphCall[] = [];
-  let tokenHandler: (call: TokenCall) => { status: number; body: unknown };
+  type MockResponse = { status: number; body: unknown };
+  let tokenHandler: (call: TokenCall) => MockResponse | Promise<MockResponse>;
+  /** The default Microsoft: echoes the requested scopes, like a plain consent. */
+  let echoTokenHandler: (call: TokenCall) => MockResponse;
   let meHandler: (bearer: string) => { status: number; body: unknown };
   let issued = 0;
 
@@ -131,17 +160,16 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
     graphCalls = [];
     issued = 0;
 
-    // Default Microsoft: every code and refresh token is honoured, and each
-    // response carries a fresh, distinguishable access and refresh token.
-    tokenHandler = (call) => {
+    // Default Microsoft: every code and refresh token is honoured, each
+    // response carries a fresh, distinguishable access and refresh token, and
+    // the granted scopes are exactly the requested ones (code and refresh).
+    echoTokenHandler = (call) => {
       issued += 1;
-      const scope = call.grant_type === "refresh_token"
-        ? "openid profile User.Read Files.Read.All Sites.Read.All"
-        : (call.scope ?? "")
-            .split(" ")
-            .filter((s) => !["openid", "profile", "offline_access"].includes(s))
-            .concat(["openid", "profile"])
-            .join(" ");
+      const scope = (call.scope ?? "")
+        .split(" ")
+        .filter((s) => s && !["openid", "profile", "offline_access"].includes(s))
+        .concat(["openid", "profile"])
+        .join(" ");
       return {
         status: 200,
         body: {
@@ -153,6 +181,7 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
         },
       };
     };
+    tokenHandler = echoTokenHandler;
     meHandler = () => ({
       status: 200,
       body: { id: "graph-user-a", userPrincipalName: "person.a@tenant.example.test", displayName: "Person A" },
@@ -160,10 +189,10 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
 
     const app = express();
     app.use(express.urlencoded({ extended: false }));
-    app.post(`/entra/${TENANT}/oauth2/v2.0/token`, (req, res) => {
+    app.post(`/entra/${TENANT}/oauth2/v2.0/token`, async (req, res) => {
       const call = Object.fromEntries(Object.entries(req.body as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
       tokenCalls.push(call);
-      const { status, body } = tokenHandler(call);
+      const { status, body } = await tokenHandler(call);
       res.status(status).json(body);
     });
     app.all(/^\/graph\/.*/, (req, res) => {
@@ -183,6 +212,8 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
     process.env.ENTRA_CLIENT_SECRET = "app-client-secret";
     process.env.ENTRA_AUTHORITY_URL = `${msBaseUrl}/entra`;
     process.env.MICROSOFT_GRAPH_BASE_URL = `${msBaseUrl}/graph`;
+    for (const key of ORIGIN_ENV_KEYS) delete process.env[key];
+    process.env.PAPERCLIP_PUBLIC_URL = PUBLIC_URL;
 
     // Fixtures.
     const [flagged, unflagged] = await db
@@ -222,7 +253,7 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
   });
 
   afterEach(async () => {
-    for (const key of ["ENTRA_TENANT_ID", "ENTRA_CLIENT_ID", "ENTRA_CLIENT_SECRET", "ENTRA_AUTHORITY_URL", "MICROSOFT_GRAPH_BASE_URL"]) {
+    for (const key of ["ENTRA_TENANT_ID", "ENTRA_CLIENT_ID", "ENTRA_CLIENT_SECRET", "ENTRA_AUTHORITY_URL", "MICROSOFT_GRAPH_BASE_URL", ...ORIGIN_ENV_KEYS]) {
       delete process.env[key];
     }
     if (msServer?.listening) {
@@ -240,19 +271,19 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
 
   // -- helpers --------------------------------------------------------------
 
-  function appAs(actor: Record<string, unknown>) {
+  function appAs(actor: Record<string, unknown>, routeOpts?: Parameters<typeof microsoftDocumentsRoutes>[1]) {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
       (req as any).actor = actor;
       next();
     });
-    app.use("/api", microsoftDocumentsRoutes(db));
+    app.use("/api", microsoftDocumentsRoutes(db, routeOpts));
     app.use(errorHandler);
     return app;
   }
 
-  const asPerson = (userId: string) =>
+  const asPerson = (userId: string, routeOpts?: Parameters<typeof microsoftDocumentsRoutes>[1]) =>
     appAs({
       type: "board",
       source: "session",
@@ -262,7 +293,7 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
         { companyId: FLAGGED, membershipRole: "member", status: "active" },
         { companyId: UNFLAGGED, membershipRole: "member", status: "active" },
       ],
-    });
+    }, routeOpts);
 
   const base = (companyId: string) => `/api/companies/${companyId}/me/connections/microsoft`;
 
@@ -702,7 +733,13 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
     // Reconnecting clears the error.
     tokenHandler = () => ({
       status: 200,
-      body: { token_type: "Bearer", access_token: "a", refresh_token: "r", expires_in: 3600, scope: "User.Read" },
+      body: {
+        token_type: "Bearer",
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 3600,
+        scope: "User.Read Files.Read.All Sites.Read.All",
+      },
     });
     const again = await connect(PERSON_A);
     expect(again.done.status).toBe(200);
@@ -733,6 +770,280 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
     await expect(microsoftGraphAuthService(db).tokenForConnection(other.id)).rejects.toMatchObject({
       reason: "not_connected",
     });
+  });
+
+  // -- review fixes: the tier is an upper bound ---------------------------------
+
+  async function activityFor(connectionId: string) {
+    return db.select().from(activityLog).where(eq(activityLog.entityId, connectionId));
+  }
+
+  it("keeps a read-tier connection read-only when Microsoft lists more consented scopes", async () => {
+    // Tenant-wide admin consent on a shared app can make Microsoft list scopes
+    // nobody asked for. The person chose `read`; that choice is the limit.
+    tokenHandler = (call) => {
+      issued += 1;
+      return {
+        status: 200,
+        body: {
+          token_type: "Bearer",
+          access_token: `access-${issued}-${randomUUID()}`,
+          refresh_token: `refresh-${issued}-${randomUUID()}`,
+          expires_in: 3600,
+          scope:
+            "openid profile User.Read Files.Read.All Sites.Read.All Files.ReadWrite Files.ReadWrite.All User.ReadBasic.All",
+          grant: call.grant_type,
+        },
+      };
+    };
+    const { done } = await connect(PERSON_A, "read");
+    expect(done.status).toBe(200);
+    expect(done.body.connection.tier).toBe("read");
+    expect(done.body.connection.writeScopes).toEqual([]);
+    const connectionId = done.body.connection.id;
+    const [row] = await rowsFor(PERSON_A);
+    for (const wide of ["Files.ReadWrite", "Files.ReadWrite.All", "User.ReadBasic.All"]) {
+      expect(row!.scopes).not.toContain(wide);
+    }
+    const health = await request(asPerson(PERSON_A)).get(base(FLAGGED));
+    expect(health.body.connection.tier).toBe("read");
+    expect(health.body.connection.writeScopes).toEqual([]);
+
+    const fresh = await microsoftGraphAuthService(db).tokenForConnection(connectionId);
+    expect(fresh.grantedScopes).not.toContain("Files.ReadWrite");
+
+    // A refresh asks only for the bounded set and stays bounded.
+    await setExpiry(connectionId, -1_000);
+    const refreshed = await microsoftGraphAuthService(db).tokenForConnection(connectionId);
+    const refreshCall = tokenCalls.at(-1)!;
+    expect(refreshCall.grant_type).toBe("refresh_token");
+    expect(refreshCall.scope!.split(" ")).not.toContain("Files.ReadWrite");
+    expect(refreshCall.scope!.split(" ")).not.toContain("User.ReadBasic.All");
+    expect(refreshed.grantedScopes).not.toContain("Files.ReadWrite");
+    expect(refreshed.grantedScopes).not.toContain("Files.ReadWrite.All");
+    const [after] = await rowsFor(PERSON_A);
+    expect(after!.scopes).not.toContain("Files.ReadWrite");
+  });
+
+  it("refreshes a read_propose connection with its write scope and keeps the tier", async () => {
+    const { done } = await connect(PERSON_A, "read_propose");
+    const connectionId = done.body.connection.id;
+    await setExpiry(connectionId, -1_000);
+    const refreshed = await microsoftGraphAuthService(db).tokenForConnection(connectionId);
+    const refreshCall = tokenCalls.at(-1)!;
+    expect(refreshCall.grant_type).toBe("refresh_token");
+    expect(refreshCall.scope!.split(" ")).toEqual(expect.arrayContaining(["Files.ReadWrite", "offline_access"]));
+    expect(refreshed.grantedScopes).toEqual(expect.arrayContaining(["Files.ReadWrite", "User.ReadBasic.All"]));
+    const health = await request(asPerson(PERSON_A)).get(base(FLAGGED));
+    expect(health.body.connection.tier).toBe("read_propose");
+  });
+
+  it("treats a code redemption without a scope field as granting the requested scopes", async () => {
+    tokenHandler = () => {
+      issued += 1;
+      return {
+        status: 200,
+        body: {
+          token_type: "Bearer",
+          access_token: `access-${issued}-${randomUUID()}`,
+          refresh_token: `refresh-${issued}-${randomUUID()}`,
+          expires_in: 3600,
+        },
+      };
+    };
+    const { done } = await connect(PERSON_A, "read_propose");
+    expect(done.status).toBe(200);
+    expect(done.body.connection.tier).toBe("read_propose");
+    const [row] = await rowsFor(PERSON_A);
+    expect(row!.scopes).toEqual(
+      expect.arrayContaining(["User.Read", "Files.Read.All", "Sites.Read.All", "Files.ReadWrite"]),
+    );
+  });
+
+  it("refuses a grant without the read permissions and names what is missing", async () => {
+    tokenHandler = () => ({
+      status: 200,
+      body: {
+        token_type: "Bearer",
+        access_token: "access-partial",
+        refresh_token: "refresh-partial",
+        expires_in: 3600,
+        scope: "openid profile User.Read",
+      },
+    });
+    const { done } = await connect(PERSON_A, "read");
+    expect(done.status).toBe(403);
+    expect(done.body.details?.code ?? done.body.code).toBe("consent_incomplete");
+    expect(String(done.body.error)).toContain("Files.Read.All");
+    expect(String(done.body.error)).toContain("Sites.Read.All");
+    const [row] = await rowsFor(PERSON_A);
+    expect(row!.encryptedToken).toBeNull();
+    const health = await request(asPerson(PERSON_A)).get(base(FLAGGED));
+    expect(health.body.connection.status).toBe("pending");
+    expect(health.body.connection.lastError).toEqual(expect.objectContaining({ reason: "consent_incomplete" }));
+  });
+
+  // -- review fixes: a refresh is tied to the credential it started from -------
+
+  it("does not let an in-flight refresh overwrite a reconnect that finished meanwhile", async () => {
+    const first = await connect(PERSON_A, "read");
+    const connectionId = first.done.body.connection.id;
+    await setExpiry(connectionId, -1_000);
+
+    const gate = deferred<void>();
+    tokenHandler = async (call) => {
+      if (call.grant_type === "refresh_token") {
+        await gate.promise;
+        return {
+          status: 200,
+          body: {
+            token_type: "Bearer",
+            access_token: "access-stale-refresh",
+            refresh_token: "refresh-stale-refresh",
+            expires_in: 3600,
+            scope: "openid profile User.Read Files.Read.All Sites.Read.All",
+          },
+        };
+      }
+      return echoTokenHandler(call);
+    };
+    const auth = microsoftGraphAuthService(db);
+    const inFlight = auth.tokenForConnection(connectionId);
+    await waitUntil(() => tokenCalls.some((c) => c.grant_type === "refresh_token"), "the refresh call");
+
+    const upgraded = await connect(PERSON_A, "read_propose");
+    expect(upgraded.done.status).toBe(200);
+    const reconnected = await connectorService(db).getDecryptedToken(connectionId);
+
+    gate.resolve();
+    const result = await inFlight;
+    expect(result.accessToken).toBe(reconnected!.accessToken);
+    expect(result.accessToken).not.toBe("access-stale-refresh");
+    const stored = await connectorService(db).getDecryptedToken(connectionId);
+    expect(stored!.accessToken).toBe(reconnected!.accessToken);
+    expect(stored!.refreshToken).toBe(reconnected!.refreshToken);
+    const [row] = await rowsFor(PERSON_A);
+    expect(row!.scopes).toEqual(expect.arrayContaining(["Files.ReadWrite"]));
+  });
+
+  it("does not mark a fresh reconnect as error when a stale refresh is refused", async () => {
+    const first = await connect(PERSON_A, "read");
+    const connectionId = first.done.body.connection.id;
+    await setExpiry(connectionId, -1_000);
+
+    const gate = deferred<void>();
+    tokenHandler = async (call) => {
+      if (call.grant_type === "refresh_token") {
+        await gate.promise;
+        return { status: 400, body: { error: "invalid_grant" } };
+      }
+      return echoTokenHandler(call);
+    };
+    const inFlight = microsoftGraphAuthService(db).tokenForConnection(connectionId);
+    await waitUntil(() => tokenCalls.some((c) => c.grant_type === "refresh_token"), "the refresh call");
+    const again = await connect(PERSON_A, "read");
+    expect(again.done.status).toBe(200);
+    const reconnected = await connectorService(db).getDecryptedToken(connectionId);
+
+    gate.resolve();
+    const result = await inFlight;
+    expect(result.accessToken).toBe(reconnected!.accessToken);
+    const [row] = await rowsFor(PERSON_A);
+    expect(row!.status).toBe("active");
+    const actions = (await activityFor(connectionId)).map((a) => a.action);
+    expect(actions).not.toContain("connection.microsoft_refresh_failed");
+    const health = await request(asPerson(PERSON_A)).get(base(FLAGGED));
+    expect(health.body.connection.status).toBe("active");
+    expect(health.body.connection.lastError).toBeNull();
+  });
+
+  it("returns no token when the person disconnects while a refresh is in flight", async () => {
+    const { done } = await connect(PERSON_A);
+    const connectionId = done.body.connection.id;
+    await setExpiry(connectionId, -1_000);
+
+    const gate = deferred<void>();
+    tokenHandler = async (call) => {
+      await gate.promise;
+      return echoTokenHandler(call);
+    };
+    const inFlight = microsoftGraphAuthService(db).tokenForConnection(connectionId).catch((e) => e);
+    await waitUntil(() => tokenCalls.some((c) => c.grant_type === "refresh_token"), "the refresh call");
+    const revoked = await request(asPerson(PERSON_A)).post(`${base(FLAGGED)}/revoke`).send({});
+    expect(revoked.status).toBe(200);
+
+    gate.resolve();
+    const failure = await inFlight;
+    expect(failure).toBeInstanceOf(MicrosoftGraphAuthError);
+    expect(failure.reason).toBe("not_connected");
+    const [row] = await rowsFor(PERSON_A);
+    expect(row!.encryptedToken).toBeNull();
+    expect(row!.revokedAt).not.toBeNull();
+  });
+
+  // -- review fixes: untested safety branches --------------------------------
+
+  it("refuses an authorize URL older than 15 minutes without calling Microsoft", async () => {
+    const started = await initiate(PERSON_A);
+    const state = authorizeParams(started.body.authorizationUrl).params.get("state")!;
+    const [row] = await rowsFor(PERSON_A);
+    const oauthState = { ...(row!.oauthState as Record<string, unknown>) };
+    oauthState.issuedAt = new Date(Date.now() - 16 * 60_000).toISOString();
+    await db.update(connections).set({ oauthState }).where(eq(connections.id, row!.id));
+
+    const res = await request(asPerson(PERSON_A))
+      .post(`${base(FLAGGED)}/oauth/callback`)
+      .send({ code: "code-late", state, redirectUri: REDIRECT_URI });
+    expect(res.status).toBe(400);
+    expect(tokenCalls).toHaveLength(0);
+    const [after] = await rowsFor(PERSON_A);
+    expect(after!.encryptedToken).toBeNull();
+  });
+
+  it("reports not_configured and leaves the row active when Microsoft rejects the app's credentials on refresh", async () => {
+    const { done } = await connect(PERSON_A);
+    const connectionId = done.body.connection.id;
+    await setExpiry(connectionId, -1_000);
+    tokenHandler = () => ({ status: 401, body: { error: "invalid_client" } });
+    await expect(microsoftGraphAuthService(db).tokenForConnection(connectionId)).rejects.toMatchObject({
+      reason: "not_configured",
+    });
+    const [row] = await rowsFor(PERSON_A);
+    expect(row!.status).toBe("active");
+    const actions = (await activityFor(connectionId)).map((a) => a.action);
+    expect(actions).not.toContain("connection.microsoft_refresh_failed");
+  });
+
+  // -- review fixes: the redirect URI is this instance's ----------------------
+
+  it("refuses a redirect URI on another origin, even with the right callback path", async () => {
+    const res = await request(asPerson(PERSON_A))
+      .post(`${base(FLAGGED)}/oauth/initiate`)
+      .send({ redirectUri: "https://another-instance.example.test/connect/microsoft/callback", tier: "read" });
+    expect(res.status).toBe(400);
+    expect(await rowsFor(PERSON_A)).toHaveLength(0);
+  });
+
+  it("refuses a loopback redirect URI unless the instance runs in local mode", async () => {
+    const loopback = "http://localhost:3100/connect/microsoft/callback";
+    const strict = await request(asPerson(PERSON_A))
+      .post(`${base(FLAGGED)}/oauth/initiate`)
+      .send({ redirectUri: loopback, tier: "read" });
+    expect(strict.status).toBe(400);
+    expect(await rowsFor(PERSON_A)).toHaveLength(0);
+
+    const local = await request(asPerson(PERSON_A, { deploymentMode: "local_trusted" }))
+      .post(`${base(FLAGGED)}/oauth/initiate`)
+      .send({ redirectUri: loopback, tier: "read" });
+    expect(local.status).toBe(200);
+  });
+
+  it("refuses every non-loopback redirect URI when the instance has no public URL", async () => {
+    delete process.env.PAPERCLIP_PUBLIC_URL;
+    const res = await initiate(PERSON_A);
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/PAPERCLIP_PUBLIC_URL/);
+    expect(await rowsFor(PERSON_A)).toHaveLength(0);
   });
 
   // -- storeOAuthState shape check -------------------------------------------

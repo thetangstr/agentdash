@@ -559,7 +559,7 @@ export async function createApp(
   api.use(whatsappConnectorRoutes(db));
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
-  api.use(microsoftDocumentsRoutes(db));
+  api.use(microsoftDocumentsRoutes(db, { deploymentMode: opts.deploymentMode }));
   api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(stewardWebhookRoutes(db));
   api.use(teamsConnectorRoutes(db));

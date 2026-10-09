@@ -21,6 +21,13 @@
 //     malformed_token_response Microsoft answered without a usable token
 // - It records write capability (`grantedScopes` may include Files.ReadWrite)
 //   but does not refuse on it: the write path (slice 5/8) decides.
+// - `grantedScopes` is the connection's recorded grant, which never exceeds
+//   the tier the person chose at connect (see "Scopes" below). The access
+//   token itself may carry more if the tenant consented to more; AgentDash's
+//   limit is the recorded set, and every check must read that.
+// - A refresh is tied to the credential it started from: if the person
+//   reconnects or disconnects while it is in flight, it stores nothing, never
+//   marks the new connection failed, and answers from the row as it now is.
 // - The access token must never reach an agent, a log or a response body.
 //
 // `microsoftGraphBaseUrl()` is the Graph root every Graph caller should use, so
@@ -41,12 +48,25 @@
 // Files.Read.All Sites.Read.All. Tier `read_propose` adds Files.ReadWrite (the
 // person's own OneDrive, for proposed copies) and User.ReadBasic.All (slice 8's
 // recipient check). Nothing tenant-wide for writing is ever requested (D5, D11).
+//
+// The chosen tier is an upper bound. Microsoft can list scopes nobody asked
+// for (tenant-wide admin consent on a shared app registration), and a refresh
+// token is good for everything already consented. So the row records only
+// `granted ∩ requested-for-tier`, a refresh asks for that recorded set and
+// nothing else, and the recorded set can shrink on refresh but never grow.
+// A grant without the read scopes is refused at connect (`consent_incomplete`).
+//
+// The redirect URI must be on this instance's own configured origin
+// (`PAPERCLIP_PUBLIC_URL` or the declared origins); loopback is accepted only
+// when the instance runs in `local_trusted` mode.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { and, desc, eq, isNull, like, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, connections } from "@paperclipai/db";
 import { HttpError, badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { unwrapPgError, PG_UNIQUE_VIOLATION } from "../lib/pg-error.js";
+import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
+import { mintingOrigins, normalizeOrigin } from "../lib/declared-origins.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import { connectorService } from "./connectors.js";
@@ -182,6 +202,20 @@ function tierFromScopes(scopes: readonly string[]): MicrosoftConnectionTier {
   return hasScope(scopes, "Files.ReadWrite") ? "read_propose" : "read";
 }
 
+/**
+ * What a connection may record: the granted scopes that the tier asked for,
+ * in the tier's own spelling and order. Anything else Microsoft lists (a
+ * tenant-wide consent the person never chose) is dropped.
+ */
+function boundScopes(granted: readonly string[], allowed: readonly string[]): string[] {
+  return allowed.filter((scope) => hasScope(granted, scope));
+}
+
+/** The data scopes a tier asks for, without the sign-in scopes. */
+function dataScopesForTier(tier: MicrosoftConnectionTier): string[] {
+  return normalizeScopes(requestedScopesForTier(tier).join(" "));
+}
+
 export function requestedScopesForTier(tier: MicrosoftConnectionTier): string[] {
   return [
     ...SIGN_IN_SCOPES,
@@ -196,12 +230,33 @@ function safeEqual(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+export interface MicrosoftConnectOptions {
+  /**
+   * Accept a loopback (`localhost`, `127.0.0.1`, `[::1]`) redirect URI. Only a
+   * `local_trusted` instance sets this: anywhere else a loopback URI names a
+   * machine that is not this instance.
+   */
+  allowLoopbackRedirect?: boolean;
+}
+
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+
+/** The origins this instance answers on, as its operator configured them. */
+function instanceOrigins(): Set<string> {
+  const origins = new Set(mintingOrigins());
+  const configured = normalizeOrigin(configuredPublicBaseUrl());
+  if (configured) origins.add(configured);
+  return origins;
+}
+
 /**
- * The redirect URI the browser returns to: AgentDash's own callback page, over
- * HTTPS (Microsoft accepts plain HTTP only for localhost). Microsoft enforces
- * the registered value too; refusing early gives the person a clear answer.
+ * The redirect URI the browser returns to: AgentDash's own callback page, on
+ * this instance's configured origin, over HTTPS (Microsoft accepts plain HTTP
+ * only for localhost). Microsoft enforces the registered value too, but an app
+ * registration can list more than one instance (or a stale dev URI), so the
+ * origin is pinned here and Microsoft's check is not the only guard.
  */
-function validateRedirectUri(value: unknown): string {
+function validateRedirectUri(value: unknown, options: MicrosoftConnectOptions): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 2048) {
     throw badRequest("redirectUri is required");
   }
@@ -211,12 +266,27 @@ function validateRedirectUri(value: unknown): string {
   } catch {
     throw badRequest("redirectUri must be an absolute URL");
   }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  const loopback = LOOPBACK_HOSTS.includes(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw badRequest("redirectUri must use HTTPS; Microsoft accepts plain HTTP only for localhost");
   }
-  if (!url.pathname.endsWith(CALLBACK_PATH) || url.search || url.hash) {
+  if (!url.pathname.endsWith(CALLBACK_PATH) || url.search || url.hash || url.username || url.password) {
     throw badRequest(`redirectUri must be this instance's ${CALLBACK_PATH} page`);
+  }
+  if (loopback) {
+    if (!options.allowLoopbackRedirect) {
+      throw badRequest("redirectUri may name localhost only on a local instance; use this instance's public address");
+    }
+    return value;
+  }
+  const origins = instanceOrigins();
+  if (origins.size === 0) {
+    throw badRequest(
+      "This AgentDash instance has no configured public address, so it cannot receive a Microsoft sign-in. An administrator must set PAPERCLIP_PUBLIC_URL.",
+    );
+  }
+  if (!origins.has(url.origin.toLowerCase())) {
+    throw badRequest(`redirectUri must be on this instance's own address (${[...origins].join(", ")})`);
   }
   return value;
 }
@@ -333,7 +403,7 @@ export function __resetMicrosoftGraphAuthState(): void {
   inflightRefresh.clear();
 }
 
-export function microsoftGraphAuthService(db: Db) {
+export function microsoftGraphAuthService(db: Db, options: MicrosoftConnectOptions = {}) {
   const connectors = connectorService(db);
 
   async function liveRowFor(companyId: string, userId: string) {
@@ -374,7 +444,10 @@ export function microsoftGraphAuthService(db: Db) {
   // tokenForConnection
   // -------------------------------------------------------------------------
 
-  async function refresh(connectionId: string): Promise<MicrosoftGraphToken> {
+  /** How many times a refresh that lost a race to a reconnect starts over. */
+  const MAX_REFRESH_ATTEMPTS = 3;
+
+  async function refresh(connectionId: string, attempt = 1): Promise<MicrosoftGraphToken> {
     const row = await connectors.getById(connectionId);
     if (!row || row.provider !== MICROSOFT_PROVIDER || row.revokedAt || row.status === "revoked" || !row.encryptedToken) {
       throw new MicrosoftGraphAuthError("not_connected", "There is no connected Microsoft account for this connection");
@@ -385,21 +458,36 @@ export function microsoftGraphAuthService(db: Db) {
         "Microsoft no longer accepts this connection; its owner must reconnect Microsoft from My Agent",
       );
     }
+    // The credential this refresh starts from. Every write below is
+    // conditional on the row still holding exactly this ciphertext (each
+    // encryption is fresh, so a reconnect or a disconnect always changes it).
+    const startedFrom = row.encryptedToken as Record<string, unknown>;
     const token = await connectors.getDecryptedToken(connectionId);
     if (!token) {
       throw new MicrosoftGraphAuthError("not_connected", "There is no connected Microsoft account for this connection");
     }
+    // The recorded grant, already bounded by the tier at connect.
     const recorded = (row.scopes ?? []) as string[];
-    const currentScopes = token.scope ? normalizeScopes(token.scope) : recorded;
     const expiresAtMs = token.expiresAt ? Date.parse(token.expiresAt) : Number.NaN;
     if (Number.isFinite(expiresAtMs) && expiresAtMs - Date.now() > REFRESH_SKEW_MS) {
-      return { accessToken: token.accessToken, grantedScopes: currentScopes };
+      return { accessToken: token.accessToken, grantedScopes: recorded };
     }
+
+    /** The row changed under this refresh: answer from the row as it is now. */
+    const startOver = (): Promise<MicrosoftGraphToken> => {
+      if (attempt >= MAX_REFRESH_ATTEMPTS) {
+        throw new MicrosoftGraphAuthError(
+          "not_connected",
+          "This Microsoft connection kept changing while it was being refreshed; try again",
+        );
+      }
+      return refresh(connectionId, attempt + 1);
+    };
 
     const config = readConfig();
     if (!config) throw new MicrosoftGraphAuthError("not_configured", NOT_CONFIGURED_MESSAGE);
     if (!token.refreshToken) {
-      await markRefreshFailed(row, "reconnect_required", null);
+      if (!(await markRefreshFailed(row, startedFrom, "reconnect_required", null))) return startOver();
       throw new MicrosoftGraphAuthError(
         "reconnect_required",
         "This Microsoft connection has no refresh token; its owner must reconnect Microsoft from My Agent",
@@ -409,7 +497,8 @@ export function microsoftGraphAuthService(db: Db) {
     const result = await callTokenEndpoint(config, {
       grant_type: "refresh_token",
       refresh_token: token.refreshToken,
-      // Ask for exactly what was granted: a refresh never widens the grant.
+      // Ask for exactly the recorded grant: a refresh never widens it, even
+      // though Microsoft would honour anything already consented.
       scope: [...recorded, "offline_access"].join(" "),
     });
     if (!result.ok) {
@@ -428,7 +517,9 @@ export function microsoftGraphAuthService(db: Db) {
       if (result.kind === "malformed") {
         throw new MicrosoftGraphAuthError("malformed_token_response", "Microsoft returned no usable token");
       }
-      await markRefreshFailed(row, "reconnect_required", result.error);
+      // A refusal of the refresh token this attempt started from says nothing
+      // about a credential that replaced it meanwhile.
+      if (!(await markRefreshFailed(row, startedFrom, "reconnect_required", result.error))) return startOver();
       throw new MicrosoftGraphAuthError(
         "reconnect_required",
         result.error === "interaction_required"
@@ -437,34 +528,47 @@ export function microsoftGraphAuthService(db: Db) {
       );
     }
 
-    const scope = result.scope ?? token.scope;
-    await connectors.refreshToken(connectionId, {
-      accessToken: result.accessToken,
-      // Microsoft rotates refresh tokens; keep the old one only if it did not.
-      refreshToken: result.refreshToken ?? token.refreshToken,
-      expiresAt: result.expiresAt,
-      tokenType: result.tokenType,
-      scope,
-    });
-    const grantedScopes = scope ? normalizeScopes(scope) : recorded;
-    if (grantedScopes.join(" ") !== recorded.join(" ")) {
-      await db
-        .update(connections)
-        .set({ scopes: grantedScopes, updatedAt: new Date() })
-        .where(eq(connections.id, connectionId));
-    }
+    // Microsoft may omit `scope` ("the token is for the scopes requested");
+    // whatever it lists, the grant can shrink here but never grow.
+    const grantedScopes = result.scope ? boundScopes(normalizeScopes(result.scope), recorded) : recorded;
+    const stored = await connectors.refreshToken(
+      connectionId,
+      {
+        accessToken: result.accessToken,
+        // Microsoft rotates refresh tokens; keep the old one only if it did not.
+        refreshToken: result.refreshToken ?? token.refreshToken,
+        expiresAt: result.expiresAt,
+        tokenType: result.tokenType,
+        scope: grantedScopes.join(" "),
+      },
+      { expectedEncryptedToken: startedFrom, scopes: grantedScopes },
+    );
+    // Disconnected (no row) or reconnected (different credential) meanwhile:
+    // this token must not be stored, and must not be handed out either.
+    if (!stored) return startOver();
     return { accessToken: result.accessToken, grantedScopes };
   }
 
+  /** Marks the row `error`, unless its credential changed since `startedFrom`. Returns whether it did. */
   async function markRefreshFailed(
     row: { id: string; companyId: string },
+    startedFrom: Record<string, unknown>,
     reason: MicrosoftGraphAuthFailureReason,
     microsoftError: string | null,
-  ) {
-    await db
+  ): Promise<boolean> {
+    const marked = await db
       .update(connections)
       .set({ status: "error", updatedAt: new Date() })
-      .where(and(eq(connections.id, row.id), isNull(connections.revokedAt)));
+      .where(
+        and(
+          eq(connections.id, row.id),
+          isNull(connections.revokedAt),
+          sql`${connections.encryptedToken} = ${JSON.stringify(startedFrom)}::jsonb`,
+        ),
+      )
+      .returning({ id: connections.id })
+      .then((rows) => rows.length > 0);
+    if (!marked) return false;
     await logEvent(row, { type: "system", id: "microsoft-graph-auth" }, ACTIVITY.refreshFailed, {
       reason,
       // Microsoft's error code only; its description can carry trace ids.
@@ -474,6 +578,7 @@ export function microsoftGraphAuthService(db: Db) {
           ? "Microsoft requires you to sign in again (a sign-in or multi-factor policy). Reconnect Microsoft."
           : "Microsoft no longer accepts this connection. Reconnect Microsoft.",
     });
+    return true;
   }
 
   /**
@@ -500,7 +605,7 @@ export function microsoftGraphAuthService(db: Db) {
     input: { redirectUri: unknown; tier: unknown },
   ): Promise<{ authorizationUrl: string; connectionId: string }> {
     const config = requireConfigForRoute();
-    const redirectUri = validateRedirectUri(input.redirectUri);
+    const redirectUri = validateRedirectUri(input.redirectUri, options);
     const tier = parseTier(input.tier);
     const requestedScopes = requestedScopesForTier(tier);
     const codeVerifier = base64Url(randomBytes(32));
@@ -645,14 +750,27 @@ export function microsoftGraphAuthService(db: Db) {
       }
       throw await fail("code_rejected", "Microsoft did not accept this sign-in. Start connecting again.", 400);
     }
-    if (!exchanged.refreshToken || !exchanged.scope) {
+    if (!exchanged.refreshToken) {
       // Without a refresh token the connection dies within the hour, which is
-      // the failure this slice exists to fix; without a scope we cannot tell
-      // what it may do. Refuse rather than store either.
+      // the failure this slice exists to fix. Refuse rather than store it.
       throw await fail(
         "malformed_token_response",
-        "Microsoft did not grant lasting access (no refresh token or no scope list). Try connecting again.",
+        "Microsoft did not grant lasting access (no refresh token). Try connecting again.",
         502,
+      );
+    }
+    // `scope` is optional in a code redemption: omitted means "the scopes
+    // requested". Either way the tier chosen at connect is the upper bound.
+    const scopes = boundScopes(
+      normalizeScopes(exchanged.scope ?? stored.requestedScopes.join(" ")),
+      dataScopesForTier(stored.tier),
+    );
+    const missing = MICROSOFT_READ_SCOPES.filter((scope) => !hasScope(scopes, scope));
+    if (missing.length > 0) {
+      throw await fail(
+        "consent_incomplete",
+        `Microsoft did not grant ${missing.join(", ")}, so AgentDash cannot read your documents. Your organization may require an administrator to consent to these permissions; ask your Microsoft 365 administrator, then connect again.`,
+        403,
       );
     }
 
@@ -676,7 +794,6 @@ export function microsoftGraphAuthService(db: Db) {
       throw await fail("profile_unavailable", "Signed in, but Microsoft did not return your profile. Try connecting again.", 502);
     }
 
-    const scopes = normalizeScopes(exchanged.scope);
     const reconnected = row.encryptedToken !== null;
     const updated = await connectors.completeOAuthConnection(row.id, {
       scopes,
@@ -687,7 +804,7 @@ export function microsoftGraphAuthService(db: Db) {
         refreshToken: exchanged.refreshToken,
         expiresAt: exchanged.expiresAt,
         tokenType: exchanged.tokenType,
-        scope: exchanged.scope,
+        scope: scopes.join(" "),
       },
     });
     if (!updated) throw notFound("This Microsoft connection was disconnected while signing in");

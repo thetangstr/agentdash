@@ -154,6 +154,8 @@ Deployments can hold confidential documents. Document text returned by `document
 
 One migration (slice 1). Flag key `document_access_enabled` added to `FEATURE_FLAG_KEYS`; set per company through `featureFlagsService.set`; no UI for toggling in this plan (the owner sets it by API or SQL, as with `dod_guard_enabled`).
 
+**Turning the flag off (slice 2 review, open for an owner decision).** With the flag off every route answers 404, including `POST …/microsoft/revoke`, so a person cannot delete their own stored Microsoft refresh token. Until the owner decides otherwise, turning the flag off for a company must be paired with revoking that company's live `microsoft` rows (set `revoked_at`, `status = 'revoked'`, `encrypted_token = null`, as `connectorService.revoke` does). The alternative is to let `revoke` through when the flag is off and the caller has a live row; that departs from "404 on every route", so it was not built without a decision.
+
 ## Decisions
 
 Recorded 2026-10-08. D1, D3, D5 and D6 were decided by the owner directly; D2, D4 and D7 to D9 were proposed as defaults and accepted by the owner without change.

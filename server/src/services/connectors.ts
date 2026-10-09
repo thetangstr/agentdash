@@ -1,5 +1,5 @@
 // AgentDash: Connectors (AGE-106)
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   connections,
@@ -257,17 +257,36 @@ export function connectorService(db: Db) {
     return decryptToken(conn.encryptedToken as Record<string, unknown>);
   }
 
-  async function refreshToken(connectionId: string, newToken: TokenPayload) {
+  /**
+   * Store a refreshed credential. Returns null when nothing was written: the
+   * row is gone or revoked, or (with `expectedEncryptedToken`) its credential
+   * is no longer the one the refresh started from, e.g. its owner reconnected
+   * meanwhile. `scopes`, when given, is written in the same statement.
+   */
+  async function refreshToken(
+    connectionId: string,
+    newToken: TokenPayload,
+    options: { expectedEncryptedToken?: Record<string, unknown>; scopes?: string[] } = {},
+  ) {
     const encryptedMaterial = await encryptToken(newToken);
     return db
       .update(connections)
       .set({
         encryptedToken: encryptedMaterial,
+        ...(options.scopes ? { scopes: options.scopes } : {}),
         status: "active",
         updatedAt: new Date(),
       })
-      // A row revoked while a refresh was in flight stays revoked and empty.
-      .where(and(eq(connections.id, connectionId), isNull(connections.revokedAt)))
+      .where(
+        and(
+          eq(connections.id, connectionId),
+          // A row revoked while a refresh was in flight stays revoked and empty.
+          isNull(connections.revokedAt),
+          ...(options.expectedEncryptedToken
+            ? [sql`${connections.encryptedToken} = ${JSON.stringify(options.expectedEncryptedToken)}::jsonb`]
+            : []),
+        ),
+      )
       .returning()
       .then((rows) => rows[0] ?? null);
   }
