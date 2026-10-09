@@ -238,6 +238,8 @@ export {
   // AgentDash: Connectors (AGE-106)
   CONNECTION_OWNER_TYPES,
   CONNECTION_PROVIDERS,
+  DOCUMENT_PROVIDERS,
+  isDocumentProvider,
   CONNECTION_STATUSES,
   CONNECTION_SEND_IDENTITIES,
   CONNECTION_AUTONOMY_LEVELS,
@@ -246,6 +248,7 @@ export {
   ACTIVITY_LOG_ACTIONS_CONNECTORS,
   type ConnectionOwnerType,
   type ConnectionProvider,
+  type DocumentProvider,
   type ConnectionStatus,
   type ConnectionSendIdentity,
   type ConnectionAutonomyLevel,

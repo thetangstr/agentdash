@@ -15,8 +15,8 @@ import type {
   ConnectorWorkspaceDefaults,
   AgentConnectorOverrides,
 } from "@paperclipai/shared";
-import { policyListAllows, policyListAllowsAll } from "@paperclipai/shared";
-import { notFound, forbidden, conflict } from "../errors.js";
+import { isDocumentProvider, policyListAllows, policyListAllowsAll } from "@paperclipai/shared";
+import { notFound, forbidden, conflict, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
@@ -62,6 +62,29 @@ const DEFAULT_AUTONOMY: ConnectionAutonomyConfig = {
 };
 
 const DEFAULT_SEND_IDENTITY: ConnectionSendIdentity = "service";
+
+/**
+ * AgentDash (security): a document-provider connection must be a person's own
+ * private row. A workspace-visible row would offer one person's files to
+ * everyone, and an agent-owned row would detach access from stewardship;
+ * `resolveActingAs` never resolves either shape, so refuse to create them.
+ */
+function assertDocumentConnectionShape(
+  provider: string,
+  shape: { ownerType?: string; visibility?: string },
+) {
+  if (!isDocumentProvider(provider)) return;
+  if (shape.ownerType === "agent") {
+    throw unprocessable(
+      `A ${provider} connection must belong to a person, not an agent: agents reach documents only through their current steward's own connection`,
+    );
+  }
+  if (shape.visibility === "workspace") {
+    throw unprocessable(
+      `A ${provider} connection cannot be shared with the workspace: it grants access to one person's documents, so it stays private to that person`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Service factory
@@ -123,6 +146,7 @@ export function connectorService(db: Db) {
       token: TokenPayload;
     },
   ) {
+    assertDocumentConnectionShape(input.provider, input);
     const wsDefaults = await getWorkspaceDefaults(companyId);
     const encryptedToken = await encryptToken(input.token);
 
@@ -172,6 +196,7 @@ export function connectorService(db: Db) {
   ) {
     const existing = await getById(connectionId);
     if (!existing) throw notFound("Connection not found");
+    assertDocumentConnectionShape(existing.provider, { visibility: patch.visibility });
 
     return db
       .update(connections)
@@ -427,15 +452,46 @@ export function connectorService(db: Db) {
       )
       .orderBy(desc(connections.createdAt));
 
-    // Filter to connections this agent can use:
-    // - the actor's own connections (ownerId = agentId, ownerType = actorType;
-    //   for a human acting directly that includes their private connections)
-    // - workspace-visible connections from any owner
-    let usable = agentConnections.filter(
-      (c) =>
-        (c.ownerType === actorType && c.ownerId === agentId) ||
-        c.visibility === "workspace",
-    );
+    let usable: typeof agentConnections;
+    if (isDocumentProvider(provider)) {
+      // AgentDash (security): a document-provider connection is one person's
+      // delegated access to their own files. An agent may read exactly the
+      // files of the human who CURRENTLY stewards it, so the row is derived
+      // from the live stewardship and nothing else:
+      // - no agent-owned rows and no workspace-visible rows, so a shared row
+      //   can never shadow (or stand in for) the steward's own;
+      // - only the steward's private row that actually holds a credential;
+      // - no active stewardship means no connection, and ending a stewardship
+      //   cuts access on the next call with no revocation to remember.
+      // Not gated on `policy`: document access is not tied to a product
+      // profile. A human acting directly resolves only their own rows.
+      if (actorType === "user") {
+        usable = agentConnections.filter(
+          (c) => c.ownerType === "user" && c.ownerId === agentId && c.encryptedToken != null,
+        );
+      } else {
+        const activeStewardship = await stewardships.activeByAgent(companyId, agentId);
+        usable = activeStewardship
+          ? agentConnections.filter(
+              (c) =>
+                c.ownerType === "user" &&
+                c.ownerId === activeStewardship.userId &&
+                c.visibility === "private" &&
+                c.encryptedToken != null,
+            )
+          : [];
+      }
+    } else {
+      // Filter to connections this agent can use:
+      // - the actor's own connections (ownerId = agentId, ownerType = actorType;
+      //   for a human acting directly that includes their private connections)
+      // - workspace-visible connections from any owner
+      usable = agentConnections.filter(
+        (c) =>
+          (c.ownerType === actorType && c.ownerId === agentId) ||
+          c.visibility === "workspace",
+      );
+    }
 
     // AgentDash-MK: ...and the private connection of the human who CURRENTLY
     // stewards this agent.
@@ -463,7 +519,9 @@ export function connectorService(db: Db) {
     // Only consulted when nothing above matched, so the common path adds no
     // query. The consequence is that an agent-owned or workspace connection
     // takes precedence over the steward's own — more specific ownership wins.
-    if (usable.length === 0 && policy) {
+    //
+    // Document providers resolved above and never take this path.
+    if (usable.length === 0 && policy && !isDocumentProvider(provider)) {
       const activeStewardship = await stewardships.activeByAgent(companyId, agentId);
       if (activeStewardship) {
         usable = agentConnections.filter(
