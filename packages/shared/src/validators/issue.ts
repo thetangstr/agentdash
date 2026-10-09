@@ -155,9 +155,9 @@ const createIssueBaseSchema = z.object({
   assigneeAgentId: z.string().uuid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),
   /**
-   * AgentDash: when an agent assigns a person who stewards an agent, the work
-   * goes to that agent instead. `true` keeps it with the person — for a
-   * decision only a human can make. Ignored for human callers. Not stored.
+   * AgentDash: work assigned to a person who stewards an agent goes to that
+   * agent instead, whoever assigns it. `true` keeps it with the person. Not
+   * stored.
    */
   assignToPerson: z.boolean().optional(),
   // AgentDash: ExecOS request identity. The external ExecOS client records
@@ -342,6 +342,10 @@ export const suggestedTaskDraftSchema = z.object({
   assigneeUserId: z.string().trim().min(1).nullable().optional(),
   // AgentDash: same meaning as on issue create; applied when the drafts are written.
   assignToPerson: z.boolean().optional(),
+  // AgentDash: server-set when the draft's person assignee was replaced by the
+  // agent they steward; carried to that agent's wake when the draft is
+  // accepted. Ignored on input.
+  routedFromStewardUserId: z.string().trim().min(1).optional(),
   projectId: z.string().uuid().nullable().optional(),
   goalId: z.string().uuid().nullable().optional(),
   billingCode: z.string().trim().max(120).nullable().optional(),

@@ -26,19 +26,26 @@ export function queueIssueAssignmentWakeup(input: {
   contextSource: string;
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
+  /**
+   * AgentDash: set when the issue was assigned to this agent's steward and
+   * routed to the agent (services/stewarded-agent-routing.ts). Carried on the
+   * wake so the run context says the work came via the steward.
+   */
+  routedFromStewardUserId?: string | null;
   rethrowOnError?: boolean;
 }) {
   if (!input.issue.assigneeAgentId || input.issue.status === "backlog") return;
+  const steward = input.routedFromStewardUserId ? { routedFromStewardUserId: input.routedFromStewardUserId } : {};
 
   return input.heartbeat
     .wakeup(input.issue.assigneeAgentId, {
       source: "assignment",
       triggerDetail: "system",
       reason: input.reason,
-      payload: { issueId: input.issue.id, mutation: input.mutation },
+      payload: { issueId: input.issue.id, mutation: input.mutation, ...steward },
       requestedByActorType: input.requestedByActorType,
       requestedByActorId: input.requestedByActorId ?? null,
-      contextSnapshot: { issueId: input.issue.id, source: input.contextSource },
+      contextSnapshot: { issueId: input.issue.id, source: input.contextSource, ...steward },
     })
     .catch((err) => {
       logger.warn({ err, issueId: input.issue.id }, "failed to wake assignee on issue assignment");
