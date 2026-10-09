@@ -381,6 +381,8 @@ function mergeAdapterRecoveryMetadata(input: {
 // running issue must not swallow the news that its message never went out.
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
   "approval_approved",
+  // A refusal is news the running issue must not swallow either.
+  "approval_rejected",
   "connector_send_failed",
   "connector_send_outcome_unknown",
 ]);
@@ -2293,8 +2295,9 @@ function isHeartbeatRunTerminalStatus(
 export const STEWARD_ROUTED_TASK_NOTE =
   "This issue was assigned to your steward and came to you. Take the first pass. Unless your " +
   "mandate (AGENTS.md) explicitly lets you finish this kind of work unattended, ask your steward " +
-  "before completing it: comment the restated request, your recommendation and the options, and " +
-  "set the issue to blocked.";
+  "before completing it: ask_user_questions on this issue with the restated request as the prompt, " +
+  "your recommendation as the first option and the alternatives after it, then set the issue to " +
+  "blocked. It reaches your steward in their own Claude or Codex session; their answer wakes you.";
 
 export function buildPaperclipTaskMarkdown(input: {
   issue: {

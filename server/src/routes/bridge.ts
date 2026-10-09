@@ -10,6 +10,7 @@ import { approvalCardDeliveryService } from "../services/approval-card-delivery.
 import { stewardInboxService } from "../services/steward-inbox.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
+import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { BRIDGE_TASK_CLASSES, bridgeService } from "../services/bridge.js";
@@ -63,6 +64,8 @@ export function bridgeRoutes(
   options: {
     pluginWorkerManager?: PluginWorkerManager;
     autoDispatchQueuedRuns?: boolean;
+    /** Substituted in tests to observe the wake an answer queues. */
+    heartbeat?: Pick<ReturnType<typeof heartbeatService>, "wakeup">;
   } = {},
 ) {
   const router = Router();
@@ -71,9 +74,12 @@ export function bridgeRoutes(
   const cardDelivery = approvalCardDeliveryService(db);
   const inbox = stewardInboxService(db);
   const inboxDecisions = stewardInboxDecisionService(db, options);
-  const inboxActions = stewardInboxActionsService(db, {
-    heartbeat: heartbeatService(db, { pluginWorkerManager: options.pluginWorkerManager }),
+  const heartbeat = heartbeatService(db, {
+    pluginWorkerManager: options.pluginWorkerManager,
+    autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
+  const inboxActions = stewardInboxActionsService(db, { heartbeat });
+  const inboxAnswers = stewardInboxAnswerService(db, { heartbeat: options.heartbeat ?? heartbeat });
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -144,7 +150,8 @@ export function bridgeRoutes(
    * have made an idempotent read share a route with a leased write.
    *
    * Pass `includeDigest: true` for the ordered standing summary -- urgent
-   * approvals, then blockers, then completions. That is a projection of how
+   * approvals, then questions the person's agents asked them (each with an
+   * answer handle), then blockers, then completions. That is a projection of how
    * things stand rather than a replay of the events above, so it answers "what
    * is waiting" while the event list answers "what changed".
    */
@@ -238,6 +245,50 @@ export function bridgeRoutes(
     const token = typeof req.body?.token === "string" ? req.body.token : null;
     if (!token) throw badRequest("token is required");
     res.json(await inboxActions.confirm(endpointId, token));
+  });
+
+  /**
+   * Answer an agent's question from the inbox.
+   *
+   * The credential does not authorise this; the handle does, for the one
+   * question it was minted against, and the answer goes through the same
+   * service the web page uses -- so the answer is validated, recorded as the
+   * person and receipted the same way, and the asking agent is woken with it.
+   * Whether the question is still this person's is re-resolved now, not
+   * trusted from the sync that delivered the handle.
+   *
+   * Answers 200 with `ok: false` for the refusals a person can actually hit,
+   * as `decide` does.
+   */
+  router.post("/bridge/inbox/answer", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    const token = typeof body.token === "string" ? body.token : null;
+    if (!token) throw badRequest("token is required");
+    const optionIds = Array.isArray(body.optionIds)
+      ? body.optionIds.filter((value: unknown): value is string => typeof value === "string")
+      : undefined;
+    const answers = Array.isArray(body.answers)
+      ? body.answers
+          .filter((value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object")
+          .map((value: Record<string, unknown>) => ({
+            questionId: typeof value.questionId === "string" ? value.questionId : "",
+            optionIds: Array.isArray(value.optionIds)
+              ? value.optionIds.filter((id: unknown): id is string => typeof id === "string")
+              : [],
+            ...(typeof value.text === "string" ? { text: value.text } : {}),
+          }))
+      : undefined;
+    res.json(
+      await inboxAnswers.answer(endpointId, {
+        token,
+        ...(typeof body.optionId === "string" ? { optionId: body.optionId } : {}),
+        ...(optionIds ? { optionIds } : {}),
+        ...(typeof body.text === "string" ? { text: body.text } : {}),
+        ...(answers ? { answers } : {}),
+      }),
+    );
   });
 
   router.post("/bridge/result", async (req, res) => {

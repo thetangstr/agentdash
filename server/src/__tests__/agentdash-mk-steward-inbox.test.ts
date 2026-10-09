@@ -138,6 +138,7 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/inbox/agents",
         "/api/bridge/inbox/propose",
         "/api/bridge/inbox/confirm",
+        "/api/bridge/inbox/answer",
       ].sort(),
     );
   });
@@ -1243,7 +1244,7 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(withDigest.digest).toBeDefined();
   });
 
-  it("orders the digest urgent approvals, then blockers, then completions", async () => {
+  it("orders the digest urgent approvals, then agent questions, then blockers, then completions", async () => {
     const { company, steward, agent } = await seed();
     const endpoint = await makeEndpoint(company.id, steward.principalId);
     await makeApproval(company.id, agent.id, { type: "hire_agent" });
@@ -1254,6 +1255,7 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     // The contract is the reading order, so the key order is the assertion.
     expect(Object.keys(digest).filter((k) => k !== "agentsAnsweredFor" && k !== "truncated")).toEqual([
       "approvals",
+      "questions",
       "blockers",
       "completions",
     ]);

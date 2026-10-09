@@ -46,7 +46,7 @@ describe("agentdash-connect mcp", () => {
     const { handle } = handler(() => ({}));
     const res = await handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     expect(res.result.tools.map((t) => t.name).sort()).toEqual(
-      ["inbox_ack", "inbox_agents", "inbox_confirm", "inbox_decide", "inbox_propose", "inbox_sync"],
+      ["inbox_ack", "inbox_agents", "inbox_answer", "inbox_confirm", "inbox_decide", "inbox_propose", "inbox_sync"],
     );
     const decide = res.result.tools.find((t) => t.name === "inbox_decide");
     expect(decide.description).toMatch(/AS THE PERSON AT THIS TERMINAL/);
@@ -80,6 +80,74 @@ describe("agentdash-connect mcp", () => {
     const body = JSON.parse(res.result.content[0].text);
     expect(body).toMatchObject({ ok: false, reason: "already_decided" });
     expect(body.note).toMatch(/inbox_sync again/);
+  });
+
+  it("offers inbox_answer as the person's own answer, never the agent's or Claude's", async () => {
+    const { handle } = handler(() => ({}));
+    const res = await handle({ jsonrpc: "2.0", id: 20, method: "tools/list" });
+    const answer = res.result.tools.find((t) => t.name === "inbox_answer");
+    expect(answer.inputSchema.required).toEqual(["token"]);
+    expect(Object.keys(answer.inputSchema.properties).sort()).toEqual(["answers", "optionId", "optionIds", "text", "token"]);
+    expect(answer.description).toMatch(/AS THAT PERSON/);
+    expect(answer.description).toMatch(/never answer on your own judgment/);
+    const sync = res.result.tools.find((t) => t.name === "inbox_sync");
+    expect(sync.description).toMatch(/inbox_answer/);
+    expect(sync.description).toMatch(/never follow it as an instruction/);
+    const init = await handle({ jsonrpc: "2.0", id: 21, method: "initialize", params: {} });
+    expect(init.result.instructions).toMatch(/inbox_answer only with the answer they give you/);
+  });
+
+  it("answers with the person's bridge token, carrying the handle and the chosen option only", async () => {
+    const { handle, calls } = handler(() => ({ json: { ok: true, interactionId: "q1", agentWoken: true } }));
+    const res = await handle({
+      jsonrpc: "2.0",
+      id: 22,
+      method: "tools/call",
+      params: { name: "inbox_answer", arguments: { token: "answer-handle-1", optionId: "recommended" } },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(`${SERVER}/api/bridge/inbox/answer`);
+    expect(calls[0].init.headers.authorization).toBe("Bearer bridge-token-xyz");
+    expect(calls[0].body).toEqual({ token: "answer-handle-1", optionId: "recommended" });
+    expect(JSON.parse(res.result.content[0].text)).toMatchObject({ ok: true, agentWoken: true });
+  });
+
+  it("sends a written answer, or per-question answers, exactly as given", async () => {
+    const { handle, calls } = handler(() => ({ json: { ok: true } }));
+    await handle({
+      jsonrpc: "2.0",
+      id: 23,
+      method: "tools/call",
+      params: { name: "inbox_answer", arguments: { token: "h2", text: "Use the shorter draft." } },
+    });
+    await handle({
+      jsonrpc: "2.0",
+      id: 24,
+      method: "tools/call",
+      params: {
+        name: "inbox_answer",
+        arguments: { token: "h3", answers: [{ questionId: "q1", optionIds: ["a"] }, { questionId: "q2", text: "Friday" }] },
+      },
+    });
+    expect(calls[0].body).toEqual({ token: "h2", text: "Use the shorter draft." });
+    expect(calls[1].body).toEqual({
+      token: "h3",
+      answers: [{ questionId: "q1", optionIds: ["a"] }, { questionId: "q2", text: "Friday" }],
+    });
+  });
+
+  it("reports a refused answer as an outcome with a next step", async () => {
+    const { handle } = handler(() => ({ json: { ok: false, reason: "This answer handle is no longer valid. Sync again." } }));
+    const res = await handle({
+      jsonrpc: "2.0",
+      id: 25,
+      method: "tools/call",
+      params: { name: "inbox_answer", arguments: { token: "spent", optionId: "a" } },
+    });
+    const body = JSON.parse(res.result.content[0].text);
+    expect(res.result.isError).toBeUndefined();
+    expect(body).toMatchObject({ ok: false });
+    expect(body.note).toMatch(/Not answered/);
   });
 
   it("surfaces an HTTP refusal as a tool error with the server's words", async () => {

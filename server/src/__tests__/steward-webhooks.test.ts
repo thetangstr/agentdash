@@ -115,6 +115,32 @@ describe("renderStewardWebhookMessage", () => {
     expect(text).toContain("never the evidence");
   });
 
+  it("points at agent questions without carrying the agent's text", () => {
+    const text = renderStewardWebhookMessage({
+      ownerName: "Steward A",
+      approvalsUrl: null,
+      digest: digest({
+        questions: {
+          total: 1,
+          shown: 1,
+          items: [
+            {
+              identifier: "MKT-12",
+              issueTitle: "Reply to the vendor",
+              agentName: "Agent A",
+              fromAgent: { questions: [{ prompt: "the private restatement" }] },
+            },
+          ],
+        },
+        blockers: { total: 1, shown: 1, items: [{ identifier: "MKT-9", title: "Stuck thing", agentName: "Agent A" }] },
+      }) as never,
+    });
+    const asked = text.indexOf("Your agents asked you (1):\n  - MKT-12 Reply to the vendor (Agent A)");
+    expect(asked).toBeGreaterThan(-1);
+    expect(asked).toBeLessThan(text.indexOf("Stopped and needs you (1):"));
+    expect(text).not.toContain("private restatement");
+  });
+
   it("leads with approved sends that did not go out", () => {
     const text = renderStewardWebhookMessage({
       ownerName: "Jordan Lee",

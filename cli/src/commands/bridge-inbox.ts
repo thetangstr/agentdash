@@ -72,6 +72,8 @@ interface InboxSyncResponse {
       risk: { level: string; reason: string };
       waitingSince: string;
     }>;
+    /** Absent from instances that predate agent questions in the inbox. */
+    questions?: DigestSection<{ identifier: string | null; issueTitle: string | null; agentName: string | null }>;
     blockers: DigestSection<{ identifier: string | null; title: string; agentName: string | null }>;
     completions: DigestSection<{ identifier: string | null; title: string; agentName: string | null }>;
     truncated: boolean;
@@ -145,8 +147,12 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
     return lines.join("\n");
   }
 
+  const questions = digest.questions ?? { total: 0, shown: 0, items: [] };
   const nothing =
-    digest.approvals.total === 0 && digest.blockers.total === 0 && digest.completions.total === 0;
+    digest.approvals.total === 0 &&
+    questions.total === 0 &&
+    digest.blockers.total === 0 &&
+    digest.completions.total === 0;
   if (nothing) {
     // Still name uncovered events: `--ack` advances the cursor over the whole
     // fetched page, so anything unmentioned here is buried permanently.
@@ -170,6 +176,18 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
       );
     }
     const more = remainder(digest.approvals);
+    if (more) lines.push(more);
+    lines.push("");
+  }
+
+  // Pointers only here: the question text is the agent's, and this render
+  // has no tool to answer with. agentdash-connect's inbox shows it in full.
+  if (questions.total > 0) {
+    lines.push(`Your agents asked you (${questions.total}) — answer on the issue:`);
+    for (const item of questions.items) {
+      lines.push(issueLine({ identifier: item.identifier, title: item.issueTitle ?? "", agentName: item.agentName }));
+    }
+    const more = remainder(questions);
     if (more) lines.push(more);
     lines.push("");
   }
@@ -256,6 +274,7 @@ export async function runBridgeInbox(
     response.events.length === 0 &&
     (!digest ||
       (digest.approvals.total === 0 &&
+        (digest.questions?.total ?? 0) === 0 &&
         digest.blockers.total === 0 &&
         digest.completions.total === 0));
 

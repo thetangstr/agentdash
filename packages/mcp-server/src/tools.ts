@@ -701,7 +701,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "update_issue",
-      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. Assigning a person who stewards an agent gives the issue to that agent unless assignToPerson is true. Work assigned to your steward comes to you: take the first pass, ask before completing unless your mandate lets you finish it (comment your recommendation, set blocked), and assign it to your steward (assigneeAgentId null, assigneeUserId = steward) only when they must do the work themselves. That hand-back stays with them, as does returning your issue to the person who created it.",
+      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. Assigning a person who stewards an agent gives the issue to that agent unless assignToPerson is true. Work assigned to your steward comes to you: take the first pass, ask before completing unless your mandate lets you finish it (ask_user_questions with your recommendation as the first option, then set blocked), and assign it to your steward (assigneeAgentId null, assigneeUserId = steward) only when they must do the work themselves. That hand-back stays with them, as does returning your issue to the person who created it.",
       updateIssueToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("PATCH", `/issues/${encodeURIComponent(issueId)}`, { body }),
@@ -745,7 +745,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "ask_user_questions",
-      "Ask focused human questions on an issue. Use selectionMode text with empty options for free text; companyFactKey only for known workforce facts. A workforce question is delivered to the named accountable human. Stop dependent work immediately after asking; arbitrary comments and wake metadata do not answer it.",
+      "Ask focused human questions on an issue. On an issue assigned to you, the question goes to your steward (the person who answers for you; you do not name them) and reaches them in their own Claude or Codex session through their AgentDash inbox, as well as in AgentDash. For work assigned to your steward, ask before completing it unless your mandate lets you finish it: the restated request as the prompt (max 500 characters), your recommendation as the first option labelled recommended, then the alternatives (selectionMode single, or multi); then set the issue blocked. Their answer wakes you. Use selectionMode text with empty options for free text; companyFactKey only for known workforce facts. A workforce question is delivered to the named accountable human. Stop dependent work immediately after asking; arbitrary comments and wake metadata do not answer it.",
       createAskUserQuestionsToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/interactions`, {

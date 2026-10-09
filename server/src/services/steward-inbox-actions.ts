@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, bridgeEndpoints, stewardInboxActionHandles } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
@@ -325,6 +325,9 @@ export function stewardInboxActionsService(
         and(
           eq(stewardInboxActionHandles.token, token),
           eq(stewardInboxActionHandles.bridgeEndpointId, endpointId),
+          // The table also holds question answer handles. Those are spent only
+          // by the answer route, never confirmed here as an assignment.
+          inArray(stewardInboxActionHandles.kind, ["assign_work", "set_cadence"]),
           isNull(stewardInboxActionHandles.consumedAt),
           gt(stewardInboxActionHandles.expiresAt, now),
         ),

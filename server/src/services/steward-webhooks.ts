@@ -40,6 +40,12 @@ const MAX_URL_LENGTH = 2000;
 export interface StewardWebhookDigest {
   agentsAnsweredFor: number;
   approvals: { total: number; shown: number; items: Array<{ type: string; agentName: string | null; revision: number; risk: { level: string; reason: string }; waitingSince: string }> };
+  /**
+   * Optional so a digest from before questions existed still renders. Only
+   * the pointer is read here -- the question text never goes to a channel
+   * whose audience is wider than the steward.
+   */
+  questions?: { total: number; shown: number; items: Array<{ identifier: string | null; issueTitle: string | null; agentName: string | null }> };
   blockers: { total: number; shown: number; items: Array<{ identifier: string | null; title: string; agentName: string | null }> };
   completions: { total: number; shown: number; items: Array<{ identifier: string | null; title: string; agentName: string | null }> };
 }
@@ -92,6 +98,15 @@ export function renderStewardWebhookMessage(input: {
       lines.push(`  - ${who}${item.type} [${item.risk.level}: ${item.risk.reason}], rev ${item.revision}`);
     }
     const more = remainder(digest.approvals);
+    if (more) lines.push(more);
+    lines.push("");
+  }
+  if (digest.questions && digest.questions.total > 0) {
+    lines.push(`Your agents asked you (${digest.questions.total}):`);
+    for (const item of digest.questions.items) {
+      lines.push(issueLine({ identifier: item.identifier, title: item.issueTitle ?? "", agentName: item.agentName }));
+    }
+    const more = remainder(digest.questions);
     if (more) lines.push(more);
     lines.push("");
   }

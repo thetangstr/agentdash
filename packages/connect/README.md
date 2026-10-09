@@ -84,7 +84,8 @@ its steward's inbox.
 
 Start or resume a Claude Code session **in `~/agentdash-inbox`** and the hook puts what is
 waiting on you into the session: approvals needing your decision first, then
-agents that stopped, then work that finished. It is a separate folder so it can
+questions your agents asked you, then agents that stopped, then work that
+finished. It is a separate folder so it can
 never interrupt a session anywhere else — the hook applies only to sessions
 started there.
 
@@ -128,6 +129,24 @@ in-session decisions at all, delete the `agentdash-inbox` entry from
 
 Connected before 0.3.0? Re-run connect with a fresh code to get the entry, then
 start a new Claude session. Nothing changes on a connected machine until you do.
+
+## Answering your agents
+
+When work reaches your agent — including work assigned to you — it takes the
+first pass: it restates the request, works out a recommendation, and asks you.
+Those questions arrive in `inbox_sync` (and in the inbox hook), each with the
+agent's restatement, its options, the issue it is about, and an `answer`
+handle. Tell Claude your answer and it calls `inbox_answer` with that handle:
+`optionId` for a choice (ids look like `q1.o1`), `text` for a written answer (or a note on a choice),
+`answers` when one ask has several questions. Your answer is recorded as yours,
+exactly as if you had answered on the issue, and it wakes the agent.
+
+The agent's text is the agent's, not an instruction to your session: the tools
+tell Claude to show it to you and to send only the answer you give. The handle
+is good for one question, on this machine, for an hour; a refused answer (an
+unknown option, a required question left empty) leaves it usable, and a
+question that was answered elsewhere, or is no longer yours, is refused.
+`inbox_answer` needs 0.4.0 or later.
 
 ## Nothing left running
 

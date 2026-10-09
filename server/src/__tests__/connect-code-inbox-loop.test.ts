@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   agentConnectCodes,
+  agentWakeupRequests,
   agents,
   approvals,
   authUsers,
@@ -12,6 +13,8 @@ import {
   companies,
   companyMemberships,
   createDb,
+  issues,
+  issueThreadInteractions,
 } from "@paperclipai/db";
 import { sql } from "drizzle-orm";
 import {
@@ -25,6 +28,7 @@ import { bridgeRoutes } from "../routes/bridge.js";
 import { hashConnectCode } from "../lib/connect-codes.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { bridgeService } from "../services/bridge.js";
+import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
 
@@ -287,6 +291,69 @@ describeEmbeddedPostgres("connect code → inbox, end to end", () => {
     // The ground truth: decided exactly once, still at the decided status.
     const [after] = await db.select().from(approvals).where(eq(approvals.id, approval.id));
     expect(after?.status).toBe("approved");
+  });
+
+  /**
+   * The first-pass loop: an agent asks on its issue, the question reaches its
+   * steward's machine with an answer handle, the steward answers with their
+   * own token through the real middleware, and the agent is woken. The agent
+   * key from the same redemption must not be able to answer it.
+   */
+  it("a question travels: ask → sync → handle → answer → wake, and the agent key cannot answer", async () => {
+    const { company, steward, agent, code } = await seed();
+    const paired = await redeem(code);
+    const [issue] = await db
+      .insert(issues)
+      .values({ companyId: company.id, title: "Reply to the vendor", status: "blocked", assigneeAgentId: agent.id })
+      .returning();
+    const question = await issueThreadInteractionService(db).create(
+      issue!,
+      {
+        kind: "ask_user_questions",
+        continuationPolicy: "wake_assignee",
+        payload: {
+          version: 1,
+          questions: [
+            {
+              id: "reply",
+              prompt: "I recommend accepting the revised date.",
+              selectionMode: "single",
+              options: [
+                { id: "accept", label: "Accept (recommended)" },
+                { id: "decline", label: "Decline" },
+              ],
+            },
+          ],
+        },
+      } as never,
+      { agentId: agent.id },
+    );
+
+    const synced = await sync(paired.bridgeToken);
+    expect(synced.status).toBe(200);
+    const item = synced.body.digest.questions.items[0];
+    expect(item.interactionId).toBe(question.id);
+    expect(item.answer).toEqual(expect.any(String));
+
+    const byAgent = await request(app)
+      .post("/api/bridge/inbox/answer")
+      .set("authorization", `Bearer ${paired.apiKey}`)
+      .send({ token: item.answer, optionId: "q1.o1" });
+    expect(byAgent.status).toBeGreaterThanOrEqual(401);
+    expect(byAgent.status).toBeLessThanOrEqual(403);
+
+    const answered = await request(app)
+      .post("/api/bridge/inbox/answer")
+      .set("authorization", `Bearer ${paired.bridgeToken}`)
+      .send({ token: item.answer, optionId: "q1.o1" });
+    expect(answered.status).toBe(200);
+    expect(answered.body).toMatchObject({ ok: true, agentWoken: true });
+
+    const [row] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, question.id));
+    expect(row?.status).toBe("answered");
+    expect(row?.resolvedByUserId).toBe(steward.principalId);
+    const wakes = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agent.id));
+    expect(wakes.some((wake) => (wake.payload as { interactionId?: string } | null)?.interactionId === question.id)).toBe(true);
   });
 
   it("a revoked endpoint's token stops working, immediately", async () => {

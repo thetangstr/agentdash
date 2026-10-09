@@ -447,6 +447,65 @@ export function approvalDecisionEffectsService(
         "recommendation settlement failed; it may stay open after being declined",
       );
     }
+
+    // AgentDash: wake the requester with the refusal, from every decision
+    // surface. Without this a rejected agent learned nothing until something
+    // else woke it, and an agent blocked on its own request stayed blocked.
+    // Last, so every effect above (a declined bridge task, a discarded fact)
+    // is already visible when it reads why. Logged, never thrown: the
+    // decision is committed.
+    if (approval.requestedByAgentId) {
+      let linkedIssueIds: string[] = [];
+      try {
+        linkedIssueIds = (await issueApprovalsSvc.listIssuesForApproval(approval.id)).map((issue) => issue.id);
+      } catch (err) {
+        logger.warn({ err, approvalId: approval.id }, "linked issues unavailable for rejection wake");
+      }
+      const primaryIssueId = linkedIssueIds[0] ?? null;
+      try {
+        const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "approval_rejected",
+          payload: {
+            approvalId: approval.id,
+            approvalStatus: approval.status,
+            issueId: primaryIssueId,
+            issueIds: linkedIssueIds,
+          },
+          requestedByActorType: "user",
+          requestedByActorId: actorUserId,
+          contextSnapshot: {
+            source: "approval.rejected",
+            approvalId: approval.id,
+            approvalStatus: approval.status,
+            issueId: primaryIssueId,
+            issueIds: linkedIssueIds,
+            taskId: primaryIssueId,
+            wakeReason: "approval_rejected",
+          },
+        });
+        await logActivity(db, {
+          companyId: approval.companyId,
+          actorType: "user",
+          actorId: actorUserId,
+          action: "approval.requester_wakeup_queued",
+          entityType: "approval",
+          entityId: approval.id,
+          details: {
+            requesterAgentId: approval.requestedByAgentId,
+            wakeRunId: wakeRun?.id ?? null,
+            wakeReason: "approval_rejected",
+            linkedIssueIds,
+          },
+        });
+      } catch (err) {
+        logger.warn(
+          { err, approvalId: approval.id, requestedByAgentId: approval.requestedByAgentId },
+          "failed to queue requester wakeup after rejection",
+        );
+      }
+    }
   }
   }
 

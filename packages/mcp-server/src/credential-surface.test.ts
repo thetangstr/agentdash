@@ -60,6 +60,8 @@ describe("advertised tool surface", () => {
     "inbox_agents",
     "inbox_propose",
     "inbox_confirm",
+    // Spends a handle minted for one question to this endpoint's owner.
+    "inbox_answer",
   ];
 
   it("offers a bridge endpoint token exactly the tools it can use", () => {
