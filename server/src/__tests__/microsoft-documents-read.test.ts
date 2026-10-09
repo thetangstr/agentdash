@@ -40,7 +40,10 @@ import { microsoftDocumentsRoutes } from "../routes/microsoft-documents.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { createDocumentTextStripper } from "../services/document-content.js";
 import { featureFlagsService } from "../services/feature-flags.js";
-import { __resetMicrosoftDocumentsLimiterState } from "../services/microsoft-documents.js";
+import {
+  __resetMicrosoftDocumentsLimiterState,
+  allowedDownloadLocation,
+} from "../services/microsoft-documents.js";
 import { __resetMicrosoftGraphAuthState } from "../services/microsoft-graph-auth.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -140,6 +143,18 @@ describe("microsoft-documents read service source (slice 3)", () => {
     expect(source).not.toMatch(/documents-write/);
     expect(source).not.toMatch(/sharedWithMe/);
     expect(source).not.toMatch(/\/search\/query/);
+  });
+
+  it("follows a download redirect over https only, unless Graph itself is plain http (a local test double)", () => {
+    const graph = "https://graph.microsoft.com/v1.0";
+    expect(allowedDownloadLocation("http://files.example.test/x?tempauth=secret", graph)).toBeNull();
+    expect(allowedDownloadLocation("https://files.example.test/x?tempauth=secret", graph)?.href).toBe(
+      "https://files.example.test/x?tempauth=secret",
+    );
+    expect(allowedDownloadLocation("ftp://files.example.test/x", graph)).toBeNull();
+    expect(allowedDownloadLocation("not a url", graph)).toBeNull();
+    expect(allowedDownloadLocation(null, graph)).toBeNull();
+    expect(allowedDownloadLocation("http://127.0.0.1:9/download/x", "http://127.0.0.1:9/graph")?.protocol).toBe("http:");
   });
 
   it("gets its token only from slice 2 and its connection only from slice 1", () => {
@@ -276,7 +291,8 @@ describeEmbeddedPostgres("Microsoft document reads for agents (slice 3)", () => 
           res.json({ id: "graph-user-a", userPrincipalName: "person.a@tenant.example.test" });
           return;
         }
-        reply(res, p, graphRoutes.get(p));
+        const skipToken = url.searchParams.get("$skiptoken");
+        reply(res, p, graphRoutes.get(skipToken ? `${p}?$skiptoken=${skipToken}` : p));
         return;
       }
       if (pathname.startsWith("/download/")) {
@@ -445,9 +461,10 @@ describeEmbeddedPostgres("Microsoft document reads for agents (slice 3)", () => 
 
   const docs = (companyId = FLAGGED) => `/api/companies/${companyId}/documents`;
 
-  function fileItem(id: string, name: string, mimeType: string, size: number) {
+  function fileItem(id: string, name: string, mimeType: string, size: number, eTag = `"{${id}},1"`) {
     return {
       id,
+      eTag,
       name,
       size,
       file: { mimeType },
@@ -457,8 +474,8 @@ describeEmbeddedPostgres("Microsoft document reads for agents (slice 3)", () => 
     };
   }
 
-  function serveFile(id: string, name: string, mimeType: string, bytes: Buffer) {
-    graphRoutes.set(`/drives/${DRIVE}/items/${id}`, { status: 200, body: fileItem(id, name, mimeType, bytes.byteLength) });
+  function serveFile(id: string, name: string, mimeType: string, bytes: Buffer, eTag?: string) {
+    graphRoutes.set(`/drives/${DRIVE}/items/${id}`, { status: 200, body: fileItem(id, name, mimeType, bytes.byteLength, eTag) });
     graphRoutes.set(`/drives/${DRIVE}/items/${id}/content`, {
       status: 302,
       headers: { location: `${msBaseUrl}/download/${id}?sig=preauth` },
@@ -605,6 +622,67 @@ describeEmbeddedPostgres("Microsoft document reads for agents (slice 3)", () => 
     expect(graphCalls).toHaveLength(3);
   });
 
+  it("pages drive search for scope shared until it has enough shared items", async () => {
+    await connect(PERSON_A);
+    const searchPath = "/me/drive/search(q='kickoff')";
+    const own = Array.from({ length: 10 }, (_, i) => fileItem(`own-${i}`, `Kickoff ${i}.docx`, DOCX_MIME, 100));
+    const sharedItem = {
+      id: "shortcut-2",
+      name: "Kickoff shared.docx",
+      remoteItem: { id: "remote-2", size: 50, file: { mimeType: DOCX_MIME }, parentReference: { driveId: "b!drive-of-person-c" } },
+    };
+    graphRoutes.set(searchPath, {
+      status: 200,
+      body: { value: own, "@odata.nextLink": `${msBaseUrl}/graph${searchPath}?$top=200&$skiptoken=page2` },
+    });
+    graphRoutes.set(`${searchPath}?$skiptoken=page2`, { status: 200, body: { value: [sharedItem] } });
+
+    const res = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/search`).query({ query: "kickoff", scope: "shared", limit: 10 });
+    expect(res.status, res.text).toBe(200);
+    expect(res.body.results.map((r: { itemRef: string }) => r.itemRef)).toEqual(["b!drive-of-person-c:remote-2"]);
+    const calls = graphCalls.filter((c) => c.path.startsWith(searchPath));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.path).toContain("$top=200");
+    expect(calls.every((c) => c.bearer.startsWith("access-"))).toBe(true);
+  });
+
+  it("never follows a search nextLink that leaves Microsoft Graph", async () => {
+    await connect(PERSON_A);
+    const searchPath = "/me/drive/search(q='kickoff')";
+    graphRoutes.set(searchPath, {
+      status: 200,
+      body: { value: [fileItem("own-1", "Kickoff.docx", DOCX_MIME, 100)], "@odata.nextLink": "https://elsewhere.example.test/v1.0/me/drive/search?$skiptoken=x" },
+    });
+    const res = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/search`).query({ query: "kickoff", scope: "shared" });
+    expect(res.status, res.text).toBe(200);
+    expect(res.body.results).toEqual([]);
+    expect(graphCalls.filter((c) => c.path.startsWith(searchPath))).toHaveLength(1);
+  });
+
+  it("refuses references made only of dots, which a URL parser would collapse into another Graph path", async () => {
+    await connect(PERSON_A);
+    for (const itemRef of [".", "..", "...", `${DRIVE}:..`, `..:item-1`]) {
+      const res = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/read`).query({ itemRef });
+      expect(res.status, itemRef).toBe(400);
+      expect(res.body.details.reason).toBe("invalid_reference");
+    }
+    const folder = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/list`).query({ folderRef: ".." });
+    expect(folder.status).toBe(400);
+    const listSite = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/list`).query({ siteId: ".." });
+    expect(listSite.status).toBe(400);
+    const searchSite = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/search`).query({ query: "x", scope: "sites", siteId: "." });
+    expect(searchSite.status).toBe(400);
+    expect(graphCalls).toHaveLength(0);
+
+    // An id of dots coming back from Graph is dropped rather than handed to the agent.
+    graphRoutes.set("/me/drive/root/children", {
+      status: 200,
+      body: { value: [{ id: "..", name: "odd", file: {}, parentReference: { driveId: DRIVE } }, fileItem("item-3", "c.docx", DOCX_MIME, 5)] },
+    });
+    const listed = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/list`);
+    expect(listed.body.items.map((i: { itemRef: string }) => i.itemRef)).toEqual([`${DRIVE}:item-3`]);
+  });
+
   // -- read --------------------------------------------------------------------------
 
   it("reads a docx: framed under the request's run, stripped by that run's log pass", async () => {
@@ -670,6 +748,46 @@ describeEmbeddedPostgres("Microsoft document reads for agents (slice 3)", () => 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ text: null, unreadable: { reason: "too_large" } });
     expect(graphCalls.some((c) => c.path.includes("/content") || c.host === "download")).toBe(false);
+  });
+
+  it("pages a document from one download, and downloads again only when the file changes", async () => {
+    await connect(PERSON_A);
+    await connect(PERSON_B);
+    const long = Array.from({ length: 1000 }, (_, i) => `Paragraph ${i} ${"x".repeat(80)}`);
+    serveFile("long-2", "Contract.docx", DOCX_MIME, await docxFixture(long), '"{long-2},1"');
+    const first = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/read`).query({ itemRef: `${DRIVE}:long-2` });
+    expect(first.body.truncated).toBe(true);
+    const second = await request(asAgent(AGENT_A))
+      .get(`${docs()}/microsoft/read`)
+      .query({ itemRef: `${DRIVE}:long-2`, offset: first.body.nextOffset });
+    expect(second.status, second.text).toBe(200);
+    expect(second.body.text).toContain("Paragraph 999 ");
+    const downloadsOf = () => graphCalls.filter((c) => c.host === "download").length;
+    expect(downloadsOf()).toBe(1);
+    // Access is still checked on every page: the metadata call is made each time.
+    expect(graphCalls.filter((c) => c.path.startsWith(`/drives/${DRIVE}/items/long-2?`))).toHaveLength(2);
+
+    // Edited in OneDrive: a new eTag, so the next read downloads the new content.
+    serveFile("long-2", "Contract.docx", DOCX_MIME, await docxFixture(["Rewritten", SENTINEL]), '"{long-2},2"');
+    const edited = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/read`).query({ itemRef: `${DRIVE}:long-2` });
+    expect(edited.body.text).toContain(SENTINEL);
+    expect(downloadsOf()).toBe(2);
+
+    // Another steward's connection never reads what this one extracted.
+    const otherSteward = await request(asAgent(AGENT_B, { runId: null })).get(`${docs()}/microsoft/read`).query({ itemRef: `${DRIVE}:long-2` });
+    expect(otherSteward.status, otherSteward.text).toBe(200);
+    expect(downloadsOf()).toBe(3);
+  });
+
+  it("remembers an unreadable file too, so a retry does not download and parse it again", async () => {
+    await connect(PERSON_A);
+    serveFile("broken-1", "Broken.docx", DOCX_MIME, Buffer.from("not a zip at all"));
+    for (let i = 0; i < 3; i += 1) {
+      const res = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/read`).query({ itemRef: `${DRIVE}:broken-1` });
+      expect(res.status).toBe(200);
+      expect(res.body.unreadable).toMatchObject({ reason: "content_unreadable" });
+    }
+    expect(graphCalls.filter((c) => c.host === "download")).toHaveLength(1);
   });
 
   it("aborts a download that runs past 25 MB even when the metadata said it was small", async () => {
@@ -783,6 +901,41 @@ describeEmbeddedPostgres("Microsoft document reads for agents (slice 3)", () => 
     await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, RUN_A));
     const outside = await request(asAgent(AGENT_A, { runId: null })).get(`${docs()}/microsoft/list`);
     expect(outside.status).toBe(200);
+  });
+
+  it("accepts a queued run only while none of the agent's runs is running, and a run JWT only for its own run", async () => {
+    await connect(PERSON_A);
+    graphRoutes.set("/me/drive/root/children", { status: 200, body: { value: [] } });
+    const [queued, queuedOther] = await db
+      .insert(heartbeatRuns)
+      .values([
+        { companyId: FLAGGED, agentId: AGENT_A, status: "queued" },
+        { companyId: FLAGGED, agentId: AGENT_A, status: "queued" },
+      ])
+      .returning()
+      .then((rows) => rows.map((r) => r.id));
+
+    // RUN_A is running, so that is where the output lands: a queued run's id is wrong.
+    const wrong = await request(asAgent(AGENT_A, { runId: queued })).get(`${docs()}/microsoft/list`);
+    expect(wrong.status).toBe(403);
+    expect(wrong.body.details.reason).toBe("run_mismatch");
+    expect(graphCalls).toHaveLength(0);
+    const right = await request(asAgent(AGENT_A)).get(`${docs()}/microsoft/list`);
+    expect(right.status).toBe(200);
+
+    // Nothing running: the queued run is accepted.
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, RUN_A));
+    const nowOk = await request(asAgent(AGENT_A, { runId: queued })).get(`${docs()}/microsoft/list`);
+    expect(nowOk.status).toBe(200);
+
+    // A run JWT names its run; a header naming another live run is refused.
+    const asJwt = (jwtRunId: string, headerRunId: string) =>
+      appAs({ type: "agent", agentId: AGENT_A, companyId: FLAGGED, source: "agent_jwt", runId: headerRunId, jwtRunId });
+    const spoofed = await request(asJwt(queuedOther!, queued!)).get(`${docs()}/microsoft/list`);
+    expect(spoofed.status).toBe(403);
+    expect(spoofed.body.details.reason).toBe("run_mismatch");
+    const own = await request(asJwt(queued!, queued!)).get(`${docs()}/microsoft/list`);
+    expect(own.status).toBe(200);
   });
 
   // -- measurement ------------------------------------------------------------------------------

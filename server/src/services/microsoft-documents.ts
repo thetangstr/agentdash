@@ -39,6 +39,14 @@
 //   metadata before any download, and the stream is aborted if the content
 //   runs past the cap anyway.
 // - A per-connection call budget (120 calls a minute, in process).
+// - Extracted text is kept in process for a few minutes, keyed by the
+//   connection, the item and its eTag, so paging a long document downloads
+//   and parses it once. The item's metadata is still fetched on every read, so
+//   a steward who loses access stops the reads at once. An unreadable result
+//   is kept too, so retrying a hostile file does not parse it again.
+// - A download redirect is followed over https only (http only when Graph
+//   itself is configured as http, which only a local test double is): the
+//   pre-authenticated URL is a credential.
 // - A 401 from Graph marks the connection `error` (the steward must reconnect)
 //   and records a `connection.microsoft_read_failed` activity row, which the
 //   steward's My Agent panel shows as the last error. A short in-process
@@ -54,6 +62,7 @@ import { connectorService } from "./connectors.js";
 import { frameUntrustedDocumentText, newDocumentFrameNonce } from "./document-content.js";
 import {
   DOCUMENT_MAX_BYTES,
+  type DocumentExtraction,
   classifyDocument,
   extractDocumentText,
   pageDocumentText,
@@ -83,11 +92,20 @@ export const DOCUMENT_SEARCH_DEFAULT_RESULTS = 10;
 export const DOCUMENT_LIST_MAX_RESULTS = 100;
 export const DOCUMENT_LIST_DEFAULT_RESULTS = 50;
 export const DOCUMENT_QUERY_MAX_CHARS = 200;
+/** scope "shared": drive search ranks the steward's own files first, so pages are read until enough shared ones turn up. */
+const SHARED_SEARCH_PAGE_SIZE = 200;
+const SHARED_SEARCH_MAX_PAGES = 5;
+
+/** Extracted text kept between page requests: per connection, item and eTag. */
+const EXTRACTION_CACHE_TTL_MS = 10 * 60_000;
+const EXTRACTION_CACHE_MAX_ENTRIES = 64;
+/** Characters held across all entries (a 25 MB text file is about 25 million). */
+const EXTRACTION_CACHE_MAX_CHARS = 32 * 1024 * 1024;
 
 export const DOCUMENT_SEARCH_SCOPES = ["all", "my_drive", "shared", "sites"] as const;
 export type DocumentSearchScope = (typeof DOCUMENT_SEARCH_SCOPES)[number];
 
-const ITEM_SELECT = "id,name,size,file,folder,webUrl,lastModifiedDateTime,parentReference,remoteItem,description";
+const ITEM_SELECT = "id,eTag,name,size,file,folder,webUrl,lastModifiedDateTime,parentReference,remoteItem,description";
 
 export type DocumentReadFailureReason =
   | "provider_not_allowed"
@@ -167,10 +185,81 @@ export interface DocumentRunContext {
 const rateBuckets = new Map<string, number[]>();
 const authFailures = new Map<string, number>();
 
+type CachedExtraction = { at: number; chars: number; byteCount: number; result: DocumentExtraction };
+/** Insertion order is recency: a hit is re-inserted, eviction takes the first key. */
+const extractionCache = new Map<string, CachedExtraction>();
+let extractionCacheChars = 0;
+
 /** Test seam, named like `__resetSharepointLimiterState`. */
 export function __resetMicrosoftDocumentsLimiterState() {
   rateBuckets.clear();
   authFailures.clear();
+  extractionCache.clear();
+  extractionCacheChars = 0;
+}
+
+function dropCached(key: string) {
+  const entry = extractionCache.get(key);
+  if (!entry) return;
+  extractionCache.delete(key);
+  extractionCacheChars -= entry.chars;
+}
+
+function getCached(key: string): CachedExtraction | null {
+  const entry = extractionCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > EXTRACTION_CACHE_TTL_MS) {
+    dropCached(key);
+    return null;
+  }
+  extractionCache.delete(key);
+  extractionCache.set(key, entry);
+  return entry;
+}
+
+function putCached(key: string, byteCount: number, result: DocumentExtraction) {
+  const chars = result.ok ? result.text.length : result.message.length;
+  if (chars > EXTRACTION_CACHE_MAX_CHARS) return;
+  dropCached(key);
+  extractionCache.set(key, { at: Date.now(), chars, byteCount, result });
+  extractionCacheChars += chars;
+  const now = Date.now();
+  for (const [oldKey, entry] of extractionCache) {
+    const over = extractionCache.size > EXTRACTION_CACHE_MAX_ENTRIES || extractionCacheChars > EXTRACTION_CACHE_MAX_CHARS;
+    if (!over && now - entry.at <= EXTRACTION_CACHE_TTL_MS) break;
+    dropCached(oldKey);
+  }
+}
+
+/**
+ * Which version of an item's content this is. Null when Graph gives nothing
+ * to tell versions apart; such an item is never cached.
+ */
+function extractionCacheKey(connectionId: string, ref: ItemRef, body: Record<string, unknown>): string | null {
+  const eTag = typeof body.eTag === "string" ? body.eTag : "";
+  const modified = typeof body.lastModifiedDateTime === "string" ? body.lastModifiedDateTime : "";
+  if (!eTag && !modified) return null;
+  const size = typeof body.size === "number" ? body.size : null;
+  return JSON.stringify([connectionId, ref.driveId ?? "", ref.itemId, eTag, modified, size]);
+}
+
+/**
+ * The URL Graph's `/content` redirect may send the server to. The
+ * pre-authenticated download URL carries its own credential in the query, so
+ * it is fetched over https only; plain http is allowed only when Graph itself
+ * is configured as http (a local test double, never Microsoft).
+ */
+export function allowedDownloadLocation(location: string | null, graphBaseUrl: string): URL | null {
+  if (!location) return null;
+  let target: URL;
+  try {
+    target = new URL(location);
+  } catch {
+    return null;
+  }
+  if (target.protocol === "https:") return target;
+  if (target.protocol === "http:" && graphBaseUrl.toLowerCase().startsWith("http:")) return target;
+  return null;
 }
 
 function consumeRateBudget(connectionId: string): boolean {
@@ -194,7 +283,17 @@ function tokenKey(connectionId: string, accessToken: string): string {
 
 const REF_PART_RE = /^[A-Za-z0-9!_.\-]{1,400}$/;
 const SITE_ID_RE = /^[A-Za-z0-9.,_\-]{1,400}$/;
+/** "." and ".." are dot segments: a URL parser collapses them into a different path. */
+const DOTS_ONLY_RE = /^\.+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isRefPart(value: string): boolean {
+  return REF_PART_RE.test(value) && !DOTS_ONLY_RE.test(value);
+}
+
+function isSiteId(value: unknown): value is string {
+  return typeof value === "string" && SITE_ID_RE.test(value) && !DOTS_ONLY_RE.test(value);
+}
 
 type ItemRef = { driveId: string | null; itemId: string };
 
@@ -203,15 +302,15 @@ export function parseItemRef(value: unknown): ItemRef | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   const colon = trimmed.indexOf(":");
-  if (colon < 0) return REF_PART_RE.test(trimmed) ? { driveId: null, itemId: trimmed } : null;
+  if (colon < 0) return isRefPart(trimmed) ? { driveId: null, itemId: trimmed } : null;
   const driveId = trimmed.slice(0, colon);
   const itemId = trimmed.slice(colon + 1);
-  return REF_PART_RE.test(driveId) && REF_PART_RE.test(itemId) ? { driveId, itemId } : null;
+  return isRefPart(driveId) && isRefPart(itemId) ? { driveId, itemId } : null;
 }
 
 function formatItemRef(driveId: unknown, itemId: unknown): string | null {
-  if (typeof itemId !== "string" || !REF_PART_RE.test(itemId)) return null;
-  return typeof driveId === "string" && REF_PART_RE.test(driveId) ? `${driveId}:${itemId}` : itemId;
+  if (typeof itemId !== "string" || !isRefPart(itemId)) return null;
+  return typeof driveId === "string" && isRefPart(driveId) ? `${driveId}:${itemId}` : itemId;
 }
 
 function itemPath(ref: ItemRef): string {
@@ -293,13 +392,35 @@ export function microsoftDocumentsService(db: Db) {
    * this agent's live runs. Outside any run (a steward's own terminal session
    * using the agent key) nothing server-side records the output; an agent that
    * IS in a run must say which, or its text would be stored unstripped.
+   *
+   * The run named must be the one the output will land in: while any run of
+   * the agent is running, a queued run's id is refused (its frames would not
+   * verify in the running run's log, so the stripper would leave them in). A
+   * run JWT names its run, and a header naming another is refused.
    */
   async function frameRunFor(
     companyId: string,
     agentId: string,
     requestRunId: string | null | undefined,
+    jwtRunId?: string | null,
   ): Promise<{ ok: true; runId: string } | DocumentReadFailure> {
     const live = ["queued", "running"];
+    if (jwtRunId && requestRunId !== jwtRunId) {
+      return {
+        ok: false,
+        reason: "run_mismatch",
+        message: "The run id sent with this request is not the run your credential was issued for; send $PAPERCLIP_RUN_ID as given",
+      };
+    }
+    const runningRun = () =>
+      db
+        .select({ id: heartbeatRuns.id })
+        .from(heartbeatRuns)
+        .where(
+          and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["running"])),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
     if (requestRunId) {
       if (!UUID_RE.test(requestRunId)) {
         return { ok: false, reason: "run_mismatch", message: "The run id sent with this request is not one of your runs" };
@@ -317,17 +438,16 @@ export function microsoftDocumentsService(db: Db) {
       if (!live.includes(run.status)) {
         return { ok: false, reason: "run_mismatch", message: "The run id sent with this request belongs to a run that has ended" };
       }
+      if (run.status === "queued" && (await runningRun())) {
+        return {
+          ok: false,
+          reason: "run_mismatch",
+          message: "The run id sent with this request is a queued run, not the run you are in; send $PAPERCLIP_RUN_ID as given",
+        };
+      }
       return { ok: true, runId: run.id };
     }
-    const active = await db
-      .select({ id: heartbeatRuns.id })
-      .from(heartbeatRuns)
-      .where(
-        and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, ["running"])),
-      )
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-    if (active) {
+    if (await runningRun()) {
       return {
         ok: false,
         reason: "run_id_required",
@@ -555,7 +675,7 @@ export function microsoftDocumentsService(db: Db) {
   function projectSite(raw: unknown, framer: Framer): DocumentSiteView | null {
     if (!raw || typeof raw !== "object") return null;
     const site = raw as Record<string, any>;
-    if (typeof site.id !== "string" || !SITE_ID_RE.test(site.id)) return null;
+    if (!isSiteId(site.id)) return null;
     const name = typeof site.displayName === "string" ? site.displayName : typeof site.name === "string" ? site.name : "";
     const view: DocumentSiteView = {
       kind: "site",
@@ -601,8 +721,13 @@ export function microsoftDocumentsService(db: Db) {
 
   type Prelude = { ok: true; authorized: Authorized; framer: Framer } | DocumentReadFailure;
 
-  async function prelude(input: { companyId: string; agentId: string; requestRunId?: string | null }): Promise<Prelude> {
-    const run = await frameRunFor(input.companyId, input.agentId, input.requestRunId);
+  async function prelude(input: {
+    companyId: string;
+    agentId: string;
+    requestRunId?: string | null;
+    jwtRunId?: string | null;
+  }): Promise<Prelude> {
+    const run = await frameRunFor(input.companyId, input.agentId, input.requestRunId, input.jwtRunId);
     if (!run.ok) return run;
     const authorized = await authorize(input.companyId, input.agentId);
     if (!authorized.ok) return authorized;
@@ -635,6 +760,7 @@ export function microsoftDocumentsService(db: Db) {
     companyId: string;
     agentId: string;
     requestRunId?: string | null;
+    jwtRunId?: string | null;
     query: unknown;
     scope?: unknown;
     siteId?: unknown;
@@ -651,7 +777,7 @@ export function microsoftDocumentsService(db: Db) {
       return fail({ ok: false, reason: "invalid_reference", message: `scope must be one of: ${DOCUMENT_SEARCH_SCOPES.join(", ")}` });
     }
     const siteId = input.siteId === undefined || input.siteId === null || input.siteId === "" ? null : input.siteId;
-    if (siteId !== null && (typeof siteId !== "string" || !SITE_ID_RE.test(siteId) || scope !== "sites")) {
+    if (siteId !== null && (!isSiteId(siteId) || scope !== "sites")) {
       return fail({ ok: false, reason: "invalid_reference", message: "siteId must be a site id from a scope \"sites\" search, and only with scope \"sites\"" });
     }
     const limit = clampLimit(input.limit, DOCUMENT_SEARCH_DEFAULT_RESULTS, DOCUMENT_SEARCH_MAX_RESULTS);
@@ -667,7 +793,8 @@ export function microsoftDocumentsService(db: Db) {
     else if (scope === "my_drive") path = `/me/drive/root/search(q='${q}')?$top=${limit}&$select=${ITEM_SELECT}`;
     // "all" and "shared": drive-level search covers the steward's own drive AND
     // what others shared with them.
-    else path = `/me/drive/search(q='${q}')?$top=${limit}&$select=${ITEM_SELECT}`;
+    else if (scope === "all") path = `/me/drive/search(q='${q}')?$top=${limit}&$select=${ITEM_SELECT}`;
+    else return sharedSearch(`/me/drive/search(q='${q}')?$top=${SHARED_SEARCH_PAGE_SIZE}&$select=${ITEM_SELECT}`);
 
     const result = await graphJson(authorized, input.companyId, path);
     if (!result.ok) return fail(result);
@@ -678,11 +805,42 @@ export function microsoftDocumentsService(db: Db) {
       await record(input.companyId, input.runContext, startedAt, { ok: true, resultChars: JSON.stringify(sites).length });
       return { ok: true as const, provider: MICROSOFT_DOCUMENTS_PROVIDER, scope, results: sites };
     }
-    let items = values.map((v) => projectItem(v, framer)).filter((v): v is DocumentItemView => v !== null);
-    if (scope === "shared") items = items.filter((item) => item.shared);
-    items = items.slice(0, limit);
+    const items = values
+      .map((v) => projectItem(v, framer))
+      .filter((v): v is DocumentItemView => v !== null)
+      .slice(0, limit);
     await record(input.companyId, input.runContext, startedAt, { ok: true, resultChars: JSON.stringify(items).length });
     return { ok: true as const, provider: MICROSOFT_DOCUMENTS_PROVIDER, scope, results: items };
+
+    /**
+     * Drive search ranks the steward's own files with the shared ones, so a
+     * page of `limit` can hold no shared file at all. Read full pages, and
+     * follow Graph's nextLink (only back to Graph itself, each page charged
+     * to the call budget) until `limit` shared items or the page cap.
+     */
+    async function sharedSearch(firstPath: string) {
+      const graphBase = microsoftGraphBaseUrl();
+      const shared: DocumentItemView[] = [];
+      let nextPath: string | null = firstPath;
+      for (let page = 0; nextPath !== null && page < SHARED_SEARCH_MAX_PAGES && shared.length < limit; page += 1) {
+        if (page > 0 && !consumeRateBudget(authorized.connectionId)) break;
+        const result = await graphJson(authorized, input.companyId, nextPath);
+        if (!result.ok) {
+          if (page === 0) return fail(result);
+          break;
+        }
+        const values = Array.isArray(result.body.value) ? (result.body.value as unknown[]) : [];
+        for (const value of values) {
+          const item = projectItem(value, framer);
+          if (item?.shared) shared.push(item);
+        }
+        const nextLink = result.body["@odata.nextLink"];
+        nextPath = typeof nextLink === "string" && nextLink.startsWith(`${graphBase}/`) ? nextLink.slice(graphBase.length) : null;
+      }
+      const items = shared.slice(0, limit);
+      await record(input.companyId, input.runContext, startedAt, { ok: true, resultChars: JSON.stringify(items).length });
+      return { ok: true as const, provider: MICROSOFT_DOCUMENTS_PROVIDER, scope, results: items };
+    }
 
     async function fail(failure: DocumentReadFailure) {
       await record(input.companyId, input.runContext, startedAt, { ok: false, reasonChars: failure.message.length });
@@ -696,6 +854,7 @@ export function microsoftDocumentsService(db: Db) {
     companyId: string;
     agentId: string;
     requestRunId?: string | null;
+    jwtRunId?: string | null;
     folderRef?: unknown;
     path?: unknown;
     siteId?: unknown;
@@ -720,7 +879,7 @@ export function microsoftDocumentsService(db: Db) {
     } else {
       let root = "/me/drive/root";
       if (has(input.siteId)) {
-        if (typeof input.siteId !== "string" || !SITE_ID_RE.test(input.siteId)) {
+        if (!isSiteId(input.siteId)) {
           return fail({ ok: false, reason: "invalid_reference", message: "siteId must be a site id from a scope \"sites\" search" });
         }
         root = `/sites/${encodeURIComponent(input.siteId)}/drive/root`;
@@ -765,15 +924,9 @@ export function microsoftDocumentsService(db: Db) {
     try {
       let response = await fetchDownload(`${microsoftGraphBaseUrl()}${itemPath(ref)}/content`, authorized.accessToken, signal);
       if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
+        const target = allowedDownloadLocation(response.headers.get("location"), microsoftGraphBaseUrl());
         await response.body?.cancel().catch(() => undefined);
-        let target: URL | null = null;
-        try {
-          target = location ? new URL(location) : null;
-        } catch {
-          target = null;
-        }
-        if (!target || (target.protocol !== "https:" && target.protocol !== "http:")) {
+        if (!target) {
           return { ok: false, reason: "provider_error", message: "Microsoft Graph returned no usable download location" };
         }
         response = await fetchDownload(target.toString(), null, signal);
@@ -819,6 +972,7 @@ export function microsoftDocumentsService(db: Db) {
     companyId: string;
     agentId: string;
     requestRunId?: string | null;
+    jwtRunId?: string | null;
     itemRef: unknown;
     offset?: unknown;
     format?: unknown;
@@ -893,25 +1047,37 @@ export function microsoftDocumentsService(db: Db) {
       return noText("too_large", tooLargeMessage);
     }
 
-    const downloaded = await download(authorized, input.companyId, ref);
-    if (!downloaded.ok) {
-      if ("tooLarge" in downloaded) {
-        await record(input.companyId, input.runContext, startedAt, { ok: true, itemId: ref.itemId, byteCount: 0, resultChars: 0 });
-        return noText("too_large", tooLargeMessage);
+    // Paging a document reads it once: the metadata call above has just
+    // confirmed the steward can still open this version of it.
+    const cacheKey = extractionCacheKey(authorized.connectionId, ref, meta.body);
+    let content = cacheKey ? getCached(cacheKey) : null;
+    if (!content) {
+      const downloaded = await download(authorized, input.companyId, ref);
+      let fresh: { byteCount: number; result: DocumentExtraction };
+      if (downloaded.ok) {
+        fresh = { byteCount: downloaded.bytes.byteLength, result: await extractDocumentText(downloaded.bytes, kind) };
+      } else if ("tooLarge" in downloaded) {
+        fresh = { byteCount: 0, result: { ok: false, reason: "too_large", message: tooLargeMessage } };
+      } else {
+        return fail(downloaded);
       }
-      return fail(downloaded);
+      if (cacheKey) putCached(cacheKey, fresh.byteCount, fresh.result);
+      content = { at: Date.now(), chars: 0, ...fresh };
     }
-    const extracted = await extractDocumentText(downloaded.bytes, kind);
+    const extracted = content.result;
+    const byteCount = content.byteCount;
     if (!extracted.ok) {
-      await record(input.companyId, input.runContext, startedAt, { ok: true, itemId: ref.itemId, byteCount: downloaded.bytes.byteLength, resultChars: 0 });
-      return noText(extracted.reason, extracted.message, downloaded.bytes.byteLength);
+      await record(input.companyId, input.runContext, startedAt, { ok: true, itemId: ref.itemId, byteCount, resultChars: 0 });
+      return extracted.reason === "too_large"
+        ? noText("too_large", tooLargeMessage)
+        : noText(extracted.reason, extracted.message, byteCount);
     }
     const page = pageDocumentText(extracted.text, rawOffset);
     const framed = framer.frame(page.text, formatItemRef(ref.driveId, ref.itemId) ?? ref.itemId, rawName);
     await record(input.companyId, input.runContext, startedAt, {
       ok: true,
       itemId: ref.itemId,
-      byteCount: downloaded.bytes.byteLength,
+      byteCount,
       resultChars: page.text.length,
     });
     return {
@@ -924,7 +1090,7 @@ export function microsoftDocumentsService(db: Db) {
       totalChars: page.totalChars,
       slideCount: extracted.slideCount,
       unreadable: null,
-      byteCount: downloaded.bytes.byteLength,
+      byteCount,
     };
   }
 

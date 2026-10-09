@@ -1,11 +1,18 @@
 // AgentDash (per-steward document access, slice 3): provider-neutral text
 // extraction. Fixtures are built here, part by part, with JSZip, so they do
 // not depend on the extractor's own reading of the format.
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   DOCUMENT_MAX_BYTES,
   DOCUMENT_MAX_TEXT_CHARS,
+  __extractionConcurrencyStats,
+  __resetExtractionConcurrencyStats,
   classifyDocument,
   extractDocumentText,
   pageDocumentText,
@@ -21,6 +28,9 @@ const NOTES_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relatio
 
 const run = (text: string) => `<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
 const para = (...runs: string[]) => `<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr>${runs.join("")}</w:p>`;
+const MB = 1024 * 1024;
+/** About `bytes` of `<w:p><w:r><w:t>a</w:t></w:r></w:p>`: the cheapest paragraph Word can hold. */
+const tinyParagraphs = (bytes: number) => "<w:p><w:r><w:t>a</w:t></w:r></w:p>".repeat(Math.ceil(bytes / 34));
 const cell = (text: string) => `<w:tc><w:tcPr><w:tcW w:w="2000"/></w:tcPr>${para(run(text))}</w:tc>`;
 
 export async function buildDocx(bodyXml: string): Promise<Buffer> {
@@ -116,8 +126,8 @@ describe("docx extraction", () => {
 
   it("stops inflating a zip bomb and answers content_unreadable", async () => {
     const zip = new JSZip();
-    // ~240 MB of one repeated character inflates past the 200 MB budget but
-    // compresses to well under the 25 MB download cap.
+    // ~240 MB of one repeated character inflates far past the inflation caps
+    // but compresses to well under the 25 MB download cap.
     const filler = "a".repeat(8 * 1024 * 1024);
     zip.file(
       "word/document.xml",
@@ -130,10 +140,120 @@ describe("docx extraction", () => {
     if (!result.ok) expect(result.message).toContain("extraction limit");
   }, 60_000);
 
+  it("refuses one part that inflates past 16 MB, though the file is small", async () => {
+    // Real document.xml parts are a few MB. 17 MB of tiny paragraphs is a
+    // hostile file, not a long contract.
+    const bytes = await buildDocx(tinyParagraphs(17 * MB));
+    expect(bytes.byteLength).toBeLessThan(MB);
+    const result = await extractDocumentText(bytes, "docx");
+    expect(result).toMatchObject({ ok: false, reason: "content_unreadable" });
+    if (!result.ok) expect(result.message).toContain("extraction limit");
+  }, 60_000);
+
+  it("refuses a deck whose parts together inflate past 32 MB, though each part is under the part cap", async () => {
+    const big = `<p:sp><p:txBody>${"<a:p><a:r><a:t>a</a:t></a:r></a:p>".repeat(Math.ceil((12 * MB) / 34))}</p:txBody></p:sp>`;
+    const bytes = await buildPptx([
+      { file: 1, body: big },
+      { file: 2, body: big },
+      { file: 3, body: big },
+    ]);
+    const result = await extractDocumentText(bytes, "pptx");
+    expect(result).toMatchObject({ ok: false, reason: "content_unreadable" });
+    if (!result.ok) expect(result.message).toContain("extraction limit");
+  }, 60_000);
+
+  it("refuses a zip that lists more than 20,000 parts before opening it", async () => {
+    const zip = new JSZip();
+    zip.file("word/document.xml", `<w:document ${W}><w:body>${para(run("hello"))}</w:body></w:document>`);
+    for (let i = 0; i < 20_001; i += 1) zip.file(`junk/${i}.xml`, "");
+    const bytes = await zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
+    const result = await extractDocumentText(bytes, "docx");
+    expect(result).toMatchObject({ ok: false, reason: "content_unreadable" });
+    if (!result.ok) expect(result.message).toContain("parts");
+  }, 60_000);
+
+  it("runs at most two extractions at once and queues the rest", async () => {
+    const bytes = await buildDocx(tinyParagraphs(2 * MB));
+    __resetExtractionConcurrencyStats();
+    const results = await Promise.all(Array.from({ length: 6 }, () => extractDocumentText(bytes, "docx")));
+    expect(results.every((r) => r.ok)).toBe(true);
+    const stats = __extractionConcurrencyStats();
+    expect(stats.peak).toBe(2);
+    expect(stats).toMatchObject({ active: 0, waiting: 0 });
+  }, 60_000);
+
+  it("reads XML the way OOXML writes it: entities, CDATA, comments, quoted '>' and content-control cells", async () => {
+    const bytes = await buildDocx(
+      [
+        "<!-- a comment <w:t>not text</w:t> -->",
+        para(run("A&#x41;&#66;&lt;&gt;&quot;&apos;&amp;&unknown;")),
+        `<w:p><w:r><w:t><![CDATA[<raw> & text]]></w:t></w:r></w:p>`,
+        `<w:p w:rsidR="a>b"><w:r><w:t xml:space='preserve'>quoted</w:t></w:r></w:p>`,
+        `<w:tbl><w:tr>${cell("one")}<w:sdt><w:sdtContent>${cell("two")}</w:sdtContent></w:sdt></w:tr></w:tbl>`,
+        `<w:p><w:r><w:instrText>PAGE</w:instrText><w:t>after field</w:t><w:br/><w:t>next line</w:t></w:r></w:p>`,
+      ].join(""),
+    );
+    const result = await extractDocumentText(bytes, "docx");
+    expect(result.ok && result.text).toBe(
+      ["AAB<>\"'&&unknown;", "<raw> & text", "quoted", "one | two", "", "after field", "next line"].join("\n"),
+    );
+  });
+
+  it("answers content_unreadable for XML that is not well-formed", async () => {
+    const zip = new JSZip();
+    zip.file("word/document.xml", `<w:document ${W}><w:body><w:p><w:r><w:t>open</w:r></w:p></w:body></w:document>`);
+    const result = await extractDocumentText(await zip.generateAsync({ type: "nodebuffer" }), "docx");
+    expect(result).toMatchObject({ ok: false, reason: "content_unreadable" });
+  });
+
   it("answers content_unreadable for bytes that are not a zip", async () => {
     const result = await extractDocumentText(Buffer.from("not a zip"), "docx");
     expect(result).toMatchObject({ ok: false, reason: "content_unreadable" });
   });
+});
+
+describe("extraction memory is bounded by the input, not the document's structure", () => {
+  // Run in a child process with a small heap: a regression aborts the child
+  // ("JavaScript heap out of memory") instead of the test runner.
+  const HEAP_MB = 192;
+
+  it(`reads a docx at the part cap and refuses one built for the old 200 MB cap, inside a ${HEAP_MB} MB heap`, async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "extraction-heap-"));
+    try {
+      // 15 MB of one-character paragraphs: a valid document at the cap.
+      const atCap = await buildDocx(tinyParagraphs(15 * MB));
+      // 195 MB of the same: a 0.6 MB file that passed the old 200 MB budget
+      // and then built a parse tree past 4 GB.
+      const oldCap = await buildDocx(tinyParagraphs(195 * MB));
+      expect(oldCap.byteLength).toBeLessThan(MB);
+      await writeFile(path.join(dir, "at-cap.docx"), atCap);
+      await writeFile(path.join(dir, "old-cap.docx"), oldCap);
+      const moduleUrl = pathToFileURL(path.resolve(import.meta.dirname, "../services/document-extraction.ts")).href;
+      const script = [
+        `import { readFile } from "node:fs/promises";`,
+        `const { extractDocumentText } = await import(${JSON.stringify(moduleUrl)});`,
+        `const out = {};`,
+        `for (const name of ["at-cap", "old-cap"]) {`,
+        `  const r = await extractDocumentText(await readFile(${JSON.stringify(dir)} + "/" + name + ".docx"), "docx");`,
+        `  out[name] = r.ok ? { ok: true, chars: r.text.length } : { ok: false, reason: r.reason };`,
+        `}`,
+        `process.stdout.write(JSON.stringify(out));`,
+      ].join("\n");
+      await writeFile(path.join(dir, "child.mjs"), script);
+      const child = spawnSync(process.execPath, [`--max-old-space-size=${HEAP_MB}`, "--import", "tsx", path.join(dir, "child.mjs")], {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        encoding: "utf8",
+        timeout: 120_000,
+      });
+      expect(child.status, child.stderr.slice(-2000)).toBe(0);
+      const out = JSON.parse(child.stdout);
+      expect(out["at-cap"]).toMatchObject({ ok: true });
+      expect(out["at-cap"].chars).toBeGreaterThan(400_000);
+      expect(out["old-cap"]).toEqual({ ok: false, reason: "content_unreadable" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
 });
 
 describe("pptx extraction", () => {

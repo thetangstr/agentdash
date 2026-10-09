@@ -84,6 +84,8 @@ describe("document read tools", () => {
     expect(read).toMatch(/Quote, do not paste/);
     expect(read).toMatch(/nextOffset/);
     expect(read).toMatch(/Slide N/);
+    // A hostile or damaged Office file is refused, and retrying will not help.
+    expect(read).toMatch(/content_unreadable: ask your steward for the section you need/);
     expect(getTool("documents_status").description).toMatch(/current steward/);
   });
 
