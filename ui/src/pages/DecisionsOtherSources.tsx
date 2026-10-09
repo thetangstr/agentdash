@@ -7,6 +7,7 @@ import type { InboxItem } from "../api/stewardships";
 import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
+import { approvalAsk } from "../lib/approval-ask";
 import { Button } from "@/components/ui/button";
 import type { DecisionsOtherSourcesData } from "../hooks/useDecisionsSources";
 
@@ -31,21 +32,9 @@ export {
   type DecisionsOtherSourcesData,
 } from "../hooks/useDecisionsSources";
 
-const ASKS: Record<string, string> = {
-  hire_agent: "wants to hire another agent",
-  approve_ceo_strategy: "wants sign-off on the strategy",
-  budget_override_required: "has run out of budget and cannot continue",
-  request_board_approval: "wants your approval",
-  mandate_violation: "did something its mandate does not allow",
-  connector_send: "wants to send something outside the company",
-  inbound_content_review: "wants to release content that was held back",
-  deliverable_review: "needs your sign-off on a deliverable",
-  workflow_recommendation: "has a suggestion about how this work runs",
-};
-
 export function stewardItemSummary(item: InboxItem): string {
   const who = item.requestingAgent?.name ?? "Your agent";
-  const ask = ASKS[item.type];
+  const ask = approvalAsk(item.type, item.payload);
   return ask ? `${who} ${ask}` : `${who}: ${item.type.replace(/_/g, " ")}`;
 }
 

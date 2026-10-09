@@ -56,6 +56,7 @@ import { hubspotConnectorRoutes } from "./routes/hubspot-connector.js";
 import { sharepointConnectorRoutes } from "./routes/sharepoint-connector.js";
 // AgentDash: per-steward document access, Microsoft 365 (slice 2: connect).
 import { microsoftDocumentsRoutes } from "./routes/microsoft-documents.js";
+import { microsoftDocumentProposalRoutes } from "./routes/microsoft-document-proposals.js";
 import { bridgeRoutes } from "./routes/bridge.js";
 import { stewardWebhookRoutes } from "./routes/steward-webhooks.js";
 import { teamsConnectorRoutes } from "./routes/teams-connector.js";
@@ -560,6 +561,8 @@ export async function createApp(
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
   api.use(microsoftDocumentsRoutes(db, { deploymentMode: opts.deploymentMode }));
+  // Document access slice 5: an agent proposes a new copy for its steward's OneDrive.
+  api.use(microsoftDocumentProposalRoutes(db));
   api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(stewardWebhookRoutes(db));
   api.use(teamsConnectorRoutes(db));

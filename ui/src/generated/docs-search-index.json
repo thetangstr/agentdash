@@ -1197,6 +1197,7 @@
         "mandates",
         "mcp",
         "me-capabilities",
+        "microsoft-document-proposals",
         "microsoft-documents",
         "msp",
         "oauth",
@@ -1226,7 +1227,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 616 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 48da63aa05e9; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 617 routes in 83 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 8e1d433cef98; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
@@ -1320,6 +1321,7 @@
         "getgoal",
         "listapprovals",
         "createapproval",
+        "documentsproposeupload",
         "mandatedattest",
         "getapproval",
         "getapprovalissues",
@@ -1370,7 +1372,7 @@
         "agentdashNarrowAgentCeilings",
         "agentdashGetAgentPolicy"
       ],
-      "firstParagraph": "76 tools — measured: the length of the tools/list response. Source: buildToolSurface(client, config, \"agent\") in packages/mcp-server/src/index.ts; the tools are defined in src/tools.ts, src/journey.ts and src/harness.ts, in that order."
+      "firstParagraph": "77 tools — measured: the length of the tools/list response. Source: buildToolSurface(client, config, \"agent\") in packages/mcp-server/src/index.ts; the tools are defined in src/tools.ts, src/journey.ts and src/harness.ts, in that order."
     },
     {
       "slug": "mcp/tools/setup",

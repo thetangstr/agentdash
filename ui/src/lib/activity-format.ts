@@ -134,6 +134,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "connection.hubspot_connected": "connected HubSpot",
   "connection.hubspot_rotated": "rotated the HubSpot credential",
   "connection.hubspot_write_requested": "asked to write to HubSpot",
+  "document.upload_proposed": "proposed a copy of a document for its steward's OneDrive",
   "connection.revoked": "disconnected an integration",
   "connection.sharepoint_connected": "connected SharePoint",
   "connector_send.failed": "could not deliver a connector send",

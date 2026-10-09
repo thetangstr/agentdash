@@ -1,4 +1,4 @@
-import { workforceTemplateIdSchema } from "@paperclipai/shared";
+import { MICROSOFT_PROPOSE_SUMMARY_MAX_CHARS, workforceTemplateIdSchema } from "@paperclipai/shared";
 import { z } from "zod";
 import {
   addIssueCommentSchema,
@@ -161,6 +161,52 @@ const approvalDecisionSchema = z.object({
   action: z.enum(["approve", "reject", "requestRevision", "resubmit"]),
   decisionNote: z.string().optional(),
   payloadJson: z.string().optional(),
+});
+
+/**
+ * AgentDash (per-steward document access, slice 5/6): an agent asks to save a
+ * proposed copy in its steward's own OneDrive. Provider is an enum so a later
+ * one is additive. There is no `operation`: the only one is `upload_new`, and
+ * the server refuses anything that could overwrite or delete.
+ */
+const documentsProposeUploadToolSchema = z.object({
+  companyId: companyIdOptional,
+  provider: z.enum(["microsoft"]).describe("The document provider. Microsoft 365 (OneDrive) only."),
+  target: z
+    .object({
+      path: z
+        .string()
+        .min(1)
+        .max(400)
+        .optional()
+        .describe('Folder path in your steward\'s own OneDrive, e.g. "Projects/Kickoff"; "/" is the top level.'),
+      folderId: z.string().min(1).max(256).optional().describe("Microsoft item id of the destination folder."),
+      driveId: z.string().min(1).max(256).optional().describe("Optional; must be your steward's own OneDrive."),
+    })
+    .describe("Exactly one of path or folderId. There is no default folder: ask your steward where it goes."),
+  fileName: z
+    .string()
+    .min(1)
+    .max(120)
+    .describe(
+      "Base name with the output extension (.docx, .pptx, .xlsx, .pdf, .md, .txt, .csv). The saved copy is " +
+        "named \"<name> (proposed by <your name>).<ext>\".",
+    ),
+  attachmentId: z
+    .string()
+    .uuid()
+    .describe("Id of the issue attachment (attach_file) holding the draft. Markdown becomes Word when fileName ends .docx."),
+  sourceItemId: z
+    .string()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("Microsoft item id of the original document this copy proposes changes to, if any."),
+  summary: z
+    .string()
+    .min(1)
+    .max(MICROSOFT_PROPOSE_SUMMARY_MAX_CHARS)
+    .describe("For your steward: what the copy changes and why. Do not paste document text."),
 });
 
 const createApprovalToolSchema = z.object({
@@ -648,14 +694,33 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     makeTool(
       "create_approval",
       "Create a board approval request, optionally linked to one or more issues. "
-        + "A connector_send must name a provider with an executor (today only \"hubspot\", with objectType, "
-        + "operation and properties); one with no provider or naming Teams is refused with 422. There is no "
+        + "A connector_send must name a provider with an executor (here only \"hubspot\", with objectType, "
+        + "operation and properties); one with no provider or naming Teams is refused with 422. A proposed copy "
+        + "of a document for your steward's OneDrive is filed with documents_propose_upload, never here. There is no "
         + "Teams send: to reach a person, comment on the issue and set it blocked, or open a request_board_approval.",
       createApprovalToolSchema,
       async ({ companyId, ...body }) =>
         client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/approvals`, {
           body,
         }),
+    ),
+    makeTool(
+      "documents_propose_upload",
+      "Ask your steward to approve saving a NEW file in their own OneDrive: a proposed copy named "
+        + "\"<name> (proposed by <your name>).<ext>\" in the folder you name. Nothing is written until your steward "
+        + "approves, and it never overwrites, edits or deletes an existing document; a name already in use gets a "
+        + "numbered copy. Attach the draft to the issue first (attach_file) and pass its attachmentId; a Markdown "
+        + "draft proposed with a .docx fileName is converted to Word. Returns 202 with an approvalId: report that the request is with your steward, not "
+        + "that a file was saved. Ask your steward which folder first (ask_user_questions); there is no default. "
+        + "Load the agentdash-office-docs skill before using this. Refusals carry details.code (422) or "
+        + "details.reason (403: no_active_steward, no_connection).",
+      documentsProposeUploadToolSchema,
+      async ({ companyId, provider, ...body }) =>
+        client.requestJson(
+          "POST",
+          `/companies/${client.resolveCompanyId(companyId)}/documents/${encodeURIComponent(provider)}/propose`,
+          { body },
+        ),
     ),
     makeTool(
       "mandated_attest",

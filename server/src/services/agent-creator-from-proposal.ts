@@ -205,6 +205,13 @@ ${userVoice || "No interview context was captured."}
 `;
 }
 
+// AgentDash: document-proposed-copies (document access slice 5) is inherited from
+// the canonical default bundle: `connector_send` has a second executor, a NEW
+// proposed copy in the steward's own OneDrive filed only through
+// documents_propose_upload after asking the steward, never an overwrite; the
+// opt-in agentdash-office-docs skill carries the rules. Proposal-created hires
+// add nothing to that and get no document access of their own.
+
 // AgentDash: member-email-visibility (GH #505) is inherited from the canonical
 // default bundle: agents resolve people to `userId` + name through
 // /companies/:companyId/people; member email addresses are never returned to

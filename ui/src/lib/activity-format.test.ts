@@ -303,6 +303,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "connection.hubspot_connected",
   "connection.hubspot_rotated",
   "connection.hubspot_write_requested",
+  "document.upload_proposed",
   "connection.revoked",
   "connection.sharepoint_connected",
   "connector_send.failed",

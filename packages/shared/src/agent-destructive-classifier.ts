@@ -40,13 +40,20 @@ export const DESTRUCTIVE_ACTION_CLASS_KEYS = [
 export type DestructiveActionClassKey = (typeof DESTRUCTIVE_ACTION_CLASS_KEYS)[number];
 
 /**
- * The two non-togglable outcomes that sit alongside the nine classes.
- * `safe_read` is the only never-destructive outcome; `unclassified_write` is
- * the fail-closed catch-all (always destructive).
+ * The non-togglable outcomes that sit alongside the nine classes.
+ * `safe_read` and `new_private_copy` are never destructive; `unclassified_write`
+ * is the fail-closed catch-all (always destructive).
+ *
+ * `new_private_copy` (document access slice 5) is a write that creates one new
+ * file in the steward's own storage and cannot touch anything that exists: the
+ * Microsoft `upload_new` operation, which only ever runs after the steward
+ * approves it. Not destructive, so a `blocked` ceiling does not refuse it, but
+ * still approval-gated by the `connector_send` path it travels on.
  */
 export type ActionClassification =
   | DestructiveActionClassKey
   | "safe_read"
+  | "new_private_copy"
   | "unclassified_write";
 
 export interface DestructiveActionClassEntry {
@@ -167,7 +174,7 @@ export type ClassifyActionInput = ClassifyConnectorAction | ClassifyBridgeAction
 
 export interface ClassifyActionResult {
   class: ActionClassification;
-  /** True for every class except `safe_read`. */
+  /** True for every class except `safe_read` and `new_private_copy`. */
   destructive: boolean;
 }
 
@@ -216,10 +223,23 @@ const OPERATION_CLASS: Readonly<Record<string, DestructiveActionClassKey>> = Obj
   revoke_key: "credential_or_connection_change",
 });
 
+/**
+ * Provider-specific writes that only ever create a new private file. Keyed by
+ * provider because the guarantee is the executor's, not the verb's: the same
+ * operation name on another provider fails closed.
+ */
+const NEW_PRIVATE_COPY_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
+  microsoft: new Set(["upload_new"]),
+});
+
 /** Message-shaped operations — destructive only when the recipient is external. */
 const MESSAGE_OPERATIONS: ReadonlySet<string> = new Set(["send", "message", "email"]);
 
 const SAFE_READ: ClassifyActionResult = Object.freeze({ class: "safe_read", destructive: false });
+const NEW_PRIVATE_COPY: ClassifyActionResult = Object.freeze({
+  class: "new_private_copy",
+  destructive: false,
+});
 const UNCLASSIFIED: ClassifyActionResult = Object.freeze({
   class: "unclassified_write",
   destructive: true,
@@ -246,6 +266,9 @@ export function classifyAction(input: ClassifyActionInput): ClassifyActionResult
   const operation = input.operation.trim().toLowerCase();
 
   if (READ_OPERATIONS.has(operation)) return SAFE_READ;
+
+  const provider = input.provider.trim().toLowerCase();
+  if (NEW_PRIVATE_COPY_OPERATIONS[provider]?.has(operation)) return NEW_PRIVATE_COPY;
 
   if (MESSAGE_OPERATIONS.has(operation)) {
     // Internal messages (to the steward or an internal teammate) are safe;

@@ -3,15 +3,15 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `31955ca47` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `0e7a53586` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
-**76 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "agent")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/tools.ts`, `src/journey.ts` and `src/harness.ts`, in that order.
+**77 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "agent")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/tools.ts`, `src/journey.ts` and `src/harness.ts`, in that order.
 
 Each tool's description is its inline string, verbatim. The input table is rendered from the JSON schema the server advertises in `tools/list` (`toolInputSchema` in `packages/mcp-server/src/schema.ts`, converted from the tool's zod schema). Nested objects are flattened: `a.b` is property `b` of object `a`, and `a[].b` is property `b` of each item of array `a`.
 
-Tools, in the order `tools/list` returns them: `whoami`, `agentdashGetMyMemory`, `agentdashUpdateMyMemory`, `agentdashGetMyMandate`, `inbox_lite`, `list_agents`, `get_agent`, `update_agent`, `list_issues`, `get_issue`, `get_heartbeat_context`, `list_comments`, `get_comment`, `list_issue_approvals`, `attach_file`, `list_documents`, `get_document`, `list_document_revisions`, `list_projects`, `get_project`, `get_issue_workspace_runtime`, `control_issue_workspace_services`, `wait_for_issue_workspace_service`, `list_goals`, `get_goal`, `list_approvals`, `create_approval`, `mandated_attest`, `get_approval`, `get_approval_issues`, `list_approval_comments`, `create_issue`, `update_issue`, `checkout_issue`, `release_issue`, `add_comment`, `suggest_tasks`, `ask_user_questions`, `request_confirmation`, `upsert_issue_document`, `restore_issue_document_revision`, `link_issue_approval`, `unlink_issue_approval`, `approval_decision`, `add_approval_comment`, `report_issue`, `report_issue_status`, `api_request`, `agentdashBootstrapWorkspace`, `agentdashListCompanies`, `agentdashGetCompany`, `agentdashCreateCompany`, `agentdashCosChat`, `agentdashReadConversation`, `agentdashHireAgent`, `agentdash_setup_status`, `agentdash_install_checklist`, `agentdash_sign_up`, `agentdash_setup_adapter`, `agentdash_start_interview`, `agentdash_interview_turn`, `agentdash_get_plan`, `agentdash_confirm_plan`, `agentdash_revise_plan`, `agentdash_request_approval`, `agentdash_check_approval`, `agentdash_list_agents`, `agentdash_list_tasks`, `agentdash_create_task`, `agentdash_get_dashboard`, `agentdash_pause_agent`, `agentdash_resume_agent`, `agentdashPushAgentDirectives`, `agentdashGetAgentDirectives`, `agentdashNarrowAgentCeilings`, `agentdashGetAgentPolicy`.
+Tools, in the order `tools/list` returns them: `whoami`, `agentdashGetMyMemory`, `agentdashUpdateMyMemory`, `agentdashGetMyMandate`, `inbox_lite`, `list_agents`, `get_agent`, `update_agent`, `list_issues`, `get_issue`, `get_heartbeat_context`, `list_comments`, `get_comment`, `list_issue_approvals`, `attach_file`, `list_documents`, `get_document`, `list_document_revisions`, `list_projects`, `get_project`, `get_issue_workspace_runtime`, `control_issue_workspace_services`, `wait_for_issue_workspace_service`, `list_goals`, `get_goal`, `list_approvals`, `create_approval`, `documents_propose_upload`, `mandated_attest`, `get_approval`, `get_approval_issues`, `list_approval_comments`, `create_issue`, `update_issue`, `checkout_issue`, `release_issue`, `add_comment`, `suggest_tasks`, `ask_user_questions`, `request_confirmation`, `upsert_issue_document`, `restore_issue_document_revision`, `link_issue_approval`, `unlink_issue_approval`, `approval_decision`, `add_approval_comment`, `report_issue`, `report_issue_status`, `api_request`, `agentdashBootstrapWorkspace`, `agentdashListCompanies`, `agentdashGetCompany`, `agentdashCreateCompany`, `agentdashCosChat`, `agentdashReadConversation`, `agentdashHireAgent`, `agentdash_setup_status`, `agentdash_install_checklist`, `agentdash_sign_up`, `agentdash_setup_adapter`, `agentdash_start_interview`, `agentdash_interview_turn`, `agentdash_get_plan`, `agentdash_confirm_plan`, `agentdash_revise_plan`, `agentdash_request_approval`, `agentdash_check_approval`, `agentdash_list_agents`, `agentdash_list_tasks`, `agentdash_create_task`, `agentdash_get_dashboard`, `agentdash_pause_agent`, `agentdash_resume_agent`, `agentdashPushAgentDirectives`, `agentdashGetAgentDirectives`, `agentdashNarrowAgentCeilings`, `agentdashGetAgentPolicy`.
 
 ## `whoami`
 
@@ -263,7 +263,7 @@ List approvals in a company
 
 ## `create_approval`
 
-Create a board approval request, optionally linked to one or more issues. A connector_send must name a provider with an executor (today only "hubspot", with objectType, operation and properties); one with no provider or naming Teams is refused with 422. There is no Teams send: to reach a person, comment on the issue and set it blocked, or open a request_board_approval.
+Create a board approval request, optionally linked to one or more issues. A connector_send must name a provider with an executor (here only "hubspot", with objectType, operation and properties); one with no provider or naming Teams is refused with 422. A proposed copy of a document for your steward's OneDrive is filed with documents_propose_upload, never here. There is no Teams send: to reach a person, comment on the issue and set it blocked, or open a request_board_approval.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -272,6 +272,23 @@ Create a board approval request, optionally linked to one or more issues. A conn
 | `requestedByAgentId` | string \| null | no |  |
 | `payload` | map of any | yes |  |
 | `issueIds` | array of string | no |  |
+
+## `documents_propose_upload`
+
+Ask your steward to approve saving a NEW file in their own OneDrive: a proposed copy named "<name> (proposed by <your name>).<ext>" in the folder you name. Nothing is written until your steward approves, and it never overwrites, edits or deletes an existing document; a name already in use gets a numbered copy. Attach the draft to the issue first (attach_file) and pass its attachmentId; a Markdown draft proposed with a .docx fileName is converted to Word. Returns 202 with an approvalId: report that the request is with your steward, not that a file was saved. Ask your steward which folder first (ask_user_questions); there is no default. Load the agentdash-office-docs skill before using this. Refusals carry details.code (422) or details.reason (403: no_active_steward, no_connection).
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `companyId` | string \| null | no |  |
+| `provider` | `"microsoft"` | yes | The document provider. Microsoft 365 (OneDrive) only. |
+| `target` | object | yes | Exactly one of path or folderId. There is no default folder: ask your steward where it goes. |
+| `target.path` | string | no | Folder path in your steward's own OneDrive, e.g. "Projects/Kickoff"; "/" is the top level. |
+| `target.folderId` | string | no | Microsoft item id of the destination folder. |
+| `target.driveId` | string | no | Optional; must be your steward's own OneDrive. |
+| `fileName` | string | yes | Base name with the output extension (.docx, .pptx, .xlsx, .pdf, .md, .txt, .csv). The saved copy is named "<name> (proposed by <your name>).<ext>". |
+| `attachmentId` | string | yes | Id of the issue attachment (attach_file) holding the draft. Markdown becomes Word when fileName ends .docx. |
+| `sourceItemId` | string | no | Microsoft item id of the original document this copy proposes changes to, if any. |
+| `summary` | string | yes | For your steward: what the copy changes and why. Do not paste document text. |
 
 ## `mandated_attest`
 

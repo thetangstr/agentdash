@@ -7,13 +7,34 @@ import {
   connectorSendExecutions,
   workflowEvents,
 } from "@paperclipai/db";
-import { checkConnectorSendPayload, classifyAction, CONNECTOR_SEND_PROVIDERS } from "@paperclipai/shared";
+import { createHash } from "node:crypto";
+import {
+  checkConnectorSendPayload,
+  classifyAction,
+  CONNECTOR_SEND_PROVIDERS,
+  FEATURE_FLAG_KEYS,
+  proposedCopyFormatFor,
+} from "@paperclipai/shared";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
+import { getStorageService } from "../storage/index.js";
+import type { StorageService } from "../storage/types.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
+import { buildMarkdownDocx } from "./assess-project-docx.js";
 import { connectorService } from "./connectors.js";
+import { featureFlagsService } from "./feature-flags.js";
 import { hubspotConnectorService } from "./hubspot-connector.js";
+import {
+  baseContentType,
+  loadProposalAttachment,
+  microsoftProposalDigest,
+} from "./microsoft-document-proposals.js";
+import {
+  MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES,
+  microsoftDocumentsWriteService,
+} from "./microsoft-documents-write.js";
+import { MicrosoftGraphAuthError, microsoftGraphAuthService } from "./microsoft-graph-auth.js";
 import { workflowEventsService } from "./workflow-events.js";
 import { logActivity } from "./activity-log.js";
 
@@ -81,6 +102,29 @@ const REASON_TEXT: Record<string, string> = {
   operation_invalid: "the request was missing details the connector needs",
   object_id_required: "the request was missing details the connector needs",
   properties_invalid: "the request was missing details the connector needs",
+  // Microsoft proposed copies (document access slice 5).
+  target_invalid: "the request did not name a folder the copy could be saved in",
+  file_name_invalid: "the request did not give a usable file name",
+  attachment_id_invalid: "the request did not name the file to upload",
+  summary_invalid: "the request did not say what the copy changes",
+  source_item_id_invalid: "the request named the original document in a form Microsoft does not use",
+  document_access_disabled: "document access is turned off for this company",
+  payload_changed: "the request changed after it was filed",
+  steward_changed: "the agent's steward changed after the request was filed, so the approval no longer belongs to the person whose OneDrive it names",
+  approver_not_steward: "it was approved by someone other than the agent's steward, and only the steward can approve a file going into their own OneDrive",
+  write_scope_missing: "the steward's Microsoft connection can only read; the steward must reconnect Microsoft from My Agent with the option that allows proposing copies",
+  reconnect_required: "Microsoft no longer accepts the steward's connection; the steward must reconnect Microsoft from My Agent",
+  microsoft_unreachable: "Microsoft could not be reached; nothing was saved",
+  not_configured: "Microsoft sign-in is not configured on this AgentDash instance",
+  not_connected: "the steward has no live Microsoft connection",
+  malformed_token_response: "Microsoft returned no usable token",
+  attachment_missing: "the file to upload is no longer attached",
+  attachment_changed: "the file changed after the request was filed",
+  attachment_type_mismatch: "the attached file is not the kind of document the request names",
+  attachment_too_large: "the file is larger than Microsoft accepts in one upload",
+  target_not_found: "the folder it names does not exist in the steward's OneDrive",
+  target_not_folder: "the destination it names is a file, not a folder",
+  target_not_own_drive: "the destination is not in the steward's own OneDrive",
 };
 
 function reasonText(reason: string): string {
@@ -101,6 +145,18 @@ export function describeConnectorSendOutcome(report: ConnectorSendExecutionRepor
   const why = report.reason ? reasonText(report.reason) : null;
   const known =
     report.provider && (CONNECTOR_SEND_PROVIDERS as readonly string[]).includes(report.provider);
+  if (report.provider === "microsoft") {
+    // A proposed copy is not a "send": say what it is.
+    if (report.outcome === "succeeded") return "The approved proposed copy was saved to the steward's OneDrive.";
+    if (report.outcome === "outcome_unknown") {
+      return (
+        `The approved proposed copy may or may not have been saved to the steward's OneDrive${why ? ` (${why})` : ""}. ` +
+        "Do not retry it: a steward must check their OneDrive and reconcile the outcome first."
+      );
+    }
+    const verb = report.refused ? "was refused before anything was saved" : "failed";
+    return `The approved proposed copy ${verb}${why ? `: ${why}` : ""}. Nothing was saved to OneDrive.`;
+  }
   const provider = known ? ` through ${report.provider}` : "";
   if (report.outcome === "succeeded") return `The approved send${provider} was delivered.`;
   if (report.outcome === "outcome_unknown") {
@@ -140,6 +196,18 @@ export type ReconcileResult =
   | { status: "conflict"; reason: "stale_revision" | "already_reconciled" | "not_reconcilable" };
 
 /**
+ * Whether bytes plausibly are the format their extension names: OOXML is a
+ * zip, a PDF starts with `%PDF`. Text formats are not sniffed.
+ */
+function looksLike(extension: string, bytes: Buffer): boolean {
+  if (extension === "docx" || extension === "pptx" || extension === "xlsx") {
+    return bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  }
+  if (extension === "pdf") return bytes.subarray(0, 5).toString("latin1") === "%PDF-";
+  return true;
+}
+
+/**
  * AgentDash-MK: execute a `connector_send` after its steward approved it.
  *
  * Everything here exists because of the gap between deciding and doing.
@@ -155,12 +223,22 @@ export type ReconcileResult =
  * ambiguous outcome can never be "resolved" by retrying — for a CRM of record a
  * duplicate is worse than a gap, and only a human can tell the two apart.
  */
-export function connectorSendExecutionService(db: Db) {
+export function connectorSendExecutionService(
+  db: Db,
+  options: {
+    /** Where issue attachments are read from; the process-wide store by default. */
+    storage?: () => StorageService;
+  } = {},
+) {
   const connectors = connectorService(db);
   const hubspot = hubspotConnectorService(db);
   const stewardships = agentStewardshipService(db);
   const governance = agentGovernanceService(db);
   const workflow = workflowEventsService(db);
+  const flags = featureFlagsService(db);
+  const microsoftAuth = microsoftGraphAuthService(db);
+  const microsoftWrite = microsoftDocumentsWriteService();
+  const storage = options.storage ?? getStorageService;
 
   /** Record a refusal that happened before any provider call was made. */
   async function recordRefusal(
@@ -176,7 +254,7 @@ export function connectorSendExecutionService(db: Db) {
         connectionId: (payload.connectionId as string | undefined) ?? null,
         requestedByAgentId: approval.requestedByAgentId,
         provider: recordedProvider(payload),
-        objectType: String(payload.objectType ?? "unknown"),
+        objectType: String(payload.objectType ?? (recordedProvider(payload) === "microsoft" ? "drive_item" : "unknown")),
         operation: String(payload.operation ?? "unknown"),
         payloadDigest: String(payload.payloadDigest ?? ""),
         outcome: "failed",
@@ -205,6 +283,233 @@ export function connectorSendExecutionService(db: Db) {
       provider: recordedProvider(payload) === "unspecified" ? null : recordedProvider(payload),
       detail,
     };
+  }
+
+  /**
+   * AgentDash (document access slice 5): save an approved proposed copy as a
+   * NEW file in the steward's own OneDrive.
+   *
+   * Every authority is re-derived here, at the moment of the act, because the
+   * filing-time answers may be stale: the flag, the payload digest, the
+   * steward (and that the steward is who approved), the connection, the
+   * write scope on the CURRENT grant, the attachment bytes, and the folder.
+   * Any refusal is recorded before a single write reaches Microsoft. Only
+   * then is the attempt claimed (`outcome_unknown`) and the file uploaded,
+   * with rename-on-conflict, so nothing that exists is ever replaced.
+   *
+   * Rows written here carry ids and digests only: never the summary, the file
+   * name, the folder path or the document body.
+   */
+  async function executeMicrosoftUpload(
+    approval: typeof approvals.$inferSelect,
+    payload: Record<string, unknown>,
+    track: { claimWritten: boolean; report: ConnectorSendExecutionReport | null },
+  ): Promise<ConnectorSendExecutionReport | null> {
+    const provider = "microsoft";
+    const refuse = (reason: string) => recordRefusal(approval, payload, reason);
+
+    if (!(await flags.isEnabled(approval.companyId, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS))) {
+      return refuse("document_access_disabled");
+    }
+    if (approval.expiresAt && approval.expiresAt.getTime() < Date.now()) {
+      return refuse("approval_expired");
+    }
+    const agentId = approval.requestedByAgentId;
+    if (!agentId) return refuse("no_requesting_agent");
+    if (typeof payload.payloadDigest !== "string" || payload.payloadDigest !== microsoftProposalDigest(payload)) {
+      return refuse("payload_changed");
+    }
+
+    // The ceiling's destructive-action mode, as for every connector send. An
+    // `upload_new` is `new_private_copy`, which is not destructive, so a
+    // `blocked` mode does not refuse it; it is still approval-gated.
+    const policy = await governance.resolveAgentPolicy(approval.companyId, agentId);
+    if (policy) {
+      const classification = classifyAction({ kind: "connector", provider, operation: "upload_new" });
+      const mode = policy.destructiveActions;
+      const refused = classification.destructive && mode === "blocked";
+      await workflow.emit({
+        companyId: approval.companyId,
+        pipelineId: `connector_send:${provider}`,
+        runId: approval.id,
+        stepKey: "authorization",
+        eventType: "destructive_action_gated",
+        actorKind: "agent",
+        payload: {
+          surface: "connector_send",
+          actionClass: classification.class,
+          mode,
+          decision: refused ? "refused" : "allowed",
+        },
+      });
+      if (refused) return refuse("destructive_action_blocked");
+    }
+
+    // The steward it was filed for must still be the steward, and must be the
+    // person who approved it: the file lands in THEIR OneDrive under THEIR
+    // credential, so nobody else's approval can put it there.
+    const steward = await stewardships.activeByAgent(approval.companyId, agentId);
+    if (!steward || steward.userId !== payload.stewardUserId) return refuse("steward_changed");
+    if (approval.decidedByUserId !== steward.userId) return refuse("approver_not_steward");
+
+    const acting = await connectors.resolveActingAs(approval.companyId, agentId, "send", provider);
+    if (!acting.ok) return refuse(acting.blocked.reason);
+    const connectionId = acting.resolution.connectionId;
+    if (payload.connectionId !== connectionId) return refuse("connection_changed");
+
+    const connection = await db
+      .select({ status: connections.status, revokedAt: connections.revokedAt, scopes: connections.scopes })
+      .from(connections)
+      .where(eq(connections.id, connectionId))
+      .then((rows) => rows[0] ?? null);
+    if (!connection || connection.revokedAt || connection.status !== "active") {
+      return refuse("connection_unavailable");
+    }
+    const canWrite = (scopes: readonly string[]) => scopes.some((scope) => scope.toLowerCase() === "files.readwrite");
+    if (!canWrite((connection.scopes ?? []) as string[])) return refuse("write_scope_missing");
+
+    // The bytes the steward was shown a digest of, and only those.
+    const attachment = await loadProposalAttachment(db, approval.companyId, String(payload.attachmentId));
+    if (!attachment) return refuse("attachment_missing");
+    if (attachment.sha256 !== payload.attachmentSha256) return refuse("attachment_changed");
+    const format = proposedCopyFormatFor(String(payload.fileName));
+    const contentType = baseContentType(attachment.contentType);
+    if (!format || !format.accepts.includes(contentType)) return refuse("attachment_type_mismatch");
+    if (attachment.byteSize > MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES) return refuse("attachment_too_large");
+
+    // The CURRENT grant, which a refresh can narrow but never widen.
+    let accessToken: string;
+    try {
+      const token = await microsoftAuth.tokenForConnection(connectionId);
+      if (!canWrite(token.grantedScopes)) return refuse("write_scope_missing");
+      accessToken = token.accessToken;
+    } catch (error) {
+      if (error instanceof MicrosoftGraphAuthError) return refuse(error.reason);
+      throw error;
+    }
+
+    const stored = await storage().getObject(approval.companyId, attachment.objectKey);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of stored.stream) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      total += buffer.length;
+      if (total > MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES) {
+        stored.stream.destroy();
+        return refuse("attachment_too_large");
+      }
+      chunks.push(buffer);
+    }
+    const original = Buffer.concat(chunks);
+    if (createHash("sha256").update(original).digest("hex") !== payload.attachmentSha256) {
+      return refuse("attachment_changed");
+    }
+
+    let body: Buffer = original;
+    let converted: string | null = null;
+    if (format.convertFrom.includes(contentType)) {
+      // D9: python-docx is not on the host, so the agent drafted Markdown.
+      body = await buildMarkdownDocx({
+        markdown: original.toString("utf8"),
+        title: String(payload.proposedFileName ?? "").replace(/\.docx$/i, ""),
+      });
+      converted = "markdown_to_docx";
+    } else if (!looksLike(format.extension, original)) {
+      return refuse("attachment_type_mismatch");
+    }
+
+    const target = (payload.target ?? {}) as Record<string, unknown>;
+    const folder = await microsoftWrite.resolveOwnFolder(accessToken, {
+      folderId: typeof target.folderId === "string" ? target.folderId : null,
+      path: typeof target.path === "string" ? target.path : null,
+      driveId: typeof target.driveId === "string" ? target.driveId : null,
+    });
+    if (!folder.ok) return refuse(folder.reason);
+
+    // --- claim, then act ---------------------------------------------------
+    const payloadDigest = String(payload.payloadDigest);
+    let claimed: { id: string } | null = null;
+    try {
+      claimed = await db
+        .insert(connectorSendExecutions)
+        .values({
+          companyId: approval.companyId,
+          approvalId: approval.id,
+          connectionId,
+          requestedByAgentId: agentId,
+          provider,
+          objectType: "drive_item",
+          operation: "upload_new",
+          payloadDigest,
+          outcome: "outcome_unknown",
+          reason: "claimed",
+        })
+        .returning({ id: connectorSendExecutions.id })
+        .then((rows) => rows[0] ?? null);
+    } catch (error) {
+      if (isUniqueViolation(error)) return null;
+      throw error;
+    }
+    if (!claimed) return null;
+    track.claimWritten = true;
+
+    const uploadedSha256 = createHash("sha256").update(body).digest("hex");
+    const result = await microsoftWrite.uploadNewFile(accessToken, {
+      folderId: folder.folderId,
+      fileName: String(payload.proposedFileName),
+      body,
+      contentType: format.uploadContentType,
+    });
+    const report: ConnectorSendExecutionReport = {
+      outcome: result.outcome,
+      refused: false,
+      reason: result.outcome === "succeeded" ? null : result.reason,
+      provider,
+      detail: null,
+    };
+    track.report = report;
+
+    const externalId = result.outcome === "succeeded" ? result.itemId : null;
+    const metadata = {
+      driveId: result.outcome === "succeeded" ? (result.driveId ?? folder.driveId) : folder.driveId,
+      folderId: folder.folderId,
+      itemId: externalId,
+      attachmentId: attachment.attachmentId,
+      attachmentSha256: attachment.sha256,
+      uploadedSha256,
+      byteSize: body.length,
+      converted,
+    };
+    await db
+      .update(connectorSendExecutions)
+      .set({
+        outcome: result.outcome,
+        externalId,
+        reason: report.reason,
+        executedAt: new Date(),
+        metadata,
+      })
+      .where(eq(connectorSendExecutions.id, claimed.id));
+
+    await logActivity(db, {
+      companyId: approval.companyId,
+      actorType: "system",
+      actorId: "connector-send",
+      agentId,
+      action: `connector_send.${result.outcome}`,
+      entityType: "approval",
+      entityId: approval.id,
+      details: {
+        provider,
+        objectType: "drive_item",
+        operation: "upload_new",
+        connectionId,
+        payloadDigest,
+        externalId,
+        ...metadata,
+      },
+    });
+    return report;
   }
 
   /**
@@ -238,14 +543,20 @@ export function connectorSendExecutionService(db: Db) {
       if (!approval || approval.type !== "connector_send") return null;
       if (approval.status !== "approved") return null;
 
-      const company = await db
-        .select({ productProfile: companies.productProfile })
-        .from(companies)
-        .where(eq(companies.id, approval.companyId))
-        .then((rows) => rows[0] ?? null);
-      if (company?.productProfile !== "agentdash_mk") return null;
-
       const payload = (approval.payload ?? {}) as Record<string, unknown>;
+
+      // AgentDash (document access, D2): a Microsoft proposed copy is gated by
+      // the per-company flag, not the product profile, so it runs on any
+      // company. Every other connector send stays `agentdash_mk` only.
+      const documentProposal = recordedProvider(payload) === "microsoft";
+      if (!documentProposal) {
+        const company = await db
+          .select({ productProfile: companies.productProfile })
+          .from(companies)
+          .where(eq(companies.id, approval.companyId))
+          .then((rows) => rows[0] ?? null);
+        if (company?.productProfile !== "agentdash_mk") return null;
+      }
 
       // Already executed (or being executed). The unique index is the real
       // guard; this read just avoids the pointless work and the noisy error.
@@ -268,6 +579,16 @@ export function connectorSendExecutionService(db: Db) {
       }
       const provider = shape.provider;
       attemptedProvider = provider;
+
+      if (provider === "microsoft") {
+        const track = { claimWritten: false, report: null as ConnectorSendExecutionReport | null };
+        try {
+          return await executeMicrosoftUpload(approval, payload, track);
+        } finally {
+          claimWritten = track.claimWritten;
+          report = track.report;
+        }
+      }
 
       // --- re-resolution, all against CURRENT state ------------------------
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { approvalsApi } from "../../api/approvals";
+import { approvalAsk } from "../../lib/approval-ask";
 import type { InboxItem } from "../../api/stewardships";
 import { Button } from "../ui/button";
 import { queryKeys } from "../../lib/queryKeys";
@@ -24,30 +25,11 @@ import { timeSince, timeUntil } from "../../lib/timeAgo";
  * guarantee, not clutter.
  */
 
-/**
- * What each approval type is actually asking, as a phrase completing
- * "<agent> …". Eleven types is a small enough closed set to write out; unlike
- * activity actions, a lookup table here can be complete.
- *
- * Not every one is a request. `mandate_violation` is a report and
- * `workflow_recommendation` is advisory, so the phrases are not forced into a
- * single "wants to" shape.
- */
-const ASKS: Record<string, string> = {
-  hire_agent: "wants to hire another agent",
-  approve_ceo_strategy: "wants sign-off on the strategy",
-  budget_override_required: "has run out of budget and cannot continue",
-  request_board_approval: "wants your approval",
-  mandate_violation: "did something its mandate does not allow",
-  connector_send: "wants to send something outside the company",
-  inbound_content_review: "wants to release content that was held back",
-  deliverable_review: "needs your sign-off on a deliverable",
-  workflow_recommendation: "has a suggestion about how this work runs",
-};
-
 function askSentence(item: InboxItem, fallbackName: string): string {
   const who = item.requestingAgent?.name ?? fallbackName;
-  const ask = ASKS[item.type];
+  // The phrase table lives in lib/approval-ask (shared with the Decisions
+  // page); a document proposal gets its own sentence there (D8).
+  const ask = approvalAsk(item.type, item.payload);
   return ask ? `${who} ${ask}` : `${who}: ${item.type.replace(/_/g, " ")}`;
 }
 

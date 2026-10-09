@@ -284,7 +284,7 @@ describeEmbeddedPostgres("agentdash-mk connector_send validation and failure sur
 
     expect(res.status, JSON.stringify(res.body)).toBe(422);
     expect(res.body.details.code).toBe("connector_send_teams_not_supported");
-    expect(res.body.details.supportedProviders).toEqual(["hubspot"]);
+    expect(res.body.details.supportedProviders).toEqual(["hubspot", "microsoft"]);
     expect(res.body.error).toMatch(/steward webhook/);
     expect(res.body.error).toMatch(/agentdash-inbox/);
     expect(res.body.error).toMatch(/request_board_approval/);

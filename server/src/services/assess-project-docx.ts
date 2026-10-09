@@ -90,6 +90,37 @@ export async function buildProjectDocx(input: BuildDocxInput): Promise<Buffer> {
   return Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
 }
 
+/**
+ * AgentDash (per-steward document access, D9): a plain Markdown draft as a
+ * Word document, for an agent's proposed copy when python-docx is not on the
+ * host. No title page and no AgentDash branding: the document is the agent's
+ * draft and nothing else. Same Markdown subset as the assessment renderer.
+ */
+export async function buildMarkdownDocx(input: { markdown: string; title: string }): Promise<Buffer> {
+  const doc = new Document({
+    title: input.title,
+    numbering: {
+      config: [
+        {
+          reference: NUMBERING_REF,
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.DECIMAL,
+              text: "%1.",
+              alignment: AlignmentType.LEFT,
+              style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+            },
+          ],
+        },
+      ],
+    },
+    sections: [{ properties: {}, children: renderMarkdownToParagraphs(input.markdown) }],
+  });
+  const buf = await Packer.toBuffer(doc);
+  return Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Markdown walker                                                     */
 /* ------------------------------------------------------------------ */

@@ -220,6 +220,32 @@ export function approvalRoutes(
   }
 
   /**
+   * AgentDash (document access slice 5): a Microsoft `connector_send` carries
+   * server-stamped fields the executor trusts (the steward it was filed for,
+   * the connection, the attachment digest), so it is filed only through
+   * POST /companies/:companyId/documents/microsoft/propose, never written by
+   * hand here, and its payload is never replaced by a resubmit.
+   */
+  function namesMicrosoft(payload: unknown): boolean {
+    return (
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof (payload as Record<string, unknown>).provider === "string" &&
+      ((payload as Record<string, unknown>).provider as string).trim().toLowerCase() === "microsoft"
+    );
+  }
+
+  function assertNotDocumentProposal(payload: unknown) {
+    if (!namesMicrosoft(payload)) return;
+    throw unprocessable(
+      "A Microsoft connector_send is filed with the documents_propose_upload tool " +
+        "(POST /api/companies/:companyId/documents/microsoft/propose), which records what your steward " +
+        "is approving. It cannot be filed or edited through the generic approval routes.",
+      { code: "connector_send_use_documents_propose", supportedProviders: [...CONNECTOR_SEND_PROVIDERS] },
+    );
+  }
+
+  /**
    * AgentDash-MK: a `connector_send` must name a connector that can execute it.
    *
    * The payload schema is an open record, so without this an agent could file
@@ -228,6 +254,7 @@ export function approvalRoutes(
    * that wrote it is still the one reading the answer.
    */
   function assertConnectorSendPayloadExecutable(payload: unknown) {
+    assertNotDocumentProposal(payload);
     const check = checkConnectorSendPayload(payload);
     if (check.ok) return;
     throw unprocessable(check.message, {
@@ -681,7 +708,20 @@ export function approvalRoutes(
     // Resubmitting without a payload re-opens the stored one, so that is what
     // must be executable.
     if (existing.type === "connector_send") {
-      assertConnectorSendPayloadExecutable(req.body.payload ?? existing.payload);
+      if (namesMicrosoft(existing.payload)) {
+        // Re-opening a filed document proposal unchanged is fine; replacing
+        // its payload is not (see assertNotDocumentProposal).
+        if (req.body.payload !== undefined) assertNotDocumentProposal(existing.payload);
+        const check = checkConnectorSendPayload(existing.payload);
+        if (!check.ok) {
+          throw unprocessable(check.message, {
+            code: `connector_send_${check.problem}`,
+            supportedProviders: [...CONNECTOR_SEND_PROVIDERS],
+          });
+        }
+      } else {
+        assertConnectorSendPayloadExecutable(req.body.payload ?? existing.payload);
+      }
     }
     if (existing.type === "hire_agent" && req.body.payload) {
       assertHirePayloadHasNoHostCommands(req.body.payload);

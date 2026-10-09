@@ -458,3 +458,78 @@ describe("paperclip MCP tools", () => {
     });
   });
 });
+
+// AgentDash (per-steward document access, slice 5/6): the one agent-facing
+// write to a person's documents is a REQUEST the steward decides.
+describe("documents_propose_upload", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const ATTACHMENT = "44444444-4444-4444-8444-444444444444";
+
+  it("says plainly that nothing is written until the steward approves, and nothing is overwritten", () => {
+    const tool = getTool("documents_propose_upload");
+    expect(tool.description).toMatch(/nothing is written until your steward approves/i);
+    expect(tool.description).toMatch(/never overwrites/i);
+    expect(tool.description).toMatch(/proposed by/);
+    expect(tool.description).toMatch(/agentdash-office-docs/);
+  });
+
+  it("names Microsoft as an enum, so a later provider is additive, and has no operation to choose", () => {
+    const tool = getTool("documents_propose_upload");
+    const provider = tool.schema.shape.provider as { options?: string[] };
+    expect(provider.options).toEqual(["microsoft"]);
+    expect(tool.schema.shape.operation).toBeUndefined();
+  });
+
+  it("files the request on the propose route and sends only the proposal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ approvalId: "a-1", status: "pending_steward_approval" }, 202),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getTool("documents_propose_upload").execute({
+      provider: "microsoft",
+      target: { path: "Projects/Kickoff" },
+      fileName: "Kickoff notes.docx",
+      attachmentId: ATTACHMENT,
+      sourceItemId: "01ORIGINAL",
+      summary: "Tightened the agenda.",
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe(
+      "http://localhost:3100/api/companies/11111111-1111-1111-1111-111111111111/documents/microsoft/propose",
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      target: { path: "Projects/Kickoff" },
+      fileName: "Kickoff notes.docx",
+      attachmentId: ATTACHMENT,
+      sourceItemId: "01ORIGINAL",
+      summary: "Tightened the agenda.",
+    });
+  });
+
+  it("refuses an unbounded summary or a provider it does not know before any network call", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ approvalId: "a-2" }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = getTool("documents_propose_upload");
+    const base = { target: { path: "A" }, fileName: "a.md", attachmentId: ATTACHMENT, summary: "x" };
+    const refused = async (input: Record<string, unknown>) =>
+      JSON.parse((await tool.execute(input)).content[0]!.text) as { error?: string };
+    expect((await refused({ ...base, provider: "google" })).error).toBeTruthy();
+    expect((await refused({ ...base, provider: "microsoft", summary: "s".repeat(2001) })).error).toBeTruthy();
+    expect((await refused({ ...base, provider: "microsoft", attachmentId: "nope" })).error).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await refused({ ...base, provider: "microsoft" })).error).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells agents create_approval is not how a document copy is filed", () => {
+    expect(getTool("create_approval").description).toMatch(/documents_propose_upload/);
+  });
+});
