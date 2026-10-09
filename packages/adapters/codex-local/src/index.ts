@@ -33,6 +33,10 @@ export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
  * refreshing the list was for.
  */
 export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = [
+  "gpt-6.1-sol",
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
@@ -73,8 +77,19 @@ export function isCodexLocalFastModeSupported(model: string | null | undefined):
  * is given straight through as `--model`. So this array is a convenience, and
  * being out of date makes new models unreachable from the UI without making
  * them unsupported.
+ *
+ * The gpt-6 family was read from Codex's own model catalog for a ChatGPT Team
+ * login on 2026-10-08 (`/backend-api/codex/models`). There is no gpt-6 Terra:
+ * the tiers are Astra (frontier), Sol (workhorse; 6.1 is current) and Luna
+ * (fast). All four offer the Fast service tier. The catalog only lists them to
+ * Codex CLI 0.160.0 and later, so an older `codex` cannot run them — upgrade
+ * the CLI before moving an agent onto one.
  */
 export const models = [
+  { id: "gpt-6.1-sol", label: "gpt-6.1 Sol — current workhorse (Codex CLI 0.160+)" },
+  { id: "gpt-6-astra", label: "gpt-6 Astra — frontier, most demanding work (Codex CLI 0.160+)" },
+  { id: "gpt-6-sol", label: "gpt-6 Sol — previous workhorse (Codex CLI 0.160+)" },
+  { id: "gpt-6-luna", label: "gpt-6 Luna — fast, affordable (Codex CLI 0.160+)" },
   { id: "gpt-5.6-sol", label: "gpt-5.6 Sol — deepest reasoning" },
   { id: "gpt-5.6-terra", label: "gpt-5.6 Terra — balanced" },
   { id: "gpt-5.6-luna", label: "gpt-5.6 Luna — fastest, cheapest" },
@@ -115,7 +130,7 @@ Core fields:
 - modelReasoningEffort (string, optional): reasoning effort override (minimal|low|medium|high|xhigh) passed via -c model_reasoning_effort=...
 - promptTemplate (string, optional): run prompt template
 - search (boolean, optional): run codex with --search
-- fastMode (boolean, optional): enable Codex Fast mode; supported on GPT-5.4 and passed through for manual model IDs
+- fastMode (boolean, optional): enable Codex Fast mode; supported on the listed gpt-6, gpt-5.6 and GPT-5.4 models and passed through for manual model IDs
 - dangerouslyBypassApprovalsAndSandbox (boolean, optional): run with bypass flag
 - command (string, optional): defaults to "codex"
 - extraArgs (string[], optional): additional CLI args
@@ -134,6 +149,6 @@ Notes:
 - Paperclip injects desired local skills into the effective CODEX_HOME/skills/ directory at execution time so Codex can discover "$paperclip" and related skills without polluting the project working directory. In managed-home mode (the default) this is ~/.paperclip/instances/<id>/companies/<companyId>/codex-home/skills/; when CODEX_HOME is explicitly overridden in adapter config, that override is used instead.
 - Unless explicitly overridden in adapter config, Paperclip runs Codex with a per-company managed CODEX_HOME under the active Paperclip instance and seeds auth/config from the shared Codex home (the CODEX_HOME env var, when set, or ~/.codex).
 - Some model/tool combinations reject certain effort levels (for example minimal with web search enabled).
-- Fast mode is supported on GPT-5.4 and manual model IDs. When enabled for those models, Paperclip applies \`service_tier="fast"\` and \`features.fast_mode=true\`.
+- Fast mode is supported on the listed gpt-6, gpt-5.6 and GPT-5.4 models and on manual model IDs. When enabled for those models, Paperclip applies \`service_tier="fast"\` and \`features.fast_mode=true\`.
 - When Paperclip realizes a workspace/runtime for a run, it injects PAPERCLIP_WORKSPACE_* and PAPERCLIP_RUNTIME_* env vars for agent-side tooling.
 `;
