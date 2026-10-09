@@ -73,7 +73,9 @@ presented as complete. Teams remains part of P0.
 
 The local Codex/Claude computer-agent bridge is P2. New first-party Salesforce,
 HubSpot, Jira, SharePoint, and Google Drive integrations are not part of this
-work.
+work. (Superseded 2026-10-08 for per-steward Microsoft 365 document access
+only; Google Drive stays out of scope. See
+`doc/plans/2026-10-08-steward-document-access.md`.)
 
 ## 5. Profile architecture
 
