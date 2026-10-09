@@ -138,6 +138,7 @@ import {
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
 import { feedbackService } from "../services/feedback.js";
+import { documentRunAccess } from "./document-run-access.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { environmentService } from "../services/environments.js";
 import {
@@ -3696,6 +3697,22 @@ export function issueRoutes(
     await assertFeedbackTraceVisible(db, req, trace);
     const bundle = await feedback.getFeedbackTraceBundle(traceId);
     if (!bundle || !actorCanAccessCompany(req, bundle.companyId)) {
+      res.status(404).json({ error: "Feedback trace not found" });
+      return;
+    }
+    // Document access (slice 6b): a bundle carries its source run's log and
+    // events, so it follows the run's readership rule (steward, instance
+    // admin) while the company's flag is on.
+    const sourceRun = bundle.paperclipRun;
+    const sourceAgentId = typeof sourceRun?.agentId === "string" ? sourceRun.agentId : null;
+    const documentRuns = documentRunAccess(db);
+    const unreadable = sourceRun
+      ? sourceAgentId
+        ? !(await documentRuns.canReadRunContent(req.actor, { companyId: bundle.companyId, agentId: sourceAgentId }))
+        // A run whose agent cannot be read back: fail closed while flagged.
+        : await documentRuns.documentAccessEnabled(bundle.companyId)
+      : false;
+    if (unreadable) {
       res.status(404).json({ error: "Feedback trace not found" });
       return;
     }

@@ -1137,6 +1137,15 @@ export async function startServer(): Promise<StartedServer> {
     setInterval(sweepHandles, 60 * 60 * 1000).unref?.();
   }
 
+  // AgentDash (document access, slice 6b): run events and run-log files of
+  // agents in companies with document_access_enabled are purged after
+  // AGENTDASH_DOCUMENT_RUN_RETENTION_DAYS (default 30). Hourly, like the
+  // retention sweep above; a company without the flag is never touched.
+  {
+    const { startDocumentRunRetention } = await import("./services/document-run-retention.js");
+    startDocumentRunRetention(db as any);
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 

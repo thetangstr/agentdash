@@ -60,6 +60,14 @@ import {
   redactRunLogText,
   redactRunLogValue,
 } from "./run-log-redaction.js";
+import {
+  createDocumentTextStripper,
+  stripFramedDocumentText,
+  stripFramedDocumentTextInValue,
+  type DocumentStripAnomaly,
+  type DocumentStripOptions,
+  emptyDocumentFrameAnomalies,
+} from "./document-content.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
   AdapterExecutionResult,
@@ -222,6 +230,36 @@ import {
 import type { AgentWakePolicyRefusalCode } from "@paperclipai/shared";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
+
+/**
+ * AgentDash (document access, slice 6b): an unmatched or forged document
+ * marker is left in the stored output and logged here — run id, where it was
+ * seen and a nonce prefix only, never the surrounding text.
+ */
+/** Add the run's document-frame counts to a result (numbers only). */
+function withDocumentFrameAnomalies<T extends Record<string, unknown> | null | undefined>(
+  resultJson: T,
+  anomalies: Record<string, number> | null,
+): T {
+  if (!anomalies) return resultJson;
+  return { ...(resultJson ?? {}), documentFrameAnomalies: anomalies } as unknown as T;
+}
+
+function documentStripOptions(
+  runId: string,
+  where: "stdout" | "stderr" | "event" | "run_row" | "runtime_state",
+): DocumentStripOptions {
+  return {
+    // Frames verify only in the output of the run they were minted for.
+    runId,
+    onAnomaly: (anomaly: DocumentStripAnomaly) => {
+      logger.warn(
+        { runId, where, kind: anomaly.kind, noncePrefix: anomaly.noncePrefix },
+        "document text marker anomaly in run output",
+      );
+    },
+  };
+}
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
 const MAX_RUN_EVENT_PAYLOAD_STRING_CHARS = 16 * 1024;
 const MAX_RUN_EVENT_PAYLOAD_ARRAY_ITEMS = 50;
@@ -856,6 +894,7 @@ const heartbeatRunSqlAsciiSafeColumns = {
 const heartbeatRunLogAccessColumns = {
   id: heartbeatRuns.id,
   companyId: heartbeatRuns.companyId,
+  agentId: heartbeatRuns.agentId,
   logStore: heartbeatRuns.logStore,
   logRef: heartbeatRuns.logRef,
 } as const;
@@ -3192,6 +3231,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     lastRunId: string | null;
     lastError: string | null;
   }) {
+    // AgentDash (document access, slice 6b): the stored error never carries
+    // framed document text (frames verify against the run that wrote them).
+    const lastError = input.lastError && input.lastRunId
+      ? stripFramedDocumentText(input.lastError, documentStripOptions(input.lastRunId, "runtime_state"))
+      : input.lastError;
     const existing = await getTaskSession(
       input.companyId,
       input.agentId,
@@ -3205,7 +3249,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           sessionParamsJson: input.sessionParamsJson,
           sessionDisplayId: input.sessionDisplayId,
           lastRunId: input.lastRunId,
-          lastError: input.lastError,
+          lastError,
           updatedAt: new Date(),
         })
         .where(eq(agentTaskSessions.id, existing.id))
@@ -3223,7 +3267,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         sessionParamsJson: input.sessionParamsJson,
         sessionDisplayId: input.sessionDisplayId,
         lastRunId: input.lastRunId,
-        lastError: input.lastError,
+        lastError,
       })
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -3323,7 +3367,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const updated = await executor
       .update(heartbeatRuns)
       .set({ status, ...patch,
-        ...(patch?.resultJson !== undefined ? { resultJson: preserveWorkspaceAttempt(patch.resultJson) } : {}),
+        // AgentDash (document access, slice 6b): adapters copy stdout into
+        // the result (and errors can quote it); framed document text is
+        // withheld from the stored row as it is from the log.
+        ...(patch?.resultJson !== undefined
+          ? { resultJson: preserveWorkspaceAttempt(stripFramedDocumentTextInValue(patch.resultJson, documentStripOptions(runId, "run_row"))) }
+          : {}),
+        ...(typeof patch?.error === "string" ? { error: stripFramedDocumentText(patch.error, documentStripOptions(runId, "run_row")) } : {}),
         ...(patch?.usageJson !== undefined ? { usageJson: preserveWorkspaceAttemptProvenance(patch.usageJson) } : {}),
         errorCode: sql`case when ${workspacePersistenceHasProvenance} and ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true' then ${WORKSPACE_PERSISTENCE_RECOVERY_CODE} else ${patch?.errorCode === undefined ? heartbeatRuns.errorCode : patch.errorCode} end`,
         updatedAt: new Date() })
@@ -4023,6 +4073,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     },
   ) {
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
+    // AgentDash (document access, slice 6b): framed document text never
+    // reaches the events table or the live bus; only a withheld placeholder.
+    const documentStrip = documentStripOptions(run.id, "event");
+    event = {
+      ...event,
+      message: event.message ? stripFramedDocumentText(event.message, documentStrip) : event.message,
+      payload: event.payload ? stripFramedDocumentTextInValue(event.payload, documentStrip) : event.payload,
+    };
     // AgentDash (GH #782): GitHub tokens are scrubbed by shape from events too.
     // AgentDash (GH #992): the full secret pattern set plus this instance's
     // known keys run on top, so a provider key or run token echoed into an
@@ -6246,7 +6304,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         sessionId: session.legacySessionId,
         lastRunId: run.id,
         lastRunStatus: run.status,
-        lastError: result.errorMessage ?? null,
+        // AgentDash (document access, slice 6b): adapter errors can quote tool
+        // output; framed document text never reaches the runtime state.
+        lastError: result.errorMessage ? stripFramedDocumentText(result.errorMessage, documentStripOptions(run.id, "runtime_state")) : null,
         totalInputTokens: sql`${agentRuntimeState.totalInputTokens} + ${inputTokens}`,
         totalOutputTokens: sql`${agentRuntimeState.totalOutputTokens} + ${outputTokens}`,
         totalCachedInputTokens: sql`${agentRuntimeState.totalCachedInputTokens} + ${cachedInputTokens}`,
@@ -7250,6 +7310,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       stdout: createRunLogStreamRedactor(runKnownSecrets),
       stderr: createRunLogStreamRedactor(runKnownSecrets),
     };
+    // AgentDash (document access, slice 6b): document text a read tool
+    // framed for the agent is replaced by a withheld placeholder before
+    // anything stores or streams it (log, events, live websocket). First in
+    // the chain, on the raw chunk, so no other pass can alter a marker.
+    // Stateful per stream: a marker split across chunks is buffered, not
+    // missed. Only the agent's own stdin/stdout is untouched.
+    const documentTextStrippers = {
+      stdout: createDocumentTextStripper(documentStripOptions(run.id, "stdout")),
+      stderr: createDocumentTextStripper(documentStripOptions(run.id, "stderr")),
+    };
+    // Numbers only, for the run's result: null when nothing was withheld or
+    // went wrong, so ordinary runs carry no extra key.
+    const documentFrameAnomaliesForResult = (): Record<string, number> | null => {
+      const total = emptyDocumentFrameAnomalies();
+      for (const stripper of Object.values(documentTextStrippers)) {
+        const stats = stripper.stats();
+        for (const key of Object.keys(total) as Array<keyof typeof total>) total[key] += stats[key];
+      }
+      const anomalous = total.overflow + total.unterminated + total.truncated + total.forged + total.unmatchedEnd > 0;
+      return anomalous ? { ...total } : null;
+    };
     const flushOutputProgress = async (opts?: { force?: boolean }) => {
       const pendingOutputProgress = outputProgressState.pending;
       if (!pendingOutputProgress) return;
@@ -7347,9 +7428,26 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         stdout: createGitHubTokenStreamRedactor(),
         stderr: createGitHubTokenStreamRedactor(),
       };
+      // While a frame is held the strippers emit nothing, so liveness (the
+      // run row's lastOutput* fields, which the stale-run watchdog and the
+      // liveness probe read) follows RAW output received, not output stored:
+      // a long document read must not look like a stalled run.
+      const noteRawOutput = async (stream: "stdout" | "stderr") => {
+        const at = new Date();
+        if (firstOutputAt === null) firstOutputAt = at;
+        outputProgressState.pending = {
+          at,
+          seq: outputSeq,
+          stream,
+          bytes: persistedLogBytes,
+        };
+        await flushOutputProgress();
+      };
       const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
+        if (chunk.length > 0) await noteRawOutput(stream);
+        const documentSafeChunk = documentTextStrippers[stream].push(chunk);
         const githubSafeChunk = githubTokenRedactors[stream].push(
-          redactCurrentUserText(chunk, currentUserRedactionOptions),
+          redactCurrentUserText(documentSafeChunk, currentUserRedactionOptions),
         );
         const safeChunk = secretLogRedactors[stream].push(githubSafeChunk);
         if (safeChunk.length === 0 && chunk.length > 0) return;
@@ -7357,7 +7455,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
       const flushLogRedactors = async () => {
         for (const stream of ["stdout", "stderr"] as const) {
-          const rest = githubTokenRedactors[stream].flush();
+          const documentRest = redactCurrentUserText(documentTextStrippers[stream].flush(), currentUserRedactionOptions);
+          const rest = githubTokenRedactors[stream].push(documentRest) + githubTokenRedactors[stream].flush();
           const pending =
             secretLogRedactors[stream].push(rest) + secretLogRedactors[stream].flush();
           if (pending) await appendRunLogChunk(stream, pending);
@@ -7723,7 +7822,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               billingType,
             } as Record<string, unknown>);
 
-      let persistedResultJson = mergeHeartbeatRunResultJson(
+      // AgentDash (document access, slice 6b): stripped here too, because the
+      // run-facts write below stores this value without going through
+      // setRunStatus.
+      const documentFrameAnomalies = documentFrameAnomaliesForResult();
+      let persistedResultJson = withDocumentFrameAnomalies(stripFramedDocumentTextInValue(mergeHeartbeatRunResultJson(
         mergeRunStopMetadataForAgent(agent, outcome, {
           resultJson: mergeModelProfileRunMetadata(
             mergeAdapterRecoveryMetadata({
@@ -7738,7 +7841,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }),
         adapterResult.summary ?? null,
         agent.adapterType,
-      );
+      ), documentStripOptions(run.id, "run_row")), documentFrameAnomalies);
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
       // owns the terminal write — the cancel path commits "cancelled" with
@@ -7786,6 +7889,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           const withEvidence = await db
             .update(heartbeatRuns)
             .set({
+              // AgentDash (document access, slice 6b): the document-frame
+              // counts are evidence too. Merged into the stored result in
+              // SQL, so the terminal actor's result is kept as committed.
+              ...(documentFrameAnomalies
+                ? {
+                    resultJson: sql`coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb) || jsonb_build_object('documentFrameAnomalies', ${JSON.stringify(documentFrameAnomalies)}::jsonb)`,
+                  }
+                : {}),
               exitCode: adapterResult.exitCode,
               signal: adapterResult.signal,
               usageJson,
@@ -8005,10 +8116,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // OBS-1: a run that threw before producing a result is unmetered —
         // record that explicitly rather than leaving usage_json absent.
         usageJson: { meteringStatus: "unmetered_no_session" },
-        resultJson: mergeRunStopMetadataForAgent(agent, "failed", {
+        resultJson: withDocumentFrameAnomalies(mergeRunStopMetadataForAgent(agent, "failed", {
           errorCode: "adapter_failed",
           errorMessage: message,
-        }),
+        }), documentFrameAnomaliesForResult()),
         stdoutExcerpt,
         stderrExcerpt,
         logBytes: logSummary?.bytes,

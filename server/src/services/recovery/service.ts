@@ -1,8 +1,11 @@
 import { isBoardAssignmentOnlyAgent } from "../agent-wake-policy.js";
 import { workspacePersistenceHold } from "../workspace-persistence-recovery.js";
+import { featureFlagsService } from "../feature-flags.js";
+import { stripFramedDocumentText } from "../document-content.js";
 import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  FEATURE_FLAG_KEYS,
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
@@ -988,18 +991,33 @@ export function recoveryService(
         : Promise.resolve([]),
     ]);
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
-    const safeTail = truncateEvidenceText(await redactRecoveryEvidenceTextAsync(tail, currentUserRedactionOptions));
+    // AgentDash (document access, slice 6b): the evaluation issue is readable
+    // company-wide, but a document-enabled company's run content is not. Its
+    // log tail and event messages stay out; elsewhere, framed document text a
+    // stored log still holds is withheld before the tail is copied.
+    const documentAccess = await featureFlagsService(db).isEnabled(input.run.companyId, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS);
+    const documentStrip = {
+      runId: input.run.id,
+      onAnomaly: (anomaly: { kind: string; noncePrefix: string | null }) =>
+        logger.warn({ runId: input.run.id, kind: anomaly.kind, noncePrefix: anomaly.noncePrefix }, "document text marker anomaly in stale-run evidence"),
+    };
+    const safeTail = documentAccess
+      ? ""
+      : truncateEvidenceText(await redactRecoveryEvidenceTextAsync(stripFramedDocumentText(tail, documentStrip), currentUserRedactionOptions));
     const silenceAgeMs = input.activityAt
       ? Math.max(0, input.now.getTime() - input.activityAt.getTime())
       : silenceAgeMsForRun(input.run, input.now);
     return {
       safeTail,
+      tailWithheld: documentAccess,
       silenceAgeMs,
       recentEvents: recentEvents.reverse().map((event) => ({
         eventType: event.eventType,
         level: event.level,
         createdAt: event.createdAt.toISOString(),
-        message: event.message ? truncateEvidenceText(redactWatchdogEvidenceText(event.message, currentUserRedactionOptions), 300) : null,
+        message: event.message && !documentAccess
+          ? truncateEvidenceText(redactWatchdogEvidenceText(stripFramedDocumentText(event.message, documentStrip), currentUserRedactionOptions), 300)
+          : null,
       })),
       childIssues,
       blockers,
@@ -1060,7 +1078,11 @@ export function recoveryService(
       "",
       "## Last Output Excerpt",
       "",
-      input.evidence.safeTail ? `\`\`\`text\n${input.evidence.safeTail}\n\`\`\`` : "_No run-log tail was available._",
+      input.evidence.safeTail
+        ? `\`\`\`text\n${input.evidence.safeTail}\n\`\`\``
+        : input.evidence.tailWithheld
+          ? "_Run-log tail withheld: document access is enabled for this company; the agent's steward can read the run._"
+          : "_No run-log tail was available._",
       "",
       "## Recent Run Events",
       "",

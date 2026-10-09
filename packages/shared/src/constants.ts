@@ -1302,6 +1302,12 @@ export type VerdictEntityType = (typeof VERDICT_ENTITY_TYPES)[number];
 /** Known feature-flag keys for per-tenant feature gating. */
 export const FEATURE_FLAG_KEYS = {
   DOD_GUARD: "dod_guard_enabled",
+  /**
+   * Per-steward document access (Microsoft 365). While on, run transcripts of
+   * the company's agents are readable only by each agent's current steward or
+   * an instance admin, and are purged after the document-run retention window.
+   */
+  DOCUMENT_ACCESS: "document_access_enabled",
 } as const;
 
 // AgentDash (#157): billing-infra activity log action names.
