@@ -18,7 +18,7 @@ const mockAccessApi = vi.hoisted(() => ({
   getCurrentBoardAccess: vi.fn(),
 }));
 
-const mockLocation = vi.hoisted(() => ({ pathname: "/instance/settings/general" }));
+const mockLocation = vi.hoisted(() => ({ pathname: "/instance/settings/general", search: "" }));
 
 const mockOnboardingApi = vi.hoisted(() => ({
   listMemberSessions: vi.fn(),
@@ -45,7 +45,7 @@ vi.mock("@/lib/router", () => ({
   Outlet: () => <div>Outlet content</div>,
   Route: ({ children }: { children?: ReactNode }) => <>{children}</>,
   Routes: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  useLocation: () => ({ pathname: mockLocation.pathname, search: "", hash: "" }),
+  useLocation: () => ({ pathname: mockLocation.pathname, search: mockLocation.search, hash: "" }),
   useParams: () => ({}),
 }));
 
@@ -96,6 +96,7 @@ describe("CloudAccessGate", () => {
     restoreClock?.();
     restoreClock = null;
     mockLocation.pathname = "/instance/settings/general";
+    mockLocation.search = "";
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
@@ -184,6 +185,40 @@ describe("CloudAccessGate", () => {
     expect(container.textContent).toContain("Navigate:/company-create");
     expect(container.textContent).not.toContain("Navigate:/onboarding");
     expect(container.textContent).not.toContain("No company access");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  // AgentDash (document access): a provider's callback carries a one-time
+  // authorization code. Sending a signed-out person to sign in must not copy
+  // that code into /auth?next= (address bar, history, the auth page's logs).
+  it("sends a signed-out document-connect callback to sign in without its one-time code", async () => {
+    mockLocation.pathname = "/connect/microsoft/callback";
+    mockLocation.search = "?code=one-time-code-X&state=conn-1.state-Y";
+    mockAuthApi.getSession.mockResolvedValue(null);
+
+    const root = await renderGate();
+
+    expect(container.textContent).toContain("Navigate:/auth?next=%2Fconnect%2Fmicrosoft%2Fcallback");
+    expect(container.textContent).not.toContain("code=");
+    expect(container.textContent).not.toContain("one-time-code-X");
+    expect(container.textContent).not.toContain("state-Y");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the query of any other page in the sign-in redirect", async () => {
+    mockLocation.pathname = "/ACME/issues";
+    mockLocation.search = "?q=open";
+    mockAuthApi.getSession.mockResolvedValue(null);
+
+    const root = await renderGate();
+
+    expect(container.textContent).toContain(`Navigate:/auth?next=${encodeURIComponent("/ACME/issues?q=open")}`);
 
     await act(async () => {
       root.unmount();

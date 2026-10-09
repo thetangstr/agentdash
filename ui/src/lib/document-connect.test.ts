@@ -43,6 +43,16 @@ describe("document-connect", () => {
     expect(safeReturnTo(undefined)).toBe("/my-agent");
   });
 
+  it("refuses control characters the URL parser would strip into a protocol-relative link", () => {
+    expect(safeReturnTo("/\t/evil.example")).toBe("/my-agent");
+    expect(safeReturnTo("/\n/evil.example")).toBe("/my-agent");
+    expect(safeReturnTo("/\r/evil.example")).toBe("/my-agent");
+    expect(safeReturnTo("/\u0000/evil.example")).toBe("/my-agent");
+    expect(safeReturnTo("/ACME/my-agent\u007f")).toBe("/my-agent");
+    // The check is about what an href resolves to, so prove the attack shape.
+    expect(new URL("/\t/evil.example", "https://agentdash.example.test").host).toBe("evil.example");
+  });
+
   it("remembers a sign-in for its provider only, and forgets a stale one", () => {
     rememberPendingConnect(
       { provider: "microsoft", companyId: "company-1", redirectUri: "https://x/connect/microsoft/callback", returnTo: "/ACME/my-agent" },

@@ -168,6 +168,31 @@ describe("DocumentConnectCallback", () => {
     expect(readPendingConnect("microsoft")).toBeNull();
   });
 
+  it("forwards an admin-consent error code and shows the server's fixed message, never Microsoft's description", async () => {
+    const description = "AADSTS65001: <b>Call 555-0100 to unlock</b>";
+    mockDocumentsApi.completeMicrosoft.mockRejectedValue(
+      new ApiError(
+        "Your organization requires an administrator to approve AgentDash before you can connect. Ask your Microsoft 365 administrator to grant consent, then connect again.",
+        403,
+        { code: "admin_consent_required" },
+      ),
+    );
+    await render(
+      `/connect/microsoft/callback?error=consent_required&error_description=${encodeURIComponent(description)}&state=${STATE}`,
+    );
+    await flush();
+
+    expect(mockDocumentsApi.completeMicrosoft).toHaveBeenCalledWith("company-1", {
+      error: "consent_required",
+      state: STATE,
+      redirectUri: REDIRECT,
+    });
+    expect(container.textContent).toContain("requires an administrator to approve AgentDash");
+    expect(container.textContent).not.toContain("declined");
+    expect(container.textContent).not.toContain("555-0100");
+    expect(where()).toBe("/connect/microsoft/callback");
+  });
+
   it("shows the server's refusal without echoing the code", async () => {
     mockDocumentsApi.completeMicrosoft.mockRejectedValue(
       new ApiError("This sign-in link has expired or was already used. Start again from My Agent.", 400, null),

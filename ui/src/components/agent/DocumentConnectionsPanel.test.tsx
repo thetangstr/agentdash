@@ -134,6 +134,63 @@ describe("DocumentConnectionsPanel", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
+  it("still lets a member disconnect a stored connection while the instance has no Microsoft sign-in", async () => {
+    mockDocumentsApi.getMicrosoft.mockResolvedValueOnce({ configured: false, connection: connection() });
+    mockDocumentsApi.getMicrosoft.mockResolvedValue({ configured: false, connection: null });
+    await render();
+
+    expect(container.textContent).toContain("person.a@example.test");
+    expect(container.textContent).toContain("stops reading your documents once its current Microsoft access expires");
+    // Nothing that would start a sign-in the instance cannot finish.
+    expect(container.textContent).not.toContain("Connect Microsoft 365");
+    expect(container.textContent).not.toContain("Reconnect");
+    // The operator note is for instance admins only.
+    expect(container.textContent).not.toContain("ENTRA_CLIENT_ID");
+
+    await click("Disconnect");
+    expect(mockDocumentsApi.revokeMicrosoft).toHaveBeenCalledWith("company-1");
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows an instance admin both the stored connection's Disconnect and the configuration note", async () => {
+    mockDocumentsApi.getMicrosoft.mockResolvedValue({
+      configured: false,
+      connection: connection({ status: "pending", tier: null, account: null, scopes: [] }),
+    });
+    mockCapabilitiesApi.get.mockResolvedValue(capabilities(true));
+    await render();
+
+    expect(container.textContent).toContain("not configured on this instance");
+    expect(button("Disconnect")).toBeTruthy();
+    expect(Array.from(container.querySelectorAll("button")).map((b) => b.textContent?.trim())).toEqual([
+      "Disconnect",
+    ]);
+  });
+
+  it("re-enables Connect when the browser restores the page from the back/forward cache", async () => {
+    await render();
+    await click("Connect Microsoft 365");
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(button("Opening Microsoft…").disabled).toBe(true);
+
+    // Back from Microsoft's sign-in page: the old React state comes back.
+    const restored = new Event("pageshow");
+    Object.defineProperty(restored, "persisted", { value: true });
+    await act(async () => {
+      window.dispatchEvent(restored);
+    });
+    await flush();
+
+    expect(button("Connect Microsoft 365").disabled).toBe(false);
+  });
+
+  it("says Microsoft will ask for edit permission even though AgentDash only adds files", async () => {
+    mockDocumentsApi.getMicrosoft.mockResolvedValue({ configured: true, connection: connection() });
+    await render();
+    expect(container.textContent).toContain("Microsoft will ask for permission to edit your files");
+    expect(container.textContent).toContain("only ever creates new files, after your approval.");
+  });
+
   it("starts a read-only sign-in and remembers where to come back to", async () => {
     await render();
     expect(container.textContent).toContain("Microsoft 365");

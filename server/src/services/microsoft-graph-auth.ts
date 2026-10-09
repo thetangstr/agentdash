@@ -312,6 +312,39 @@ function parseState(value: unknown): { connectionId: string; stateToken: string 
   return { connectionId, stateToken };
 }
 
+/**
+ * The `error` Microsoft put on the callback, mapped to a fixed reason and
+ * message. A tenant that has turned off user consent answers
+ * `consent_required` or `interaction_required` (or shows its "Need admin
+ * approval" page): that is an administrator's step, not the person declining,
+ * and saying "declined" would send them in circles. Anything unrecognized gets
+ * a generic message and never echoes the code it was sent.
+ */
+function providerErrorFailure(error: unknown): { reason: string; message: string; status: number } {
+  const code = typeof error === "string" ? error : "";
+  if (code === "access_denied") {
+    return {
+      reason: "consent_declined",
+      message: "Microsoft sign-in was cancelled or declined, so nothing was connected. Connect again to retry.",
+      status: 400,
+    };
+  }
+  if (code === "consent_required" || code === "interaction_required") {
+    return {
+      reason: "admin_consent_required",
+      message:
+        "Your organization requires an administrator to approve AgentDash before you can connect. Ask your Microsoft 365 administrator to grant consent, then connect again.",
+      status: 403,
+    };
+  }
+  return {
+    reason: "provider_error",
+    message:
+      "Microsoft could not finish the sign-in, so nothing was connected. Try again; if it keeps happening, ask an administrator to check the Microsoft app registration.",
+    status: 502,
+  };
+}
+
 interface StoredState {
   stateToken: string;
   codeVerifier: string;
@@ -717,11 +750,11 @@ export function microsoftGraphAuthService(db: Db, options: MicrosoftConnectOptio
     };
 
     if (input.error !== undefined && input.error !== null) {
-      throw await fail(
-        "consent_declined",
-        "Microsoft sign-in was cancelled or declined, so nothing was connected. Connect again to retry.",
-        400,
-      );
+      // Only the OAuth error code selects a message, and every message is
+      // fixed text: Microsoft's error_description is never forwarded or shown,
+      // because anyone can craft a callback URL that carries one.
+      const failure = providerErrorFailure(input.error);
+      throw await fail(failure.reason, failure.message, failure.status);
     }
     if (typeof input.code !== "string" || input.code.length === 0 || input.code.length > 4096) {
       throw badRequest("code is required");

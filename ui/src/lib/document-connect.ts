@@ -67,12 +67,18 @@ export interface PendingDocumentConnect {
   startedAt: number;
 }
 
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
 /**
  * Only same-app, absolute paths: never another origin, never a
- * protocol-relative `//host`, never the callback itself.
+ * protocol-relative `//host`, never the callback itself. Control characters
+ * are refused too: the URL parser strips tab, CR and LF, so `/\t/host` would
+ * otherwise resolve, as an href, to the protocol-relative `//host`.
  */
 export function safeReturnTo(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_RETURN_TO;
+  if (CONTROL_CHARACTERS.test(value)) return DEFAULT_RETURN_TO;
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return DEFAULT_RETURN_TO;
   const pathname = value.split(/[?#]/)[0] ?? value;
   if (isDocumentCallbackPath(pathname)) return DEFAULT_RETURN_TO;

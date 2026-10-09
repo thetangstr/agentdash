@@ -565,6 +565,54 @@ describeEmbeddedPostgres("Microsoft connect from My Agent (slice 2)", () => {
     expect(health.body.connection.lastError).toEqual(expect.objectContaining({ reason: "consent_declined" }));
   });
 
+  it.each([
+    ["consent_required"],
+    ["interaction_required"],
+  ])("tells the person an administrator must approve when Microsoft answers %s", async (providerError) => {
+    const started = await initiate(PERSON_A);
+    const state = authorizeParams(started.body.authorizationUrl).params.get("state");
+    const res = await request(asPerson(PERSON_A))
+      .post(`${base(FLAGGED)}/oauth/callback`)
+      .send({ error: providerError, state, redirectUri: REDIRECT_URI });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/administrator/i);
+    expect(res.body.error).not.toMatch(/declined/i);
+    expect(tokenCalls).toHaveLength(0);
+    const health = await request(asPerson(PERSON_A)).get(base(FLAGGED));
+    expect(health.body.connection.lastError).toEqual(
+      expect.objectContaining({ reason: "admin_consent_required", message: res.body.error }),
+    );
+  });
+
+  it("keeps the declined message for access_denied and a fixed generic one for anything else Microsoft sends", async () => {
+    const declined = await initiate(PERSON_A);
+    const declinedRes = await request(asPerson(PERSON_A))
+      .post(`${base(FLAGGED)}/oauth/callback`)
+      .send({
+        error: "access_denied",
+        state: authorizeParams(declined.body.authorizationUrl).params.get("state"),
+        redirectUri: REDIRECT_URI,
+      });
+    expect(declinedRes.status).toBe(400);
+    expect(declinedRes.body.error).toMatch(/cancelled or declined/);
+
+    // An unknown code, even one shaped like text to show, is never echoed.
+    const other = await initiate(PERSON_A);
+    const otherRes = await request(asPerson(PERSON_A))
+      .post(`${base(FLAGGED)}/oauth/callback`)
+      .send({
+        error: "server_error <Call 555-0100>",
+        state: authorizeParams(other.body.authorizationUrl).params.get("state"),
+        redirectUri: REDIRECT_URI,
+      });
+    expect(otherRes.status).toBe(502);
+    expect(otherRes.body.error).not.toContain("555-0100");
+    expect(otherRes.body.error).not.toMatch(/declined/i);
+    const health = await request(asPerson(PERSON_A)).get(base(FLAGGED));
+    expect(health.body.connection.lastError).toEqual(expect.objectContaining({ reason: "provider_error" }));
+    expect(tokenCalls).toHaveLength(0);
+  });
+
   // -- reconnect --------------------------------------------------------------
 
   it("reconnects in place: the live token keeps working until the new grant lands, then the tier upgrades", async () => {

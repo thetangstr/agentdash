@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -31,7 +32,10 @@ import { Button } from "../ui/button";
  * off the route answers 404 and the panel renders nothing: no notice, no
  * "available on request", because a person cannot act on it. When the flag is
  * on but this instance has no Microsoft sign-in configured, only an instance
- * administrator, who can fix that, is told.
+ * administrator, who can fix that, is told; a person who already has a stored
+ * connection still sees it and can disconnect it, since disconnecting needs no
+ * Microsoft configuration and the stored credential would otherwise come back
+ * to life, unseen, the moment the configuration does.
  */
 export function DocumentConnectionsPanel({
   companyId,
@@ -74,20 +78,59 @@ export function DocumentConnectionsPanel({
     onSettled: () => queryClient.invalidateQueries({ queryKey }),
   });
 
+  // Once the browser has left for Microsoft the mutation stays "success", so
+  // the buttons read "Opening Microsoft…". Pressing Back can restore this page
+  // from the back/forward cache with that state intact; start fresh instead.
+  const resetConnect = connect.reset;
+  useEffect(() => {
+    const onPageShow = (event: Event) => {
+      if ((event as PageTransitionEvent).persisted) resetConnect();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [resetConnect]);
+
   if (!companyId || health.isPending) return null;
   if (health.error && isCapabilityNotFound(health.error)) return null;
 
   if (health.data && !health.data.configured) {
-    if (!isInstanceAdmin) return null;
+    const stored = health.data.connection;
+    if (!stored && !isInstanceAdmin) return null;
     return (
       <PanelFrame>
-        <p className="text-sm text-muted-foreground">
-          Document access is on for this workspace but Microsoft sign-in is not configured on this
-          instance. Set <code className="font-mono text-xs">ENTRA_TENANT_ID</code>,{" "}
-          <code className="font-mono text-xs">ENTRA_CLIENT_ID</code> and{" "}
-          <code className="font-mono text-xs">ENTRA_CLIENT_SECRET</code>, then restart. Only instance
-          administrators see this.
-        </p>
+        {stored ? (
+          <>
+            {stored.status === "pending" ? (
+              <p className="text-sm text-muted-foreground">A Microsoft sign-in was started but not finished.</p>
+            ) : (
+              <ConnectedDetails view={stored} agentName={agentName} signInUnavailable />
+            )}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Microsoft sign-in is not available on this instance right now, so you cannot reconnect, and{" "}
+              {agentName} stops reading your documents once its current Microsoft access expires. You can
+              still disconnect, which stops it at once.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>
+                {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+              </Button>
+            </div>
+            {disconnect.error ? (
+              <p className="mt-2 text-xs text-destructive" role="alert">
+                {disconnect.error instanceof Error ? disconnect.error.message : "That did not work. Try again."}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        {isInstanceAdmin ? (
+          <p className={stored ? "mt-3 text-sm text-muted-foreground" : "text-sm text-muted-foreground"}>
+            Document access is on for this workspace but Microsoft sign-in is not configured on this
+            instance. Set <code className="font-mono text-xs">ENTRA_TENANT_ID</code>,{" "}
+            <code className="font-mono text-xs">ENTRA_CLIENT_ID</code> and{" "}
+            <code className="font-mono text-xs">ENTRA_CLIENT_SECRET</code>, then restart. Only instance
+            administrators see this.
+          </p>
+        ) : null}
       </PanelFrame>
     );
   }
@@ -160,7 +203,8 @@ export function DocumentConnectionsPanel({
         <p className="mt-2 text-xs text-muted-foreground">
           Write access lets {agentName} propose new files in your own OneDrive. Each one waits for
           your approval, and it never changes or deletes a file that is already there. Microsoft
-          asks you to sign in again.
+          asks you to sign in again, and Microsoft will ask for permission to edit your files.
+          AgentDash itself only ever creates new files, after your approval.
         </p>
       ) : null}
 
@@ -197,7 +241,16 @@ function statusLabel(status: DocumentConnectionView["status"]): string {
   return "Needs reconnecting";
 }
 
-function ConnectedDetails({ view, agentName }: { view: DocumentConnectionView; agentName: string }) {
+function ConnectedDetails({
+  view,
+  agentName,
+  signInUnavailable = false,
+}: {
+  view: DocumentConnectionView;
+  agentName: string;
+  /** The instance has no Microsoft sign-in configured, so the connection cannot be refreshed. */
+  signInUnavailable?: boolean;
+}) {
   const healthy = view.status === "active";
   return (
     <>
@@ -209,11 +262,13 @@ function ConnectedDetails({ view, agentName }: { view: DocumentConnectionView; a
         <dt className="text-muted-foreground">Status</dt>
         <dd className={healthy ? undefined : "text-destructive"}>{statusLabel(view.status)}</dd>
       </dl>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {healthy
-          ? `${agentName} reads what this account can open, while you are its steward.`
-          : `${agentName} cannot read your documents until you reconnect.`}
-      </p>
+      {signInUnavailable ? null : (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {healthy
+            ? `${agentName} reads what this account can open, while you are its steward.`
+            : `${agentName} cannot read your documents until you reconnect.`}
+        </p>
+      )}
       {view.lastError ? <LastError error={view.lastError} /> : null}
     </>
   );
