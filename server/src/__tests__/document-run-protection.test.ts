@@ -345,6 +345,57 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     }
   }, 30_000);
 
+  // A run another actor ends (operator cancel, timeout monitor) adopts that
+  // actor's result; the anomaly counts must still land on the row.
+  it("a cancelled or timed-out run keeps its documentFrameAnomalies", async () => {
+    for (const ending of ["cancelled", "timed_out"] as const) {
+      const agentId = randomUUID();
+      await seedAgent(agentId, FLAGGED, "", `ending-steward-${ending}`, FAKE_ADAPTER);
+      const tail = `output after replay ${SENTINEL} `.repeat(80);
+      behaviours.set(agentId, async (ctx) => {
+        const framed = frameUntrustedDocumentText("microsoft", "tiny", { runId: ctx.runId, docId: "item-12" });
+        const beginAt = framed.indexOf("[[agentdash-untrusted-document:begin");
+        await ctx.onLog("stdout", `${framed.slice(beginAt, framed.indexOf("]]", beginAt) + 2)}${tail}`);
+        // Exit only once the other actor has committed the terminal status.
+        const deadline = Date.now() + 8_000;
+        while (Date.now() < deadline) {
+          const [row] = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns).where(eq(heartbeatRuns.id, ctx.runId));
+          if (row?.status === ending) break;
+          await sleep(50);
+        }
+        return { exitCode: null, signal: "SIGTERM", timedOut: ending === "timed_out" };
+      });
+      const heartbeat = heartbeatService(db);
+      const queued = await heartbeat.invoke(agentId, "on_demand", {}, "manual");
+      const runningDeadline = Date.now() + 5_000;
+      while (Date.now() < runningDeadline) {
+        const [row] = await db.select({ status: heartbeatRuns.status, lastOutputAt: heartbeatRuns.lastOutputAt }).from(heartbeatRuns).where(eq(heartbeatRuns.id, queued!.id));
+        if (row?.status === "running" && row.lastOutputAt) break;
+        await sleep(50);
+      }
+      if (ending === "cancelled") {
+        await heartbeat.cancelRun(queued!.id, "stopped by operator", "operator_cancelled");
+      } else {
+        // What the timeout monitor commits.
+        await db.update(heartbeatRuns)
+          .set({ status: "timed_out", finishedAt: new Date(), error: "Timed out", resultJson: { stopReason: "timeout" } })
+          .where(eq(heartbeatRuns.id, queued!.id));
+      }
+      let anomalies: unknown = undefined;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline && anomalies === undefined) {
+        const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued!.id));
+        anomalies = (row?.resultJson as Record<string, unknown> | null)?.documentFrameAnomalies;
+        if (anomalies === undefined) await sleep(100);
+      }
+      expect(anomalies, ending).toEqual({ overflow: 1, unterminated: 0, truncated: 0, forged: 0, unmatchedEnd: 0, withheldChars: tail.length });
+      const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued!.id));
+      expect(row!.status).toBe(ending);
+      if (ending === "timed_out") expect((row!.resultJson as Record<string, unknown>).stopReason).toBe("timeout");
+      expect(JSON.stringify(row)).not.toContain(SENTINEL);
+    }
+  }, 60_000);
+
   it("run detail, events and log are steward-only while the flag is on", async () => {
     expect(flaggedRunId).not.toBe("");
     const paths = [`/api/heartbeat-runs/${flaggedRunId}`, `/api/heartbeat-runs/${flaggedRunId}/events`, `/api/heartbeat-runs/${flaggedRunId}/log`];

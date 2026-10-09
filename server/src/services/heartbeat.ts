@@ -7889,6 +7889,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           const withEvidence = await db
             .update(heartbeatRuns)
             .set({
+              // AgentDash (document access, slice 6b): the document-frame
+              // counts are evidence too. Merged into the stored result in
+              // SQL, so the terminal actor's result is kept as committed.
+              ...(documentFrameAnomalies
+                ? {
+                    resultJson: sql`coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb) || jsonb_build_object('documentFrameAnomalies', ${JSON.stringify(documentFrameAnomalies)}::jsonb)`,
+                  }
+                : {}),
               exitCode: adapterResult.exitCode,
               signal: adapterResult.signal,
               usageJson,
