@@ -71,6 +71,13 @@ const workflowEventPayloadSchemas = {
       taskClass: z.string().min(1).optional(),
       /** Length only. The result itself is untrusted content that lives on its own row. */
       resultChars: z.number().int().nonnegative().optional(),
+      /**
+       * A document read: the provider's item id (never its drive, which can
+       * name the person whose drive it is) and how many bytes were fetched.
+       * Never the name or the text.
+       */
+      itemId: z.string().min(1).max(512).optional(),
+      byteCount: z.number().int().nonnegative().optional(),
     })
     .strict(),
   step_failed: z

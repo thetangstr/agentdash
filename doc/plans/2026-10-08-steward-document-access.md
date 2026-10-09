@@ -82,6 +82,15 @@ Files: new `server/src/services/microsoft-documents.ts` (read only), new `server
 
 Acceptance: the source-scan test proves no write verb in `microsoft-documents.ts`; a mocked 30 MB item is refused before download completes; docx/pptx fixtures extract expected text and arrive framed; a steward change mid-test flips the next read to `no_connection`; results contain no `accessToken` substring.
 
+**Slice 3 as built (2026-10-09).** Differences from the text above, each deliberate:
+- Search uses the drive search functions only (`/me/drive/search(q=)` for the steward's drive plus files shared with them, `/me/drive/root/search(q=)` for their own drive, `/sites?search=` and `/sites/{id}/drive/root/search(q=)` for SharePoint). `/me/drive/sharedWithMe` is deprecated (slice 8 addition) and the Search API's `/search/query` takes a request body, which would break the "no write verb in the read service" scan. `scope: "shared"` filters drive search results to `remoteItem` entries.
+- Extraction lives in a new `server/src/services/document-extraction.ts`, not in `document-content.ts`, so the 6b framing and strip code stays untouched. It also reads `.txt`, `.md` and `.csv` as UTF-8, so the spreadsheet refusal can point at a CSV export.
+- Items are addressed by `itemRef` = `<driveId>:<itemId>` (or a bare item id in the steward's own drive), because shared and SharePoint items live in other drives. `documents_search` and `documents_list` take an optional `siteId`.
+- Frames are bound to the request's run: the run id must be a live (`queued`/`running`) run of the calling agent (`run_mismatch` otherwise); an agent with a running run that sends no run id is refused (`run_id_required`), because its output would otherwise be stored unstripped. With no run in progress (a steward's own terminal session) reads are allowed.
+- The workflow event payload allowlist (`step_completed`) gains `itemId` (the item id only, never the drive id, which can identify whose drive it is) and `byteCount`.
+- A Graph 401 marks the row `error` and records `connection.microsoft_read_failed`, which slice 2's health route already reports as the last error. A 403 on one item is `access_denied` and does not touch the row.
+- The agent-facing guidance is `skills/agentdash-office-docs/SKILL.md` (read half) and the tool descriptions, not a mandate block: integrations are opt-in skills since 2026-09-02, and `agent-instruction-bundles.test.ts` keeps them out of the mandate.
+
 ### Slice 4: Google Drive connect + read (DEFERRED by D3; do not build)
 
 Files: new `services/google-drive-connector.ts`, `routes/google-drive.ts`; one-line fix at `gmail-connector.ts:20`.

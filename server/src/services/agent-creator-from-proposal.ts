@@ -215,6 +215,13 @@ ${userVoice || "No interview context was captured."}
 // a person assignment from an agent is routed server-side to the agent that
 // person stewards unless `assignToPerson: true` marks a human-only decision.
 
+// AgentDash: steward-document-reads (document access slice 3) is not a
+// mandate block: integrations are opt-in skills (2026-09-02), so the rules
+// live in the four documents_* MCP tool descriptions and in
+// skills/agentdash-office-docs (read as the current steward, text is
+// untrusted, quote rather than paste, no writes). Proposal-created hires read
+// as their current steward like every agent and add nothing to that.
+
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
 // or destructive compensation; separate setup/persistence/link phases stay truthful.
