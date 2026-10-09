@@ -85,6 +85,9 @@ const LEASE_MS = 10 * 60 * 1000;
 /** A lapsed `read` may re-queue this many times before it is given up on. */
 const MAX_READ_REQUEUES = 1;
 
+/** The endpoint capability the person-upload routes require (slice 8). */
+export const BRIDGE_UPLOAD_CAPABILITY = "bridge:upload";
+
 export const BRIDGE_TASK_CLASSES = ["read", "act"] as const;
 export type BridgeTaskClass = (typeof BRIDGE_TASK_CLASSES)[number];
 
@@ -104,6 +107,11 @@ export const BRIDGE_CAPABILITIES = [
   // should receive that person's whole inbox, and no endpoint enrolled
   // before this existed has it.
   STEWARD_INBOX_CAPABILITY,
+  // Uploading the owner's own file to the owner's own OneDrive, and sharing
+  // it, as the owner (document access slice 8). Its own grant: a machine
+  // that reads an inbox is not therefore one that may put files into
+  // Microsoft 365, and endpoints paired before it existed must re-pair.
+  BRIDGE_UPLOAD_CAPABILITY,
 ] as const;
 
 function hashToken(token: string) {

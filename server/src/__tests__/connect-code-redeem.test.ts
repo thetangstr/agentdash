@@ -215,7 +215,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
    * never to the unauthenticated redeemer.
    */
   describe("the bridge endpoint minted alongside the key", () => {
-    it("binds to the code's creator, enrolled, with read and inbox capabilities", async () => {
+    it("binds to the code's creator, enrolled, with read, inbox and upload capabilities", async () => {
       const { companyId, code } = await seed({ createdByUserId: "user-steward" });
 
       const res = await request(app)
@@ -231,7 +231,9 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
         companyId,
         userId: "user-steward",
         label: "chris-laptop",
-        capabilities: ["bridge:read", "bridge:inbox"],
+        // bridge:upload (document access slice 8): the person's own file to
+        // their own OneDrive. Its routes still 404 without the company flag.
+        capabilities: ["bridge:read", "bridge:inbox", "bridge:upload"],
       });
       // Enrolled means approved: a usable credential exists only past that step.
       expect(endpoint?.enrolledAt).toBeTruthy();

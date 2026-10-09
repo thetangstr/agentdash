@@ -42,12 +42,21 @@ describe("agentdash-connect mcp", () => {
     expect(res.result.instructions).toMatch(/never decide on your own initiative/);
   });
 
-  it("offers exactly the inbox surface — no bridge task tools, nothing from the control plane", async () => {
+  it("offers exactly the inbox and upload surface — no bridge task tools, nothing from the control plane", async () => {
     const { handle } = handler(() => ({}));
     const res = await handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(res.result.tools.map((t) => t.name).sort()).toEqual(
-      ["inbox_ack", "inbox_agents", "inbox_confirm", "inbox_decide", "inbox_propose", "inbox_sync"],
-    );
+    expect(res.result.tools.map((t) => t.name).sort()).toEqual([
+      "inbox_ack",
+      "inbox_agents",
+      "inbox_confirm",
+      "inbox_decide",
+      "inbox_propose",
+      "inbox_sync",
+      "upload_cancel",
+      "upload_confirm",
+      "upload_destinations",
+      "upload_propose",
+    ]);
     const decide = res.result.tools.find((t) => t.name === "inbox_decide");
     expect(decide.description).toMatch(/AS THE PERSON AT THIS TERMINAL/);
     expect(decide.inputSchema.required).toEqual(["token"]);

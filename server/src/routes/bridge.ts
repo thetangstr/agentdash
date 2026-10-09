@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
-import { badRequest, forbidden } from "../errors.js";
+import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
+import { badRequest, forbidden, notFound } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
@@ -13,6 +14,12 @@ import { stewardInboxActionsService } from "../services/steward-inbox-actions.js
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { BRIDGE_TASK_CLASSES, bridgeService } from "../services/bridge.js";
+import {
+  MAX_UPLOAD_MESSAGE_CHARS,
+  MAX_UPLOAD_RECIPIENTS,
+  bridgeUploadService,
+} from "../services/bridge-upload.js";
+import { featureFlagsService } from "../services/feature-flags.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
@@ -35,6 +42,49 @@ const createBridgeTaskSchema = z.object({
   // Emptiness is the service's refusal ("An instruction is required").
   instruction: z.string().default(""),
 });
+
+// Person upload (document access slice 8). Strict: an unknown key, a link
+// scope other than "organization", or a role other than read/write is a 400,
+// so `anonymous` and `users` links cannot even be asked for.
+const uploadPersonSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    userId: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+const uploadProposeSchema = z
+  .object({
+    file: z
+      .object({
+        name: z.string().min(1).max(255),
+        byteSize: z.number().int().positive(),
+        contentType: z.string().min(1).max(200),
+        sha256: z.string().regex(/^[0-9a-fA-F]{64}$/, "sha256 must be 64 hex characters"),
+      })
+      .strict(),
+    destination: z
+      .union([
+        z.object({ folderId: z.string().min(1).max(512) }).strict(),
+        z.object({ path: z.string().min(1).max(1024) }).strict(),
+      ])
+      .optional(),
+    recipients: z
+      .array(uploadPersonSchema.extend({ role: z.enum(["read", "write"]).optional() }).strict())
+      .max(MAX_UPLOAD_RECIPIENTS)
+      .optional(),
+    link: z.object({ scope: z.literal("organization"), type: z.enum(["view", "edit"]) }).strict().optional(),
+    issueId: z.string().trim().min(1).max(64).optional(),
+    task: z
+      .object({
+        title: z.string().trim().min(1).max(200),
+        instructions: z.string().max(20_000).optional(),
+        assignee: uploadPersonSchema,
+      })
+      .strict()
+      .optional(),
+    message: z.string().max(MAX_UPLOAD_MESSAGE_CHARS).optional(),
+  })
+  .strict();
 
 /**
  * AgentDash-MK: the local agent bridge.
@@ -71,9 +121,19 @@ export function bridgeRoutes(
   const cardDelivery = approvalCardDeliveryService(db);
   const inbox = stewardInboxService(db);
   const inboxDecisions = stewardInboxDecisionService(db, options);
-  const inboxActions = stewardInboxActionsService(db, {
-    heartbeat: heartbeatService(db, { pluginWorkerManager: options.pluginWorkerManager }),
-  });
+  const heartbeat = heartbeatService(db, { pluginWorkerManager: options.pluginWorkerManager });
+  const inboxActions = stewardInboxActionsService(db, { heartbeat });
+
+  const uploads = bridgeUploadService(db, { heartbeat });
+  const flags = featureFlagsService(db);
+
+  /**
+   * Person upload sits behind the company's document-access flag: off means
+   * every upload route answers 404, as if it did not exist.
+   */
+  async function requireDocumentAccess(companyId: string) {
+    if (!(await flags.isEnabled(companyId, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS))) throw notFound("Not found");
+  }
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -238,6 +298,79 @@ export function bridgeRoutes(
     const token = typeof req.body?.token === "string" ? req.body.token : null;
     if (!token) throw badRequest("token is required");
     res.json(await inboxActions.confirm(endpointId, token));
+  });
+
+  // -------------------------------------------------------------------------
+  // Person upload (document access slice 8), endpoint-facing
+  //
+  // The person's own file, to their own OneDrive, as them. The endpoint
+  // credential is still not a write credential: `propose` mints a handle over
+  // a resolved plan and changes nothing, `confirm` spends it, and fragments
+  // go only to the session that confirm opened. Every route needs the company
+  // flag (404) and `bridge:upload` (403). Agent keys are refused (403).
+  // -------------------------------------------------------------------------
+
+  /** Folders in the person's own OneDrive, to pick a destination from (D10: never a default). */
+  router.post("/bridge/upload/destinations", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await requireDocumentAccess(companyId);
+    res.json(await uploads.destinations(endpointId, { query: req.body?.query, limit: req.body?.limit }));
+  });
+
+  /** Read back the whole plan and mint a handle. Uploads and shares nothing. */
+  router.post("/bridge/upload/propose", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await requireDocumentAccess(companyId);
+    await uploads.requireUploadEndpoint(endpointId);
+    const parsed = uploadProposeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw badRequest(parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; "));
+    }
+    await bridge.touchEndpoint(endpointId);
+    res.json(await uploads.propose(endpointId, parsed.data));
+  });
+
+  /** Spend the handle after the person's yes; opens the upload session. */
+  router.post("/bridge/upload/confirm", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await requireDocumentAccess(companyId);
+    const handle = typeof req.body?.handle === "string" ? req.body.handle : null;
+    if (!handle) throw badRequest("handle is required");
+    await bridge.touchEndpoint(endpointId);
+    res.json(await uploads.confirm(endpointId, handle));
+  });
+
+  /**
+   * One fragment, raw bytes. `X-AgentDash-Upload-Id` names the upload and
+   * `Content-Range: bytes a-b/total` places the bytes; both are forwarded
+   * unchanged to the session, which only the server can reach.
+   */
+  router.post("/bridge/upload/fragment", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await requireDocumentAccess(companyId);
+    const result = await uploads.fragment(endpointId, {
+      uploadId: req.header("x-agentdash-upload-id") ?? undefined,
+      contentRange: req.header("content-range") ?? undefined,
+      contentLength: req.header("content-length") ?? undefined,
+      body: req,
+    });
+    res.status(result.status).json(result.body);
+  });
+
+  router.post("/bridge/upload/status", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await requireDocumentAccess(companyId);
+    const uploadId = typeof req.body?.uploadId === "string" ? req.body.uploadId : "";
+    if (!uploadId) throw badRequest("uploadId is required");
+    res.json(await uploads.status(endpointId, uploadId));
+  });
+
+  router.post("/bridge/upload/cancel", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await requireDocumentAccess(companyId);
+    const uploadId = typeof req.body?.uploadId === "string" ? req.body.uploadId : "";
+    if (!uploadId) throw badRequest("uploadId is required");
+    res.json(await uploads.cancel(endpointId, uploadId));
   });
 
   router.post("/bridge/result", async (req, res) => {

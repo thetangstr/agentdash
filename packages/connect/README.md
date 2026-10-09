@@ -129,6 +129,52 @@ in-session decisions at all, delete the `agentdash-inbox` entry from
 Connected before 0.3.0? Re-run connect with a fresh code to get the entry, then
 start a new Claude session. Nothing changes on a connected machine until you do.
 
+## Uploading and sharing your own files
+
+When your AgentDash administrator has turned on document access for your
+company, the same `agentdash-inbox` entry also carries four upload tools, and
+connecting installs a skill, `agentdash-upload`, that walks a request through:
+
+> Put deck.pptx in the client project folder and give Person B edit access;
+> it's for the kickoff task.
+
+The skill asks for anything missing (which folder, which person, view or edit,
+which task), shows one read-back, and uploads only after your yes:
+
+- `upload_destinations` lists folders in **your own OneDrive**. There is no
+  default folder; you always pick.
+- `upload_propose` checks the one file you named, on this machine: a regular
+  file (no symlinks, no folders, no wildcards), never under `~/.agentdash`,
+  `~/.ssh`, `~/.claude`, `~/.codex`, `~/.gnupg` or similar credential folders,
+  `.pptx`, `.docx`, `.xlsx` or `.pdf` with content that matches, 250 MB at
+  most. It sends AgentDash only the name, size, type and SHA-256. AgentDash
+  resolves the folder and each person by name among your company's members,
+  checks each one is in your Microsoft organization, and returns the read-back.
+  Nothing changes.
+- `upload_confirm` re-checks that the file has not changed since the read-back,
+  then streams it to AgentDash in 10 MiB pieces; AgentDash forwards them to
+  Microsoft as you. Then it shares as read back: Microsoft emails each person,
+  who must sign in to open it; an organization link only if you asked; no
+  links for people outside your organization, ever. If you linked a task, the
+  task gets one comment with the file name and link (never the content); a new
+  task goes to the assignee's agent when they have one.
+- `upload_cancel` stops an unfinished upload. Nothing is shared.
+
+Your machine never receives Microsoft's upload address or any Microsoft token,
+and nothing searches your disk: in Claude Desktop or claude.ai, where a dropped
+file is not a path on disk, you are asked where the file is.
+
+This needs Microsoft connected from your My Agent page with the tier that can
+save files. Paired before 0.5.0? Re-run connect with a fresh code: uploads need
+a new permission on this machine's inbox credential (`bridge:upload`), and the
+Codex entry and the skill are written by connect.
+
+Codex gets the same tools: connect writes `[mcp_servers.agentdash-inbox]`
+(`command` and `args`, no secret) to `~/.codex/config.toml`, and the skill to
+`~/.codex/skills/agentdash-upload/`. Claude Code reads the skill from
+`~/.claude/skills/agentdash-upload/`. `--remove` takes all of these out, and
+leaves alone any skill of the same name that it did not write.
+
 ## Nothing left running
 
 A config write with an exit code, not a prompt to paste — and `--remove`

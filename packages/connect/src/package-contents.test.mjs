@@ -44,7 +44,7 @@ function relativeImports(source) {
 describe("the published package", () => {
   const root = packAndExtract();
 
-  it("continues the owned package lineage at 0.3.0", () => {
+  it("continues the owned package lineage at 0.5.0", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     expect(pkg.name).toBe("agentdash-connect");
     // 0.2.0: the inbox half. Redeem stores the bridge token, scaffolds the
@@ -53,7 +53,10 @@ describe("the published package", () => {
     // this very line until it was updated on purpose.
     // 0.3.0: `agentdash-connect mcp` — the person's own inbox tools, so a
     // steward can approve or reject from their harness as themselves.
-    expect(pkg.version).toBe("0.3.0");
+    // 0.4.0: claimed by a parallel branch; it merges first.
+    // 0.5.0: person upload — `upload_*` tools in the inbox MCP, the same
+    // tools for Codex, and the agentdash-upload skill.
+    expect(pkg.version).toBe("0.5.0");
   });
 
   it("ships the entry point named in bin", () => {
@@ -100,6 +103,12 @@ describe("the published package", () => {
     const output = execFileSync(process.execPath, [entry, "--help"], { encoding: "utf8" });
     expect(output).toMatch(/agentdash-connect/);
     expect(output).toMatch(/connect code/i);
+  });
+
+  it("ships the upload skill it installs", () => {
+    const skill = path.join(root, "src", "skills", "agentdash-upload", "SKILL.md");
+    expect(fs.existsSync(skill)).toBe(true);
+    expect(fs.readFileSync(skill, "utf8")).toMatch(/^---\nname: agentdash-upload\n/);
   });
 
   it("does not ship its own tests", () => {

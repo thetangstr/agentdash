@@ -29,7 +29,7 @@ import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "../services/index.js";
 import { agentService } from "../services/agents.js";
-import { bridgeService } from "../services/bridge.js";
+import { BRIDGE_UPLOAD_CAPABILITY, bridgeService } from "../services/bridge.js";
 import { STEWARD_INBOX_CAPABILITY } from "../services/steward-inbox.js";
 import {
   hashConnectCode,
@@ -87,7 +87,10 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
     deviceName: string;
   }): Promise<{ endpointId: string; token: string } | null> {
     if (!input.createdByUserId) return null;
-    const capabilities = ["bridge:read", STEWARD_INBOX_CAPABILITY];
+    // `bridge:upload` lets the person upload their own file to their own
+    // OneDrive from this machine (slice 8). The routes behind it still 404
+    // unless the company has document access switched on.
+    const capabilities = ["bridge:read", STEWARD_INBOX_CAPABILITY, BRIDGE_UPLOAD_CAPABILITY];
     // Labels are unique per user. The same laptop redeeming a second code is
     // the common collision, so retry once with a discriminating suffix rather
     // than failing the whole pairing over a name.

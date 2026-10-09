@@ -122,7 +122,7 @@ describe("steward inbox caller existence", () => {
     }
   });
 
-  it("widens the bridge route allowlist by exactly the inbox routes", () => {
+  it("widens the bridge route allowlist by exactly the inbox and upload routes", () => {
     const source = readFileSync(path.join(repoRoot, "server/src/middleware/auth.ts"), "utf8");
     const block = source.match(/const BRIDGE_ENDPOINT_ROUTES = new Set\(\[([\s\S]*?)\]\);/);
     expect(block, "BRIDGE_ENDPOINT_ROUTES must remain a literal set").toBeTruthy();
@@ -138,6 +138,14 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/inbox/agents",
         "/api/bridge/inbox/propose",
         "/api/bridge/inbox/confirm",
+        // Person upload (document access slice 8): the person's own file to
+        // their own OneDrive. Each also requires bridge:upload and the flag.
+        "/api/bridge/upload/destinations",
+        "/api/bridge/upload/propose",
+        "/api/bridge/upload/confirm",
+        "/api/bridge/upload/fragment",
+        "/api/bridge/upload/status",
+        "/api/bridge/upload/cancel",
       ].sort(),
     );
   });

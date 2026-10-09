@@ -83,6 +83,18 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   "/api/bridge/inbox/agents",
   "/api/bridge/inbox/propose",
   "/api/bridge/inbox/confirm",
+  // Person upload (document access slice 8): the person's own file to their
+  // own OneDrive, as them. `propose` changes nothing and mints a handle over a
+  // resolved plan; `confirm` spends it and opens an upload session whose URL
+  // never leaves the server; `fragment` forwards bounded bytes to that session
+  // only. Exact paths, no parameters: the upload id travels in a header or
+  // the body. Each route also requires `bridge:upload` and the company flag.
+  "/api/bridge/upload/destinations",
+  "/api/bridge/upload/propose",
+  "/api/bridge/upload/confirm",
+  "/api/bridge/upload/fragment",
+  "/api/bridge/upload/status",
+  "/api/bridge/upload/cancel",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

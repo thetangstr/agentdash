@@ -6,7 +6,9 @@ import {
   readCodexServer,
   removeClaudeConfig,
   removeCodexToml,
+  inboxMcpLaunch,
   upsertClaudeConfig,
+  upsertCodexStdioToml,
   upsertCodexToml,
 } from "./harnesses.mjs";
 
@@ -142,5 +144,33 @@ describe("codex config.toml", () => {
 
   it("reports nothing for a server that is not configured", () => {
     expect(readCodexServer(existing, "agentdash")).toBeNull();
+  });
+});
+
+describe("codex stdio entry for the person's own inbox and upload tools", () => {
+  const launch = inboxMcpLaunch({ server: "https://agentdash.example.test", platform: "darwin" });
+
+  it("round-trips: written, read back, replaced on re-run, removed without touching neighbours", () => {
+    const remote = upsertCodexToml("", "agentdash", { url: "https://agentdash.example.test/api/mcp", envVar: "K" });
+    const once = upsertCodexStdioToml(remote, "agentdash-inbox", launch);
+    expect(once).toContain("[mcp_servers.agentdash-inbox]");
+    expect(once).toContain('command = "npx"');
+    expect(once).toContain('args = ["-y", "agentdash-connect@latest", "mcp", "--server", "https://agentdash.example.test"]');
+    expect(readCodexServer(once, "agentdash-inbox")).toEqual({ url: null, envVar: null, ...launch });
+    // No secret in the stdio entry: the token stays in ~/.agentdash/bridge-token.
+    expect(once.slice(once.indexOf("[mcp_servers.agentdash-inbox]"))).not.toMatch(/bearer_token|token =/);
+
+    const twice = upsertCodexStdioToml(once, "agentdash-inbox", launch);
+    expect(twice.match(/\[mcp_servers\.agentdash-inbox\]/g)).toHaveLength(1);
+
+    const removed = removeCodexToml(twice, "agentdash-inbox");
+    expect(readCodexServer(removed, "agentdash-inbox")).toBeNull();
+    expect(readCodexServer(removed, "agentdash")).toEqual({ url: "https://agentdash.example.test/api/mcp", envVar: "K" });
+  });
+
+  it("goes through cmd on Windows, like the Claude entry", () => {
+    const win = inboxMcpLaunch({ server: "https://agentdash.example.test", platform: "win32" });
+    const text = upsertCodexStdioToml("", "agentdash-inbox", win);
+    expect(readCodexServer(text, "agentdash-inbox")).toMatchObject({ command: "cmd", args: ["/c", "npx", "-y", "agentdash-connect@latest", "mcp", "--server", "https://agentdash.example.test"] });
   });
 });

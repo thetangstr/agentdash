@@ -117,12 +117,8 @@ function findCodexBlock(text, serverName) {
   return { lines, start, end };
 }
 
-export function upsertCodexToml(text, serverName, { url, envVar }) {
-  const block = [
-    `[mcp_servers.${serverName}]`,
-    `url = "${url}"`,
-    `bearer_token_env_var = "${envVar}"`,
-  ];
+/** Replace `[mcp_servers.<name>]` with `block`, or append it. */
+function replaceCodexBlock(text, serverName, block) {
   const found = findCodexBlock(text, serverName);
   if (found) {
     const { lines, start, end } = found;
@@ -132,6 +128,30 @@ export function upsertCodexToml(text, serverName, { url, envVar }) {
   return existing.length > 0
     ? `${existing}\n\n${block.join("\n")}\n`
     : `${block.join("\n")}\n`;
+}
+
+export function upsertCodexToml(text, serverName, { url, envVar }) {
+  return replaceCodexBlock(text, serverName, [
+    `[mcp_servers.${serverName}]`,
+    `url = "${url}"`,
+    `bearer_token_env_var = "${envVar}"`,
+  ]);
+}
+
+/** A TOML basic string. JSON's escapes are valid TOML basic-string escapes. */
+const tomlString = (value) => JSON.stringify(String(value));
+
+/**
+ * Codex's local (stdio) server shape: `command` plus `args`, launched by Codex
+ * itself. Used for the person's own inbox tools, which hold no secret in the
+ * config: the bridge token stays in ~/.agentdash/bridge-token.
+ */
+export function upsertCodexStdioToml(text, serverName, { command, args }) {
+  return replaceCodexBlock(text, serverName, [
+    `[mcp_servers.${serverName}]`,
+    `command = ${tomlString(command)}`,
+    `args = [${(args ?? []).map(tomlString).join(", ")}]`,
+  ]);
 }
 
 export function removeCodexToml(text, serverName) {
@@ -150,5 +170,15 @@ export function readCodexServer(text, serverName) {
   const body = found.lines.slice(found.start + 1, found.end).join("\n");
   const url = body.match(/^\s*url\s*=\s*"([^"]*)"/m)?.[1] ?? null;
   const envVar = body.match(/^\s*bearer_token_env_var\s*=\s*"([^"]*)"/m)?.[1] ?? null;
-  return { url, envVar };
+  const command = body.match(/^\s*command\s*=\s*"([^"]*)"/m)?.[1] ?? null;
+  const argsLine = body.match(/^\s*args\s*=\s*(\[.*\])\s*$/m)?.[1] ?? null;
+  let args = null;
+  if (argsLine) {
+    try {
+      args = JSON.parse(argsLine);
+    } catch {
+      args = null;
+    }
+  }
+  return { url, envVar, ...(command ? { command } : {}), ...(args ? { args } : {}) };
 }

@@ -1146,6 +1146,14 @@ export async function startServer(): Promise<StartedServer> {
     startDocumentRunRetention(db as any);
   }
 
+  // AgentDash (document access, slice 8): person-upload rows (ids, sizes,
+  // hashes, sharing outcome) are deleted after 7 days; the activity log keeps
+  // the audit. Hourly.
+  {
+    const { startBridgeUploadRetention } = await import("./services/bridge-upload.js");
+    startBridgeUploadRetention(db as any);
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 

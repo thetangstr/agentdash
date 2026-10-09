@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, bridgeEndpoints, stewardInboxActionHandles } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
@@ -325,6 +325,10 @@ export function stewardInboxActionsService(
         and(
           eq(stewardInboxActionHandles.token, token),
           eq(stewardInboxActionHandles.bridgeEndpointId, endpointId),
+          // Only this service's own kinds. The same table holds upload
+          // handles (bridge-upload.ts); spending one here would burn it on
+          // an action it was never minted for.
+          inArray(stewardInboxActionHandles.kind, ["assign_work", "set_cadence"]),
           isNull(stewardInboxActionHandles.consumedAt),
           gt(stewardInboxActionHandles.expiresAt, now),
         ),

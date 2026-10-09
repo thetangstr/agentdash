@@ -158,6 +158,9 @@ export {
 // AgentDash-MK: a proposed action read back to a person, waiting on their
 // confirmation. Same single-use, endpoint-bound shape as a decision handle.
 export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
+// AgentDash (document access, slice 8): a person's own file uploaded from their
+// machine to their own OneDrive; the Graph upload URL is stored encrypted.
+export { bridgeUploads } from "./bridge_uploads.js";
 export { stewardWebhooks } from "./steward_webhooks.js";
 // AgentDash (GH #677): OAuth 2.1 authorization-server state for the assistant
 // MCP surface — grants, registered clients, pending auth requests, and the

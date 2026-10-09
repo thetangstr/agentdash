@@ -16,8 +16,10 @@ import {
   DEFAULT_SERVER_NAME,
   applyConnection,
   applyInboxMcp,
+  applyInboxMcpCodex,
   checkConnection,
   detectHarnesses,
+  installUploadSkill,
   mcpEndpointFor,
   normalizeInstanceUrl,
   removeConnection,
@@ -83,8 +85,8 @@ function usage() {
   npx agentdash-connect --remove         undo everything this wrote
   npx agentdash-connect inbox            read your AgentDash inbox (used by the
                                          SessionStart hook in ~/agentdash-inbox)
-  npx agentdash-connect mcp              serve your own inbox tools (sync, decide,
-                                         assign) to Claude Code over stdio
+  npx agentdash-connect mcp              serve your own inbox and upload tools (sync,
+                                         decide, assign, upload) over stdio
 
 Options
   --name <name>   MCP server name to write (default: ${DEFAULT_SERVER_NAME})
@@ -351,7 +353,23 @@ async function main() {
       if (harnesses.claude) {
         const inboxMcp = applyInboxMcp({ serverName, instanceUrl });
         out(`  claude  ${inboxMcp.file}
-          "${inboxMcp.name}" — your own inbox tools, so you can approve or reject from Claude`);
+          "${inboxMcp.name}" — your own inbox and upload tools, so you can approve, reject and share files as yourself`);
+      }
+      if (harnesses.codex) {
+        const inboxMcp = applyInboxMcpCodex({ serverName, instanceUrl });
+        out(`  codex   ${inboxMcp.file}
+          "${inboxMcp.name}" — the same tools for Codex`);
+      }
+      // The skill that walks an upload through: which file, which folder,
+      // who, view or edit, which task; one read-back; one yes.
+      for (const skill of installUploadSkill({ harnesses })) {
+        out(
+          skill.skipped
+            ? `  ${skill.harness.padEnd(7)} ${skill.file}
+          left alone — a skill with that name already exists and is not ours`
+            : `  ${skill.harness.padEnd(7)} ${skill.file}
+          "agentdash-upload" skill — put a file in your OneDrive and share it`,
+        );
       }
       out("");
       out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);

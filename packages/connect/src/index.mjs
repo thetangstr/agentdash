@@ -22,6 +22,7 @@ import {
   removeCodexToml,
   upsertClaudeConfig,
   upsertClaudeStdioServer,
+  upsertCodexStdioToml,
   upsertCodexToml,
 } from "./harnesses.mjs";
 import {
@@ -169,6 +170,64 @@ export function applyInboxMcp({ serverName, instanceUrl, configPath = CLAUDE_CON
   return { name, file: configPath };
 }
 
+/**
+ * The same inbox tools for Codex: a stdio entry in ~/.codex/config.toml that
+ * launches `agentdash-connect mcp`. Like the Claude entry it names only the
+ * command; the bridge token stays in ~/.agentdash/bridge-token.
+ */
+export function applyInboxMcpCodex({ serverName, instanceUrl, configPath = CODEX_CONFIG }) {
+  const name = inboxServerNameFor(serverName);
+  writeTextFile(configPath, upsertCodexStdioToml(readTextFile(configPath), name, inboxMcpLaunch({ server: instanceUrl })));
+  return { name, file: configPath };
+}
+
+/** The skill that orchestrates an upload, shipped inside this package. */
+export const UPLOAD_SKILL_NAME = "agentdash-upload";
+const UPLOAD_SKILL_SOURCE = new URL(`./skills/${UPLOAD_SKILL_NAME}/SKILL.md`, import.meta.url);
+
+/** Where each harness reads personal skills from. */
+export function uploadSkillPaths({ home = os.homedir(), harnesses }) {
+  const paths = [];
+  if (harnesses.claude) paths.push({ harness: "claude", file: path.join(home, ".claude", "skills", UPLOAD_SKILL_NAME, "SKILL.md") });
+  if (harnesses.codex) paths.push({ harness: "codex", file: path.join(home, ".codex", "skills", UPLOAD_SKILL_NAME, "SKILL.md") });
+  return paths;
+}
+
+/** Ours, not a skill the person wrote under the same name. */
+function isOurSkill(file) {
+  return readTextFile(file).includes(`name: ${UPLOAD_SKILL_NAME}\n`);
+}
+
+/**
+ * Install the upload skill for each harness present. A file of that name the
+ * person wrote themselves is left alone and reported as skipped.
+ */
+export function installUploadSkill({ home = os.homedir(), harnesses }) {
+  const body = fs.readFileSync(UPLOAD_SKILL_SOURCE, "utf8");
+  const written = [];
+  for (const target of uploadSkillPaths({ home, harnesses })) {
+    if (fs.existsSync(target.file) && !isOurSkill(target.file)) {
+      written.push({ ...target, skipped: true });
+      continue;
+    }
+    fs.mkdirSync(path.dirname(target.file), { recursive: true });
+    fs.writeFileSync(target.file, body);
+    written.push({ ...target, skipped: false });
+  }
+  return written;
+}
+
+/** Remove the installed skill files this package wrote. */
+export function removeUploadSkill({ home = os.homedir() } = {}) {
+  const removed = [];
+  for (const target of uploadSkillPaths({ home, harnesses: { claude: true, codex: true } })) {
+    if (!fs.existsSync(target.file) || !isOurSkill(target.file)) continue;
+    fs.rmSync(path.dirname(target.file), { recursive: true, force: true });
+    removed.push(target);
+  }
+  return removed;
+}
+
 /** Undo everything `applyConnection` did, reporting what was actually there. */
 export function removeConnection({ serverName, account }) {
   const removed = [];
@@ -182,10 +241,17 @@ export function removeConnection({ serverName, account }) {
     }
   }
 
-  const codexText = readTextFile(CODEX_CONFIG);
-  if (readCodexServer(codexText, serverName)) {
-    writeTextFile(CODEX_CONFIG, removeCodexToml(codexText, serverName));
-    removed.push({ harness: "codex", file: CODEX_CONFIG });
+  let codexText = readTextFile(CODEX_CONFIG);
+  for (const name of [serverName, inboxServerNameFor(serverName)]) {
+    if (readCodexServer(codexText, name)) {
+      codexText = removeCodexToml(codexText, name);
+      writeTextFile(CODEX_CONFIG, codexText);
+      removed.push({ harness: "codex", file: `${CODEX_CONFIG} (${name})` });
+    }
+  }
+
+  for (const skill of removeUploadSkill()) {
+    removed.push({ harness: skill.harness, file: skill.file });
   }
 
   for (const profile of shellProfilePaths()) {
