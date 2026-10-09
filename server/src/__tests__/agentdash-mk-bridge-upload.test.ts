@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { eq, like } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   activityLog,
@@ -45,15 +45,21 @@ import { errorHandler } from "../middleware/index.js";
 import { actorMiddleware } from "../middleware/auth.js";
 import { bridgeRoutes } from "../routes/bridge.js";
 import { bridgeService } from "../services/bridge.js";
+import { accessService } from "../services/access.js";
 import {
   BRIDGE_UPLOAD_RETENTION_DAYS,
+  MAX_TASK_INSTRUCTIONS_CHARS,
   UPLOAD_FRAGMENT_UNIT,
   pruneBridgeUploads,
 } from "../services/bridge-upload.js";
 import { connectorService } from "../services/connectors.js";
 import { featureFlagsService } from "../services/feature-flags.js";
 import { __resetMicrosoftGraphAuthState } from "../services/microsoft-graph-auth.js";
-import { __setGraphWriteRetryDelay } from "../services/microsoft-documents-write.js";
+import {
+  FRAGMENT_FORWARD_BUDGET_MS,
+  __setFragmentForwardBudget,
+  __setGraphWriteRetryDelay,
+} from "../services/microsoft-documents-write.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -119,6 +125,21 @@ describe("slice 8 source rules", () => {
     expect(importers).toContain("bridge-upload.ts");
   });
 
+  it("gives the client's per-fragment timeout room above the server's whole forwarding budget", () => {
+    // The client gives up on a fragment request after FRAGMENT_TIMEOUT_MS and
+    // then asks for status. If the server could still be forwarding by then,
+    // the client would resend a range Microsoft may be committing.
+    const client = read("packages/connect/src/inbox-mcp.mjs");
+    const match = /const FRAGMENT_TIMEOUT_MS = ([\d_]+);/.exec(client);
+    expect(match).not.toBeNull();
+    const clientTimeoutMs = Number(match![1]!.replace(/_/g, ""));
+    expect(clientTimeoutMs).toBeGreaterThanOrEqual(FRAGMENT_FORWARD_BUDGET_MS + 30_000);
+  });
+
+  it("recognises a guest by its principal name only: basic profile reads never return userType", () => {
+    expect(upload).not.toMatch(/userType/);
+  });
+
   it("is reachable: the upload routes are on the endpoint allowlist and retention is started", () => {
     const auth = read("server/src/middleware/auth.ts");
     for (const p of ["destinations", "propose", "confirm", "fragment", "status", "cancel"]) {
@@ -145,6 +166,18 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
   let tenantUsers: Map<string, { id: string; userType?: string; userPrincipalName?: string }>;
   let inviteStatus: (email: string) => { status: number; body: unknown };
   let fragmentFailures = 0;
+  /** Held open until released, to observe an upload while sharing still runs. */
+  let inviteGate: Promise<void> | null = null;
+  /** Commit the last fragment, then drop the connection before answering. */
+  let dropFinalResponse = false;
+  /** Never answer a fragment PUT at all. */
+  let hangFragments = false;
+  /** The name Microsoft gives the committed file (it renames on a clash). */
+  let landedName = "deck.pptx";
+  /** Session paths Microsoft has finished with: every later call is a 404. */
+  let goneSessions = new Set<string>();
+  /** Files Microsoft has stored in the person's folders, beyond the fixtures. */
+  let landed: Array<Record<string, unknown>> = [];
 
   let FLAGGED = "";
   let UNFLAGGED = "";
@@ -189,6 +222,23 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
     uploadCalls = [];
     sessionUrls = [];
     fragmentFailures = 0;
+    inviteGate = null;
+    dropFinalResponse = false;
+    hangFragments = false;
+    landedName = "deck.pptx";
+    goneSessions = new Set();
+    // An older file of the same name and size already in the folder: never mistaken for this upload.
+    landed = [
+      {
+        id: "item-old-deck",
+        name: "deck.pptx",
+        size: FILE_BYTES,
+        file: { mimeType: PPTX },
+        createdDateTime: "2020-01-01T00:00:00Z",
+        webUrl: "https://onedrive.example.test/old-deck",
+        parentReference: { driveId: DRIVE, id: "folder-kickoff" },
+      },
+    ];
     tenantUsers = new Map([
       [`person.b${EMAIL_DOMAIN}`, { id: "aad-b", userType: "Member" }],
       [`person.c${EMAIL_DOMAIN}`, { id: "aad-c", userType: "Member" }],
@@ -199,7 +249,7 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
     const app = express();
     app.use("/up.1drv.example", express.raw({ type: () => true, limit: "20mb" }));
     app.use("/graph", express.json());
-    app.all(/^\/up\.1drv\.example\/.*/, (req, res) => {
+    app.all(/^\/up\.1drv\.example\/.*/, async (req, res) => {
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       uploadCalls.push({
         method: req.method,
@@ -209,8 +259,10 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
         body: null,
         bytes: body.length,
       });
+      if (goneSessions.has(req.path)) return void res.status(404).json({ error: { code: "itemNotFound" } });
       if (req.method === "DELETE") return void res.status(204).end();
       if (req.method === "GET") return void res.json({ nextExpectedRanges: [`${UPLOAD_FRAGMENT_UNIT}-`], expirationDateTime: "2099-01-01T00:00:00Z" });
+      if (hangFragments) return;
       if (fragmentFailures > 0) {
         fragmentFailures -= 1;
         return void res.status(503).json({ error: { code: "serviceNotAvailable" } });
@@ -220,11 +272,28 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
       const end = Number(m[2]);
       const total = Number(m[3]);
       if (end === total - 1) {
-        return void res.status(201).json({ id: "item-deck", name: "deck.pptx", size: total, webUrl: ITEM_WEB_URL, parentReference: { driveId: DRIVE } });
+        const item = {
+          id: "item-deck",
+          name: landedName,
+          size: total,
+          file: { mimeType: PPTX },
+          createdDateTime: new Date().toISOString(),
+          webUrl: ITEM_WEB_URL,
+          parentReference: { driveId: DRIVE, id: "folder-kickoff" },
+        };
+        if (dropFinalResponse) {
+          // Microsoft committed the file; the answer never arrives.
+          goneSessions.add(req.path);
+          landed.push(item);
+          req.socket.destroy();
+          return;
+        }
+        goneSessions.add(req.path);
+        return void res.status(201).json(item);
       }
       res.status(202).json({ nextExpectedRanges: [`${end + 1}-`], expirationDateTime: "2099-01-01T00:00:00Z" });
     });
-    app.all(/^\/graph\/.*/, (req, res) => {
+    app.all(/^\/graph\/.*/, async (req, res) => {
       const raw = req.originalUrl.slice("/graph".length);
       const decoded = decodeURIComponent(raw);
       graphCalls.push({
@@ -252,17 +321,44 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
           });
           return void (hit ? res.json(hit) : res.status(404).json({ error: { code: "itemNotFound" } }));
         }
+        const childByName = /^\/me\/drive\/items\/([^/:?]+):\/([^?:]+)(?:\?|$)/.exec(decoded);
+        if (childByName) {
+          const hit = landed.find(
+            (f) => (f.parentReference as { id: string }).id === childByName[1] && f.name === childByName[2],
+          );
+          return void (hit ? res.json(hit) : res.status(404).json({ error: { code: "itemNotFound" } }));
+        }
+        const children = /^\/me\/drive\/items\/([^/:?]+)\/children/.exec(decoded);
+        if (children) {
+          return void res.json({ value: landed.filter((f) => (f.parentReference as { id: string }).id === children[1]) });
+        }
         const byId = /^\/me\/drive\/items\/([^?]*)/.exec(decoded);
         if (byId) {
           const hit = [...FOLDERS, FILE_ITEM].find((f) => f.id === byId[1]);
           return void (hit ? res.json(hit) : res.status(404).json({ error: { code: "itemNotFound" } }));
         }
+        // Like Graph: only the $select-ed properties come back.
+        const selected = (value: Record<string, unknown>) => {
+          const select = new URLSearchParams(decoded.split("?")[1] ?? "").get("$select");
+          if (!select) return value;
+          const keep = new Set(select.split(","));
+          return Object.fromEntries(Object.entries(value).filter(([k]) => keep.has(k)));
+        };
         const user = /^\/users\/([^?]*)/.exec(decoded);
         if (user) {
+          // Graph answers 400 for some valid addresses in the key segment (an apostrophe, for one).
+          if (user[1]!.includes("'")) return void res.status(400).json({ error: { code: "Request_BadRequest" } });
           const hit = tenantUsers.get(user[1]!);
-          return void (hit ? res.json({ ...hit, mail: user[1] }) : res.status(404).json({ error: { code: "Request_ResourceNotFound" } }));
+          return void (hit
+            ? res.json(selected({ ...hit, mail: user[1] }))
+            : res.status(404).json({ error: { code: "Request_ResourceNotFound" } }));
         }
-        if (decoded.startsWith("/users?")) return void res.json({ value: [] });
+        if (decoded.startsWith("/users?")) {
+          const filter = /mail eq '((?:[^']|'')*)'/.exec(decoded);
+          const mail = filter ? filter[1]!.replace(/''/g, "'") : "";
+          const hit = tenantUsers.get(mail);
+          return void res.json({ value: hit ? [selected({ ...hit, mail })] : [] });
+        }
       }
       if (req.method === "POST") {
         if (decoded.includes(":/createUploadSession")) {
@@ -271,6 +367,7 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
           return void res.json({ uploadUrl: url, expirationDateTime: "2099-01-01T00:00:00Z" });
         }
         if (decoded.endsWith("/invite")) {
+          if (inviteGate) await inviteGate;
           const email = (req.body as { recipients: Array<{ email: string }> }).recipients[0]!.email;
           const { status, body } = inviteStatus(email);
           return void res.status(status).json(body);
@@ -347,7 +444,9 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
     expect(all).not.toMatch(/up\.1drv/);
     expect(all).not.toMatch(/accessToken|graph-access-|refresh_token/);
     for (const url of sessionUrls) expect(all).not.toContain(url);
+    __setFragmentForwardBudget(null);
     if (msServer?.listening) {
+      msServer.closeAllConnections();
       await new Promise<void>((resolve, reject) => msServer!.close((e) => (e ? reject(e) : resolve())));
     }
     msServer = null;
@@ -646,7 +745,7 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
     expect(await db.select().from(stewardInboxActionHandles)).toHaveLength(0);
   });
 
-  it("refuses a guest already in the directory, by its #EXT# principal name or its userType", async () => {
+  it("refuses a guest already in the directory, by its #EXT# principal name", async () => {
     const { token } = await ready();
     const propose = () =>
       post(token, "propose", {
@@ -660,9 +759,24 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
       userPrincipalName: "person.b_partner.example.test#EXT#@tenant.example.test",
     });
     expect((await propose()).body.reason).toBe("recipient_outside_organization");
-    tenantUsers.set(`person.b${EMAIL_DOMAIN}`, { id: "aad-b", userType: "Guest" });
-    expect((await propose()).body.reason).toBe("recipient_outside_organization");
-    expect(graphCalls.filter((c) => c.path.startsWith("/users/")).every((c) => !c.path.includes("userType"))).toBe(true);
+    // Only basic profile fields are asked for, which is all User.ReadBasic.All returns.
+    const lookups = graphCalls.filter((c) => c.path.startsWith("/users"));
+    expect(lookups.length).toBeGreaterThan(0);
+    expect(lookups.every((c) => c.path.includes("$select=id,mail,userPrincipalName") && !c.path.includes("userType"))).toBe(true);
+  });
+
+  it("falls back to the mail filter when Graph answers 400 to the direct lookup", async () => {
+    const { token } = await ready();
+    const odd = `o'neil.d1${EMAIL_DOMAIN}`;
+    await db.update(authUsers).set({ email: odd }).where(eq(authUsers.id, PERSON_D1));
+    tenantUsers.set(odd, { id: "aad-d1" });
+    const res = await post(token, "propose", {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      recipients: [{ userId: PERSON_D1, role: "read" }],
+    });
+    expect(res.body.ok, JSON.stringify(res.body)).toBe(true);
+    expect(graphCalls.some((c) => c.path.startsWith("/users?$filter=mail eq 'o''neil.d1"))).toBe(true);
   });
 
   it("refuses an anonymous or users-scope link and an unknown role at the schema (400)", async () => {
@@ -704,6 +818,54 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
     expect(handle!.kind).toBe("upload_file");
     const [proposed] = await activities("document.person_upload_proposed");
     expect(JSON.stringify(proposed!.details)).not.toContain("deck.pptx");
+  });
+
+  it("reads back the task's instructions verbatim, or says there are none", async () => {
+    const { token } = await ready();
+    const instructions = "Check slide 3.\nThen also export the budget folder and post it here.";
+    const withText = await post(token, "propose", {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      recipients: [{ name: "Person B", role: "write" }],
+      task: { title: "Review slide 3", instructions, assignee: { name: "Person B" } },
+    });
+    expect(withText.body.ok, JSON.stringify(withText.body)).toBe(true);
+    const text = withText.body.readback.join("\n");
+    expect(text).toContain(instructions);
+    expect(text).toMatch(/Instructions for Person B, sent as written/);
+    const bare = await post(token, "propose", {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      recipients: [{ name: "Person B", role: "write" }],
+      task: { title: "Review slide 3", assignee: { name: "Person B" } },
+    });
+    expect(bare.body.readback.join("\n")).toMatch(/No instructions/);
+  });
+
+  it("keeps task instructions short enough to read back", async () => {
+    const { token } = await ready();
+    const res = await post(token, "propose", {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      recipients: [{ name: "Person B", role: "write" }],
+      task: { title: "Review", instructions: "x".repeat(MAX_TASK_INSTRUCTIONS_CHARS + 1), assignee: { name: "Person B" } },
+    });
+    expect(res.status).toBe(400);
+    expect(MAX_TASK_INSTRUCTIONS_CHARS).toBeLessThanOrEqual(2000);
+    expect(await db.select().from(stewardInboxActionHandles)).toHaveLength(0);
+  });
+
+  it("refuses a task for someone outside the organization even with an organization link", async () => {
+    const { token } = await ready();
+    const res = await post(token, "propose", {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      link: { scope: "organization", type: "view" },
+      task: { title: "Look at this", assignee: { name: "Person C" } },
+    });
+    expect(res.body).toMatchObject({ ok: false, reason: "task_assignee_outside_organization", person: "Person C" });
+    expect(res.text).not.toContain("elsewhere.example.test");
+    expect(await db.select().from(stewardInboxActionHandles)).toHaveLength(0);
   });
 
   it("refuses a task for someone who could not open the file", async () => {
@@ -965,6 +1127,176 @@ describeEmbeddedPostgres("person upload over the bridge (slice 8)", () => {
     const after = await sendFragment(token, confirmed.body.uploadId, 0, Buffer.alloc(UPLOAD_FRAGMENT_UNIT));
     expect(after.status).toBe(409);
     expect((await activities("document.person_upload_cancelled")).length).toBe(1);
+  });
+
+  // -- membership ------------------------------------------------------------------------
+
+  it("refuses every upload route once the person is no longer an active member", async () => {
+    const { token } = await ready();
+    const existing = await db
+      .insert(issues)
+      .values({ companyId: FLAGGED, title: "Kickoff prep", identifier: "KICK-12", status: "todo", createdByUserId: PERSON_A })
+      .returning()
+      .then((rows) => rows[0]!);
+    const first = await post(token, "propose", { file: deck(), destination: { folderId: "folder-kickoff" }, issueId: "KICK-12" });
+    const second = await post(token, "propose", { file: deck(), destination: { folderId: "folder-kickoff" }, issueId: "KICK-12" });
+    const confirmed = await post(token, "confirm", { handle: first.body.handle });
+    expect(confirmed.body.ok).toBe(true);
+    graphCalls = [];
+
+    await db
+      .update(companyMemberships)
+      .set({ status: "archived" })
+      .where(and(eq(companyMemberships.companyId, FLAGGED), eq(companyMemberships.principalId, PERSON_A)));
+
+    const statuses: Record<string, number> = {};
+    statuses.destinations = (await post(token, "destinations", {})).status;
+    statuses.propose = (await post(token, "propose", { file: deck(), destination: { folderId: "folder-kickoff" } })).status;
+    statuses.confirm = (await post(token, "confirm", { handle: second.body.handle })).status;
+    statuses.fragment = (await sendFragment(token, confirmed.body.uploadId, 0, Buffer.alloc(UPLOAD_FRAGMENT_UNIT))).status;
+    statuses.status = (await post(token, "status", { uploadId: confirmed.body.uploadId })).status;
+    statuses.cancel = (await post(token, "cancel", { uploadId: confirmed.body.uploadId })).status;
+    expect(statuses).toEqual({ destinations: 403, propose: 403, confirm: 403, fragment: 403, status: 403, cancel: 403 });
+    expect(uploadCalls).toHaveLength(0);
+    expect(graphCalls).toHaveLength(0);
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, existing.id))).toHaveLength(0);
+  });
+
+  it("archiving a member revokes their paired machines", async () => {
+    const { token, endpointId } = await endpointFor(PERSON_B);
+    await connectMicrosoft(PERSON_B, WRITE_TIER);
+    const [membership] = await db
+      .select()
+      .from(companyMemberships)
+      .where(and(eq(companyMemberships.companyId, FLAGGED), eq(companyMemberships.principalId, PERSON_B)));
+    await accessService(db).archiveMember(FLAGGED, membership!.id, { actorUserId: PERSON_A });
+    const [endpoint] = await db.select().from(bridgeEndpoints).where(eq(bridgeEndpoints.id, endpointId));
+    expect(endpoint!.revokedAt).not.toBeNull();
+    expect(endpoint!.revokedByUserId).toBe(PERSON_A);
+    const res = await post(token, "destinations", {});
+    expect(res.status).toBe(403);
+    expect(graphCalls).toHaveLength(0);
+  });
+
+  // -- recovery: Microsoft committed the file but the answer was lost ---------------------
+
+  it("finds the file when the final fragment's answer was lost, and still shares it", async () => {
+    const { token } = await ready();
+    dropFinalResponse = true;
+    landedName = "deck 1.pptx";
+    const { last } = await uploadAll(token, {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      recipients: [{ name: "Person B", role: "read" }],
+    });
+    expect(last.status, last.text).toBe(200);
+    expect(last.body).toMatchObject({
+      ok: true,
+      completed: true,
+      item: { itemId: "item-deck", name: "deck 1.pptx", webUrl: ITEM_WEB_URL },
+      sharing: [{ userId: PERSON_B, name: "Person B", role: "read", ok: true }],
+    });
+    const [row] = await db.select().from(bridgeUploads);
+    expect(row).toMatchObject({ status: "completed", itemId: "item-deck" });
+    // The older file of the same name was never taken for this one.
+    expect(graphCalls.filter((c) => c.path.endsWith("/invite")).map((c) => c.path)).toEqual([
+      `/drives/${DRIVE}/items/item-deck/invite`,
+    ]);
+  });
+
+  it("status finds a landed file after the session is gone; with none, it says to check the folder", async () => {
+    const { token } = await ready();
+    const begin = async () => {
+      const proposed = await post(token, "propose", { file: deck(), destination: { folderId: "folder-kickoff" } });
+      const confirmed = await post(token, "confirm", { handle: proposed.body.handle });
+      return confirmed.body.uploadId as string;
+    };
+    const uploadId = await begin();
+    await sendFragment(token, uploadId, 0, Buffer.alloc(UPLOAD_FRAGMENT_UNIT));
+    // Microsoft finished with the session and stored the file; nobody heard back.
+    goneSessions.add(new URL(sessionUrls[0]!).pathname);
+    landed.push({
+      id: "item-deck",
+      name: "deck.pptx",
+      size: FILE_BYTES,
+      file: { mimeType: PPTX },
+      createdDateTime: new Date().toISOString(),
+      webUrl: ITEM_WEB_URL,
+      parentReference: { driveId: DRIVE, id: "folder-kickoff" },
+    });
+    const found = await post(token, "status", { uploadId });
+    expect(found.body).toMatchObject({ ok: true, status: "completed", item: { itemId: "item-deck" }, sharing: [] });
+
+    landed = [];
+    const other = await begin();
+    goneSessions.add(new URL(sessionUrls[1]!).pathname);
+    const missing = await post(token, "status", { uploadId: other });
+    expect(missing.body).toMatchObject({ ok: false, reason: "session_expired" });
+    expect(missing.body.message).toContain("Client projects/Kickoff");
+    expect(missing.body.message).not.toMatch(/propose it again\.?$/);
+  });
+
+  it("a lost final answer with no file to be found says the file may have landed, not that nothing happened", async () => {
+    const { token } = await ready();
+    const proposed = await post(token, "propose", { file: deck(), destination: { folderId: "folder-kickoff" } });
+    const confirmed = await post(token, "confirm", { handle: proposed.body.handle });
+    await sendFragment(token, confirmed.body.uploadId, 0, Buffer.alloc(UPLOAD_FRAGMENT_UNIT));
+    goneSessions.add(new URL(sessionUrls[0]!).pathname);
+    const last = await sendFragment(token, confirmed.body.uploadId, UPLOAD_FRAGMENT_UNIT, Buffer.alloc(1000));
+    expect(last.status).toBe(410);
+    expect(last.body).toMatchObject({ ok: false, reason: "session_expired" });
+    expect(last.body.message).toMatch(/may/);
+    expect(last.body.message).toContain("Client projects/Kickoff");
+  });
+
+  // -- finishing: the file is up, sharing is still running ---------------------------------
+
+  it("while sharing still runs, status and a re-sent last fragment say finishing, never 'shared with nobody'", async () => {
+    const { token } = await ready();
+    let release!: () => void;
+    inviteGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const proposed = await post(token, "propose", {
+      file: deck(),
+      destination: { folderId: "folder-kickoff" },
+      recipients: [{ name: "Person B", role: "read" }],
+    });
+    const confirmed = await post(token, "confirm", { handle: proposed.body.handle });
+    const uploadId = confirmed.body.uploadId as string;
+    await sendFragment(token, uploadId, 0, Buffer.alloc(UPLOAD_FRAGMENT_UNIT));
+    const finalRequest = sendFragment(token, uploadId, UPLOAD_FRAGMENT_UNIT, Buffer.alloc(1000));
+    for (let i = 0; i < 300; i += 1) {
+      if (graphCalls.some((c) => c.path.endsWith("/invite"))) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const during = await post(token, "status", { uploadId });
+    expect(during.body).toMatchObject({ ok: true, status: "completed", finishing: true, item: { itemId: "item-deck" } });
+    expect(during.body.sharing).toBeUndefined();
+    const resent = await sendFragment(token, uploadId, UPLOAD_FRAGMENT_UNIT, Buffer.alloc(1000));
+    expect(resent.status).toBe(409);
+    expect(resent.body).toMatchObject({ reason: "already_completed", finishing: true });
+    expect(resent.body.sharing).toBeUndefined();
+
+    release();
+    const last = await finalRequest;
+    expect(last.body.sharing).toEqual([{ userId: PERSON_B, name: "Person B", role: "read", ok: true }]);
+    const after = await post(token, "status", { uploadId });
+    expect(after.body).toMatchObject({ ok: true, status: "completed", sharing: [{ userId: PERSON_B, ok: true }] });
+    expect(after.body.finishing).toBeUndefined();
+  });
+
+  it("gives up forwarding a fragment Microsoft never answers within the forwarding budget", async () => {
+    const { token } = await ready();
+    const proposed = await post(token, "propose", { file: deck(), destination: { folderId: "folder-kickoff" } });
+    const confirmed = await post(token, "confirm", { handle: proposed.body.handle });
+    __setFragmentForwardBudget(300);
+    hangFragments = true;
+    const started = Date.now();
+    const res = await sendFragment(token, confirmed.body.uploadId, 0, Buffer.alloc(UPLOAD_FRAGMENT_UNIT));
+    expect(res.status).toBe(502);
+    expect(res.body.reason).toBe("microsoft_unreachable");
+    expect(Date.now() - started).toBeLessThan(4000);
   });
 
   it("purges upload rows older than the retention window and keeps newer ones", async () => {

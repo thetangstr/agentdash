@@ -156,14 +156,21 @@ which task), shows one read-back, and uploads only after your yes:
   most. It sends AgentDash only the name, size, type and SHA-256. AgentDash
   resolves the folder and each person by name among your company's members,
   checks each one is in your Microsoft organization, and returns the read-back.
+  A new task's instructions (2000 characters at most) are in the read-back
+  word for word, because they go to the assignee's agent under your name.
   Nothing changes.
-- `upload_confirm` re-checks that the file has not changed since the read-back,
-  then streams it to AgentDash in 10 MiB pieces; AgentDash forwards them to
-  Microsoft as you. Then it shares as read back: Microsoft emails each person,
-  who must sign in to open it; an organization link only if you asked; no
-  links for people outside your organization, ever. If you linked a task, the
-  task gets one comment with the file name and link (never the content); a new
-  task goes to the assignee's agent when they have one.
+- `upload_confirm` opens the file once, checks it has not changed since the
+  read-back, then streams it from that open file to AgentDash in 10 MiB
+  pieces; AgentDash forwards them to Microsoft as you. If the file's bytes
+  change during the upload, the last piece is not sent and the upload is
+  cancelled. Then it shares as read back: Microsoft emails each person, who
+  must sign in to open it; an organization link only if you asked; no links
+  for people outside your organization, ever. If you linked a task, the task
+  gets one comment with the file name and link (never the content); a new
+  task goes to the assignee's agent when they have one. If Microsoft stored
+  the file but its answer was lost, AgentDash finds the file and finishes the
+  sharing; when it cannot tell, it says the file may already be in the folder,
+  so you can check before uploading it again.
 - `upload_cancel` stops an unfinished upload. Nothing is shared.
 
 Your machine never receives Microsoft's upload address or any Microsoft token,

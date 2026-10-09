@@ -15,6 +15,7 @@ import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { BRIDGE_TASK_CLASSES, bridgeService } from "../services/bridge.js";
 import {
+  MAX_TASK_INSTRUCTIONS_CHARS,
   MAX_UPLOAD_MESSAGE_CHARS,
   MAX_UPLOAD_RECIPIENTS,
   bridgeUploadService,
@@ -77,7 +78,7 @@ const uploadProposeSchema = z
     task: z
       .object({
         title: z.string().trim().min(1).max(200),
-        instructions: z.string().max(20_000).optional(),
+        instructions: z.string().max(MAX_TASK_INSTRUCTIONS_CHARS).optional(),
         assignee: uploadPersonSchema,
       })
       .strict()

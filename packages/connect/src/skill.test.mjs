@@ -34,6 +34,11 @@ describe("the agentdash-upload skill", () => {
       expect(body).toMatch(/Never search the disk/);
       expect(body).toMatch(/Never re-create the file from the attachment content/);
       expect(body).toMatch(/upload_confirm/);
+      // Instructions travel to another person's agent: written by the person, read back in full.
+      expect(body).toMatch(/instructions are read\s+back in full/);
+      expect(body).toMatch(/task_assignee_outside_organization/);
+      // A lost answer is not "nothing happened".
+      expect(body).toMatch(/may already be in\s+the folder/);
     }
     expect(written[0].file).toBe(path.join(home, ".claude", "skills", "agentdash-upload", "SKILL.md"));
   });

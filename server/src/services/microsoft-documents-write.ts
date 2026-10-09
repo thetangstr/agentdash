@@ -28,6 +28,22 @@ const HTTP_TIMEOUT_MS = 30_000;
 const FRAGMENT_TIMEOUT_MS = 120_000;
 const FRAGMENT_RETRIES = 3;
 
+/**
+ * The whole time one fragment may take to forward, every retry included.
+ * The bridge client gives each fragment request FRAGMENT_TIMEOUT_MS in
+ * packages/connect/src/inbox-mcp.mjs, which must stay well above this:
+ * a client that gives up while the server is still forwarding would ask for
+ * status and resend a range Microsoft may be committing. A source test pins
+ * the gap.
+ */
+export const FRAGMENT_FORWARD_BUDGET_MS = 180_000;
+let forwardBudgetMs = FRAGMENT_FORWARD_BUDGET_MS;
+
+/** Test seam: shorten the forwarding budget; null restores it. */
+export function __setFragmentForwardBudget(ms: number | null): void {
+  forwardBudgetMs = ms ?? FRAGMENT_FORWARD_BUDGET_MS;
+}
+
 /** Overridable so tests do not sleep for real. */
 let retryDelayMs = (attempt: number) => 250 * 2 ** (attempt - 1);
 
@@ -179,8 +195,11 @@ export async function putUploadFragment(
   input: { contentRange: string; body: Buffer },
 ): Promise<FragmentResult> {
   const url = assertUploadUrlShape(uploadUrl);
+  const deadline = Date.now() + forwardBudgetMs;
   let lastStatus: number | null = null;
   for (let attempt = 1; attempt <= FRAGMENT_RETRIES + 1; attempt += 1) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     let response: Response;
     try {
       response = await fetch(url, {
@@ -188,12 +207,12 @@ export async function putUploadFragment(
         // Content-Length comes from the Buffer body; Microsoft requires it.
         headers: { "content-range": input.contentRange },
         body: new Uint8Array(input.body),
-        signal: AbortSignal.timeout(FRAGMENT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.min(FRAGMENT_TIMEOUT_MS, remaining)),
       });
     } catch (error) {
       logger.warn({ err: error, attempt }, "upload fragment forward failed");
       lastStatus = null;
-      if (attempt <= FRAGMENT_RETRIES) await sleep(retryDelayMs(attempt));
+      if (attempt <= FRAGMENT_RETRIES) await sleep(Math.min(retryDelayMs(attempt), Math.max(0, deadline - Date.now())));
       continue;
     }
     const body = await readJson(response);
@@ -212,7 +231,7 @@ export async function putUploadFragment(
     if (response.status === 404 || response.status === 410) return { kind: "expired" };
     if (response.status >= 500 || response.status === 429) {
       lastStatus = response.status;
-      if (attempt <= FRAGMENT_RETRIES) await sleep(retryDelayMs(attempt));
+      if (attempt <= FRAGMENT_RETRIES) await sleep(Math.min(retryDelayMs(attempt), Math.max(0, deadline - Date.now())));
       continue;
     }
     return { kind: "rejected", status: response.status, code: graphErrorCode(body) };

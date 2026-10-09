@@ -19,11 +19,20 @@ import path from "node:path";
  *   SHA-256). Bytes go only after the person's yes, in bounded fragments, and
  *   the server forwards them to Microsoft. This machine never learns the
  *   Microsoft upload URL.
+ * - After the yes the file is opened ONCE, without following a symlink, and
+ *   everything (the hash check, every fragment) is read from that one open
+ *   file. A running SHA-256 of the bytes actually sent must equal the hash
+ *   that was read back before the last fragment goes, so a file edited or
+ *   swapped mid-upload is never shared as the one the person confirmed.
  *
  * Dependency-free, like the rest of the package.
  */
 
 export const UPLOAD_MAX_BYTES = 250 * 1024 * 1024;
+
+/** Open without following a symlink at the last path component (0 where the platform has no such flag). */
+const OPEN_READ_NOFOLLOW = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+const HASH_CHUNK_BYTES = 1024 * 1024;
 
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const PDF_MAGIC = Buffer.from("%PDF-", "ascii");
@@ -56,10 +65,17 @@ export const DENIED_FOLDERS = [
 ];
 
 export class UploadRefusal extends Error {
-  constructor(reason, message) {
+  /**
+   * @param {string} reason
+   * @param {string} message
+   * @param {{ note?: string }} [options] what the person should take away; the
+   *   default, "Nothing was uploaded or shared.", is wrong once bytes have gone.
+   */
+  constructor(reason, message, options = {}) {
     super(message);
     this.name = "UploadRefusal";
     this.reason = reason;
+    if (options.note) this.note = options.note;
   }
 }
 
@@ -143,8 +159,21 @@ export function inspectLocalFile(rawPath, { home = os.homedir(), cwd = process.c
   }
 
   const head = Buffer.alloc(type.magic.length);
-  const fd = fs.openSync(absolute, "r");
+  let fd;
   try {
+    fd = fs.openSync(absolute, OPEN_READ_NOFOLLOW);
+  } catch (err) {
+    if (err?.code === "ELOOP") {
+      throw new UploadRefusal("symlink_not_allowed", "That path is a shortcut (symlink). Give the path of the file itself.");
+    }
+    throw new UploadRefusal("not_found", `There is no file at ${absolute}.`);
+  }
+  try {
+    // The file opened must be the one just checked, not one swapped in since.
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.ino !== stat.ino || opened.dev !== stat.dev) {
+      throw new UploadRefusal("file_changed", "The file changed while it was being checked. Try again.");
+    }
     fs.readSync(fd, head, 0, head.length, 0);
   } finally {
     fs.closeSync(fd);
@@ -159,15 +188,64 @@ export function inspectLocalFile(rawPath, { home = os.homedir(), cwd = process.c
   return { path: absolute, name, byteSize: stat.size, mtimeMs: stat.mtimeMs, contentType: type.contentType };
 }
 
-/** SHA-256 of the file, streamed. */
-export function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    fs.createReadStream(filePath)
-      .on("data", (chunk) => hash.update(chunk))
-      .on("error", reject)
-      .on("end", () => resolve(hash.digest("hex")));
-  });
+/**
+ * Open the file once for upload: no symlink followed, a regular file only.
+ * Everything after the person's yes reads from the handle this returns.
+ */
+export async function openForUpload(filePath) {
+  let file;
+  try {
+    file = await fs.promises.open(filePath, OPEN_READ_NOFOLLOW);
+  } catch (err) {
+    if (err?.code === "ELOOP") {
+      throw new UploadRefusal("symlink_not_allowed", "That path is a shortcut (symlink). Give the path of the file itself.");
+    }
+    throw new UploadRefusal("not_found", `There is no file at ${filePath}.`);
+  }
+  const stat = await file.stat();
+  if (!stat.isFile()) {
+    await file.close();
+    throw new UploadRefusal("not_regular_file", "That is not an ordinary file.");
+  }
+  return { file, stat };
+}
+
+/** Exactly `length` bytes at `offset` from an open file. */
+async function readSlice(file, offset, length) {
+  const buf = Buffer.alloc(length);
+  let read = 0;
+  while (read < length) {
+    const { bytesRead } = await file.read(buf, read, length - read, offset + read);
+    if (bytesRead === 0) break;
+    read += bytesRead;
+  }
+  if (read !== length) {
+    throw new UploadRefusal("file_changed", "The file got shorter while it was uploading. Propose it again.");
+  }
+  return buf;
+}
+
+/** Feed bytes [0, end) of an open file into `hash`. */
+async function hashRange(file, hash, end) {
+  for (let pos = 0; pos < end; pos += HASH_CHUNK_BYTES) {
+    hash.update(await readSlice(file, pos, Math.min(HASH_CHUNK_BYTES, end - pos)));
+  }
+  return hash;
+}
+
+/** SHA-256 of an open file's first `size` bytes. */
+export async function sha256Of(file, size) {
+  return (await hashRange(file, createHash("sha256"), size)).digest("hex");
+}
+
+/** SHA-256 of the file at `filePath`, opened without following a symlink. */
+export async function sha256File(filePath) {
+  const { file, stat } = await openForUpload(filePath);
+  try {
+    return await sha256Of(file, stat.size);
+  } finally {
+    await file.close();
+  }
 }
 
 /** The first offset Microsoft still expects: `"12345-"` or `"12345-67890"` → 12345. */
@@ -179,80 +257,130 @@ export function nextOffset(ranges) {
   return starts.length > 0 ? Math.min(...starts) : null;
 }
 
-function readSlice(filePath, offset, length) {
-  const buf = Buffer.alloc(length);
-  const fd = fs.openSync(filePath, "r");
-  try {
-    let read = 0;
-    while (read < length) {
-      const n = fs.readSync(fd, buf, read, length - read, offset + read);
-      if (n === 0) break;
-      read += n;
-    }
-    if (read !== length) throw new UploadRefusal("file_changed", "The file got shorter while it was uploading. Propose it again.");
-  } finally {
-    fs.closeSync(fd);
-  }
-  return buf;
-}
+const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
+
+const SESSION_ENDED =
+  "The upload session expired or was cancelled. Nothing was shared. Propose the upload again.";
 
 /**
  * Send the file in fragments, sequentially, resuming from what Microsoft says
  * it still expects after any failure.
  *
- * `send(offset, bytes)` → `{ status, body }` (status 0 = network failure).
- * `status()` → `{ status, body }` from the upload status route.
- * Returns the final server body (the uploaded item and sharing outcome).
+ * `file` is the handle from `openForUpload` (or pass `path` and it is opened
+ * here). `send(offset, bytes)` → `{ status, body }` (status 0 = network
+ * failure). `status()` → `{ status, body }` from the upload status route.
+ * With `expectedSha256`, the last fragment is sent only if the bytes sent
+ * (and the open file's size and modified time) still match the read-back.
+ * While AgentDash is still sharing (`finishing`), this asks for the status
+ * until the outcome is stored, so a caller never reports a sharing list that
+ * was not yet written. Returns the final server body.
  */
-export async function streamFragments({ path: filePath, byteSize, fragmentBytes, send, status, maxRetries = 5 }) {
-  let offset = 0;
-  let failures = 0;
-  while (offset < byteSize) {
-    const length = Math.min(fragmentBytes, byteSize - offset);
-    const bytes = readSlice(filePath, offset, length);
-    const res = await send(offset, bytes);
-
-    if (res.status === 200 && res.body?.ok) {
-      if (res.body.completed) return res.body;
-      failures = 0;
-      offset = nextOffset(res.body.nextExpectedRanges) ?? offset + length;
-      continue;
-    }
-    if (res.status === 404 || res.status === 410) {
-      throw new UploadRefusal(
-        "session_expired",
-        "The upload session expired or was cancelled. Nothing was shared. Propose the upload again.",
-      );
-    }
-    if (res.status === 409 && res.body?.reason === "already_completed") return { ok: true, completed: true, ...res.body };
-    const retryable = res.status === 0 || res.status >= 500 || res.status === 409 || res.status === 429;
-    if (!retryable) {
-      throw new UploadRefusal(
-        res.body?.reason ?? "upload_refused",
-        res.body?.message ?? res.body?.error ?? `AgentDash refused the fragment (${res.status}).`,
-      );
-    }
-    failures += 1;
-    if (failures > maxRetries) {
-      throw new UploadRefusal(
-        "upload_interrupted",
-        "The upload kept failing. Nothing was shared. Try again later; the upload can be cancelled with upload_cancel.",
-      );
-    }
-    const st = await status();
-    if (st.status === 200 && st.body?.status === "completed") return { ok: true, completed: true, ...st.body };
-    if (st.status === 200 && st.body?.ok) {
-      offset = nextOffset(st.body.nextExpectedRanges) ?? offset;
-      continue;
-    }
-    if (st.body?.reason === "session_expired" || st.status === 404 || st.status === 410) {
-      throw new UploadRefusal(
-        "session_expired",
-        "The upload session expired. Nothing was shared. Propose the upload again.",
-      );
-    }
-    // Status itself failed: try the same fragment again.
+export async function streamFragments({
+  file: openFile,
+  path: filePath,
+  byteSize,
+  fragmentBytes,
+  send,
+  status,
+  expectedSha256,
+  expectedMtimeMs,
+  maxRetries = 5,
+  pollIntervalMs = 2000,
+  maxPolls = 150,
+}) {
+  const owned = openFile ? null : await openForUpload(filePath);
+  const file = openFile ?? owned.file;
+  try {
+    return await stream();
+  } finally {
+    if (owned) await owned.file.close();
   }
-  // The loop only ends on a completed body; a file shorter than declared ends here.
-  throw new UploadRefusal("upload_incomplete", "Microsoft did not confirm the upload. Nothing was shared.");
+
+  async function settle(body) {
+    const { reason, ...rest } = body ?? {};
+    let current = { ...rest, ...(reason && reason !== "already_completed" ? { reason } : {}), ok: true, completed: true };
+    for (let i = 0; current.finishing && i < maxPolls; i += 1) {
+      await sleep(pollIntervalMs);
+      const st = await status();
+      if (st.status === 200 && st.body?.status === "completed") current = { ...st.body, ok: true, completed: true };
+    }
+    return current;
+  }
+
+  async function stream() {
+    let offset = 0;
+    let failures = 0;
+    // SHA-256 of bytes [0, hashedUpTo) as sent, from this one open file.
+    let hash = createHash("sha256");
+    let hashedUpTo = 0;
+    while (offset < byteSize) {
+      const length = Math.min(fragmentBytes, byteSize - offset);
+      if (offset !== hashedUpTo) {
+        // A resume moved the position: hash the prefix again from the same file.
+        hash = await hashRange(file, createHash("sha256"), offset);
+        hashedUpTo = offset;
+      }
+      const bytes = await readSlice(file, offset, length);
+      const withThis = hash.copy();
+      withThis.update(bytes);
+      if (offset + length === byteSize && expectedSha256) {
+        const now = await file.stat();
+        const changed =
+          withThis.copy().digest("hex") !== expectedSha256 ||
+          now.size !== byteSize ||
+          (expectedMtimeMs !== undefined && now.mtimeMs !== expectedMtimeMs);
+        if (changed) {
+          throw new UploadRefusal(
+            "file_changed",
+            "The file changed while it was uploading, so the last part was not sent. Propose it again.",
+            { note: "Nothing was shared. The unfinished upload was cancelled." },
+          );
+        }
+      }
+      const res = await send(offset, bytes);
+
+      if (res.status === 200 && res.body?.ok) {
+        if (res.body.completed) return settle(res.body);
+        failures = 0;
+        hash = withThis;
+        hashedUpTo = offset + length;
+        offset = nextOffset(res.body.nextExpectedRanges) ?? offset + length;
+        continue;
+      }
+      if (res.status === 404 || res.status === 410) {
+        throw new UploadRefusal("session_expired", res.body?.message ?? SESSION_ENDED, { note: "Nothing was shared." });
+      }
+      if (res.status === 409 && res.body?.reason === "already_completed") return settle(res.body);
+      const retryable = res.status === 0 || res.status >= 500 || res.status === 409 || res.status === 429;
+      if (!retryable) {
+        throw new UploadRefusal(
+          res.body?.reason ?? "upload_refused",
+          res.body?.message ?? res.body?.error ?? `AgentDash refused the fragment (${res.status}).`,
+          { note: "Nothing was shared." },
+        );
+      }
+      failures += 1;
+      if (failures > maxRetries) {
+        throw new UploadRefusal(
+          "upload_interrupted",
+          "The upload kept failing. Nothing was shared. Try again later; the upload can be cancelled with upload_cancel.",
+          { note: "Nothing was shared." },
+        );
+      }
+      const st = await status();
+      if (st.status === 200 && st.body?.status === "completed") return settle(st.body);
+      if (st.status === 200 && st.body?.ok) {
+        offset = nextOffset(st.body.nextExpectedRanges) ?? offset;
+        continue;
+      }
+      if (st.body?.reason === "session_expired" || st.status === 404 || st.status === 410) {
+        throw new UploadRefusal("session_expired", st.body?.message ?? SESSION_ENDED, { note: "Nothing was shared." });
+      }
+      // Status itself failed: try the same fragment again.
+    }
+    // The loop only ends on a completed body; a file shorter than declared ends here.
+    throw new UploadRefusal("upload_incomplete", "Microsoft did not confirm the upload. Nothing was shared.", {
+      note: "Nothing was shared.",
+    });
+  }
 }

@@ -69,6 +69,7 @@ function uploadHandler(respond) {
       owner: { name: "Person A" },
       version: "9.9.9",
       fileOptions: { home, cwd: work },
+      uploadPollMs: 1,
     },
   );
   const call = async (name, args) => {
@@ -286,6 +287,122 @@ describe("upload tools over the inbox MCP", () => {
     await call("upload_propose", { path: file, destination: { folderId: "f" } });
     const res = await call("upload_confirm", { handle: HANDLE });
     expect(res.parsed).toMatchObject({ ok: false, reason: "session_expired" });
+  });
+
+  /** A two-fragment upload whose final answer is `final(call)`; everything else succeeds. */
+  function twoFragmentServer({ final, status, onFragment } = {}) {
+    const UNIT = 320 * 1024;
+    return uploadHandler((call, calls) => {
+      const { route, headers } = call;
+      if (route === "upload/propose") return { json: { ok: true, handle: HANDLE, readback: [] } };
+      if (route === "upload/confirm") return { json: { ok: true, uploadId: "u-9", fragmentBytes: UNIT } };
+      if (route === "upload/cancel") return { json: { ok: true, status: "cancelled" } };
+      if (route === "upload/status") return status ? status(call, calls) : { json: { ok: true, status: "open", nextExpectedRanges: [] } };
+      if (route === "upload/fragment") {
+        onFragment?.(call, calls);
+        const [, , end, total] = /bytes (\d+)-(\d+)\/(\d+)/.exec(headers["content-range"]).map(Number);
+        if (end === total - 1) return final(call, calls);
+        return { json: { ok: true, nextExpectedRanges: [`${end + 1}-`] } };
+      }
+      return { status: 404 };
+    });
+  }
+
+  it("a re-sent last fragment answered 409 already_completed is reported as the success it is", async () => {
+    const file = writeDeck("deck.pptx", 320 * 1024 + 100);
+    const { call } = twoFragmentServer({
+      final: () => ({
+        status: 409,
+        json: {
+          ok: false,
+          reason: "already_completed",
+          item: { itemId: "i-1", name: "deck.pptx", webUrl: "https://onedrive.example.test/x" },
+          sharing: [{ userId: "u-b", name: "Person B", role: "read", ok: true }],
+        },
+      }),
+    });
+    await call("upload_propose", { path: file, destination: { folderId: "f" } });
+    const res = await call("upload_confirm", { handle: HANDLE });
+    expect(res.parsed).toMatchObject({ ok: true, completed: true, item: { itemId: "i-1" }, sharing: [{ ok: true }] });
+  });
+
+  it("waits while AgentDash is still sharing, then reports the stored outcome", async () => {
+    const file = writeDeck("deck.pptx", 320 * 1024 + 100);
+    let polls = 0;
+    const item = { itemId: "i-1", name: "deck.pptx", webUrl: "https://onedrive.example.test/x" };
+    const { call, calls } = twoFragmentServer({
+      final: () => ({ json: { ok: true, completed: true, finishing: true, item } }),
+      status: () => {
+        polls += 1;
+        return polls < 3
+          ? { json: { ok: true, status: "completed", finishing: true, item } }
+          : { json: { ok: true, status: "completed", item, sharing: [{ userId: "u-b", name: "Person B", role: "write", ok: true }] } };
+      },
+    });
+    await call("upload_propose", { path: file, destination: { folderId: "f" } });
+    const res = await call("upload_confirm", { handle: HANDLE });
+    expect(res.parsed).toMatchObject({ ok: true, completed: true, sharing: [{ name: "Person B", ok: true }] });
+    expect(res.parsed.finishing).toBeUndefined();
+    expect(calls.filter((c) => c.route === "upload/status")).toHaveLength(3);
+  });
+
+  it("refuses to send the last fragment if the file's bytes changed mid-upload, and cancels the upload", async () => {
+    const UNIT = 320 * 1024;
+    const file = writeDeck("deck.pptx", UNIT + 100);
+    const { call, calls } = twoFragmentServer({
+      final: () => ({ json: { ok: true, completed: true, item: { itemId: "i-1" }, sharing: [] } }),
+      onFragment: (_call, all) => {
+        if (all.filter((c) => c.route === "upload/fragment").length !== 1) return;
+        // Same size, same timestamp, different bytes in the part still to send.
+        const { mtime, atime } = fs.statSync(file);
+        const fd = fs.openSync(file, "r+");
+        fs.writeSync(fd, Buffer.alloc(50, 0x5a), 0, 50, UNIT + 10);
+        fs.closeSync(fd);
+        fs.utimesSync(file, atime, mtime);
+      },
+    });
+    await call("upload_propose", { path: file, destination: { folderId: "f" } });
+    const res = await call("upload_confirm", { handle: HANDLE });
+    expect(res.parsed).toMatchObject({ ok: false, reason: "file_changed" });
+    expect(calls.filter((c) => c.route === "upload/fragment")).toHaveLength(1);
+    expect(calls.map((c) => c.route)).toContain("upload/cancel");
+  });
+
+  it("keeps sending the file it opened when another file is moved into its place mid-upload", async () => {
+    const UNIT = 320 * 1024;
+    const file = writeDeck("deck.pptx", UNIT + 100);
+    const original = fs.readFileSync(file);
+    const sent = [];
+    const { call } = twoFragmentServer({
+      final: () => ({ json: { ok: true, completed: true, item: { itemId: "i-1" }, sharing: [] } }),
+      onFragment: (fragmentCall, all) => {
+        sent.push(fragmentCall.bytes);
+        if (all.filter((c) => c.route === "upload/fragment").length !== 1) return;
+        const other = path.join(work, "other.pptx");
+        const replacement = Buffer.alloc(UNIT + 100, 0x42);
+        Buffer.from([0x50, 0x4b, 0x03, 0x04]).copy(replacement, 0);
+        fs.writeFileSync(other, replacement);
+        fs.renameSync(other, file);
+      },
+    });
+    await call("upload_propose", { path: file, destination: { folderId: "f" } });
+    const res = await call("upload_confirm", { handle: HANDLE });
+    expect(res.parsed).toMatchObject({ ok: true, completed: true });
+    expect(Buffer.concat(sent).equals(original)).toBe(true);
+  });
+
+  it("passes on AgentDash's own words when the session ended, so 'may have landed' is not lost", async () => {
+    const file = writeDeck();
+    const message = "Nothing was shared. The file may already be in Client projects/Kickoff; check there before proposing it again.";
+    const { call } = uploadHandler(({ route }) => {
+      if (route === "upload/propose") return { json: { ok: true, handle: HANDLE, readback: [] } };
+      if (route === "upload/confirm") return { json: { ok: true, uploadId: "u-3", fragmentBytes: 10 * 1024 * 1024 } };
+      return { status: 410, json: { ok: false, reason: "session_expired", message } };
+    });
+    await call("upload_propose", { path: file, destination: { folderId: "f" } });
+    const res = await call("upload_confirm", { handle: HANDLE });
+    expect(res.parsed).toMatchObject({ ok: false, reason: "session_expired", message });
+    expect(res.parsed.note).not.toMatch(/Nothing was uploaded/);
   });
 
   it("passes a server refusal through unchanged: no handle means ask the person", async () => {

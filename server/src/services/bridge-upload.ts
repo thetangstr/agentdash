@@ -21,9 +21,16 @@
 //                    D13; an organization link if asked), then the task or
 //                    the issue comment, then the audit rows.
 //   5. status/cancel resume from Microsoft's expected ranges, or give up.
+//                    If the session is gone after the last range was sent,
+//                    the file may have landed with its answer lost: it is
+//                    looked up in the folder and, if found, finished.
+//
+// The row turns `completed` when the file lands; until sharing and the task
+// have a stored outcome, status says `finishing` rather than an empty list.
 //
 // Every route is behind the per-company flag `document_access_enabled` (404
-// when off) and the endpoint capability `bridge:upload` (403 without it).
+// when off), the endpoint capability `bridge:upload` (403 without it), and
+// the owner's active membership in the company (403 once it is not).
 // Responses carry names and roles, never an email, a token or the upload URL.
 // Audit rows carry ids, hashes and sizes only: never a file name, a path or
 // content.
@@ -98,12 +105,24 @@ export const UPLOAD_FRAGMENT_BYTES = 32 * UPLOAD_FRAGMENT_UNIT;
 
 export const MAX_UPLOAD_RECIPIENTS = 10;
 export const MAX_UPLOAD_MESSAGE_CHARS = 2000;
+/**
+ * Task instructions go to another person's agent under the uploader's name,
+ * so the read-back shows them in full. Short enough to read before saying yes.
+ */
+export const MAX_TASK_INSTRUCTIONS_CHARS = 2000;
 
 /** Long enough to read a read-back, short enough to be worthless if it leaks. */
 const HANDLE_TTL_MS = 15 * 60 * 1000;
 const HANDLE_KIND = "upload_file";
 const GRAPH_TIMEOUT_MS = 15_000;
 const MAX_DESTINATIONS = 50;
+/**
+ * Sharing, the task and the comment run after the row is marked completed.
+ * An outcome still missing after this long means that work was interrupted.
+ */
+const FINISH_STALE_MS = 15 * 60 * 1000;
+/** Clock skew allowed when matching a committed file to this upload. */
+const LANDED_SKEW_MS = 5 * 60 * 1000;
 
 /** Characters OneDrive refuses in a file name. */
 const INVALID_NAME_CHARS = /["*:<>?/\\|\u0000-\u001f]/;
@@ -302,6 +321,24 @@ export function bridgeUploadService(
       .then((rows) => rows[0] ?? null);
     if (!endpoint) throw notFound("Endpoint not found");
     if (!endpoint.enrolledAt) throw conflict("That endpoint has not been approved yet");
+    // The machine acts as its owner, so it can do no more than its owner:
+    // someone archived, suspended or removed from the company uploads,
+    // comments and creates tasks here no longer, whatever the endpoint row says.
+    const membership = await db
+      .select({ id: companyMemberships.id })
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, endpoint.companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, endpoint.userId),
+          eq(companyMemberships.status, "active"),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    if (!membership) {
+      throw forbidden("You are no longer an active member of this company, so this machine cannot upload or share for it.");
+    }
     if (!(endpoint.capabilities ?? []).includes(BRIDGE_UPLOAD_CAPABILITY)) {
       throw forbidden(
         `That endpoint did not declare the ${BRIDGE_UPLOAD_CAPABILITY} capability. Re-run agentdash-connect with a fresh code from My Agent.`,
@@ -491,15 +528,18 @@ export function bridgeUploadService(
     accessToken: string,
     email: string,
   ): Promise<"member" | "outside" | "unreachable"> {
-    // Basic profile fields only: User.ReadBasic.All may not expose userType,
-    // so a guest is recognised by the `#EXT#` Microsoft puts in a guest's
-    // user principal name, and by userType when Microsoft does return it.
+    // Basic profile fields only: that is all User.ReadBasic.All returns, and
+    // it does not include the account type. A guest is recognised by the
+    // `#EXT#` Microsoft puts in a guest's user principal name.
     const select = "$select=id,mail,userPrincipalName";
     const direct = await graphGet(accessToken, `/users/${encodeURIComponent(email)}?${select}`);
     let user: Record<string, unknown> | null = null;
     if (direct.ok) {
       user = direct.body;
-    } else if (direct.status === 404) {
+    } else if (direct.status === 404 || direct.status === 400) {
+      // 404: the address is a mail alias, not the principal name. 400: Graph
+      // could not take the address as a key at all (an apostrophe, say). The
+      // mail filter answers both.
       const filtered = await graphGet(
         accessToken,
         `/users?$filter=${encodeURIComponent(`mail eq '${odataString(email)}'`)}&${select}`,
@@ -511,7 +551,6 @@ export function bridgeUploadService(
       return direct.status === null || direct.status >= 500 ? "unreachable" : "outside";
     }
     if (!user || typeof user.id !== "string") return "outside";
-    if (typeof user.userType === "string" && user.userType.toLowerCase() === "guest") return "outside";
     if (typeof user.userPrincipalName === "string" && user.userPrincipalName.toUpperCase().includes("#EXT#")) {
       return "outside";
     }
@@ -570,6 +609,7 @@ export function bridgeUploadService(
             eq(companyMemberships.companyId, companyId),
             eq(companyMemberships.principalType, "user"),
             eq(companyMemberships.principalId, userId),
+            eq(companyMemberships.status, "active"),
           ),
         )
         .then((rows) => rows[0] ?? null),
@@ -585,7 +625,8 @@ export function bridgeUploadService(
         userId,
         source: "session",
         isInstanceAdmin: admin !== null,
-        companyIds: [companyId],
+        // Only an active membership opens the company, as on the web.
+        companyIds: membership ? [companyId] : [],
         memberships: membership
           ? [{ companyId, membershipRole: membership.membershipRole, status: membership.status }]
           : [],
@@ -707,7 +748,9 @@ export function bridgeUploadService(
 
     const conn = await personConnection(companyId, actorUserId);
     if (!conn.ok) return conn;
-    const scopeProblem = scopeRefusal(conn.scopes, recipientsIn.length > 0);
+    // The directory is read for each recipient, and for a task assignee who
+    // relies on the organization link.
+    const scopeProblem = scopeRefusal(conn.scopes, recipientsIn.length > 0 || (request.task !== undefined && request.link !== undefined));
     if (scopeProblem) return scopeProblem;
 
     // The file, as declared. The client checked it on disk; this is the
@@ -815,16 +858,27 @@ export function bridgeUploadService(
       if (!(await access.canUser(companyId, actorUserId, "tasks:assign"))) {
         return refusal("task_not_permitted", "You do not have permission to assign work, so the task cannot be created.");
       }
-      const canOpen =
-        assignee.userId === actorUserId ||
-        resolvedRecipients.some((r) => r.member.userId === assignee!.userId) ||
-        request.link !== undefined;
-      if (!canOpen) {
+      const isSelf = assignee.userId === actorUserId;
+      const isRecipient = resolvedRecipients.some((r) => r.member.userId === assignee!.userId);
+      if (!isSelf && !isRecipient && request.link === undefined) {
         return refusal(
           "task_assignee_without_access",
           `${assignee.name} would get the task but could not open the file. Share it with them (view or edit) or add an organization link.`,
           { person: assignee.name },
         );
+      }
+      // An organization link opens the file only for people in the
+      // organization; recipients were checked above, so check this one too.
+      if (!isSelf && !isRecipient) {
+        const check = assignee.email ? await tenantCheck(conn.accessToken, assignee.email) : "outside";
+        if (check === "unreachable") return refusal("microsoft_unreachable", "Microsoft could not be reached. Try again in a minute.");
+        if (check === "outside") {
+          return refusal(
+            "task_assignee_outside_organization",
+            `${assignee.name} is not in your Microsoft organization (or signs in with a different address there), so the organization link would not open the file for them. The task cannot be created.`,
+            { person: assignee.name },
+          );
+        }
       }
       route = await previewRoute(companyId, actorUserId, assignee.userId);
     }
@@ -874,6 +928,13 @@ export function bridgeUploadService(
         `Create the task "${plan.task.title}" for ${plan.task.assigneeName}` +
           (route ? `; ${route.agentName}, ${plan.task.assigneeName}'s agent, takes the first pass` : ""),
       );
+      // The instructions become the task's description and reach another
+      // person's agent under this person's name: they are read back in full.
+      readback.push(
+        plan.task.instructions
+          ? `Instructions for ${plan.task.assigneeName}, sent as written:\n"""\n${plan.task.instructions}\n"""`
+          : `No instructions: the task carries only its title and the file link.`,
+      );
     }
     readback.push(
       plan.recipients.length > 0 || plan.link
@@ -902,7 +963,7 @@ export function bridgeUploadService(
     // the permission to assign the task.
     const conn = await personConnection(companyId, actorUserId);
     if (!conn.ok) return conn;
-    const scopeProblem = scopeRefusal(conn.scopes, plan.recipients.length > 0);
+    const scopeProblem = scopeRefusal(conn.scopes, plan.recipients.length > 0 || (plan.task !== null && plan.link !== null));
     if (scopeProblem) return scopeProblem;
     const folder = await folderById(conn.accessToken, plan.folderId);
     if (!folder.found) {
@@ -1024,6 +1085,72 @@ export function bridgeUploadService(
     }
   }
 
+  /** Where the file was going, for a message that tells the person where to look. */
+  function folderPathOf(row: typeof bridgeUploads.$inferSelect): string {
+    const path = (row.destination as { folderPath?: unknown } | null)?.folderPath;
+    return typeof path === "string" && path ? path : "your OneDrive";
+  }
+
+  function mayHaveLandedMessage(row: typeof bridgeUploads.$inferSelect): string {
+    return (
+      "The upload session ended before AgentDash heard back from Microsoft. Nothing was shared. " +
+      `The file may already be in ${folderPathOf(row)}; check there before proposing it again.`
+    );
+  }
+
+  /**
+   * Microsoft can commit the last fragment while its answer is lost (a reset
+   * connection, a retry that then meets a finished session). The file is
+   * then in the folder although no 200 or 201 arrived. Look for it: by its
+   * own name first, then among the folder's files, because a name clash makes
+   * Microsoft number it (`deck 1.pptx`). A match has this upload's exact size
+   * and was created after the upload was confirmed. Exactly one match, or
+   * nothing: never a guess between two.
+   */
+  async function findLandedItem(row: typeof bridgeUploads.$inferSelect): Promise<UploadedDriveItem | null> {
+    const folderId = (row.destination as { folderId?: unknown } | null)?.folderId;
+    if (typeof folderId !== "string" || !folderId) return null;
+    const conn = await personConnection(row.companyId, row.actorUserId);
+    if (!conn.ok) return null;
+    const since = row.createdAt.getTime() - LANDED_SKEW_MS;
+    const select = "$select=id,name,size,file,createdDateTime,webUrl,parentReference";
+    const matches = (item: Record<string, unknown>) =>
+      typeof item.id === "string" &&
+      Boolean(item.file) &&
+      item.size === row.byteSize &&
+      typeof item.createdDateTime === "string" &&
+      Date.parse(item.createdDateTime) >= since;
+    const asItem = (item: Record<string, unknown>): UploadedDriveItem => {
+      const driveId = ((item.parentReference ?? {}) as { driveId?: unknown }).driveId;
+      return {
+        driveId: typeof driveId === "string" ? driveId : null,
+        itemId: item.id as string,
+        name: typeof item.name === "string" ? item.name : row.fileName,
+        size: typeof item.size === "number" ? item.size : null,
+        webUrl: typeof item.webUrl === "string" ? item.webUrl : null,
+      };
+    };
+
+    const exact = await graphGet(
+      conn.accessToken,
+      `/me/drive/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(row.fileName)}?${select}`,
+    );
+    if (exact.ok && matches(exact.body)) return asItem(exact.body);
+
+    const ext = extensionOf(row.fileName);
+    const stem = ext ? row.fileName.slice(0, -ext.length) : row.fileName;
+    const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const sameName = new RegExp(`^${escape(stem)}( \\d+)?${escape(ext)}$`, "i");
+    const children = await graphGet(
+      conn.accessToken,
+      `/me/drive/items/${encodeURIComponent(folderId)}/children?${select}&$top=200`,
+    );
+    if (!children.ok) return null;
+    const values = Array.isArray(children.body.value) ? (children.body.value as Array<Record<string, unknown>>) : [];
+    const found = values.filter((v) => matches(v) && typeof v.name === "string" && sameName.test(v.name));
+    return found.length === 1 ? asItem(found[0]!) : null;
+  }
+
   async function fragment(
     endpointId: string,
     input: { uploadId: string | undefined; contentRange: string | undefined; contentLength: string | undefined; body: Readable },
@@ -1053,9 +1180,23 @@ export function bridgeUploadService(
       }
       return { status: 200, body: { ok: true, nextExpectedRanges: result.nextExpectedRanges, expiresAt: result.expiresAt } };
     }
+    // The last range was sent but no stored item came back: Microsoft may
+    // have committed it anyway. Find it and finish, rather than telling the
+    // person nothing happened and leaving them to upload a duplicate.
+    const isFinal = range.end === row.byteSize - 1;
+    if (isFinal && (result.kind === "expired" || result.kind === "rejected")) {
+      const landedItem = await findLandedItem(row);
+      if (landedItem) return { status: 200, body: await finish(row, landedItem) };
+    }
     if (result.kind === "expired") {
       await markFailed(row, "session_expired");
-      return { status: 410, body: refusal("session_expired", "The upload session expired. Nothing was shared; propose it again.") };
+      return {
+        status: 410,
+        body: refusal(
+          "session_expired",
+          isFinal ? mayHaveLandedMessage(row) : "The upload session expired. Nothing was shared; propose it again.",
+        ),
+      };
     }
     if (result.kind === "rejected") {
       return {
@@ -1074,10 +1215,37 @@ export function bridgeUploadService(
     return { status: 200, body: await finish(row, result.item) };
   }
 
+  /**
+   * A completed upload as the client sees it. The row turns `completed` when
+   * the file lands, before sharing and the task run; until their outcome is
+   * stored this says `finishing` and carries no `sharing` list, so nobody
+   * reads "shared with nobody" into an answer that is still being worked out.
+   */
   function completedView(row: typeof bridgeUploads.$inferSelect) {
-    const outcome = (row.sharing as { outcome?: Record<string, unknown> } | null)?.outcome ?? {};
+    const outcome = (row.sharing as { outcome?: Record<string, unknown> } | null)?.outcome;
+    const item = {
+      driveId: row.driveId,
+      itemId: row.itemId,
+      name: (outcome?.name as string | undefined) ?? row.fileName,
+      webUrl: row.webUrl,
+    };
+    if (!outcome) {
+      const stale = row.completedAt !== null && Date.now() - row.completedAt.getTime() > FINISH_STALE_MS;
+      return stale
+        ? {
+            item,
+            outcomeUnknown: true as const,
+            message:
+              "The file is in OneDrive, but AgentDash did not record whether sharing and the task finished. Check who has access in OneDrive before sharing it again.",
+          }
+        : {
+            item,
+            finishing: true as const,
+            message: "The file is in OneDrive; sharing and the task are still being set up. Ask for the upload status again in a few seconds.",
+          };
+    }
     return {
-      item: { driveId: row.driveId, itemId: row.itemId, name: (outcome.name as string | undefined) ?? row.fileName, webUrl: row.webUrl },
+      item,
       sharing: (outcome.sharing as SharingOutcome[] | undefined) ?? [],
       ...(outcome.link ? { link: outcome.link } : {}),
       ...(outcome.issue ? { issue: outcome.issue } : {}),
@@ -1361,8 +1529,12 @@ export function bridgeUploadService(
     }
     const result = await getUploadSessionStatus(await decryptUploadUrl(row.uploadUrlEncrypted));
     if (result.kind === "expired") {
+      // A finished session answers 404 too: the last fragment may have landed
+      // with its answer lost. Finish it if so.
+      const landedItem = await findLandedItem(row);
+      if (landedItem) return { status: "completed" as const, ...(await finish(row, landedItem)) };
       await markFailed(row, "session_expired");
-      return refusal("session_expired", "The upload session expired. Nothing was shared; propose it again.");
+      return refusal("session_expired", mayHaveLandedMessage(row));
     }
     if (result.kind === "unreachable") return refusal("microsoft_unreachable", "Microsoft could not be reached. Try again in a minute.");
     return {
