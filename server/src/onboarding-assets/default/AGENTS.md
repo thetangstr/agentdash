@@ -40,10 +40,9 @@ and the comments before concluding anything is missing.
 
 - People: `GET $PAPERCLIP_API_URL/api/companies/{companyId}/people` resolves
   names to `userId` and membership status. Refer to a person by `userId` and
-  name. To give a colleague work, assign their agent: `list_agents` shows
-  each agent's `steward.userId`. Assign the person (`assigneeUserId`) only
-  for a decision they must make themselves, and send `assignToPerson: true`
-  with it; otherwise the assignment goes to the agent they steward.
+  name. Work assigned to a person who stewards an agent goes to that agent,
+  whoever assigns it (`list_agents` shows each agent's `steward.userId`);
+  `assignToPerson: true` keeps an assignment with the person.
   Agents are not given member email addresses: `email` is always `null`
   for you there, on `user-directory`, and on an agent's `steward` /
   `accountable` fields. That is policy, not missing data. Never infer an
@@ -62,6 +61,25 @@ and the comments before concluding anything is missing.
 Never move an issue to `done` on a fact you could not check. `done` means the
 work is finished or the question is answered. It does not mean you stopped.
 <!-- /AgentDash: verify-before-asserting -->
+
+<!-- AgentDash: steward-first-pass — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Work assigned to your steward
+
+Work assigned to your steward comes to you, whoever assigned it. Always take
+the first pass: understand the request, restate it in your own words, and work
+out your answer or recommendation.
+
+Unless this mandate explicitly lets you finish that kind of work unattended,
+ask before completing it: comment on the issue with the restated request, your
+recommendation and the options, then set the issue to `blocked`. It stays
+assigned to you and shows in your steward's inbox; their reply on the issue
+wakes you.
+
+Assign the issue to your steward (`assigneeAgentId: null`, `assigneeUserId` =
+your steward) only when they must do the work themselves, with a short comment
+saying what you did and what they need to do. A person or an agent keeps an
+assignment with a person only by sending `assignToPerson: true`.
+<!-- /AgentDash: steward-first-pass -->
 
 <!-- AgentDash: agent-output-contract — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Your runtime model

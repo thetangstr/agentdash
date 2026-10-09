@@ -6,6 +6,7 @@ import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueR
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
 import { issueService } from "./issues.js";
+import { isActiveStewardOf, routedStewardForCurrentAssignment } from "./stewarded-agent-routing.js";
 import { issueReferenceService } from "./issue-references.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { routineService } from "./routines.js";
@@ -53,8 +54,9 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   // transaction as the comment and status change, the work products that were
   // waiting for review are recorded as sent back.
   requestChanges?: boolean;
-  // AgentDash: the route moved an agent's person assignment to the agent that
-  // person stewards (services/stewarded-agent-routing.ts); recorded on the audit.
+  // AgentDash: the route moved a person assignment to the agent that person
+  // stewards (services/stewarded-agent-routing.ts); recorded on the audit and
+  // carried on the assignment wake.
   routedToStewardedAgent?: { fromUserId: string; toAgentId: string };
 }
 export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
@@ -482,8 +484,20 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       !!existing.createdByUserId &&
       nextAssigneeUserId === existing.createdByUserId;
 
+    // AgentDash: work assigned to a steward comes to their agent, and the agent
+    // can always hand its own issue back to its own steward (stewarded-agent-routing.ts).
+    const isAgentHandingIssueToItsSteward =
+      assigneeWillChange &&
+      !isAgentReturningIssueToCreator &&
+      context.actorKind === "agent" &&
+      !!actor.agentId &&
+      existing.assigneeAgentId === actor.agentId &&
+      nextAssigneeAgentId === null &&
+      typeof nextAssigneeUserId === "string" &&
+      (await isActiveStewardOf(executor as Db, { companyId: existing.companyId, agentId: actor.agentId, userId: nextAssigneeUserId }));
+
     if (assigneeWillChange && !transition.workflowControlledAssignment) {
-      if (!isAgentReturningIssueToCreator) {
+      if (!isAgentReturningIssueToCreator && !isAgentHandingIssueToItsSteward) {
         await context.validateAssignment(executor, existing);
       }
     }
@@ -1131,7 +1145,8 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         const parent = !["done", "cancelled"].includes(existing.status) && ["done", "cancelled"].includes(issue.status) && issue.parentId
           ? await reads.getWakeableParentAfterChildCompletion(issue.parentId) : null;
         readyToCommit = true;
-        return { status: "committed" as const, mutationId, publications, plan, actor, issue, comment, issueResponse, reopened, reopenFromStatus, dependents, parent };
+        return { status: "committed" as const, mutationId, publications, plan, actor, issue, comment, issueResponse, reopened, reopenFromStatus, dependents, parent,
+          routedToStewardedAgent: context.routedToStewardedAgent ?? null };
       });
     } catch (error) {
       if (readyToCommit) throw new IssuePatchAcceptanceUncertain({
@@ -1150,7 +1165,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     outcomes: Array<{ effect: string; targetId?: string; status: "confirmed" | "withheld" | "unknown" }>
   };
   async function runEffects(accepted: Awaited<ReturnType<typeof accept>>): Promise<PatchEffects> {
-    const { plan, actor, issue, comment, reopened, reopenFromStatus } = accepted;
+    const { plan, actor, issue, comment, reopened, reopenFromStatus, routedToStewardedAgent } = accepted;
     const { existing, intent, commentBody, resumeRequested, isClosed, mentionedIds } = plan;
     const id = issue.id;
     const outcomes: PatchEffects["outcomes"] = [];
@@ -1239,6 +1254,10 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     if (executionStageWakeup) {
       addWakeup(executionStageWakeup.agentId, executionStageWakeup.wakeup);
     } else if (assigneeChanged && issue.assigneeAgentId && issue.status !== "backlog") {
+      // AgentDash: the work was assigned to this agent's steward and routed to it.
+      const steward = routedToStewardedAgent?.toAgentId === issue.assigneeAgentId
+        ? { routedFromStewardUserId: routedToStewardedAgent.fromUserId }
+        : {};
       addWakeup(issue.assigneeAgentId, {
         source: "assignment",
         triggerDetail: "system",
@@ -1249,6 +1268,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           mutation: "update",
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
+          ...steward,
         },
         requestedByActorType: actor.actorType,
         requestedByActorId: actor.actorId,
@@ -1264,6 +1284,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           source: "issue.update",
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
+          ...steward,
         },
       });
     }
@@ -1273,6 +1294,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       (statusChangedFromBacklog || statusChangedFromBlockedToTodo || statusChangedFromClosedToTodo) &&
       issue.assigneeAgentId
     ) {
+      // AgentDash: a routed issue assigned in backlog had no assignment wake;
+      // the wake that starts it carries the steward context instead.
+      const routedFromStewardUserId = statusChangedFromBacklog
+        ? await routedStewardForCurrentAssignment(db, issue).catch(() => null)
+        : null;
+      const steward = routedFromStewardUserId ? { routedFromStewardUserId } : {};
       addWakeup(issue.assigneeAgentId, {
         source: "automation",
         triggerDetail: "system",
@@ -1282,6 +1309,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           mutation: "update",
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
+          ...steward,
         },
         requestedByActorType: actor.actorType,
         requestedByActorId: actor.actorId,
@@ -1290,6 +1318,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           source: "issue.status_change",
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
+          ...steward,
         },
       });
     }

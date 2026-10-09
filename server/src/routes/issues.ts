@@ -671,14 +671,19 @@ export function issueRoutes(
   }
 
   /**
-   * AgentDash: an agent handing work to a person who stewards an agent hands
-   * it to that agent (see services/stewarded-agent-routing.ts). Returns the
-   * input with `assignToPerson` removed — it is a request flag, never stored —
-   * and the assignee moved when the rule applies. On an update, a person who
-   * already holds the issue is not a new assignment and is left alone, and an
-   * agent handing its issue back to the person who created it (the
-   * return-to-creator exemption in issue-patch-actions.ts) is returning work
-   * for review, not delegating it, so it is left alone too.
+   * AgentDash: work assigned to a person who stewards an agent goes to that
+   * agent, whoever assigns it (see services/stewarded-agent-routing.ts).
+   * Returns the input with `assignToPerson` removed — it is a request flag,
+   * never stored — and the assignee moved when the rule applies. On an
+   * update, a person who already holds the issue is not a new assignment and
+   * is left alone, and an agent handing its issue back to the person who
+   * created it (the return-to-creator exemption in issue-patch-actions.ts) is
+   * returning work for review, not delegating it, so it is left alone too.
+   * Work is never given to an agent the caller cannot see (agent visibility),
+   * so a hidden steward's agent leaves the assignment with the person. A
+   * person assigning themselves is taking the work, and a person named as a
+   * reviewer or approver by the issue's execution policy is that stage's
+   * participant: both keep the assignment.
    */
   async function routePersonAssigneeToStewardedAgent<
     T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
@@ -686,7 +691,12 @@ export function issueRoutes(
     req: Request,
     companyId: string,
     input: T,
-    current?: { assigneeUserId: string | null; assigneeAgentId: string | null; createdByUserId: string | null },
+    current?: {
+      assigneeUserId: string | null;
+      assigneeAgentId: string | null;
+      createdByUserId: string | null;
+      executionPolicy?: unknown;
+    },
   ): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
     const { assignToPerson, ...fields } = input;
     const rest = fields as T;
@@ -701,15 +711,58 @@ export function issueRoutes(
     ) {
       return { input: rest, routed: null };
     }
+    const requestedPolicy = (input as { executionPolicy?: unknown }).executionPolicy;
+    if (
+      typeof input.assigneeUserId === "string" &&
+      namesStageUser(requestedPolicy !== undefined ? requestedPolicy : current?.executionPolicy, input.assigneeUserId)
+    ) {
+      return { input: rest, routed: null };
+    }
     const routed = await resolveStewardedAgentRoute(db, {
       companyId,
       actorAgentId,
+      actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
       assigneeAgentId: input.assigneeAgentId,
       assigneeUserId: input.assigneeUserId,
       assignToPerson,
     });
     if (!routed) return { input: rest, routed: null };
+    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+    if (visibleIds !== null && !visibleIds.has(routed.toAgentId)) return { input: rest, routed: null };
     return { input: { ...rest, assigneeAgentId: routed.toAgentId, assigneeUserId: null }, routed };
+  }
+
+  /** Whether an execution policy names this person as a stage participant. */
+  function namesStageUser(policy: unknown, userId: string): boolean {
+    const stages = (policy as { stages?: unknown } | null | undefined)?.stages;
+    if (!Array.isArray(stages)) return false;
+    return stages.some((stage) => {
+      const participants = (stage as { participants?: unknown } | null)?.participants;
+      return Array.isArray(participants) && participants.some((participant) => {
+        const p = participant as { type?: unknown; userId?: unknown } | null;
+        return p?.type === "user" && p.userId === userId;
+      });
+    });
+  }
+
+  /**
+   * AgentDash: which accepted drafts were routed to a steward's agent when
+   * they were written (the route stamps `routedFromStewardUserId` on the
+   * draft), keyed by the issue each one became.
+   */
+  function routedDraftStewards(
+    interaction: Awaited<ReturnType<ReturnType<typeof issueThreadInteractionService>["acceptInteraction"]>>["interaction"],
+  ): Map<string, StewardedAgentRoute> {
+    const byIssueId = new Map<string, StewardedAgentRoute>();
+    if (interaction.kind !== "suggest_tasks") return byIssueId;
+    const drafts = new Map(interaction.payload.tasks.map((task) => [task.clientKey, task]));
+    for (const created of interaction.result?.createdTasks ?? []) {
+      const draft = drafts.get(created.clientKey);
+      if (draft?.routedFromStewardUserId && draft.assigneeAgentId) {
+        byIssueId.set(created.issueId, { fromUserId: draft.routedFromStewardUserId, toAgentId: draft.assigneeAgentId });
+      }
+    }
+    return byIssueId;
   }
 
   function respondIssueMutationPolicy(res: Response, policyDb: Db | undefined, status: number, body: Record<string, unknown>) {
@@ -2509,6 +2562,7 @@ export function issueRoutes(
       contextSource: "issue.create",
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
+      routedFromStewardUserId: routedToStewardedAgent?.fromUserId ?? null,
     });
 
     // A5: a mention of a restricted issue in the new description must not
@@ -2600,6 +2654,7 @@ export function issueRoutes(
       contextSource: "issue.child_create",
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
+      routedFromStewardUserId: routedToStewardedAgent?.fromUserId ?? null,
     });
 
     res.status(201).json(routedToStewardedAgent ? { ...issue, routedToStewardedAgent } : issue);
@@ -3253,18 +3308,18 @@ export function issueRoutes(
       res.status(201).json(await currentQuestion(req, authority, issue, interaction.id));
       return;
     }
-    // AgentDash: suggest_tasks acceptance is board-only, so an agent's choice
-    // of assignee is made here, when it writes the drafts. A person who
-    // stewards an agent is routed to that agent now, and the person accepting
-    // sees the assignee the task will really have.
+    // AgentDash: drafts are routed when they are written, whoever writes them:
+    // a person who stewards an agent is replaced by that agent now, so the
+    // person accepting (board-only) sees the assignee the task will really
+    // have. Acceptance creates the stored drafts as they stand.
     const routedSuggestedTasks: Array<StewardedAgentRoute & { clientKey: string }> = [];
     let interactionBody = req.body;
     if (req.body.kind === "suggest_tasks") {
       const tasks = [];
-      for (const task of req.body.payload.tasks) {
+      for (const { routedFromStewardUserId: _ignored, ...task } of req.body.payload.tasks) {
         const { input, routed } = await routePersonAssigneeToStewardedAgent(req, issue.companyId, task);
         if (routed) routedSuggestedTasks.push({ clientKey: task.clientKey, ...routed });
-        tasks.push(input);
+        tasks.push(routed ? { ...input, routedFromStewardUserId: routed.fromUserId } : input);
       }
       interactionBody = { ...req.body, payload: { ...req.body.payload, tasks } };
     }
@@ -3370,7 +3425,9 @@ export function issueRoutes(
         });
       }
 
+      const stewardByCreatedIssueId = routedDraftStewards(interaction);
       for (const createdIssue of createdIssues) {
+        const routed = stewardByCreatedIssueId.get(createdIssue.id);
         void queueIssueAssignmentWakeup({
           heartbeat,
           issue: createdIssue,
@@ -3379,6 +3436,8 @@ export function issueRoutes(
           contextSource: "issue.interaction.accept",
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
+          routedFromStewardUserId:
+            routed && routed.toAgentId === createdIssue.assigneeAgentId ? routed.fromUserId : null,
         });
       }
 

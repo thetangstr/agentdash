@@ -20,7 +20,9 @@ export function decisionsListLength(data: WaitingOnYou | undefined): number {
     (data.tasksAssignedToYouTotal ?? 0) +
     (data.pendingQuestionsTotal ?? 0) +
     // AgentDash (MVP launch lane B): deliverables waiting for the person's review.
-    (data.reviewsWaitingTotal ?? 0)
+    (data.reviewsWaitingTotal ?? 0) +
+    // AgentDash: issues the person's agents blocked — they stopped and need them.
+    (data.stoppedAgentIssuesTotal ?? 0)
   );
 }
 

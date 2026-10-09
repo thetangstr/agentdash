@@ -361,7 +361,7 @@ export type {
   DashboardCosts,
   DashboardSummary,
   WaitingOnYou,
-  WaitingOnYouDecision, WaitingOnYouQuestion, WaitingOnYouReview,
+  WaitingOnYouDecision, WaitingOnYouQuestion, WaitingOnYouReview, WaitingOnYouStoppedAgentIssue,
   WaitingOnYouTask,
   WorkingNow,
   WorkingNowItem,

@@ -211,9 +211,12 @@ ${userVoice || "No interview context was captured."}
 // agent callers (people, user-directory, steward/accountable on agent reads).
 
 // AgentDash: stewarded-agent routing is inherited from the canonical default
-// bundle: an agent hands a colleague work by assigning the colleague's agent;
-// a person assignment from an agent is routed server-side to the agent that
-// person stewards unless `assignToPerson: true` marks a human-only decision.
+// bundle (the `steward-first-pass` block): any assignment of a person who
+// stewards an agent — by a person or an agent — is routed server-side to that
+// agent unless `assignToPerson: true`. The agent takes the first pass, asks its
+// steward before completing (comment + blocked) unless its mandate lets it
+// finish unattended, and assigns the issue to its steward only when they must
+// do the work themselves.
 
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry

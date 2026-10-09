@@ -691,7 +691,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "create_issue",
-      "Create a new issue. To give a colleague work, assign their agent (list_agents → steward.userId) via assigneeAgentId. assigneeUserId is for decisions only a human can make: when an agent assigns a person, the issue goes to the agent that person stewards unless assignToPerson is true.",
+      "Create a new issue. Assigning a person (assigneeUserId) who stewards an agent gives the issue to that agent, whoever assigns it (list_agents → steward.userId); assignToPerson: true keeps it with the person.",
       createIssueToolSchema,
       async ({ companyId, ...input }) => {
         // AgentDash: enforce the refined create contract (see createIssueToolSchema).
@@ -701,7 +701,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "update_issue",
-      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true. Handing your own issue back to the person who created it (assigneeAgentId null, assigneeUserId = creator) stays with them.",
+      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. Assigning a person who stewards an agent gives the issue to that agent unless assignToPerson is true. Work assigned to your steward comes to you: take the first pass, ask before completing unless your mandate lets you finish it (comment your recommendation, set blocked), and assign it to your steward (assigneeAgentId null, assigneeUserId = steward) only when they must do the work themselves. That hand-back stays with them, as does returning your issue to the person who created it.",
       updateIssueToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("PATCH", `/issues/${encodeURIComponent(issueId)}`, { body }),
@@ -733,7 +733,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "suggest_tasks",
-      "Create a suggest_tasks interaction on an issue. For a colleague's task, set assigneeAgentId to their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment is drafted to that person's agent unless the task sets assignToPerson: true.",
+      "Create a suggest_tasks interaction on an issue. A task assigned to a person who stewards an agent is drafted to that agent (list_agents → steward.userId) unless the task sets assignToPerson: true.",
       createSuggestTasksToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/interactions`, {

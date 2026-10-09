@@ -205,6 +205,21 @@ export interface WaitingOnYouReview {
   requestedByYou: boolean;
 }
 
+/**
+ * AgentDash: an issue an agent the person answers for (steward, else
+ * accountable human) has blocked — it stopped and needs them. The same
+ * definition as the bridge digest's "Stopped and needs you".
+ */
+export interface WaitingOnYouStoppedAgentIssue {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  /** The agent that stopped, when the person may see it. */
+  agentName: string | null;
+  /** When the issue last changed — normally when it was blocked. */
+  waitingSince: string;
+}
+
 export interface WaitingOnYou {
   pendingQuestions: WaitingOnYouQuestion[];
   pendingQuestionsTotal: number;
@@ -212,6 +227,10 @@ export interface WaitingOnYou {
   reviewsWaiting?: WaitingOnYouReview[];
   /** Every review waiting, not only those listed. */
   reviewsWaitingTotal?: number;
+  /** Blocked issues of agents the person answers for, oldest first. */
+  stoppedAgentIssues?: WaitingOnYouStoppedAgentIssue[];
+  /** Every such blocked issue, not only those listed. */
+  stoppedAgentIssuesTotal?: number;
   decisions: WaitingOnYouDecision[];
   /** Every waiting approval, not only those in `decisions`. */
   total: number;

@@ -3,6 +3,7 @@ import { useLocation, useSearchParams } from "@/lib/router";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
+import { useStewardedRoutingNotice } from "../hooks/useStewardedRoutingNotice";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { heartbeatsApi } from "../api/heartbeats";
@@ -207,10 +208,12 @@ export function Issues() {
     });
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
+  const announceRouting = useStewardedRoutingNotice(selectedCompanyId);
   const updateIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       issuesApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      announceRouting(response);
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId!) });
     },
     onError: (err, variables) => {

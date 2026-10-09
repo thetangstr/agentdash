@@ -526,6 +526,7 @@ export type {
   WaitingOnYou,
   WaitingOnYouQuestion,
   WaitingOnYouReview,
+  WaitingOnYouStoppedAgentIssue,
   WaitingOnYouDecision,
   WaitingOnYouTask,
   WorkingNow,

@@ -290,6 +290,26 @@ describe("Home", () => {
     expect(rows("home-waiting-row")).toHaveLength(4);
   });
 
+  it("shows an issue the person's agent blocked, and counts it", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue({
+      ...waiting,
+      stoppedAgentIssues: [{
+        issueId: "issue-stopped-1",
+        identifier: "ACM-4",
+        title: "Choose a vendor",
+        agentName: "Agent A",
+        waitingSince: new Date().toISOString(),
+      }],
+      stoppedAgentIssuesTotal: 1,
+    });
+    await render();
+    const block = q("home-waiting")!;
+    expect(block.querySelector('a[href="/issues/ACM-4"]')?.textContent).toContain("Choose a vendor");
+    expect(block.textContent).toContain("Agent A stopped and needs you");
+    expect(q("home-waiting-count")?.textContent).toBe("4");
+    expect(rows("home-waiting-row")).toHaveLength(4);
+  });
+
   it("says how many more when the list is capped, so the count still adds up", async () => {
     mockDashboardApi.waitingOnYou.mockResolvedValue({ ...waiting, tasksAssignedToYouTotal: 9 });
     await render();

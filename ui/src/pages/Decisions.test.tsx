@@ -221,6 +221,24 @@ describe("Decisions", () => {
     expect(q("decisions-count")?.textContent).toBe("3");
   });
 
+  it("lists issues the person's agents blocked in the main list and counts them", async () => {
+    mockDashboardApi.waitingOnYou.mockResolvedValue(
+      waitingWith({ stoppedAgentIssues: [{
+        issueId: "issue-stopped-1",
+        identifier: "ACM-4",
+        title: "Choose a vendor",
+        agentName: "Agent A",
+        waitingSince: new Date().toISOString(),
+      }], stoppedAgentIssuesTotal: 1 }),
+    );
+    await render();
+    const row = q("decisions-stopped-row")!;
+    expect(row.querySelector('a[href="/issues/ACM-4"]')?.textContent).toContain("Choose a vendor");
+    expect(row.textContent).toContain("Agent A stopped and needs you");
+    expect(decisionsListLength(waitingWith({ stoppedAgentIssuesTotal: 1 }))).toBe(3);
+    expect(q("decisions-count")?.textContent).toBe("3");
+  });
+
   it("puts machine-generated items under a collapsed Other activity, not the main list", async () => {
     await render();
     // Exactly one task row in the main list: the manual one.

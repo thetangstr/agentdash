@@ -368,6 +368,8 @@ export interface SuggestedTaskDraft {
   priority?: IssuePriority | null;
   assigneeAgentId?: string | null;
   assigneeUserId?: string | null;
+  /** AgentDash: server-set; the person this draft was assigned to before it was routed to their agent. */
+  routedFromStewardUserId?: string;
   projectId?: string | null;
   goalId?: string | null;
   billingCode?: string | null;

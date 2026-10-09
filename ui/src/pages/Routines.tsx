@@ -6,6 +6,7 @@ import { routinesApi } from "../api/routines";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { issuesApi } from "../api/issues";
+import { useStewardedRoutingNotice } from "../hooks/useStewardedRoutingNotice";
 import { heartbeatsApi } from "../api/heartbeats";
 import { accessApi } from "../api/access";
 import { useCompany } from "../context/CompanyContext";
@@ -452,10 +453,12 @@ export function Routines() {
       navigate(`/routines/${routine.id}?tab=triggers`);
     },
   });
+  const announceRouting = useStewardedRoutingNotice(selectedCompanyId);
   const updateIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       issuesApi.update(id, data),
-    onSuccess: async () => {
+    onSuccess: async (response) => {
+      announceRouting(response);
       await queryClient.invalidateQueries({ queryKey: [...queryKeys.issues.list(selectedCompanyId!), "routine-executions"] });
     },
   });

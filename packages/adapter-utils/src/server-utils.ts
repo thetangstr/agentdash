@@ -450,6 +450,8 @@ type PaperclipWakeTreeHoldSummary = {
 
 type PaperclipWakePayload = {
   reason: string | null;
+  /** AgentDash: the issue was assigned to this agent's steward and routed to it. */
+  routedFromStewardUserId: string | null;
   issue: PaperclipWakeIssue | null;
   checkedOutByHarness: boolean;
   dependencyBlockedInteraction: boolean;
@@ -657,6 +659,7 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
 
   return {
     reason: asString(payload.reason, "").trim() || null,
+    routedFromStewardUserId: asString(payload.routedFromStewardUserId, "").trim() || null,
     issue: normalizePaperclipWakeIssue(payload.issue),
     checkedOutByHarness: asBoolean(payload.checkedOutByHarness, false),
     dependencyBlockedInteraction: asBoolean(payload.dependencyBlockedInteraction, false),
@@ -827,6 +830,9 @@ export function renderPaperclipWakePrompt(
         `- fallback fetch needed: ${normalized.fallbackFetchNeeded ? "yes" : "no"}`,
       ];
 
+  if (normalized.routedFromStewardUserId) {
+    lines.push(`- assigned to: your steward (user ${normalized.routedFromStewardUserId}); it came to you to take the first pass`);
+  }
   if (normalized.issue?.status) {
     lines.push(`- issue status: ${normalized.issue.status}`);
   }
