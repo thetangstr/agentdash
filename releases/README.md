@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1009.0](v2026.1009.0.md) | 2026-10-09 | An agent's person assignment goes to that person's agent; steward-only document connections; gpt-6 Codex models; My agent back in the sidebar; HTTP adapter deadlines in seconds; hosted invitations; one migration (0147) | Pending stable publication |
 | [v2026.1008.0](v2026.1008.0.md) | 2026-10-08 | Release preparation: accurate private Hermes SSH invocation records; stricter agent and approval authority; financial privacy; responsive log privacy checks; inactive-owner input recovery; public docs and updates; no migrations | Pending stable publication |
 | [v2026.1007.1](v2026.1007.1.md) | 2026-10-07 | Run-log reads yield between lines; chats and live transcripts follow the newest message; assignment-only wake policy with a run-window audit route; instance identity on the health check; no migrations | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1007.1) |
 | [v2026.1007.0](v2026.1007.0.md) | 2026-10-07 | Business view as the default run page, with milestone timelines; agents in the left bar grouped by team; pre-launch security pass (restricted projects, approvals, agent configuration, spend, plugin secrets, security headers); Hermes over SSH, off by default; no migrations | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1007.0) |
