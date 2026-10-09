@@ -950,7 +950,7 @@ export function stewardInboxService(db: Db) {
         identifier: issue.identifier,
         issueTitle: frameUntrustedText(issue.title, QUESTION_TEXT_CAPS.issueTitle),
         // Only the issue title can be cut (see QUESTION_TEXT_CAPS); say so.
-        issueTitleShortened: frameUntrustedText(issue.title, Number.MAX_SAFE_INTEGER)!.length > QUESTION_TEXT_CAPS.issueTitle,
+        issueTitleShortened: (frameUntrustedText(issue.title, Number.MAX_SAFE_INTEGER)?.length ?? 0) > QUESTION_TEXT_CAPS.issueTitle,
         agentName: issue.assigneeAgentId ? nameById.get(issue.assigneeAgentId) ?? null : null,
         waitingSince: interaction.createdAt.toISOString(),
         fromAgent: {

@@ -604,6 +604,27 @@ describeEmbeddedPostgres("steward inbox: agent questions", () => {
     expect(item.issueTitle.endsWith("…")).toBe(true);
   });
 
+  it("still builds the digest when the issue title is only whitespace", async () => {
+    const { company, prefix, stewardA, agentA } = await seed();
+    const endpoint = await makeEndpoint(company.id, stewardA.principalId);
+    const issue = await makeIssue(company.id, prefix, agentA.id, "   ");
+    await issueThreadInteractionService(db).create(
+      issue,
+      {
+        kind: "ask_user_questions",
+        continuationPolicy: "wake_assignee",
+        payload: {
+          version: 1,
+          questions: [{ id: "q", prompt: "Which one?", selectionMode: "single", options: [{ id: "a", label: "A" }] }],
+        },
+      } as never,
+      { agentId: agentA.id },
+    );
+    const item = (await digestFor(endpoint.id)).questions.items[0];
+    expect(item.issueTitleShortened).toBe(false);
+    expect(item.fromAgent.questions[0].prompt).toBe("Which one?");
+  });
+
   // -----------------------------------------------------------------------
   // Approvals: the linked issue in the digest, and a rejection that wakes
   // -----------------------------------------------------------------------
