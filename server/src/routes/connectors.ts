@@ -7,6 +7,7 @@ import {
   connectorWorkspaceDefaultsSchema,
   agentConnectorOverridesSchema,
   connectorApprovalDecisionSchema,
+  isDocumentProvider,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -14,7 +15,7 @@ import { connectorService } from "../services/connectors.js";
 import { logActivity } from "../services/activity-log.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { accessService } from "../services/access.js";
-import { forbidden } from "../errors.js";
+import { forbidden, unprocessable } from "../errors.js";
 
 export function connectorRoutes(db: Db) {
   const router = Router();
@@ -99,6 +100,15 @@ export function connectorRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       const actor = getActorInfo(req);
+      // AgentDash (security): a document-provider row must hold the person's
+      // real delegated credential, which only that provider's own sign-in
+      // flow can mint. A placeholder row here would count as the person's
+      // connection and occupy their one active slot.
+      if (isDocumentProvider(req.body.provider)) {
+        throw unprocessable(
+          `A ${req.body.provider} connection is created by signing in to ${req.body.provider} from your own connection settings, not through this route`,
+        );
+      }
 
       const created = await svc.create(companyId, {
         ownerType: actor.actorType,

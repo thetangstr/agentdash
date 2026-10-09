@@ -467,7 +467,7 @@ export function connectorService(db: Db) {
       // profile. A human acting directly resolves only their own rows.
       if (actorType === "user") {
         usable = agentConnections.filter(
-          (c) => c.ownerType === "user" && c.ownerId === agentId,
+          (c) => c.ownerType === "user" && c.ownerId === agentId && c.encryptedToken != null,
         );
       } else {
         const activeStewardship = await stewardships.activeByAgent(companyId, agentId);

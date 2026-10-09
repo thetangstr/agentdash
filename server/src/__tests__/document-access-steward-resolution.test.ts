@@ -397,6 +397,24 @@ describeEmbeddedPostgres("document providers resolve only through the live stewa
     expect(other.ok).toBe(false);
   });
 
+  it("a person's own unfinished sign-in (no credential yet) does not resolve", async () => {
+    const { company, stewardA } = await seed();
+    await db.insert(connections).values({
+      companyId: company.id,
+      ownerType: "user",
+      ownerId: stewardA.principalId,
+      provider: "microsoft",
+      visibility: "private",
+      status: "active",
+      encryptedToken: null,
+    });
+    const svc = connectorService(db);
+    const self = await svc.resolveActingAs(company.id, stewardA.principalId, "read", "microsoft", {
+      actorType: "user",
+    });
+    expect(self.ok).toBe(false);
+  });
+
   it("leaves non-document providers on the generic rule: a workspace row still resolves", async () => {
     const { company, memberC, agentA } = await seed();
     const shared = await insertLegacyRow(company.id, {
@@ -477,32 +495,27 @@ describeEmbeddedPostgres("document providers resolve only through the live stewa
     }
   }
 
-  it("the route refuses workspace visibility for document providers with 422 and a reason", async () => {
+  it("the generic route refuses every document-provider connection with 422 and a reason", async () => {
     const { company, stewardA } = await seed();
     const app = mountRoutes(boardActor(company.id, stewardA.principalId, "operator"));
 
+    // Private or shared, a document-provider row from this route would hold a
+    // placeholder token, count as the person's connection and take their one
+    // active slot. Only the provider's own sign-in flow may create one.
     for (const provider of DOCUMENT_PROVIDERS) {
-      const res = await call(app, (baseUrl) =>
-        request(baseUrl)
-          .post(`/api/companies/${company.id}/connections`)
-          .send({ provider, visibility: "workspace" }),
-      );
-      expect(res.status, provider).toBe(422);
-      expect(String(res.body.error)).toMatch(/cannot be shared with the workspace/);
+      for (const visibility of ["private", "workspace"]) {
+        const res = await call(app, (baseUrl) =>
+          request(baseUrl)
+            .post(`/api/companies/${company.id}/connections`)
+            .send({ provider, visibility }),
+        );
+        expect(res.status, `${provider}/${visibility}`).toBe(422);
+        expect(String(res.body.error)).toMatch(/created by signing in to/);
+      }
     }
     expect(await db.select().from(connections)).toHaveLength(0);
 
-    // A private document connection and a workspace connection for a
-    // non-document provider are both still accepted.
-    const priv = await call(app, (baseUrl) =>
-      request(baseUrl)
-        .post(`/api/companies/${company.id}/connections`)
-        .send({ provider: "microsoft", visibility: "private" }),
-    );
-    expect(priv.status).toBe(201);
-    expect(priv.body.ownerType).toBe("user");
-    expect(priv.body.visibility).toBe("private");
-
+    // A workspace connection for a non-document provider is still accepted.
     const slack = await call(app, (baseUrl) =>
       request(baseUrl)
         .post(`/api/companies/${company.id}/connections`)
