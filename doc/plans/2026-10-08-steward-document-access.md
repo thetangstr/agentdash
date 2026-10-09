@@ -2,7 +2,7 @@
 
 2026-10-08 · **Plan, slice 1 in progress** · Line numbers are as of `5b50db7df`; re-check before editing.
 
-**Recommendation.** Give an agent read access to exactly its current steward's documents by resolving document-provider connections *only* through the live stewardship row, never through agent-owned or workspace-visible rows. Replace the dead OBO connect path with a standard authorization-code + PKCE flow that stores a refresh token, so access survives the hour. Reads are server-side, GET-only, size-capped, text-extracted and framed as untrusted. Writes exist only as `connector_send` approvals executed by a separate service after the steward approves, and only as *new* files in v1. Seven slices, each shippable alone, all behind one per-company feature flag. Do not build the "allow the OneDrive folder in the sandbox" shortcut (see Threat model).
+**Recommendation.** Give an agent read access to exactly its current steward's documents by resolving document-provider connections *only* through the live stewardship row, never through agent-owned or workspace-visible rows. Replace the dead OBO connect path with a standard authorization-code + PKCE flow that stores a refresh token, so access survives the hour. Reads are server-side, GET-only, size-capped, text-extracted and framed as untrusted. Writes exist only as `connector_send` approvals executed by a separate service after the steward approves, and only as *new* files in v1. Seven slices to build (1, 2, 3, 5, 6b, 6, 7; slice 4 is deferred), each shippable alone, all behind one per-company feature flag. Do not build the "allow the OneDrive folder in the sandbox" shortcut (see Threat model).
 
 **Decisions recorded 2026-10-08 (owner).**
 - **D1: override.** Document access is in scope; `2026-09-24-mvl-1.0.md:179` and the MK design spec `:75` are superseded by this plan. Both are annotated in the PR that adds this plan.
@@ -11,7 +11,7 @@
 - **D6: run logs are a hard gate (new slice 6b below).** Verified: `GET /heartbeat-runs/:runId/events` and `/log` (`server/src/routes/agents.ts:5173-5230`) check only `assertCompanyAccess`, so any company member reads any run; serve-time redaction covers secrets only; `heartbeat_run_events` has no retention. The flag must not go on for a company until slice 6b ships.
 - **Prerequisite (not in the original plan): a trusted HTTPS origin.** Entra accepts only HTTPS redirect URIs other than localhost (per Microsoft's redirect-URI rules; **re-verify against current docs**). An instance served over plain HTTP or a bare IP address cannot complete slice 2 until it has a DNS name with a certificate the browser trusts.
 
-**Scope conflict (resolved by D1 above).** `doc/plans/2026-09-24-mvl-1.0.md:179` and `docs/superpowers/specs/2026-07-28-agentdash-mk-design.md:75` place SharePoint and Google Drive connectors out of scope. This plan contradicts both. Owner decision D1 below; nothing merges until it is recorded.
+**Scope.** `doc/plans/2026-09-24-mvl-1.0.md:179` and `docs/superpowers/specs/2026-07-28-agentdash-mk-design.md:75` placed SharePoint and Google Drive connectors out of scope. D1 supersedes both for Microsoft 365 document access only; Google Drive stays out of scope.
 
 ## What exists (verified by code read)
 
@@ -32,12 +32,12 @@ Public facts (Microsoft Learn, read 2026-10-08): delegated `Files.Read.All` and 
 
 ## Decisions encoded for the executor
 
-- **Provider keys.** `microsoft` (already in `CONNECTION_PROVIDERS`, `constants.ts:1185`) for OneDrive + SharePoint via auth-code; `google_drive` (new) for Drive. Do not reuse `google`: Gmail routes select on it (`routes/gmail.ts:38`) and its scope presets would collide. The legacy `sharepoint` row and `entra-obo.ts` stay untouched and keep working for anyone who has one; they are folded into the steward-only rule but not migrated.
+- **Provider keys.** v1 is Microsoft only: `microsoft` (already in `CONNECTION_PROVIDERS`, `constants.ts:1185`) for OneDrive + SharePoint via auth-code. If slice 4 is ever un-deferred, Drive gets a new key `google_drive`, not `google`: Gmail routes select on `google` (`routes/gmail.ts:38`) and its scope presets would collide. The legacy `sharepoint` row and `entra-obo.ts` stay untouched and keep working for anyone who has one; they are folded into the steward-only rule but not migrated.
 - **Auth-code + PKCE, not OBO.** OBO needs a front-end that acquires a token with `aud` = our API (MSAL in the SPA, an exposed API scope, known-client wiring) and *still* needs `offline_access` to outlive an hour. Auth-code gives the same delegated semantics (Graph answers with what the steward can see) with one app registration, one redirect, and a refresh token. Confidential client with `ENTRA_CLIENT_SECRET` (already configured).
 - **One connection row per provider per owner, scope tier chosen at connect** (`read` or `read_propose`). Upgrading means reconnecting. Two rows were rejected: `resolveActingAs` returns one row per provider and the stewardship rule must stay "one steward, one row".
 - **Reads are structural GET.** New read services copy the `graphGet` pattern (`sharepoint-connector.ts:184-192`) and get the same source-scan test (`agentdash-mk-sharepoint-obo.test.ts:123-135`). Writes live in separate files that are imported only by the executor.
 - **Gate = feature flag `document_access_enabled`, not product profile.** Resolution tightening (slice 1) applies to every company; routes 404 without the flag. Unlike the SharePoint routes there is no `agentdash_mk` check, so the owner can enable it on a default-profile company later. If D2 says "profile-gate too", add `requireProductProfile` next to the flag check.
-- **v1 writes create new files only.** No overwrite, no delete, no in-place edit. "Propose edit" means: upload `<name> (proposed by <agent> <date>).docx` beside the source, or into an app-created folder on Drive.
+- **v1 writes create new files only.** No overwrite, no delete, no in-place edit. "Propose edit" means: upload `<name> (proposed by <agent> <date>).docx` in the steward's own OneDrive (D5).
 
 ## Slices
 
@@ -95,11 +95,11 @@ Acceptance: as slice 3, against a mocked Google token + Drive server; `drive.rea
 
 ### Slice 5: propose-upload behind steward approval
 
-Files: `validators/approval.ts:20` (`CONNECTOR_SEND_PROVIDERS` += `microsoft`, `google_drive`), `:79-140` (per-provider payload shape), `connector-send-execution.ts:403` (dispatch by provider), new `services/microsoft-documents-write.ts` and `services/google-drive-write.ts` (the only files with PUT/POST to a provider; each imported only by the executor), `routes/*-documents.ts` (`POST …/propose`, agent-authenticated, files the approval like `routes/hubspot-connector.ts:176`).
+Files: `validators/approval.ts:20` (`CONNECTOR_SEND_PROVIDERS` += `microsoft`; Microsoft only in v1), `:79-140` (per-provider payload shape), `connector-send-execution.ts:403` (dispatch by provider), new `services/microsoft-documents-write.ts` (the only file with PUT/POST to a provider; imported only by the executor), `routes/*-documents.ts` (`POST …/propose`, agent-authenticated, files the approval like `routes/hubspot-connector.ts:176`).
 
-Payload: `{provider, operation: "upload_new", target: {driveId|folderId|siteId, path}, fileName, attachmentId, sourceItemId?, summary}`. The file body is an `issue_attachments` row the agent uploaded (`attach_file` exists in MCP), not inline base64; the executor streams it. `summary` is the steward-readable "what changed and why". `operation` is an enum with one member in v1; `update`/`delete` are rejected by `checkConnectorSendPayload` so an approved payload can never overwrite.
+Payload: `{provider, operation: "upload_new", target: {driveId|folderId, path}, fileName, attachmentId, sourceItemId?, summary}`. The file body is an `issue_attachments` row the agent uploaded (`attach_file` exists in MCP), not inline base64; the executor streams it. `summary` is the steward-readable "what changed and why". `operation` is an enum with one member in v1; `update`/`delete` are rejected by `checkConnectorSendPayload` so an approved payload can never overwrite.
 
-Executor: re-resolve via slice 1 at apply time (stewardship may have ended since filing → `recordRefusal` with a new reason `steward_changed`); require the write scope on the *current* grant (`Files.ReadWrite` / `drive.file`), else refuse `write_scope_missing`; `classifyAction` marks `upload_new` as non-destructive but still `approval_required`; outcome row and activity log carry ids and digests only.
+Executor: re-resolve via slice 1 at apply time (stewardship may have ended since filing → `recordRefusal` with a new reason `steward_changed`); require the write scope on the *current* grant (`Files.ReadWrite`), else refuse `write_scope_missing`; `classifyAction` marks `upload_new` as non-destructive but still `approval_required`; outcome row and activity log carry ids and digests only.
 
 Acceptance: filing without the write tier is accepted as an approval but refused at execute with `write_scope_missing`; ending stewardship between approve and execute refuses with `steward_changed` and no provider call (assert the mock saw none); a successful upload records `externalId` = new item id; the `read` services' source still contains no write verb.
 
@@ -118,7 +118,7 @@ Acceptance: a run that calls `documents_read` leaves no document text in `heartb
 
 Files: `packages/mcp-server/src/tools.ts` (add after `create_approval`, `:648`), `packages/mcp-server/src/client.ts` unchanged, new `skills/agentdash-office-docs/SKILL.md`, regenerate the MCP tool docs per `doc/plans/2026-10-08-agent-contract-reliability.md` lane 1.
 
-Tools (all `makeTool`, `companyIdOptional`, provider `z.enum(["microsoft","google_drive"])`):
+Tools (all `makeTool`, `companyIdOptional`, provider `z.enum(["microsoft"])` in v1 (an enum so a later provider is additive)):
 - `documents_status {provider?}` → which providers resolve for this agent and the steward's account label; `readOnlyHint`.
 - `documents_search {provider, query, scope?: "my_drive"|"shared"|"sites", limit≤25}`.
 - `documents_list {provider, folderRef?, path?, limit≤100}`.
@@ -133,7 +133,7 @@ Acceptance: `tools/list` consumer test shows the five tools with descriptions an
 
 Files: new `ui/src/components/agent/DocumentConnectionsPanel.tsx` (model on `HubspotConnectionPanel.tsx:16-60`), new `ui/src/api/documents.ts` (model on `ui/src/api/hubspot.ts`), `ui/src/lib/queryKeys.ts:144` (add `documents`), `ui/src/pages/MyAgent.tsx` insert after `ConnectYourTerminal` (`:373-377`), new route `/connect/:provider/callback` in `App.tsx` that posts `{code, state, redirectUri}` to the callback endpoint and returns to My Agent.
 
-Per provider: connected account, tier, status, last error, Connect (opens the authorization URL), Reconnect with write tier, Disconnect. Hidden entirely when the capability route 404s (use `isCapabilityNotFound`, `MyAgent.tsx:12`). `HubspotConnectionPanel.tsx` and `MyChannels.tsx` stay unused; do not wire them in.
+Microsoft only in v1: connected account, tier, status, last error, Connect (opens the authorization URL), Reconnect with write tier, Disconnect. Hidden entirely when the capability route 404s (use `isCapabilityNotFound`, `MyAgent.tsx:12`). `HubspotConnectionPanel.tsx` and `MyChannels.tsx` stay unused; do not wire them in.
 
 Acceptance: `MyAgent.test.tsx` covers hidden-when-404, connected, error-with-reconnect; no token or code appears in React Query cache keys or URLs after the callback completes.
 
@@ -147,7 +147,7 @@ Acceptance: `MyAgent.test.tsx` covers hidden-when-404, connected, error-with-rec
 
 ## Data retention
 
-Deployments can hold confidential client documents (drawings, contracts, budgets). Document text returned by `documents_read` enters the agent transcript, which is stored in `heartbeat_run_events` and today readable by any member of the company (verified, D6). Mitigations in this plan: hard per-call text cap, "quote, do not paste" in the skill, workflow events carry ids and byte counts only, approvals carry attachment ids and a summary. Redaction from run logs, narrowed run-log readership and a retention TTL are now slice 6b and gate the flag (D6). No document bytes are written to disk by the server; extraction is in memory. The optional "copy raw file into the run workspace" variant is not built (D4).
+Deployments can hold confidential documents. Document text returned by `documents_read` enters the agent transcript, which is stored in `heartbeat_run_events` and today readable by any member of the company (verified, D6). Mitigations in this plan: hard per-call text cap, "quote, do not paste" in the skill, workflow events carry ids and byte counts only, approvals carry attachment ids and a summary. Redaction from run logs, narrowed run-log readership and a retention TTL are now slice 6b and gate the flag (D6). No document bytes are written to disk by the server; extraction is in memory. The optional "copy raw file into the run workspace" variant is not built (D4).
 
 ## Migrations and flag
 
@@ -155,7 +155,7 @@ One migration (slice 1). Flag key `document_access_enabled` added to `FEATURE_FL
 
 ## Decisions
 
-Recorded 2026-10-08.
+Recorded 2026-10-08. D1, D3, D5 and D6 were decided by the owner directly; D2, D4 and D7 to D9 were proposed as defaults and accepted by the owner without change.
 - **D1.** Override the out-of-scope entries: done (see top).
 - **D2.** Flag-only gate, no product-profile check.
 - **D3.** Google Drive deferred; slice 4 not built.
