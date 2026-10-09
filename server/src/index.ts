@@ -1123,6 +1123,29 @@ export async function startServer(): Promise<StartedServer> {
     webhookHandle.unref?.();
   }
 
+  /**
+   * Inbox email: a pointer-only email to a person when an agent's question or
+   * an approval starts waiting on them, at most one per person per 15 minutes.
+   * Every minute; the sweep is a no-op (logged once) while RESEND_API_KEY is
+   * unset, and its batching state lives in steward_email_notices.
+   */
+  {
+    const { stewardInboxEmailService } = await import("./services/steward-inbox-email.js");
+    const inboxEmail = stewardInboxEmailService(db as any, {
+      publicBaseUrl:
+        (config.declaredOrigins ? configuredPublicBaseUrl() : undefined)
+        ?? process.env.PAPERCLIP_PUBLIC_URL
+        ?? config.authPublicBaseUrl
+        ?? null,
+    });
+    const inboxEmailHandle = setInterval(() => {
+      void inboxEmail.sweep().catch((err) => {
+        logger.warn({ err }, "inbox email sweep failed");
+      });
+    }, 60 * 1000);
+    inboxEmailHandle.unref?.();
+  }
+
   // AgentDash (human control plane, review P2 #859): retention sweep for
   // human action handles, which carry answer text in payload/result.
   {

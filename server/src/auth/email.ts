@@ -36,6 +36,13 @@ export interface SendEmailResult {
   status: "sent" | "skipped" | "failed";
   messageId?: string;
   error?: string;
+  /**
+   * Set on a failure whose outcome is unknown -- a timeout or a dropped
+   * connection after the request may have reached the provider. A caller that
+   * must not send twice treats it as possibly sent. A non-2xx answer is a
+   * definite failure and leaves this unset.
+   */
+  ambiguous?: boolean;
 }
 
 /**
@@ -95,7 +102,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn({ to: input.to, subject: input.subject, error: message }, "[email] send threw — email not sent");
-    return { status: "failed", error: message };
+    return { status: "failed", error: message, ambiguous: true };
   }
 }
 

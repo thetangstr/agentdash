@@ -192,6 +192,8 @@
       "headings": [
         "Acting on it",
         "Three rules",
+        "Questions from your agents",
+        "Email",
         "Optional: have your agent keep watch"
       ],
       "firstParagraph": "Open ~/agentdash-inbox in Claude Code and what is waiting on you appears as the session starts. You can decide it right there, as yourself."
@@ -1198,6 +1200,7 @@
         "mcp",
         "me-capabilities",
         "msp",
+        "notification-preferences",
         "oauth",
         "onboarding-mcp-signup",
         "onboarding-v2",
@@ -1225,7 +1228,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 613 routes in 81 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest ae8445bcc0c4; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 615 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 640e5dacbd9e; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
