@@ -134,15 +134,36 @@ describe("document text stripping", () => {
     expect(anomalies[0]!.noncePrefix).toMatch(/^[0-9a-f]{8}$/);
   });
 
-  it("past the hold limit drops the held text and keeps streaming after it", () => {
+  // Re-review fix 3: once a frame overflows, everything up to its end marker
+  // is discarded, not just the capped length.
+  it("past the hold limit discards everything up to the late end marker, then streams", () => {
     const framed = frame(BODY, { docId: "item-8", title: "Big.docx" });
     const begin = framed.slice(0, framed.indexOf(BODY));
+    const end = framed.slice(framed.indexOf("[[agentdash-untrusted-document:end"));
     const anomalies: DocumentStripAnomaly[] = [];
     const stripper = createDocumentTextStripper({ runId: RUN, maxPendingChars: 2_000, onAnomaly: (a) => anomalies.push(a) });
-    const out = stripper.push(begin) + stripper.push(`${SENTINEL}${"z".repeat(3_000)}`) + stripper.push("\nlater output\n") + stripper.flush();
+    const out =
+      stripper.push(begin) +
+      stripper.push(`${SENTINEL}${"z".repeat(3_000)}`) +
+      stripper.push(`late document text ${SENTINEL}-late `.repeat(200)) +
+      stripper.push(end.slice(0, 10)) +
+      stripper.push(`${end.slice(10)}\nlater output\n`) +
+      stripper.flush();
     expect(out).not.toContain(SENTINEL);
+    expect(out).not.toContain("late document text");
+    expect(out.match(/document text withheld/g)).toHaveLength(1);
     expect(out).toContain("[document text withheld: item-8 Big.docx unterminated]");
     expect(out).toContain("later output");
+    expect(anomalies.map((a) => a.kind)).toEqual(["overflow"]);
+  });
+
+  it("an overflowed frame with no end marker withholds everything to end of stream", () => {
+    const framed = frame("tiny", { docId: "item-4" });
+    const beginAt = framed.indexOf("[[agentdash-untrusted-document:begin");
+    const begin = framed.slice(beginAt, framed.indexOf("]]", beginAt) + 2);
+    const anomalies: DocumentStripAnomaly[] = [];
+    const out = strip([`${begin}${"y".repeat(5_000)}`, "tail-after-cap"], anomalies);
+    expect(out).toBe("[document text withheld: item-4 untitled unterminated]");
     expect(anomalies.map((a) => a.kind)).toEqual(["overflow"]);
   });
 
@@ -167,26 +188,19 @@ describe("document text stripping", () => {
     expect(strip([framed], [], OTHER_RUN)).not.toContain(SENTINEL);
   });
 
-  it("treats a replayed begin marker around implausibly short text as forged", () => {
-    const framed = frame(BODY, { docId: "item-3" });
-    const begin = framed.slice(framed.indexOf("[[agentdash-untrusted-document:begin"), framed.indexOf("]]", framed.indexOf("[[agentdash-untrusted-document:begin")) + 2);
-    const end = framed.slice(framed.indexOf("[[agentdash-untrusted-document:end"));
-    const replay = `${begin}hi${end}`;
+  // Re-review fix 1: a span shorter than declared is what an adapter that
+  // truncates a long tool result (keeping head and tail) produces. Withheld.
+  it("withholds a truncated frame (head and tail kept) and reports it", () => {
+    const body = `${SENTINEL} ${"a".repeat(6_000)} middle ${"b".repeat(6_000)} ${SENTINEL}-tail`;
+    expect(body.length).toBeGreaterThan(12_000);
+    const framed = frame(body, { docId: "item-3", title: "Long.docx" });
+    const at = framed.indexOf(body);
+    const truncated = `${framed.slice(0, at + 2_000)}\n...[truncated]...\n${framed.slice(at + body.length - 2_000)}`;
     const anomalies: DocumentStripAnomaly[] = [];
-    expect(strip([replay], anomalies)).toBe(replay);
-    expect(anomalies.map((a) => a.kind)).toEqual(["implausible", "unmatched_end"]);
-  });
-
-  it("withholds at most the plausible span of a replayed begin marker, then streams the rest", () => {
-    const framed = frame("tiny", { docId: "item-4" });
-    const beginAt = framed.indexOf("[[agentdash-untrusted-document:begin");
-    const begin = framed.slice(beginAt, framed.indexOf("]]", beginAt) + 2);
-    const anomalies: DocumentStripAnomaly[] = [];
-    const out = strip([`${begin}${"y".repeat(5_000)}visible-tail`], anomalies);
-    expect(out).toContain("[document text withheld: item-4 untitled unterminated]");
-    expect(out).toContain("visible-tail");
-    expect(out.length).toBeGreaterThan(4_000);
-    expect(anomalies.map((a) => a.kind)).toEqual(["overflow"]);
+    const out = strip([truncated], anomalies);
+    expect(out).not.toContain(SENTINEL);
+    expect(out).toContain("[document text withheld: item-3 Long.docx truncated]");
+    expect(anomalies.map((a) => a.kind)).toEqual(["truncated"]);
   });
 
   it("leaves a stray end marker alone, and reports it", () => {

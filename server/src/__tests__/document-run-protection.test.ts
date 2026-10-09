@@ -57,6 +57,7 @@ import { dashboardRoutes } from "../routes/dashboard.js";
 import { issueRoutes } from "../routes/issues.js";
 import { feedbackService } from "../services/feedback.ts";
 import { getRunLogStore } from "../services/run-log-store.ts";
+import { workspacePersistenceHold } from "../services/workspace-persistence-recovery.ts";
 import { registerServerAdapter, unregisterServerAdapter } from "../adapters/registry.ts";
 import { ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS } from "../services/heartbeat.ts";
 import { errorHandler } from "../middleware/index.js";
@@ -503,7 +504,16 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
         error: "error quoting figures",
         stdoutExcerpt: "stdout quoting figures",
         stderrExcerpt: "stderr quoting figures",
-        resultJson: { summary: "result quoting figures" },
+        // Operational keys the purge must keep: an unresolved workspace
+        // quarantine (only an audited person may lift it), run facts and cost.
+        resultJson: {
+          summary: "result quoting figures",
+          stdout: "stdout quoting figures",
+          workspacePersistence: { workspaceId: `ws-${id}`, issueId: null, recoveryRequired: true, outcome: "uncertain" },
+          runFacts: { outcome: "no_op", meteringStatus: "metered", inputTokens: 10 },
+          total_cost_usd: 1.25,
+        },
+        usageJson: { workspacePersistenceAttemptId: `ws-${id}` },
         nextAction: "next quoting figures",
         livenessReason: "liveness quoting figures",
         contextSnapshot: { issueId: null, taskKey: "task-1", paperclipSessionHandoffMarkdown: "handoff quoting figures" },
@@ -544,6 +554,19 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     // Review fix 6: the purged run keeps no free text either.
     expect(JSON.stringify(oldRow)).not.toContain("quoting figures");
     expect((oldRow!.contextSnapshot as Record<string, unknown>).taskKey).toBe("task-1");
+    // Re-review fix 2: the quarantine, run facts and cost survive the purge.
+    const keptResult = oldRow!.resultJson as Record<string, unknown>;
+    expect((keptResult.workspacePersistence as Record<string, unknown>).recoveryRequired).toBe(true);
+    expect((keptResult.runFacts as Record<string, unknown>).inputTokens).toBe(10);
+    expect(keptResult.total_cost_usd).toBe(1.25);
+    expect(keptResult.summary).toBeUndefined();
+    expect(await workspacePersistenceHold(db, FLAGGED, FLAGGED_AGENT, null)).toMatchObject({ runId: flaggedOld.id });
+    const listed = (await request(appAs(asUser(STEWARD, "member"))).get(`/api/companies/${FLAGGED}/heartbeat-runs`)).body as Array<Record<string, unknown>>;
+    // The listing projects cost either as resultTotalCostUsd or, on a
+    // legacy-encoding database (as in this test), inside a trimmed resultJson.
+    const listedRow = listed.find((r) => r.id === flaggedOld.id)!;
+    const listedCost = listedRow.resultTotalCostUsd ?? (listedRow.resultJson as Record<string, unknown> | null)?.total_cost_usd;
+    expect(Number(listedCost)).toBe(1.25);
     expect(oldRow!.status).toBe("succeeded");
     const [recentRow] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, flaggedRecent.id));
     expect(recentRow!.logRef).not.toBeNull();

@@ -22,16 +22,20 @@
 // - Text that a document contains cannot end or forge a frame: it cannot know
 //   the nonce or compute the MAC.
 // - Neither can an agent mint a frame of its own. It CAN re-print a genuine
-//   begin marker it was handed (a replay) to hide some of its own output, but
-//   only inside the same run (the MAC is bound to the run id), and only for a
-//   span plausible for that frame's declared length: from `chars` to
-//   `SPAN_MAX_FACTOR`×`chars` plus a fixed allowance (JSON escaping, once or
-//   twice, never makes text shorter and makes it at most ~7× longer). A pair
-//   whose span is shorter is treated as forged and left in place; output past
-//   the longest plausible span is never withheld.
-// - A verified begin marker whose end never arrives (truncated transcript,
-//   killed process, hold limit) fails CLOSED: the held text is replaced by an
-//   "unterminated" placeholder, never released.
+//   begin marker it was handed (a replay), inside the same run only (the MAC
+//   is bound to the run id), to hide some of its own output from the stored
+//   copy. The amount is bounded: a frame whose end marker arrives within
+//   `SPAN_MAX_FACTOR`×`chars` + `SPAN_OVERHEAD_CHARS` characters hides at most
+//   that span; one that overflows hides everything up to its end marker or
+//   the end of the stream (fail closed beats leaking). The live stream and the
+//   agent's own view are never affected, and every such case is reported.
+// - Everything after a verified begin marker fails CLOSED. A span SHORTER than
+//   the declared `chars` (an adapter that truncates a long tool result but
+//   keeps its head and tail) is withheld as "truncated". A frame whose end
+//   never arrives (killed process, end of stream) is withheld as
+//   "unterminated". A frame that overflows the hold limit is withheld, and
+//   what follows is discarded unbuffered until its end marker or the end of
+//   the stream, so memory stays bounded. None of these releases text.
 // - Rotating the server secret (PAPERCLIP_AGENT_JWT_SECRET / BETTER_AUTH_SECRET)
 //   while a run is in flight leaves that run's outstanding frames unverified:
 //   they are reported as forged and stay in the stored copy. Rotate between
@@ -47,7 +51,7 @@
 // chunk boundaries is handled by buffering: text that could be the start of a
 // marker is held back, and once a valid begin marker is seen the stream is
 // held until its end marker arrives (bounded by the frame's plausible span and
-// `DOCUMENT_STRIP_MAX_PENDING_CHARS`). Every anomaly is reported through
+// `DOCUMENT_STRIP_MAX_PENDING_CHARS`; past that, discarded until the end). Every anomaly is reported through
 // `onAnomaly` — never silently dropped.
 //
 // The agent is unaffected: this runs on the server's copy of the adapter's
@@ -124,12 +128,13 @@ export type DocumentStripAnomaly = {
   /**
    * unterminated: verified begin, stream ended without its end (text withheld).
    * overflow: verified begin, no end within the plausible span or hold limit
-   *   (held text withheld, streaming resumed after it).
-   * implausible: a pair whose span is shorter than the declared length (left).
+   *   (text withheld and discarded up to its end marker or end of stream).
+   * truncated: a pair whose span is shorter than the declared length — an
+   *   adapter cut the middle out of a long result (text withheld).
    * forged: begin marker whose MAC does not verify for this run (left).
    * unmatched_end: an end marker with no open frame (left).
    */
-  kind: "unterminated" | "overflow" | "implausible" | "forged" | "unmatched_end";
+  kind: "unterminated" | "overflow" | "truncated" | "forged" | "unmatched_end";
   /** First 8 hex characters of the nonce, for correlation. Never text. */
   noncePrefix: string | null;
 };
@@ -218,10 +223,13 @@ function placeholderText(value: string, fallback: string, max: number): string {
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
-function withheldPlaceholder(marker: { docId: string; title: string; chars: string }, unterminated = false): string {
+function withheldPlaceholder(
+  marker: { docId: string; title: string; chars: string },
+  state: "complete" | "unterminated" | "truncated" = "complete",
+): string {
   const id = placeholderText(marker.docId, "unknown-item", MAX_ID_CHARS);
   const title = placeholderText(marker.title, "untitled", MAX_TITLE_CHARS);
-  return `[document text withheld: ${id} ${title} ${unterminated ? "unterminated" : `${marker.chars} chars`}]`;
+  return `[document text withheld: ${id} ${title} ${state === "complete" ? `${marker.chars} chars` : state}]`;
 }
 
 /** Length of the longest suffix of `text` that is a proper prefix of the marker prefix. */
@@ -263,28 +271,38 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
     end: string;
     placeholder: string;
     unterminatedPlaceholder: string;
+    truncatedPlaceholder: string;
     minSpan: number;
     holdLimit: number;
     scanFrom: number;
   } | null = null;
+  // After an overflow: input is discarded, not buffered, until this end marker.
+  let discardUntil: string | null = null;
 
   function drain(final: boolean): string {
     let out = "";
     for (;;) {
+      if (discardUntil) {
+        const at = buf.indexOf(discardUntil);
+        if (at >= 0) {
+          buf = buf.slice(at + discardUntil.length);
+          discardUntil = null;
+          continue;
+        }
+        // Keep only what could be the start of a split end marker.
+        buf = final ? "" : buf.slice(Math.max(0, buf.length - discardUntil.length + 1));
+        if (final) discardUntil = null;
+        return out;
+      }
+
       if (pending) {
         const p = pending;
         const at = buf.indexOf(p.end, p.scanFrom);
         if (at >= 0 && at - p.beginLength <= p.holdLimit) {
-          if (at - p.beginLength < p.minSpan) {
-            // Shorter than the text it claims to frame: a replayed begin
-            // marker. Leave it; what follows is the agent's own output.
-            report("implausible", p.nonce);
-            out += buf.slice(0, p.beginLength);
-            buf = buf.slice(p.beginLength);
-            pending = null;
-            continue;
-          }
-          out += p.placeholder;
+          // Shorter than declared: an adapter truncated the result. Withhold.
+          const truncated = at - p.beginLength < p.minSpan;
+          if (truncated) report("truncated", p.nonce);
+          out += truncated ? p.truncatedPlaceholder : p.placeholder;
           buf = buf.slice(at + p.end.length);
           pending = null;
           continue;
@@ -304,11 +322,17 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
           pending = null;
           continue;
         }
-        // No end within the plausible span / hold limit: drop the held span
-        // (fail closed) and resume streaming after it.
+        // No end within the plausible span / hold limit: withhold, and
+        // discard everything up to the end marker (or end of stream). The
+        // held text is dropped now; nothing after it is buffered.
         report("overflow", p.nonce);
         out += p.unterminatedPlaceholder;
-        buf = buf.slice(p.beginLength + p.holdLimit);
+        if (at >= 0) {
+          buf = buf.slice(at + p.end.length);
+        } else {
+          discardUntil = p.end;
+          buf = buf.slice(p.beginLength);
+        }
         pending = null;
         continue;
       }
@@ -350,7 +374,8 @@ export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPen
         nonce: marker.nonce,
         end: endMarker(marker.nonce),
         placeholder: withheldPlaceholder(marker),
-        unterminatedPlaceholder: withheldPlaceholder(marker, true),
+        unterminatedPlaceholder: withheldPlaceholder(marker, "unterminated"),
+        truncatedPlaceholder: withheldPlaceholder(marker, "truncated"),
         minSpan: chars,
         holdLimit: Math.min(maxPending, chars * SPAN_MAX_FACTOR + SPAN_OVERHEAD_CHARS),
         scanFrom: markerText.length,

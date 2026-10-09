@@ -5,9 +5,10 @@
 // after the read tools' own framing is stripped (the agent may paraphrase).
 // So for every company with `document_access_enabled` on, run events and run
 // log files older than the window are deleted. The run row itself stays
-// (status, timing, cost) but loses every free-text column — error, result,
-// excerpts, progress lines, and all of its context snapshot except the
-// routing ids. Its log pointer is cleared, so the log route answers an empty
+// (status, timing, cost) but loses every free-text column — error, result
+// text, excerpts, progress lines, and all of its context snapshot except the
+// routing ids. Operational result keys stay (workspace quarantine, run facts,
+// cost): see RETAINED_RESULT_KEYS. Its log pointer is cleared, so the log route answers an empty
 // `missing` log instead of a 404 for a file that is gone.
 //
 // Modelled on plugin-log-retention.ts: batched deletes, an iteration cap, and
@@ -53,10 +54,53 @@ const RETAINED_CONTEXT_KEYS = [
   "executionWorkspaceId",
 ] as const;
 
+/**
+ * The result keys a purged run keeps: operational state other code reads, no
+ * free text. `workspacePersistence` is a workspace quarantine that only an
+ * audited person may lift (workspace-persistence-recovery.ts); `runFacts`
+ * feeds the token ceiling; the cost and billing keys feed run listings and
+ * cost views; the rest are stop/timeout/retry classification. Dropped:
+ * summary, result, message, error, stdout, stderr and anything else.
+ */
+const RETAINED_RESULT_KEYS = [
+  "workspacePersistence",
+  "workspacePersistenceUnverified",
+  "runFacts",
+  "total_cost_usd",
+  "cost_usd",
+  "costUsd",
+  "costSource",
+  "billingType",
+  "billing_type",
+  "usageBasis",
+  "num_turns",
+  "num_tool_calls",
+  "failureClassification",
+  "errorFamily",
+  "retryNotBefore",
+  "transientRetryNotBefore",
+  "stopReason",
+  "timeoutFired",
+  "timeoutSource",
+  "timeoutConfigured",
+  "effectiveTimeoutSec",
+  "effectiveTimeoutMs",
+] as const;
+
+/** The object with only `keys` (values untouched, nested nulls included). */
+function retainedKeysSql(column: typeof heartbeatRuns.contextSnapshot | typeof heartbeatRuns.resultJson, keys: readonly string[]) {
+  const list = sql.join(keys.map((key) => sql`${key}::text`), sql`, `);
+  return sql`case when ${column} is null or jsonb_typeof(${column}) <> 'object' then null
+    else (select coalesce(jsonb_object_agg(kv.key, kv.value), '{}'::jsonb)
+          from jsonb_each(${column}) as kv where kv.key in (${list})) end`;
+}
+
 function retainedContextSql() {
-  const pairs = RETAINED_CONTEXT_KEYS.map((key) => sql`${key}::text, ${heartbeatRuns.contextSnapshot} -> ${key}::text`);
-  return sql`case when ${heartbeatRuns.contextSnapshot} is null then null
-    else jsonb_strip_nulls(jsonb_build_object(${sql.join(pairs, sql`, `)})) end`;
+  return retainedKeysSql(heartbeatRuns.contextSnapshot, RETAINED_CONTEXT_KEYS);
+}
+
+function retainedResultSql() {
+  return retainedKeysSql(heartbeatRuns.resultJson, RETAINED_RESULT_KEYS);
 }
 
 export function documentRunRetentionDays(env: NodeJS.ProcessEnv = process.env): number {
@@ -130,7 +174,7 @@ export async function pruneDocumentRunData(
             or(
               isNotNull(heartbeatRuns.logRef),
               isNotNull(heartbeatRuns.error),
-              isNotNull(heartbeatRuns.resultJson),
+              sql`${heartbeatRuns.resultJson} is distinct from ${retainedResultSql()}`,
               isNotNull(heartbeatRuns.stdoutExcerpt),
               isNotNull(heartbeatRuns.stderrExcerpt),
               isNotNull(heartbeatRuns.nextAction),
@@ -170,7 +214,7 @@ export async function pruneDocumentRunData(
             logStore: null,
             logRef: null,
             error: null,
-            resultJson: null,
+            resultJson: retainedResultSql(),
             stdoutExcerpt: null,
             stderrExcerpt: null,
             nextAction: null,
