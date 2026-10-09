@@ -4,8 +4,8 @@
 // A document-enabled agent reads its steward's files, and its transcript can
 // quote them. So while the flag is on, a run's content — the run row's free
 // text, its events and its log — is readable only by the run agent's CURRENT
-// steward (the live `agent_stewardships` row) or an instance admin. Everyone
-// else gets 404, as for an agent hidden by agent visibility: the run is
+// steward (the live `agent_stewardships` row), an instance admin, or the agent
+// itself (it saw that content live, as it ran). Everyone else gets 404, as for an agent hidden by agent visibility: the run is
 // nonexistent to them. With the flag off nothing changes.
 //
 // Listings keep the row (status, timing, cost) so counts and dashboards stay
@@ -23,6 +23,11 @@ type Actor = Request["actor"];
 /** The local board and instance admins read every run. */
 export function actorBypassesDocumentRunRule(actor: Actor): boolean {
   return actor.type === "board" && (actor.source === "local_implicit" || actor.isInstanceAdmin === true);
+}
+
+/** An agent reads its own runs: it already saw their content as it ran. */
+export function actorIsRunAgent(actor: Actor, agentId: string | null | undefined): boolean {
+  return actor.type === "agent" && typeof actor.agentId === "string" && actor.agentId.length > 0 && actor.agentId === agentId;
 }
 
 export function documentRunAccess(db: Db) {
@@ -51,6 +56,7 @@ export function documentRunAccess(db: Db) {
   async function canReadRunContent(actor: Actor, run: { companyId: string; agentId: string }): Promise<boolean> {
     if (!(await documentAccessEnabled(run.companyId))) return true;
     if (actorBypassesDocumentRunRule(actor)) return true;
+    if (actorIsRunAgent(actor, run.agentId)) return true;
     if (actor.type !== "board" || !actor.userId) return false;
     return (await currentStewardUserId(run.companyId, run.agentId)) === actor.userId;
   }
@@ -67,6 +73,7 @@ export function documentRunAccess(db: Db) {
   async function readableAgentIds(actor: Actor, companyId: string): Promise<ReadonlySet<string> | null> {
     if (!(await documentAccessEnabled(companyId))) return null;
     if (actorBypassesDocumentRunRule(actor)) return null;
+    if (actor.type === "agent") return new Set(actor.agentId ? [actor.agentId] : []);
     if (actor.type !== "board" || !actor.userId) return new Set();
     const rows = await db
       .select({ agentId: agentStewardships.agentId })
@@ -101,6 +108,9 @@ const RUN_CONTENT_FIELDS = [
   "resultResult",
   "resultMessage",
   "resultError",
+  // Progress lines the agent wrote about its own work.
+  "nextAction",
+  "livenessReason",
 ] as const;
 
 /** The row with its free text nulled; fields it does not have stay absent. */

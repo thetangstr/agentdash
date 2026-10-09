@@ -3,7 +3,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentStewardships, approvals, companyMemberships, featureFlags, heartbeatRuns, instanceUserRoles, issues, projects } from "@paperclipai/db";
 import { FEATURE_FLAG_KEYS, type LiveEvent } from "@paperclipai/shared";
-import { actorBypassesDocumentRunRule } from "../routes/document-run-access.js";
+import { actorBypassesDocumentRunRule, actorIsRunAgent } from "../routes/document-run-access.js";
 import {
   approvalBudgetProjectId,
   isCanonicalUuid,
@@ -290,9 +290,10 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     try {
       if (!(await documentAccessEnabled(companyId))) return true;
       if (actorBypassesDocumentRunRule(req.actor)) return true;
-      if (req.actor.type !== "board" || !req.actor.userId) return false;
       const agentId = asRecord(event.payload)?.agentId;
       if (typeof agentId !== "string" || agentId.length === 0) return false;
+      if (actorIsRunAgent(req.actor, agentId)) return true;
+      if (req.actor.type !== "board" || !req.actor.userId) return false;
       return (await currentStewardOf(companyId, agentId)) === req.actor.userId;
     } catch {
       return false;

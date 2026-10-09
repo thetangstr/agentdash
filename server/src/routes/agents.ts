@@ -5080,7 +5080,9 @@ export function agentRoutes(
         .orderBy(desc(heartbeatRuns.createdAt))
         .limit(targetRunCount - liveRuns.length);
 
-      const rows = [...liveRuns, ...recentRuns];
+      // Document access (slice 6b): progress text of runs the actor may not
+      // read is dropped; the rows stay.
+      const rows = withholdUnreadableRunContent([...liveRuns, ...recentRuns], await documentRuns.readableAgentIds(req.actor, companyId));
       res.json(await Promise.all(rows.map(async (run) => redactRunLogValue({
         ...run,
         outputSilence: await heartbeat.buildRunOutputSilence(run),
@@ -5088,7 +5090,8 @@ export function agentRoutes(
       return;
     }
 
-    res.json(await Promise.all(liveRuns.map(async (run) => redactRunLogValue({
+    const readableLiveRuns = withholdUnreadableRunContent(liveRuns, await documentRuns.readableAgentIds(req.actor, companyId));
+    res.json(await Promise.all(readableLiveRuns.map(async (run) => redactRunLogValue({
       ...run,
       outputSilence: await heartbeat.buildRunOutputSilence(run),
     }))));
@@ -5327,7 +5330,8 @@ export function agentRoutes(
       )
       .orderBy(desc(heartbeatRuns.createdAt));
 
-    res.json(await Promise.all(liveRuns.map(async (run) => redactRunLogValue({
+    const readableLiveRuns = withholdUnreadableRunContent(liveRuns, await documentRuns.readableAgentIds(req.actor, issue.companyId));
+    res.json(await Promise.all(readableLiveRuns.map(async (run) => redactRunLogValue({
       ...run,
       outputSilence: await heartbeat.buildRunOutputSilence({ ...run, companyId: issue.companyId }),
     }))));
@@ -5373,8 +5377,9 @@ export function agentRoutes(
       return;
     }
 
+    const readable = await documentRuns.canReadRunContent(req.actor, { companyId: issue.companyId, agentId: agent.id });
     res.json(redactRunLogValue({
-      ...run,
+      ...(readable ? run : withoutRunContent(run)),
       agentId: agent.id,
       agentName: agent.name,
       adapterType: agent.adapterType,

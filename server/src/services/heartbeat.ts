@@ -65,6 +65,7 @@ import {
   stripFramedDocumentText,
   stripFramedDocumentTextInValue,
   type DocumentStripAnomaly,
+  type DocumentStripOptions,
 } from "./document-content.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
@@ -234,12 +235,19 @@ const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
  * marker is left in the stored output and logged here — run id, where it was
  * seen and a nonce prefix only, never the surrounding text.
  */
-function documentStripAnomalyLogger(runId: string, where: "stdout" | "stderr" | "event" | "run_row") {
-  return (anomaly: DocumentStripAnomaly) => {
-    logger.warn(
-      { runId, where, kind: anomaly.kind, noncePrefix: anomaly.noncePrefix },
-      "document text marker left in run output",
-    );
+function documentStripOptions(
+  runId: string,
+  where: "stdout" | "stderr" | "event" | "run_row" | "runtime_state",
+): DocumentStripOptions {
+  return {
+    // Frames verify only in the output of the run they were minted for.
+    runId,
+    onAnomaly: (anomaly: DocumentStripAnomaly) => {
+      logger.warn(
+        { runId, where, kind: anomaly.kind, noncePrefix: anomaly.noncePrefix },
+        "document text marker anomaly in run output",
+      );
+    },
   };
 }
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -3213,6 +3221,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     lastRunId: string | null;
     lastError: string | null;
   }) {
+    // AgentDash (document access, slice 6b): the stored error never carries
+    // framed document text (frames verify against the run that wrote them).
+    const lastError = input.lastError && input.lastRunId
+      ? stripFramedDocumentText(input.lastError, documentStripOptions(input.lastRunId, "runtime_state"))
+      : input.lastError;
     const existing = await getTaskSession(
       input.companyId,
       input.agentId,
@@ -3226,7 +3239,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           sessionParamsJson: input.sessionParamsJson,
           sessionDisplayId: input.sessionDisplayId,
           lastRunId: input.lastRunId,
-          lastError: input.lastError,
+          lastError,
           updatedAt: new Date(),
         })
         .where(eq(agentTaskSessions.id, existing.id))
@@ -3244,7 +3257,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         sessionParamsJson: input.sessionParamsJson,
         sessionDisplayId: input.sessionDisplayId,
         lastRunId: input.lastRunId,
-        lastError: input.lastError,
+        lastError,
       })
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -3348,9 +3361,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // the result (and errors can quote it); framed document text is
         // withheld from the stored row as it is from the log.
         ...(patch?.resultJson !== undefined
-          ? { resultJson: preserveWorkspaceAttempt(stripFramedDocumentTextInValue(patch.resultJson, documentStripAnomalyLogger(runId, "run_row"))) }
+          ? { resultJson: preserveWorkspaceAttempt(stripFramedDocumentTextInValue(patch.resultJson, documentStripOptions(runId, "run_row"))) }
           : {}),
-        ...(typeof patch?.error === "string" ? { error: stripFramedDocumentText(patch.error, documentStripAnomalyLogger(runId, "run_row")) } : {}),
+        ...(typeof patch?.error === "string" ? { error: stripFramedDocumentText(patch.error, documentStripOptions(runId, "run_row")) } : {}),
         ...(patch?.usageJson !== undefined ? { usageJson: preserveWorkspaceAttemptProvenance(patch.usageJson) } : {}),
         errorCode: sql`case when ${workspacePersistenceHasProvenance} and ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true' then ${WORKSPACE_PERSISTENCE_RECOVERY_CODE} else ${patch?.errorCode === undefined ? heartbeatRuns.errorCode : patch.errorCode} end`,
         updatedAt: new Date() })
@@ -4052,11 +4065,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
     // AgentDash (document access, slice 6b): framed document text never
     // reaches the events table or the live bus; only a withheld placeholder.
-    const onDocumentAnomaly = documentStripAnomalyLogger(run.id, "event");
+    const documentStrip = documentStripOptions(run.id, "event");
     event = {
       ...event,
-      message: event.message ? stripFramedDocumentText(event.message, onDocumentAnomaly) : event.message,
-      payload: event.payload ? stripFramedDocumentTextInValue(event.payload, onDocumentAnomaly) : event.payload,
+      message: event.message ? stripFramedDocumentText(event.message, documentStrip) : event.message,
+      payload: event.payload ? stripFramedDocumentTextInValue(event.payload, documentStrip) : event.payload,
     };
     // AgentDash (GH #782): GitHub tokens are scrubbed by shape from events too.
     // AgentDash (GH #992): the full secret pattern set plus this instance's
@@ -6281,7 +6294,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         sessionId: session.legacySessionId,
         lastRunId: run.id,
         lastRunStatus: run.status,
-        lastError: result.errorMessage ?? null,
+        // AgentDash (document access, slice 6b): adapter errors can quote tool
+        // output; framed document text never reaches the runtime state.
+        lastError: result.errorMessage ? stripFramedDocumentText(result.errorMessage, documentStripOptions(run.id, "runtime_state")) : null,
         totalInputTokens: sql`${agentRuntimeState.totalInputTokens} + ${inputTokens}`,
         totalOutputTokens: sql`${agentRuntimeState.totalOutputTokens} + ${outputTokens}`,
         totalCachedInputTokens: sql`${agentRuntimeState.totalCachedInputTokens} + ${cachedInputTokens}`,
@@ -7389,10 +7404,26 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       // marker split across chunks is buffered, not missed. The agent's own
       // stdin/stdout is untouched — this is the server's copy of the output.
       const documentTextStrippers = {
-        stdout: createDocumentTextStripper({ onAnomaly: documentStripAnomalyLogger(run.id, "stdout") }),
-        stderr: createDocumentTextStripper({ onAnomaly: documentStripAnomalyLogger(run.id, "stderr") }),
+        stdout: createDocumentTextStripper(documentStripOptions(run.id, "stdout")),
+        stderr: createDocumentTextStripper(documentStripOptions(run.id, "stderr")),
+      };
+      // While a frame is held the strippers emit nothing, so liveness (the
+      // run row's lastOutput* fields, which the stale-run watchdog and the
+      // liveness probe read) follows RAW output received, not output stored:
+      // a long document read must not look like a stalled run.
+      const noteRawOutput = async (stream: "stdout" | "stderr") => {
+        const at = new Date();
+        if (firstOutputAt === null) firstOutputAt = at;
+        outputProgressState.pending = {
+          at,
+          seq: outputSeq,
+          stream,
+          bytes: persistedLogBytes,
+        };
+        await flushOutputProgress();
       };
       const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
+        if (chunk.length > 0) await noteRawOutput(stream);
         const documentSafeChunk = documentTextStrippers[stream].push(chunk);
         const githubSafeChunk = githubTokenRedactors[stream].push(
           redactCurrentUserText(documentSafeChunk, currentUserRedactionOptions),
@@ -7788,7 +7819,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }),
         adapterResult.summary ?? null,
         agent.adapterType,
-      ), documentStripAnomalyLogger(run.id, "run_row"));
+      ), documentStripOptions(run.id, "run_row"));
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
       // owns the terminal write — the cancel path commits "cancelled" with

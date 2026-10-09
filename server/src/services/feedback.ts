@@ -23,6 +23,7 @@ import { claudeConfigDir, parseClaudeStreamJson } from "@paperclipai/adapter-cla
 import { codexHomeDir, parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
 import { parseOpenCodeJsonl } from "@paperclipai/adapter-opencode-local/server";
 import {
+  FEATURE_FLAG_KEYS,
   DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
   instanceGeneralSettingsSchema,
@@ -49,6 +50,7 @@ import {
   sha256Digest,
 } from "./feedback-redaction.js";
 import { getRunLogStore } from "./run-log-store.js";
+import { featureFlagsService } from "./feature-flags.js";
 
 const FEEDBACK_SCHEMA_VERSION = "paperclip-feedback-envelope-v2";
 const FEEDBACK_BUNDLE_VERSION = "paperclip-feedback-bundle-v2";
@@ -67,6 +69,20 @@ const MAX_INSTRUCTION_FILES = 20;
 const MAX_TRACE_FILE_CHARS = 10_000_000;
 const DEFAULT_INSTANCE_SETTINGS_SINGLETON_KEY = "default";
 const FEEDBACK_EXPORT_BACKEND_NOT_CONFIGURED = "Feedback export backend is not configured";
+
+/**
+ * AgentDash (document access, slice 6b): a company with document access on has
+ * agents that read its people's files, and a trace bundle carries the source
+ * run's transcript. Such traces are never shared off-instance, and bundles
+ * leave out the adapters' own transcript files (which never pass the
+ * document-text strip pass).
+ */
+const FEEDBACK_EXPORT_DOCUMENT_ACCESS_REFUSED =
+  "Not shared: document access is enabled for this company, so its run traces stay on this instance";
+
+function documentAccessEnabledFor(db: Pick<Db, "select">, companyId: string): Promise<boolean> {
+  return featureFlagsService(db as Db).isEnabled(companyId, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS);
+}
 
 type FeedbackTraceRow = typeof feedbackExports.$inferSelect & {
   issueIdentifier: string | null;
@@ -1555,7 +1571,11 @@ async function buildFeedbackTraceBundleFromRow(
         appendNote(notes, "run_log_missing");
       }
 
-      if (run.adapterType === "codex_local") {
+      if (await documentAccessEnabledFor(db, run.companyId)) {
+        // Adapter-native transcripts (session files, debug logs, raw stdout)
+        // never pass the document-text strip pass: left out.
+        appendNote(notes, "adapter_trace_withheld_document_access");
+      } else if (run.adapterType === "codex_local") {
         const adapter = await buildCodexTraceFiles({
           companyId: row.companyId,
           sessionId: run.sessionIdAfter ?? run.sessionIdBefore,
@@ -1830,6 +1850,23 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
         attempted += 1;
 
         try {
+          if (await documentAccessEnabledFor(db, row.companyId)) {
+            // Queued before the flag went on: refused, never uploaded, and
+            // moved to local_only so later flushes do not pick it up again.
+            await db
+              .update(feedbackExports)
+              .set({
+                status: "local_only",
+                destination: null,
+                attemptCount: row.attemptCount + 1,
+                lastAttemptedAt: attemptAt,
+                failureReason: FEEDBACK_EXPORT_DOCUMENT_ACCESS_REFUSED,
+                updatedAt: attemptAt,
+              })
+              .where(eq(feedbackExports.id, row.id));
+            failed += 1;
+            continue;
+          }
           const bundle = await buildFeedbackTraceBundleFromRow(db, row);
           await shareClient.uploadTraceBundle(bundle);
 
@@ -1905,7 +1942,9 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
 
         const now = new Date();
         const normalizedReason = normalizeReason(input.vote, input.reason);
-        const sharedWithLabs = input.allowSharing === true;
+        // Document access (slice 6b): never share a flagged company's traces;
+        // the vote is still recorded, locally.
+        const sharedWithLabs = input.allowSharing === true && !(await documentAccessEnabledFor(tx, issue.companyId));
         let consentEnabledNow = false;
         let consentVersion = existingCompany.feedbackDataSharingTermsVersion ?? null;
         let persistedSharingPreference: "allowed" | "not_allowed" | null = null;

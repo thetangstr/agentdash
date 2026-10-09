@@ -14,18 +14,41 @@
 // - The begin marker carries the item id, title and character count (base64url,
 //   so the marker survives JSON-escaping by any adapter transcript unchanged:
 //   it holds no quote, backslash, control or non-ASCII character).
-// - `mac` is an HMAC over those fields under a key derived from the server secret.
-//   It is what makes a marker "server-generated": an agent (or a document) that
-//   prints a marker pair of its own cannot hide its output from the log.
+// - `mac` is an HMAC over those fields AND the id of the run the read was made
+//   for (not printed in the marker), under a key derived from the server
+//   secret.
 //
-// Stripping. `createDocumentTextStripper` is a stateful, per-stream pass. It
-// replaces everything from a valid begin marker through the end marker with
-// the same nonce by `[document text withheld: <id> <title> <chars> chars]`.
-// A marker split across chunk boundaries is handled by buffering: text that
-// could be the start of a marker is held back, and once a valid begin marker
-// is seen the stream is held until its end marker arrives (bounded by
-// `DOCUMENT_STRIP_MAX_PENDING_CHARS`). Unmatched or forged markers are left
-// alone and reported through `onAnomaly` — never silently dropped.
+// What this guarantees, and what it does not:
+// - Text that a document contains cannot end or forge a frame: it cannot know
+//   the nonce or compute the MAC.
+// - Neither can an agent mint a frame of its own. It CAN re-print a genuine
+//   begin marker it was handed (a replay) to hide some of its own output, but
+//   only inside the same run (the MAC is bound to the run id), and only for a
+//   span plausible for that frame's declared length: from `chars` to
+//   `SPAN_MAX_FACTOR`×`chars` plus a fixed allowance (JSON escaping, once or
+//   twice, never makes text shorter and makes it at most ~7× longer). A pair
+//   whose span is shorter is treated as forged and left in place; output past
+//   the longest plausible span is never withheld.
+// - A verified begin marker whose end never arrives (truncated transcript,
+//   killed process, hold limit) fails CLOSED: the held text is replaced by an
+//   "unterminated" placeholder, never released.
+// - Rotating the server secret (PAPERCLIP_AGENT_JWT_SECRET / BETTER_AUTH_SECRET)
+//   while a run is in flight leaves that run's outstanding frames unverified:
+//   they are reported as forged and stay in the stored copy. Rotate between
+//   runs.
+// - Frames are only recognized in the form printed here. An adapter that
+//   rewrites or re-encodes markers (anything beyond JSON escaping) defeats
+//   recognition; such frames stay in place.
+//
+// Stripping. `createDocumentTextStripper` is a stateful, per-stream pass built
+// for one run. It replaces everything from a valid begin marker through the
+// end marker with the same nonce by
+// `[document text withheld: <id> <title> <chars> chars]`. A marker split across
+// chunk boundaries is handled by buffering: text that could be the start of a
+// marker is held back, and once a valid begin marker is seen the stream is
+// held until its end marker arrives (bounded by the frame's plausible span and
+// `DOCUMENT_STRIP_MAX_PENDING_CHARS`). Every anomaly is reported through
+// `onAnomaly` — never silently dropped.
 //
 // The agent is unaffected: this runs on the server's copy of the adapter's
 // output (the onLog tap), not on the agent's own stdin/stdout.
@@ -45,13 +68,16 @@ const MAX_TITLE_CHARS = 200;
 
 /**
  * Most characters held back while waiting for the end marker of a valid begin
- * marker. Document reads return at most 60 000 characters per call; adapter
- * transcripts JSON-escape them (up to six characters per character for
- * `\uXXXX`) and may echo a tool result more than once, so the cap leaves room
- * for that and still bounds memory. Past it the begin marker is reported as
- * unmatched and the held text is released as it is.
+ * marker: document reads return at most 60 000 characters per call, and JSON
+ * escaping in an adapter transcript makes that at most ~10× longer. Past it
+ * the held text is dropped (fail closed) and streaming resumes after it.
  */
-export const DOCUMENT_STRIP_MAX_PENDING_CHARS = 2_000_000;
+export const DOCUMENT_STRIP_MAX_PENDING_CHARS = 600_000;
+
+/** Longest plausible span between a frame's markers, as a multiple of `chars`. */
+const SPAN_MAX_FACTOR = 7;
+/** Fixed allowance on top: the newlines around the text, escaped twice. */
+const SPAN_OVERHEAD_CHARS = 256;
 
 // Frame key, derived from the instance's persistent server secret so markers
 // minted before a restart still verify after it: a deploy that lands mid-run
@@ -77,6 +103,12 @@ const PROVIDER_LABELS: Record<string, string> = {
 const UNTRUSTED_NOTICE_HEAD = "The text between the markers below was read from";
 
 export type DocumentFrameMeta = {
+  /**
+   * The heartbeat run the read was made for (the agent request's run id). The
+   * frame verifies only in that run's output; without it the frame is never
+   * stripped, so callers must pass it.
+   */
+  runId: string;
   /** Provider item id. Not secret; shown in the withheld placeholder. */
   docId?: string | null;
   /** Item name. Shown in the withheld placeholder. */
@@ -89,7 +121,15 @@ export type DocumentFrameMeta = {
 };
 
 export type DocumentStripAnomaly = {
-  kind: "unmatched_begin" | "unmatched_end" | "forged";
+  /**
+   * unterminated: verified begin, stream ended without its end (text withheld).
+   * overflow: verified begin, no end within the plausible span or hold limit
+   *   (held text withheld, streaming resumed after it).
+   * implausible: a pair whose span is shorter than the declared length (left).
+   * forged: begin marker whose MAC does not verify for this run (left).
+   * unmatched_end: an end marker with no open frame (left).
+   */
+  kind: "unterminated" | "overflow" | "implausible" | "forged" | "unmatched_end";
   /** First 8 hex characters of the nonce, for correlation. Never text. */
   noncePrefix: string | null;
 };
@@ -106,9 +146,9 @@ function fromB64url(value: string): string {
   return Buffer.from(value, "base64url").toString("utf8");
 }
 
-function macFor(fields: { provider: string; nonce: string; id: string; title: string; chars: string }): string {
+function macFor(fields: { runId: string; provider: string; nonce: string; id: string; title: string; chars: string }): string {
   return createHmac("sha256", getFrameKey())
-    .update(`v1\u0000${fields.provider}\u0000${fields.nonce}\u0000${fields.id}\u0000${fields.title}\u0000${fields.chars}`)
+    .update(`v1\u0000${fields.runId}\u0000${fields.provider}\u0000${fields.nonce}\u0000${fields.id}\u0000${fields.title}\u0000${fields.chars}`)
     .digest("hex")
     .slice(0, 32);
 }
@@ -127,16 +167,16 @@ function endMarker(nonce: string): string {
  * then the text between nonce-carrying begin/end markers. Frame names,
  * descriptions and body text; never ids, sizes, URLs or timestamps.
  *
- * Idempotent: text that already begins with a frame is returned unchanged.
+ * Always frames: whether text is "already framed" is never inferred from the
+ * text, which a document author controls. Frame each value exactly once.
  */
-export function frameUntrustedDocumentText(provider: string, text: string, meta: DocumentFrameMeta = {}): string {
-  if (text.startsWith(MARKER_PREFIX) || text.startsWith(UNTRUSTED_NOTICE_HEAD)) return text;
+export function frameUntrustedDocumentText(provider: string, text: string, meta: DocumentFrameMeta): string {
   const providerKey = normalizeProvider(provider);
   const nonce = meta.nonce && /^[0-9a-f]{32}$/.test(meta.nonce) ? meta.nonce : newDocumentFrameNonce();
   const id = b64url((meta.docId ?? "").slice(0, MAX_ID_CHARS));
   const title = b64url((meta.title ?? "").slice(0, MAX_TITLE_CHARS));
   const chars = String(text.length);
-  const mac = macFor({ provider: providerKey, nonce, id, title, chars });
+  const mac = macFor({ runId: meta.runId, provider: providerKey, nonce, id, title, chars });
   const label = PROVIDER_LABELS[providerKey] ?? "an external document";
   return [
     `${UNTRUSTED_NOTICE_HEAD} ${label}.`,
@@ -152,13 +192,13 @@ type ParsedMarker =
   | { kind: "end"; nonce: string }
   | { kind: "begin"; nonce: string; valid: boolean; docId: string; title: string; chars: string };
 
-function parseMarker(text: string): ParsedMarker | null {
+function parseMarker(text: string, runId: string): ParsedMarker | null {
   const end = END_RE.exec(text);
   if (end) return { kind: "end", nonce: end[1]! };
   const begin = BEGIN_RE.exec(text);
   if (!begin) return null;
   const [, provider, nonce, id, title, chars, mac] = begin as unknown as [string, string, string, string, string, string, string];
-  const expected = Buffer.from(macFor({ provider, nonce, id, title, chars }), "utf8");
+  const expected = Buffer.from(macFor({ runId, provider, nonce, id, title, chars }), "utf8");
   const given = Buffer.from(mac, "utf8");
   const valid = expected.length === given.length && timingSafeEqual(expected, given);
   return { kind: "begin", nonce, valid, docId: fromB64url(id), title: fromB64url(title), chars };
@@ -178,10 +218,10 @@ function placeholderText(value: string, fallback: string, max: number): string {
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
-function withheldPlaceholder(marker: { docId: string; title: string; chars: string }): string {
+function withheldPlaceholder(marker: { docId: string; title: string; chars: string }, unterminated = false): string {
   const id = placeholderText(marker.docId, "unknown-item", MAX_ID_CHARS);
   const title = placeholderText(marker.title, "untitled", MAX_TITLE_CHARS);
-  return `[document text withheld: ${id} ${title} ${marker.chars} chars]`;
+  return `[document text withheld: ${id} ${title} ${unterminated ? "unterminated" : `${marker.chars} chars`}]`;
 }
 
 /** Length of the longest suffix of `text` that is a proper prefix of the marker prefix. */
@@ -196,15 +236,19 @@ function partialPrefixLength(text: string): number {
 export type DocumentTextStripper = {
   /** Feed one chunk; returns what is safe to persist now (possibly ""). */
   push(chunk: string): string;
-  /** End of stream: release everything still held. */
+  /** End of stream: release everything still held (an open frame stays withheld). */
   flush(): string;
 };
 
-export function createDocumentTextStripper(opts: {
+export type DocumentStripOptions = {
+  /** The run whose output this is; only frames minted for it verify. */
+  runId: string;
   onAnomaly?: (anomaly: DocumentStripAnomaly) => void;
-  maxPendingChars?: number;
-} = {}): DocumentTextStripper {
+};
+
+export function createDocumentTextStripper(opts: DocumentStripOptions & { maxPendingChars?: number }): DocumentTextStripper {
   const maxPending = Math.max(1, opts.maxPendingChars ?? DOCUMENT_STRIP_MAX_PENDING_CHARS);
+  const runId = opts.runId;
   const report = (kind: DocumentStripAnomaly["kind"], nonce: string | null) => {
     try {
       opts.onAnomaly?.({ kind, noncePrefix: nonce ? nonce.slice(0, 8) : null });
@@ -213,29 +257,58 @@ export function createDocumentTextStripper(opts: {
     }
   };
   let buf = "";
-  let pending: { beginLength: number; nonce: string; end: string; placeholder: string; scanFrom: number } | null = null;
+  let pending: {
+    beginLength: number;
+    nonce: string;
+    end: string;
+    placeholder: string;
+    unterminatedPlaceholder: string;
+    minSpan: number;
+    holdLimit: number;
+    scanFrom: number;
+  } | null = null;
 
   function drain(final: boolean): string {
     let out = "";
     for (;;) {
       if (pending) {
-        const at = buf.indexOf(pending.end, pending.scanFrom);
-        if (at >= 0) {
-          out += pending.placeholder;
-          buf = buf.slice(at + pending.end.length);
+        const p = pending;
+        const at = buf.indexOf(p.end, p.scanFrom);
+        if (at >= 0 && at - p.beginLength <= p.holdLimit) {
+          if (at - p.beginLength < p.minSpan) {
+            // Shorter than the text it claims to frame: a replayed begin
+            // marker. Leave it; what follows is the agent's own output.
+            report("implausible", p.nonce);
+            out += buf.slice(0, p.beginLength);
+            buf = buf.slice(p.beginLength);
+            pending = null;
+            continue;
+          }
+          out += p.placeholder;
+          buf = buf.slice(at + p.end.length);
           pending = null;
           continue;
         }
-        if (!final && buf.length <= maxPending) {
+        const held = buf.length - p.beginLength;
+        if (at < 0 && !final && held <= p.holdLimit) {
           // Resume the end-marker search where this one stopped (minus an
           // end marker's worth, in case it is split across chunks).
-          pending.scanFrom = Math.max(pending.beginLength, buf.length - pending.end.length + 1);
+          p.scanFrom = Math.max(p.beginLength, buf.length - p.end.length + 1);
           return out;
         }
-        // No end marker in time: leave the begin marker and the text alone.
-        report("unmatched_begin", pending.nonce);
-        out += buf.slice(0, pending.beginLength);
-        buf = buf.slice(pending.beginLength);
+        if (at < 0 && final && held <= p.holdLimit) {
+          // Stream ended inside the frame: withhold all of it (fail closed).
+          report("unterminated", p.nonce);
+          out += p.unterminatedPlaceholder;
+          buf = "";
+          pending = null;
+          continue;
+        }
+        // No end within the plausible span / hold limit: drop the held span
+        // (fail closed) and resume streaming after it.
+        report("overflow", p.nonce);
+        out += p.unterminatedPlaceholder;
+        buf = buf.slice(p.beginLength + p.holdLimit);
         pending = null;
         continue;
       }
@@ -259,7 +332,7 @@ export function createDocumentTextStripper(opts: {
         continue;
       }
       const markerText = buf.slice(0, close + MARKER_SUFFIX.length);
-      const marker = parseMarker(markerText);
+      const marker = parseMarker(markerText, runId);
       if (!marker) {
         out += MARKER_PREFIX;
         buf = buf.slice(MARKER_PREFIX.length);
@@ -271,11 +344,15 @@ export function createDocumentTextStripper(opts: {
         buf = buf.slice(markerText.length);
         continue;
       }
+      const chars = Number.parseInt(marker.chars, 10);
       pending = {
         beginLength: markerText.length,
         nonce: marker.nonce,
         end: endMarker(marker.nonce),
         placeholder: withheldPlaceholder(marker),
+        unterminatedPlaceholder: withheldPlaceholder(marker, true),
+        minSpan: chars,
+        holdLimit: Math.min(maxPending, chars * SPAN_MAX_FACTOR + SPAN_OVERHEAD_CHARS),
         scanFrom: markerText.length,
       };
     }
@@ -294,25 +371,19 @@ export function createDocumentTextStripper(opts: {
 }
 
 /** Whole-text strip: for strings that are complete (run event messages, payload values). */
-export function stripFramedDocumentText(
-  text: string,
-  onAnomaly?: (anomaly: DocumentStripAnomaly) => void,
-): string {
+export function stripFramedDocumentText(text: string, opts: DocumentStripOptions): string {
   if (!text || !text.includes(MARKER_PREFIX)) return text;
-  const stripper = createDocumentTextStripper({ onAnomaly });
+  const stripper = createDocumentTextStripper(opts);
   return stripper.push(text) + stripper.flush();
 }
 
 /** `stripFramedDocumentText` over every string inside a JSON-like value. */
-export function stripFramedDocumentTextInValue<T>(
-  value: T,
-  onAnomaly?: (anomaly: DocumentStripAnomaly) => void,
-): T {
-  if (typeof value === "string") return stripFramedDocumentText(value, onAnomaly) as T;
+export function stripFramedDocumentTextInValue<T>(value: T, opts: DocumentStripOptions): T {
+  if (typeof value === "string") return stripFramedDocumentText(value, opts) as T;
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
-      const stripped = stripFramedDocumentTextInValue(item, onAnomaly);
+      const stripped = stripFramedDocumentTextInValue(item, opts);
       if (stripped !== item) changed = true;
       return stripped;
     });
@@ -322,7 +393,7 @@ export function stripFramedDocumentTextInValue<T>(
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      const stripped = stripFramedDocumentTextInValue(item, onAnomaly);
+      const stripped = stripFramedDocumentTextInValue(item, opts);
       if (stripped !== item) changed = true;
       next[key] = stripped;
     }

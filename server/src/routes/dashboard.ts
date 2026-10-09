@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { dashboardService } from "../services/dashboard.js";
 import { issues, agents, costEvents } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
+import { documentRunAccess } from "./document-run-access.js";
 import {
   agentVisibilityCondition,
   approvalVisibilityCondition,
@@ -68,10 +69,19 @@ export function dashboardRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     await resolveAgentVisibility(db, req, companyId);
+    const workingNow = await svc.workingNow(companyId, {
+      visibleWhere: issueVisibilityCondition(req, companyId),
+    });
+    // Document access (slice 6b): the last step is the run's own progress
+    // text; it is dropped for runs the actor may not read.
+    const readable = await documentRunAccess(db).readableAgentIds(req.actor, companyId);
     res.json(
-      await svc.workingNow(companyId, {
-        visibleWhere: issueVisibilityCondition(req, companyId),
-      }),
+      readable === null
+        ? workingNow
+        : {
+            ...workingNow,
+            items: workingNow.items.map((item) => (readable.has(item.agent.id) ? item : { ...item, lastStep: null })),
+          },
     );
   });
 

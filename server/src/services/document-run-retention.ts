@@ -5,14 +5,16 @@
 // after the read tools' own framing is stripped (the agent may paraphrase).
 // So for every company with `document_access_enabled` on, run events and run
 // log files older than the window are deleted. The run row itself stays
-// (status, timing, cost); its log pointer is cleared, so the log route answers
-// an empty `missing` log instead of a 404 for a file that is gone.
+// (status, timing, cost) but loses every free-text column — error, result,
+// excerpts, progress lines, and all of its context snapshot except the
+// routing ids. Its log pointer is cleared, so the log route answers an empty
+// `missing` log instead of a 404 for a file that is gone.
 //
 // Modelled on plugin-log-retention.ts: batched deletes, an iteration cap, and
 // a start function that sweeps once at startup and then on an interval.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray, isNotNull, lt, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { featureFlags, heartbeatRunEvents, heartbeatRuns } from "@paperclipai/db";
 import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
@@ -34,6 +36,29 @@ const MAX_ITERATIONS = 100;
 /** Statuses of a run that may still be writing its log. */
 const ACTIVE_RUN_STATUSES = ["queued", "running"];
 
+/**
+ * The context-snapshot keys a purged run keeps: ids and enums that link it to
+ * its issue and wake, never text (a snapshot can carry a session handoff the
+ * agent wrote).
+ */
+const RETAINED_CONTEXT_KEYS = [
+  "issueId",
+  "taskId",
+  "taskKey",
+  "commentId",
+  "wakeCommentId",
+  "wakeReason",
+  "wakeSource",
+  "wakeTriggerDetail",
+  "executionWorkspaceId",
+] as const;
+
+function retainedContextSql() {
+  const pairs = RETAINED_CONTEXT_KEYS.map((key) => sql`${key}::text, ${heartbeatRuns.contextSnapshot} -> ${key}::text`);
+  return sql`case when ${heartbeatRuns.contextSnapshot} is null then null
+    else jsonb_strip_nulls(jsonb_build_object(${sql.join(pairs, sql`, `)})) end`;
+}
+
 export function documentRunRetentionDays(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[DOCUMENT_RUN_RETENTION_DAYS_ENV];
   const parsed = raw !== undefined && /^\d+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : NaN;
@@ -44,6 +69,8 @@ export type DocumentRunPruneResult = {
   companies: number;
   eventsDeleted: number;
   logFilesDeleted: number;
+  /** Runs whose log pointer and free text were cleared. */
+  runsCleared: number;
 };
 
 function logFilePath(basePath: string, logRef: string): string | null {
@@ -70,7 +97,7 @@ export async function pruneDocumentRunData(
     .from(featureFlags)
     .where(and(eq(featureFlags.flagKey, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS), eq(featureFlags.enabled, true)));
 
-  const result: DocumentRunPruneResult = { companies: flagged.length, eventsDeleted: 0, logFilesDeleted: 0 };
+  const result: DocumentRunPruneResult = { companies: flagged.length, eventsDeleted: 0, logFilesDeleted: 0, runsCleared: 0 };
 
   for (const { companyId } of flagged) {
     // Run events: batched by id so no single delete holds locks for long.
@@ -90,7 +117,9 @@ export async function pruneDocumentRunData(
       if (ids.length < BATCH_SIZE) break;
     }
 
-    // Run-log files of finished runs that ended before the cutoff.
+    // Run-log files and free text of finished runs that ended before the
+    // cutoff. A run is selected while anything is left to purge, so the
+    // update below takes it out of the next batch.
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       const runs = await db
         .select({ id: heartbeatRuns.id, logStore: heartbeatRuns.logStore, logRef: heartbeatRuns.logRef })
@@ -98,7 +127,16 @@ export async function pruneDocumentRunData(
         .where(
           and(
             eq(heartbeatRuns.companyId, companyId),
-            isNotNull(heartbeatRuns.logRef),
+            or(
+              isNotNull(heartbeatRuns.logRef),
+              isNotNull(heartbeatRuns.error),
+              isNotNull(heartbeatRuns.resultJson),
+              isNotNull(heartbeatRuns.stdoutExcerpt),
+              isNotNull(heartbeatRuns.stderrExcerpt),
+              isNotNull(heartbeatRuns.nextAction),
+              isNotNull(heartbeatRuns.livenessReason),
+              sql`${heartbeatRuns.contextSnapshot} is distinct from ${retainedContextSql()}`,
+            ),
             notInArray(heartbeatRuns.status, ACTIVE_RUN_STATUSES),
             sql`coalesce(${heartbeatRuns.finishedAt}, ${heartbeatRuns.createdAt}) < ${cutoff.toISOString()}::timestamptz`,
           ),
@@ -128,14 +166,26 @@ export async function pruneDocumentRunData(
       if (cleared.length > 0) {
         await db
           .update(heartbeatRuns)
-          .set({ logStore: null, logRef: null, updatedAt: new Date() })
+          .set({
+            logStore: null,
+            logRef: null,
+            error: null,
+            resultJson: null,
+            stdoutExcerpt: null,
+            stderrExcerpt: null,
+            nextAction: null,
+            livenessReason: null,
+            contextSnapshot: retainedContextSql(),
+            updatedAt: new Date(),
+          })
           .where(inArray(heartbeatRuns.id, cleared));
+        result.runsCleared += cleared.length;
       }
       if (runs.length < BATCH_SIZE || cleared.length === 0) break;
     }
   }
 
-  if (result.eventsDeleted > 0 || result.logFilesDeleted > 0) {
+  if (result.eventsDeleted > 0 || result.logFilesDeleted > 0 || result.runsCleared > 0) {
     logger.info({ ...result, retentionDays }, "Pruned expired run output for document-enabled companies");
   }
   return result;
