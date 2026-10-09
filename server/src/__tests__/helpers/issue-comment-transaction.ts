@@ -26,6 +26,9 @@ export function commentTransactionReads(getIssue: () => Promise<any>, getRun: (i
             // stub below already assumes.
             if (tableName === "issue_work_products") return resolve([]);
             if (tableName === "issue_documents" || tableName === "documents") return resolve([]);
+            // AgentDash: an agent's person assignment looks up whether that
+            // person stewards an agent. These fixtures hold no stewardships.
+            if (tableName === "agent_stewardships") return resolve([]);
             if (tableName === "heartbeat_runs") {
               const run = await getRun((await getIssue()).executionRunId);
               // The real close-out queries only pick live runs; a finished

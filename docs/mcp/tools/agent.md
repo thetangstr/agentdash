@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `92bec8fe1` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `31955ca47` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -312,7 +312,7 @@ List comments for an approval
 
 ## `create_issue`
 
-Create a new issue
+Create a new issue. To give a colleague work, assign their agent (list_agents → steward.userId) via assigneeAgentId. assigneeUserId is for decisions only a human can make: when an agent assigns a person, the issue goes to the agent that person stewards unless assignToPerson is true.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -329,6 +329,7 @@ Create a new issue
 | `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no | Default: `"medium"`. |
 | `assigneeAgentId` | string \| null | no |  |
 | `assigneeUserId` | string \| null | no |  |
+| `assignToPerson` | boolean | no |  |
 | `originKind` | string (1 value omitted: engagement-specific) | no |  |
 | `originId` | string \| null | no |  |
 | `requestDepth` | integer | no | Default: `0`. Minimum: 0. |
@@ -374,7 +375,7 @@ Create a new issue
 
 ## `update_issue`
 
-Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work
+Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true. Handing your own issue back to the person who created it (assigneeAgentId null, assigneeUserId = creator) stays with them.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -391,6 +392,7 @@ Patch an issue, optionally including a comment; include resume=true when intenti
 | `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no | Default: `"medium"`. |
 | `assigneeAgentId` | string \| null | no |  |
 | `assigneeUserId` | string \| null | no |  |
+| `assignToPerson` | boolean | no |  |
 | `requestDepth` | integer | no | Minimum: 0. |
 | `requestId` | any | no |  |
 | `billingCode` | string \| null | no |  |
@@ -465,7 +467,7 @@ Add a comment to an issue; include resume=true when intentionally requesting fol
 
 ## `suggest_tasks`
 
-Create a suggest_tasks interaction on an issue
+Create a suggest_tasks interaction on an issue. For a colleague's task, set assigneeAgentId to their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment is drafted to that person's agent unless the task sets assignToPerson: true.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -488,6 +490,7 @@ Create a suggest_tasks interaction on an issue
 | `payload.tasks[].priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` \| null | no |  |
 | `payload.tasks[].assigneeAgentId` | string \| null | no |  |
 | `payload.tasks[].assigneeUserId` | string \| null | no |  |
+| `payload.tasks[].assignToPerson` | boolean | no |  |
 | `payload.tasks[].projectId` | string \| null | no |  |
 | `payload.tasks[].goalId` | string \| null | no |  |
 | `payload.tasks[].billingCode` | string \| null | no |  |

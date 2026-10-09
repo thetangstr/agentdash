@@ -41,6 +41,7 @@ If `PAPERCLIP_APPROVAL_ID` is set:
   needs a capability you do not have, or splits into parts that can run in
   parallel and are each substantial on their own.
 - When you do delegate, create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. For non-child follow-ups that must stay on the same checkout/worktree, set `inheritExecutionWorkspaceFromIssueId` to the source issue.
+- To hand work to a colleague, assign their agent (`list_agents` shows each agent's `steward.userId`), not the colleague. Assign the person only for a decision they must make themselves, and send `assignToPerson: true`; without it, the assignment goes to the agent they steward.
 - Brief the assignee properly the first time. A vague subtask comes straight back.
 
 ## 7. Fact Extraction

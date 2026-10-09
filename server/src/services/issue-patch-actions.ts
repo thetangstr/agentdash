@@ -53,6 +53,9 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   // transaction as the comment and status change, the work products that were
   // waiting for review are recorded as sent back.
   requestChanges?: boolean;
+  // AgentDash: the route moved an agent's person assignment to the agent that
+  // person stewards (services/stewarded-agent-routing.ts); recorded on the audit.
+  routedToStewardedAgent?: { fromUserId: string; toAgentId: string };
 }
 export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
   constructor(readonly recovery: { mutationId: string; companyId: string; issueId: string; commentId: string | null; decisionId: string | null }) {
@@ -330,6 +333,8 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       interrupt: _interruptRequested,
       hiddenAt: hiddenAtRaw,
       acceptedDocumentRevisions: _acceptedDocumentRevisions,
+      // A request flag for the route's stewarded-agent routing; never a column.
+      assignToPerson: _assignToPerson,
       ...rawUpdateFields
     } = intent;
     const updateFields: Parameters<typeof svc.update>[1] = { ...rawUpdateFields };
@@ -712,6 +717,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             // same audit with a status move, and the feed showed the bare
             // "updated ACM-6" — nothing said changes were asked for.
             ...(context.requestChanges === true ? { requestedChanges: true } : {}),
+            ...(context.routedToStewardedAgent ? { routedToStewardedAgent: context.routedToStewardedAgent } : {}),
             ...(plan.interruptRun ? { requestedInterruptRunId: plan.interruptRun.id } : {}),
             ...(plan.runsToCancelForClosedStatus.length > 0
               ? { requestedStatusCancelRunIds: plan.runsToCancelForClosedStatus.map((run) => run.id) }

@@ -40,7 +40,11 @@ and the comments before concluding anything is missing.
 
 - People: `GET $PAPERCLIP_API_URL/api/companies/{companyId}/people` resolves
   names to `userId` and membership status. Refer to a person by `userId` and
-  name. Agents are not given member email addresses: `email` is always `null`
+  name. To give a colleague work, assign their agent: `list_agents` shows
+  each agent's `steward.userId`. Assign the person (`assigneeUserId`) only
+  for a decision they must make themselves, and send `assignToPerson: true`
+  with it; otherwise the assignment goes to the agent they steward.
+  Agents are not given member email addresses: `email` is always `null`
   for you there, on `user-directory`, and on an agent's `steward` /
   `accountable` fields. That is policy, not missing data. Never infer an
   address from a name pattern, and never ask for or record one.

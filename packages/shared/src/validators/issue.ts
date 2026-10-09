@@ -154,6 +154,12 @@ const createIssueBaseSchema = z.object({
   priority: z.enum(ISSUE_PRIORITIES).optional().default("medium"),
   assigneeAgentId: z.string().uuid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),
+  /**
+   * AgentDash: when an agent assigns a person who stewards an agent, the work
+   * goes to that agent instead. `true` keeps it with the person — for a
+   * decision only a human can make. Ignored for human callers. Not stored.
+   */
+  assignToPerson: z.boolean().optional(),
   // AgentDash: ExecOS request identity. The external ExecOS client records
   // one normalized request as one issue; the pair is its durable idempotency
   // key (unique per company, see issues_execos_request_origin_uq). It is
@@ -334,6 +340,8 @@ export const suggestedTaskDraftSchema = z.object({
   priority: z.enum(ISSUE_PRIORITIES).nullable().optional(),
   assigneeAgentId: z.string().uuid().nullable().optional(),
   assigneeUserId: z.string().trim().min(1).nullable().optional(),
+  // AgentDash: same meaning as on issue create; applied when the drafts are written.
+  assignToPerson: z.boolean().optional(),
   projectId: z.string().uuid().nullable().optional(),
   goalId: z.string().uuid().nullable().optional(),
   billingCode: z.string().trim().max(120).nullable().optional(),

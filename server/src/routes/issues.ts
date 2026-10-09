@@ -127,6 +127,7 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import { resolveStewardedAgentRoute, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
 import {
   clearIssueRecoveryBudget,
   EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL,
@@ -666,6 +667,48 @@ export function issueRoutes(
     issue: { assigneeAgentId: string | null },
   ): boolean {
     return !input.assigneeAgentId && !input.assigneeUserId && Boolean(issue.assigneeAgentId);
+  }
+
+  /**
+   * AgentDash: an agent handing work to a person who stewards an agent hands
+   * it to that agent (see services/stewarded-agent-routing.ts). Returns the
+   * input with `assignToPerson` removed — it is a request flag, never stored —
+   * and the assignee moved when the rule applies. On an update, a person who
+   * already holds the issue is not a new assignment and is left alone, and an
+   * agent handing its issue back to the person who created it (the
+   * return-to-creator exemption in issue-patch-actions.ts) is returning work
+   * for review, not delegating it, so it is left alone too.
+   */
+  async function routePersonAssigneeToStewardedAgent<
+    T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
+  >(
+    req: Request,
+    companyId: string,
+    input: T,
+    current?: { assigneeUserId: string | null; assigneeAgentId: string | null; createdByUserId: string | null },
+  ): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
+    const { assignToPerson, ...fields } = input;
+    const rest = fields as T;
+    if (current && input.assigneeUserId === current.assigneeUserId) return { input: rest, routed: null };
+    const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
+    if (
+      current &&
+      actorAgentId &&
+      current.assigneeAgentId === actorAgentId &&
+      !!current.createdByUserId &&
+      input.assigneeUserId === current.createdByUserId
+    ) {
+      return { input: rest, routed: null };
+    }
+    const routed = await resolveStewardedAgentRoute(db, {
+      companyId,
+      actorAgentId,
+      assigneeAgentId: input.assigneeAgentId,
+      assigneeUserId: input.assigneeUserId,
+      assignToPerson,
+    });
+    if (!routed) return { input: rest, routed: null };
+    return { input: { ...rest, assigneeAgentId: routed.toAgentId, assigneeUserId: null }, routed };
   }
 
   function respondIssueMutationPolicy(res: Response, policyDb: Db | undefined, status: number, body: Record<string, unknown>) {
@@ -2386,7 +2429,9 @@ export function issueRoutes(
     }
 
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    const { requestId: _requestId, ...issueInput } = req.body;
+    const { requestId: _requestId, ...requestedInput } = req.body;
+    const { input: issueInput, routed: routedToStewardedAgent } =
+      await routePersonAssigneeToStewardedAgent(req, companyId, requestedInput);
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, companyId, issueInput);
     let issue;
     try {
@@ -2445,6 +2490,7 @@ export function issueRoutes(
         // AgentDash (GH #678): provenance when the write came via an assistant grant.
         ...assistantGrantAttribution(req),
         ...(wasRoutedToChiefOfStaff(issueInput, issue) ? { routedToChiefOfStaff: issue.assigneeAgentId } : {}),
+        ...(routedToStewardedAgent ? { routedToStewardedAgent } : {}),
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
         ...summarizeIssueReferenceActivityDetails({
           addedReferencedIssues: referenceDiff.addedReferencedIssues.map(summarizeIssueRelationForActivity),
@@ -2469,6 +2515,7 @@ export function issueRoutes(
     const visibleReferenceSummary = await filterVisibleReferenceSummary(db, req, companyId, referenceSummary);
     res.status(201).json({
       ...issue,
+      ...(routedToStewardedAgent ? { routedToStewardedAgent } : {}),
       relatedWork: visibleReferenceSummary,
       referencedIssueIdentifiers: visibleReferenceSummary.outbound.map(
         (item) => item.issue.identifier ?? item.issue.id,
@@ -2510,9 +2557,11 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, parent.companyId, req.body);
+    const { input: childInput, routed: routedToStewardedAgent } =
+      await routePersonAssigneeToStewardedAgent(req, parent.companyId, req.body);
+    const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, parent.companyId, childInput);
     const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
-      ...req.body,
+      ...childInput,
       routeUnownedTodoToChiefOfStaff,
       executionPolicy,
       createdByAgentId: actor.agentId,
@@ -2535,7 +2584,8 @@ export function issueRoutes(
         identifier: issue.identifier,
         title: issue.title,
         inheritedExecutionWorkspaceFromIssueId: parent.id,
-        ...(wasRoutedToChiefOfStaff(req.body, issue) ? { routedToChiefOfStaff: issue.assigneeAgentId } : {}),
+        ...(wasRoutedToChiefOfStaff(childInput, issue) ? { routedToChiefOfStaff: issue.assigneeAgentId } : {}),
+        ...(routedToStewardedAgent ? { routedToStewardedAgent } : {}),
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
         ...(parentBlockerAdded ? { parentBlockerAdded: true } : {}),
       },
@@ -2551,7 +2601,7 @@ export function issueRoutes(
       requestedByActorId: actor.actorId,
     });
 
-    res.status(201).json(issue);
+    res.status(201).json(routedToStewardedAgent ? { ...issue, routedToStewardedAgent } : issue);
   });
 
   router.patch("/issues/:id", validate(updateIssueRouteSchema), async (req, res) => {
@@ -2571,9 +2621,12 @@ export function issueRoutes(
           model: typeof agent.adapterConfig?.model === "string" ? agent.adapterConfig.model : undefined });
       },
     });
+    const { input: patchIntent, routed: routedToStewardedAgent } =
+      await routePersonAssigneeToStewardedAgent(req, existing.companyId, req.body, existing);
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
-        actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req), intent: req.body,
+        actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req), intent: patchIntent,
+        ...(routedToStewardedAgent ? { routedToStewardedAgent } : {}),
         stageAuthority: issueCurrentAuthority(req, req.body.projectId),
         validate: async (executor, current, intent) => {
           const policyDb = executor as Db;
@@ -2635,7 +2688,8 @@ export function issueRoutes(
       // AgentDash (recovery budget, explicit clear): say so when the marker
       // outlives this update, and point at the explicit clear.
       const budgetNotice = recoveryBudgetNotice(accepted.issue.id, accepted.issue.executionState);
-      res.json({ ...issueResponse, comment: accepted.comment, ...(budgetNotice ? { recoveryBudgetNotice: budgetNotice } : {}) });
+      res.json({ ...issueResponse, comment: accepted.comment, ...(routedToStewardedAgent ? { routedToStewardedAgent } : {}),
+        ...(budgetNotice ? { recoveryBudgetNotice: budgetNotice } : {}) });
     } catch (error) {
       if (error instanceof IssueCommentPolicyRefusal) {
         if (error.body.error === "Agent cannot mutate another agent's issue") reportAuthzRefusal(req, {
@@ -3198,8 +3252,23 @@ export function issueRoutes(
       res.status(201).json(await currentQuestion(req, authority, issue, interaction.id));
       return;
     }
+    // AgentDash: suggest_tasks acceptance is board-only, so an agent's choice
+    // of assignee is made here, when it writes the drafts. A person who
+    // stewards an agent is routed to that agent now, and the person accepting
+    // sees the assignee the task will really have.
+    const routedSuggestedTasks: Array<StewardedAgentRoute & { clientKey: string }> = [];
+    let interactionBody = req.body;
+    if (req.body.kind === "suggest_tasks") {
+      const tasks = [];
+      for (const task of req.body.payload.tasks) {
+        const { input, routed } = await routePersonAssigneeToStewardedAgent(req, issue.companyId, task);
+        if (routed) routedSuggestedTasks.push({ clientKey: task.clientKey, ...routed });
+        tasks.push(input);
+      }
+      interactionBody = { ...req.body, payload: { ...req.body.payload, tasks } };
+    }
     const interaction = await issueThreadInteractionService(db).create(issue, {
-      ...req.body,
+      ...interactionBody,
       sourceRunId: req.actor.type === "agent" ? agentSourceRunId : req.body.sourceRunId ?? null,
     }, {
       agentId: actor.agentId,
@@ -3220,10 +3289,11 @@ export function issueRoutes(
         interactionKind: interaction.kind,
         interactionStatus: interaction.status,
         continuationPolicy: interaction.continuationPolicy,
+        ...(routedSuggestedTasks.length > 0 ? { routedToStewardedAgent: routedSuggestedTasks } : {}),
       },
     });
 
-    res.status(201).json(interaction);
+    res.status(201).json(routedSuggestedTasks.length > 0 ? { ...interaction, routedToStewardedAgent: routedSuggestedTasks } : interaction);
   });
 
   router.post(
