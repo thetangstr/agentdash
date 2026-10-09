@@ -323,7 +323,7 @@ describe("Sidebar", () => {
   describe("Agents list under Team", () => {
     const findToggle = () =>
       [...container.querySelectorAll("button")].find((b) =>
-        /^(Show|Hide) agents$/.test(b.getAttribute("aria-label") ?? ""),
+        /^(Show|Hide) team$/.test(b.getAttribute("aria-label") ?? ""),
       );
     const agentHrefs = () =>
       [...container.querySelectorAll("a")]
@@ -346,7 +346,7 @@ describe("Sidebar", () => {
       expect(toggle).toBeDefined();
       expect(toggle?.getAttribute("type")).toBe("button");
       expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-      expect(toggle?.getAttribute("aria-label")).toBe("Hide agents");
+      expect(toggle?.getAttribute("aria-label")).toBe("Hide team");
       expect(toggle?.getAttribute("aria-controls")).toBeTruthy();
       // The chevron is a sibling of the Team link, never inside it, so
       // clicking it cannot navigate.
@@ -367,7 +367,7 @@ describe("Sidebar", () => {
 
       const toggle = findToggle();
       expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-      expect(toggle?.getAttribute("aria-label")).toBe("Show agents");
+      expect(toggle?.getAttribute("aria-label")).toBe("Show team");
       expect(agentHrefs()).toEqual([]);
       expect(localStorage.getItem("agentdash.sidebarTeamAgentsExpanded:company-1:user-1")).toBe("false");
       await act(async () => root.unmount());
