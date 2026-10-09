@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `5b50db7df` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `31955ca47` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -375,7 +375,7 @@ Create a new issue. To give a colleague work, assign their agent (list_agents �
 
 ## `update_issue`
 
-Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true.
+Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true. Handing your own issue back to the person who created it (assigneeAgentId null, assigneeUserId = creator) stays with them.
 
 | Property | Type | Required | Description |
 |---|---|---|---|

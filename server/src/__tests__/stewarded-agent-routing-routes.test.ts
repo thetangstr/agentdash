@@ -13,6 +13,7 @@ import {
   companyMemberships,
   createDb,
   heartbeatRuns,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -39,8 +40,15 @@ describeEmbeddedPostgres("an agent's person assignment is routed to the person's
   const AGENT_A = randomUUID(); // stewarded by steward-a; the caller
   const AGENT_B = randomUUID(); // stewarded by steward-b
   const PAUSED_AGENT = randomUUID(); // stewarded by steward-c, paused
+  const TERMINATED_AGENT = randomUUID(); // stewarded by steward-t
+  const PENDING_AGENT = randomUUID(); // stewarded by steward-p
+  const AGENT_E = randomUUID(); // no tasks:assign, no steward; does work for others
+  const OTHER_COMPANY = randomUUID();
+  const OTHER_COMPANY_AGENT = randomUUID(); // member-d stewards it, in another company
   const AGENT_A_RUN = randomUUID();
   const AGENT_A_KEY = randomUUID();
+  const AGENT_E_RUN = randomUUID();
+  const AGENT_E_KEY = randomUUID();
 
   // Wakes are recorded but no run starts: on-demand wakes are switched off, so
   // the heartbeat writes a skipped wake request naming the issue.
@@ -52,7 +60,7 @@ describeEmbeddedPostgres("an agent's person assignment is routed to the person's
 
     await db.insert(companies).values({ id: COMPANY, name: "Steward Routing Co", issuePrefix: "SRC" });
     await db.insert(companyMemberships).values(
-      ["owner", "steward-a", "steward-b", "steward-c", "member-d"].map((principalId) => ({
+      ["owner", "steward-a", "steward-b", "steward-c", "member-d", "steward-t", "steward-p"].map((principalId) => ({
         companyId: COMPANY,
         principalType: "user",
         principalId,
@@ -65,15 +73,25 @@ describeEmbeddedPostgres("an agent's person assignment is routed to the person's
       { id: AGENT_A, companyId: COMPANY, name: "Agent A", role: "general", status: "idle", permissions: { canCreateAgents: true }, runtimeConfig: noRunRuntime },
       { id: AGENT_B, companyId: COMPANY, name: "Agent B", role: "general", status: "idle", runtimeConfig: noRunRuntime },
       { id: PAUSED_AGENT, companyId: COMPANY, name: "Agent C", role: "general", status: "paused", runtimeConfig: noRunRuntime },
+      { id: TERMINATED_AGENT, companyId: COMPANY, name: "Agent T", role: "general", status: "terminated", runtimeConfig: noRunRuntime },
+      { id: PENDING_AGENT, companyId: COMPANY, name: "Agent P", role: "general", status: "pending_approval", runtimeConfig: noRunRuntime },
+      { id: AGENT_E, companyId: COMPANY, name: "Agent E", role: "general", status: "idle", runtimeConfig: noRunRuntime },
     ]);
+    await db.insert(companies).values({ id: OTHER_COMPANY, name: "Other Co", issuePrefix: "OTH" });
+    await db.insert(agents).values({ id: OTHER_COMPANY_AGENT, companyId: OTHER_COMPANY, name: "Agent D", role: "general", status: "idle", runtimeConfig: noRunRuntime });
     await db.insert(agentStewardships).values([
       { companyId: COMPANY, agentId: AGENT_A, userId: "steward-a" },
       { companyId: COMPANY, agentId: AGENT_B, userId: "steward-b" },
       { companyId: COMPANY, agentId: PAUSED_AGENT, userId: "steward-c" },
+      { companyId: COMPANY, agentId: TERMINATED_AGENT, userId: "steward-t" },
+      { companyId: COMPANY, agentId: PENDING_AGENT, userId: "steward-p" },
+      { companyId: OTHER_COMPANY, agentId: OTHER_COMPANY_AGENT, userId: "member-d" },
     ]);
     await db.insert(heartbeatRuns).values({ id: AGENT_A_RUN, companyId: COMPANY, agentId: AGENT_A, status: "running" });
     // PATCH re-reads the caller's credential, so Agent A needs a real key row.
     await db.insert(agentApiKeys).values({ id: AGENT_A_KEY, agentId: AGENT_A, companyId: COMPANY, name: "test", keyHash: "unused" });
+    await db.insert(heartbeatRuns).values({ id: AGENT_E_RUN, companyId: COMPANY, agentId: AGENT_E, status: "running" });
+    await db.insert(agentApiKeys).values({ id: AGENT_E_KEY, agentId: AGENT_E, companyId: COMPANY, name: "test", keyHash: "unused-e" });
   }, 60_000);
 
   afterAll(async () => {
@@ -88,6 +106,7 @@ describeEmbeddedPostgres("an agent's person assignment is routed to the person's
     memberships: [{ companyId: COMPANY, membershipRole: "owner", status: "active" }],
   };
   const agentAActor = { type: "agent", agentId: AGENT_A, companyId: COMPANY, source: "agent_key", keyId: AGENT_A_KEY, runId: AGENT_A_RUN };
+  const agentEActor = { type: "agent", agentId: AGENT_E, companyId: COMPANY, source: "agent_key", keyId: AGENT_E_KEY, runId: AGENT_E_RUN };
 
   function app(actor: Record<string, unknown>) {
     const server = express();
@@ -189,6 +208,49 @@ describeEmbeddedPostgres("an agent's person assignment is routed to the person's
     expect(res.status).toBe(201);
     expect(res.body.assigneeUserId).toBe("steward-c");
     expect(res.body.assigneeAgentId).toBeNull();
+  });
+
+  for (const [label, userId] of [["terminated", "steward-t"], ["pending approval", "steward-p"]] as const) {
+    it(`keeps the person when their agent is ${label}`, async () => {
+      const res = await request(app(agentAActor))
+        .post(`/api/companies/${COMPANY}/issues`)
+        .send({ title: `Review (${label})`, status: "todo", assigneeUserId: userId });
+      expect(res.status).toBe(201);
+      expect(res.body.assigneeUserId).toBe(userId);
+      expect(res.body.assigneeAgentId).toBeNull();
+    });
+  }
+
+  it("ignores a stewardship the person holds in another company", async () => {
+    const res = await request(app(agentAActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Member D: cross-company", status: "todo", assigneeUserId: "member-d" });
+    expect(res.status).toBe(201);
+    expect(res.body.assigneeUserId).toBe("member-d");
+    expect(res.body.assigneeAgentId).toBeNull();
+  });
+
+  it("lets an agent without tasks:assign hand its issue back to the person who created it", async () => {
+    // Steward B created the issue for Agent E. Handing it back for review is
+    // the return-to-creator exemption, not delegation: it stays with Steward B
+    // rather than going to Agent B, and needs no tasks:assign.
+    const [issue] = await db
+      .insert(issues)
+      .values({
+        companyId: COMPANY,
+        title: "Draft for Steward B",
+        status: "todo",
+        assigneeAgentId: AGENT_E,
+        createdByUserId: "steward-b",
+      })
+      .returning();
+    const res = await request(app(agentEActor))
+      .patch(`/api/issues/${issue!.id}`)
+      .send({ status: "in_review", assigneeAgentId: null, assigneeUserId: "steward-b" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.assigneeUserId).toBe("steward-b");
+    expect(res.body.assigneeAgentId).toBeNull();
+    expect(res.body.routedToStewardedAgent).toBeUndefined();
   });
 
   it("keeps the person when they steward no agent", async () => {

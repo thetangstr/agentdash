@@ -674,7 +674,10 @@ export function issueRoutes(
    * it to that agent (see services/stewarded-agent-routing.ts). Returns the
    * input with `assignToPerson` removed — it is a request flag, never stored —
    * and the assignee moved when the rule applies. On an update, a person who
-   * already holds the issue is not a new assignment and is left alone.
+   * already holds the issue is not a new assignment and is left alone, and an
+   * agent handing its issue back to the person who created it (the
+   * return-to-creator exemption in issue-patch-actions.ts) is returning work
+   * for review, not delegating it, so it is left alone too.
    */
   async function routePersonAssigneeToStewardedAgent<
     T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
@@ -682,14 +685,24 @@ export function issueRoutes(
     req: Request,
     companyId: string,
     input: T,
-    current?: { assigneeUserId: string | null },
+    current?: { assigneeUserId: string | null; assigneeAgentId: string | null; createdByUserId: string | null },
   ): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
     const { assignToPerson, ...fields } = input;
     const rest = fields as T;
     if (current && input.assigneeUserId === current.assigneeUserId) return { input: rest, routed: null };
+    const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
+    if (
+      current &&
+      actorAgentId &&
+      current.assigneeAgentId === actorAgentId &&
+      !!current.createdByUserId &&
+      input.assigneeUserId === current.createdByUserId
+    ) {
+      return { input: rest, routed: null };
+    }
     const routed = await resolveStewardedAgentRoute(db, {
       companyId,
-      actorAgentId: req.actor.type === "agent" ? req.actor.agentId ?? null : null,
+      actorAgentId,
       assigneeAgentId: input.assigneeAgentId,
       assigneeUserId: input.assigneeUserId,
       assignToPerson,

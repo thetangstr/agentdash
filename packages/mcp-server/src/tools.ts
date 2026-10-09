@@ -701,7 +701,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "update_issue",
-      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true.",
+      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true. Handing your own issue back to the person who created it (assigneeAgentId null, assigneeUserId = creator) stays with them.",
       updateIssueToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("PATCH", `/issues/${encodeURIComponent(issueId)}`, { body }),
