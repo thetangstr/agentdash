@@ -266,7 +266,8 @@ export function connectorService(db: Db) {
         status: "active",
         updatedAt: new Date(),
       })
-      .where(eq(connections.id, connectionId))
+      // A row revoked while a refresh was in flight stays revoked and empty.
+      .where(and(eq(connections.id, connectionId), isNull(connections.revokedAt)))
       .returning()
       .then((rows) => rows[0] ?? null);
   }
@@ -672,6 +673,10 @@ export function connectorService(db: Db) {
     provider: string,
     state: Record<string, unknown>,
   ) {
+    // AgentDash (security): a pending row becomes the live connection when
+    // its callback completes, so it must already have a document provider's
+    // only allowed shape (a person's own private row), same as `create`.
+    assertDocumentConnectionShape(provider, { ownerType, visibility: "private" });
     // Create a pending connection row to store the OAuth state
     return db
       .insert(connections)
@@ -681,12 +686,50 @@ export function connectorService(db: Db) {
         ownerId,
         provider,
         scopes: [],
+        visibility: "private",
         status: "active",
         oauthState: state,
         encryptedToken: null,
       })
       .returning()
       .then((rows) => rows[0]);
+  }
+
+  /**
+   * Turn a pending (or reconnecting) row into the live connection, in place,
+   * in one write: the credential, what it was granted, and who it signs in as.
+   * The row keeps its id, so a reconnect never creates a second live row for
+   * the owner. Document-provider rows are forced private here as well.
+   */
+  async function completeOAuthConnection(
+    connectionId: string,
+    input: {
+      scopes: string[];
+      accountLabel: string | null;
+      sendIdentity?: string;
+      token: TokenPayload;
+    },
+  ) {
+    const existing = await getById(connectionId);
+    if (!existing) throw notFound("Connection not found");
+    assertDocumentConnectionShape(existing.provider, { ownerType: existing.ownerType, visibility: "private" });
+    const encryptedToken = await encryptToken(input.token);
+    return db
+      .update(connections)
+      .set({
+        scopes: input.scopes,
+        accountLabel: input.accountLabel,
+        sendIdentity: input.sendIdentity ?? existing.sendIdentity,
+        visibility: isDocumentProvider(existing.provider) ? "private" : existing.visibility,
+        status: "active",
+        encryptedToken,
+        // `oauthState` is left alone: the caller already spent its state, and
+        // a newer sign-in started meanwhile must stay completable.
+        updatedAt: new Date(),
+      })
+      .where(and(eq(connections.id, connectionId), isNull(connections.revokedAt)))
+      .returning()
+      .then((rows) => rows[0] ?? null);
   }
 
   async function consumeOAuthState(connectionId: string): Promise<Record<string, unknown> | null> {
@@ -722,5 +765,6 @@ export function connectorService(db: Db) {
     logConnectorAction,
     storeOAuthState,
     consumeOAuthState,
+    completeOAuthConnection,
   };
 }

@@ -54,6 +54,8 @@ import { whatsappConnectorRoutes } from "./routes/whatsapp-connector.js";
 import { hubspotConnectorRoutes } from "./routes/hubspot-connector.js";
 // AgentDash-MK: SharePoint read through the acting person's Entra identity.
 import { sharepointConnectorRoutes } from "./routes/sharepoint-connector.js";
+// AgentDash: per-steward document access, Microsoft 365 (slice 2: connect).
+import { microsoftDocumentsRoutes } from "./routes/microsoft-documents.js";
 import { bridgeRoutes } from "./routes/bridge.js";
 import { stewardWebhookRoutes } from "./routes/steward-webhooks.js";
 import { teamsConnectorRoutes } from "./routes/teams-connector.js";
@@ -557,6 +559,7 @@ export async function createApp(
   api.use(whatsappConnectorRoutes(db));
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
+  api.use(microsoftDocumentsRoutes(db));
   api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(stewardWebhookRoutes(db));
   api.use(teamsConnectorRoutes(db));
