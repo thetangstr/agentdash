@@ -573,8 +573,14 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     const now = new Date();
     const old = new Date(now.getTime() - 40 * DAY_MS);
     const recent = new Date(now.getTime() - 1 * DAY_MS);
+    // Own agents and stewards: this test runs alone and in any order.
+    const RETENTION_STEWARD = "retention-steward";
+    const retentionAgent = randomUUID();
+    const plainRetentionAgent = randomUUID();
+    await seedAgent(retentionAgent, FLAGGED, "", RETENTION_STEWARD, FAKE_ADAPTER);
+    await seedAgent(plainRetentionAgent, UNFLAGGED, "", "retention-steward-plain", FAKE_ADAPTER);
 
-    async function seedRun(companyId: string, agentId: string, finishedAt: Date) {
+    async function seedRun(companyId: string, agentId: string, finishedAt: Date, quarantined: boolean) {
       const id = randomUUID();
       const logRef = `${companyId}/${agentId}/${id}.ndjson`;
       await mkdir(join(base, companyId, agentId), { recursive: true });
@@ -597,12 +603,16 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
         resultJson: {
           summary: "result quoting figures",
           stdout: "stdout quoting figures",
-          workspacePersistence: { workspaceId: `ws-${id}`, issueId: null, recoveryRequired: true, outcome: "uncertain" },
+          // Only the run under test holds a quarantine, so the hold lookup
+          // below has exactly one candidate for this agent.
+          ...(quarantined
+            ? { workspacePersistence: { workspaceId: `ws-${id}`, issueId: null, recoveryRequired: true, outcome: "uncertain" } }
+            : {}),
           runFacts: { outcome: "no_op", meteringStatus: "metered", inputTokens: 10 },
           total_cost_usd: 1.25,
           documentFrameAnomalies: { overflow: 1, unterminated: 0, truncated: 0, forged: 0, unmatchedEnd: 0, withheldChars: 42 },
         },
-        usageJson: { workspacePersistenceAttemptId: `ws-${id}` },
+        usageJson: quarantined ? { workspacePersistenceAttemptId: `ws-${id}` } : {},
         nextAction: "next quoting figures",
         livenessReason: "liveness quoting figures",
         contextSnapshot: { issueId: null, taskKey: "task-1", paperclipSessionHandoffMarkdown: "handoff quoting figures" },
@@ -619,9 +629,9 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
       return { id, logPath: join(base, logRef) };
     }
 
-    const flaggedOld = await seedRun(FLAGGED, FLAGGED_AGENT, old);
-    const flaggedRecent = await seedRun(FLAGGED, FLAGGED_AGENT, recent);
-    const unflaggedOld = await seedRun(UNFLAGGED, UNFLAGGED_AGENT, old);
+    const flaggedOld = await seedRun(FLAGGED, retentionAgent, old, true);
+    const flaggedRecent = await seedRun(FLAGGED, retentionAgent, recent, false);
+    const unflaggedOld = await seedRun(UNFLAGGED, plainRetentionAgent, old, false);
 
     const result = await pruneDocumentRunData(db, { retentionDays: 30, now, basePath: base });
     expect(result.companies).toBe(1);
@@ -631,8 +641,6 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     expect(await eventsOf(flaggedOld.id)).toHaveLength(0);
     expect(await eventsOf(flaggedRecent.id)).toHaveLength(1);
     expect(await eventsOf(unflaggedOld.id)).toHaveLength(1);
-    // The earlier run's events (written just now) are inside the window.
-    expect((await eventsOf(flaggedRunId)).length).toBeGreaterThan(0);
 
     await expect(stat(flaggedOld.logPath)).rejects.toThrow();
     await expect(stat(flaggedRecent.logPath)).resolves.toBeTruthy();
@@ -650,8 +658,8 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     expect(keptResult.total_cost_usd).toBe(1.25);
     expect((keptResult.documentFrameAnomalies as Record<string, unknown>).withheldChars).toBe(42);
     expect(keptResult.summary).toBeUndefined();
-    expect(await workspacePersistenceHold(db, FLAGGED, FLAGGED_AGENT, null)).toMatchObject({ runId: flaggedOld.id });
-    const listed = (await request(appAs(asUser(STEWARD, "member"))).get(`/api/companies/${FLAGGED}/heartbeat-runs`)).body as Array<Record<string, unknown>>;
+    expect(await workspacePersistenceHold(db, FLAGGED, retentionAgent, null)).toMatchObject({ runId: flaggedOld.id });
+    const listed = (await request(appAs(asUser(RETENTION_STEWARD, "member"))).get(`/api/companies/${FLAGGED}/heartbeat-runs`)).body as Array<Record<string, unknown>>;
     // The listing projects cost either as resultTotalCostUsd or, on a
     // legacy-encoding database (as in this test), inside a trimmed resultJson.
     const listedRow = listed.find((r) => r.id === flaggedOld.id)!;
@@ -665,7 +673,7 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
     expect(unflaggedRow!.stdoutExcerpt).toBe("stdout quoting figures");
 
     // The log route answers an empty, missing log for a purged run.
-    const log = await request(appAs(asUser(STEWARD, "member"))).get(`/api/heartbeat-runs/${flaggedOld.id}/log`);
+    const log = await request(appAs(asUser(RETENTION_STEWARD, "member"))).get(`/api/heartbeat-runs/${flaggedOld.id}/log`);
     expect(log.status).toBe(200);
     expect(log.body.missing).toBe(true);
   });
