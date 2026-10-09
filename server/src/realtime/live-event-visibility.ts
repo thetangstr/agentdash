@@ -1,8 +1,9 @@
 import type { Request } from "express";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvals, companyMemberships, heartbeatRuns, instanceUserRoles, issues, projects } from "@paperclipai/db";
-import type { LiveEvent } from "@paperclipai/shared";
+import { agentStewardships, approvals, companyMemberships, featureFlags, heartbeatRuns, instanceUserRoles, issues, projects } from "@paperclipai/db";
+import { FEATURE_FLAG_KEYS, type LiveEvent } from "@paperclipai/shared";
+import { actorBypassesDocumentRunRule } from "../routes/document-run-access.js";
 import {
   approvalBudgetProjectId,
   isCanonicalUuid,
@@ -103,7 +104,18 @@ class TtlCache<V> {
   delete(key: string) {
     this.map.delete(key);
   }
+  clear() {
+    this.map.clear();
+  }
 }
+
+/**
+ * AgentDash (document access, slice 6b): live run events that carry run
+ * content. With the company's document_access_enabled flag on they reach only
+ * the run agent's current steward and instance admins, as the REST routes do.
+ */
+const DOCUMENT_RUN_CONTENT_EVENTS = new Set(["heartbeat.run.log", "heartbeat.run.event"]);
+const DOCUMENT_RUN_TTL_MS = 10_000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -201,6 +213,10 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
   // next event, like projectGeneration does for project decisions.
   const agentScopeGeneration = new Map<string, number>();
   const resolved = new WeakMap<LiveEvent, Promise<LiveEventProjectRef>>();
+  // Document access (slice 6b): flag per company, current steward per agent.
+  // Short TTLs; a stewardship change also drops the steward cache at once.
+  const documentAccessFlag = new TtlCache<Promise<boolean>>(DOCUMENT_RUN_TTL_MS, now);
+  const agentSteward = new TtlCache<Promise<string | null>>(DOCUMENT_RUN_TTL_MS, now);
 
   function generationOf(companyId: string) {
     return projectGeneration.get(companyId) ?? 0;
@@ -223,12 +239,63 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
     }
     // Any agent or stewardship mutation may move the visibility scope; a
     // company update is a scope input only when the default changed.
+    if (payload.entityType === "agent_stewardship" || payload.entityType === "agent") agentSteward.clear();
     if (
       payload.entityType === "agent" ||
       payload.entityType === "agent_stewardship" ||
       (payload.entityType === "company" && asRecord(payload.details)?.agentVisibilityDefault !== undefined)
     ) {
       agentScopeGeneration.set(event.companyId, agentScopeGenerationOf(event.companyId) + 1);
+    }
+  }
+
+  function documentAccessEnabled(companyId: string): Promise<boolean> {
+    const cached = documentAccessFlag.get(companyId);
+    if (cached) return cached;
+    const pending = db
+      .select({ enabled: featureFlags.enabled })
+      .from(featureFlags)
+      .where(and(eq(featureFlags.companyId, companyId), eq(featureFlags.flagKey, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS)))
+      .then((rows) => rows[0]?.enabled === true);
+    documentAccessFlag.set(companyId, pending);
+    pending.catch(() => documentAccessFlag.delete(companyId));
+    return pending;
+  }
+
+  function currentStewardOf(companyId: string, agentId: string): Promise<string | null> {
+    const cached = agentSteward.get(agentId);
+    if (cached) return cached;
+    const pending = db
+      .select({ userId: agentStewardships.userId })
+      .from(agentStewardships)
+      .where(
+        and(
+          eq(agentStewardships.companyId, companyId),
+          eq(agentStewardships.agentId, agentId),
+          isNull(agentStewardships.endedAt),
+        ),
+      )
+      .then((rows) => rows[0]?.userId ?? null);
+    agentSteward.set(agentId, pending);
+    pending.catch(() => agentSteward.delete(agentId));
+    return pending;
+  }
+
+  /**
+   * May this subscriber receive this run's content? Same rule as
+   * `documentRunAccess.canReadRunContent` on the REST side; fails closed on a
+   * lookup error or an event that names no agent.
+   */
+  async function documentRunContentReadable(req: Request, companyId: string, event: LiveEvent): Promise<boolean> {
+    try {
+      if (!(await documentAccessEnabled(companyId))) return true;
+      if (actorBypassesDocumentRunRule(req.actor)) return true;
+      if (req.actor.type !== "board" || !req.actor.userId) return false;
+      const agentId = asRecord(event.payload)?.agentId;
+      if (typeof agentId !== "string" || agentId.length === 0) return false;
+      return (await currentStewardOf(companyId, agentId)) === req.actor.userId;
+    } catch {
+      return false;
     }
   }
 
@@ -443,6 +510,13 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
      * nothing is hidden, so the common case allocates nothing.
      */
     async function redactForSubscriber(event: LiveEvent): Promise<LiveEvent> {
+      if (event.type === "heartbeat.run.status") {
+        // Document access (slice 6b): the status row's `error` is run content.
+        const payload = asRecord(event.payload);
+        if (!payload || payload.error == null) return event;
+        if (await documentRunContentReadable(await currentReq(), companyId, event)) return event;
+        return { ...event, payload: { ...payload, error: null } };
+      }
       if (event.type !== "activity.logged") return event;
       const payload = asRecord(event.payload);
       const details = payload?.details;
@@ -508,6 +582,11 @@ export function createLiveEventVisibility(db: Db, opts: { now?: () => number } =
       // AgentDash (GH #708): the epoch is read before any actor is loaded, so an
       // invalidation at any later await keeps this call's decisions out of the cache.
       const epoch = actorEpoch;
+      // Document access (slice 6b): run content of a document-enabled company
+      // reaches only the agent's current steward and instance admins.
+      if (DOCUMENT_RUN_CONTENT_EVENTS.has(event.type)) {
+        if (!(await documentRunContentReadable(await currentReq(), companyId, event))) return false;
+      }
       // Agent visibility (2026-09-30): an event about an agent the subscriber
       // cannot see is not delivered, whatever project it is in. The scope is
       // cached on the actor request, which currentReq() keeps for ACTOR_TTL_MS.

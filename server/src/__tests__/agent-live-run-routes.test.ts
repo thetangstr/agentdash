@@ -2,6 +2,20 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Document access (slice 6b): the steward-only run rule reads the feature
+// flag and stewardships from the db; it is exercised against a real database
+// in document-run-protection.test.ts. Here: flag off, everything readable.
+vi.mock("../routes/document-run-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routes/document-run-access.js")>()),
+  documentRunAccess: () => ({
+    documentAccessEnabled: async () => false,
+    currentStewardUserId: async () => null,
+    canReadRunContent: async () => true,
+    assertRunContentReadable: async () => undefined,
+    readableAgentIds: async () => null,
+  }),
+}));
+
 // GH #830: issue, run and workspace routes run the A5 project-visibility
 // guards against the db. They are exercised against a real database in
 // project-visibility.test.ts; this suite's stub db cannot answer them.

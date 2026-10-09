@@ -29,6 +29,7 @@ import {
 import { heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
+import { documentRunAccess, withholdUnreadableRunContent } from "./document-run-access.js";
 
 // AgentDash (consolidation PR-C): the manual activity POST no longer lets the
 // caller choose who the row is attributed to. `actorType` and `actorId` are
@@ -185,7 +186,10 @@ export function activityRoutes(db: Db) {
     // AgentDash (c3 review): run `error` can carry adapter detail that
     // includes secrets — serve it through the same redaction pass as the
     // heartbeat-runs routes.
-    res.json(redactRunLogValue(result));
+    // Document access (slice 6b): runs the actor may not read keep their row
+    // but lose their free text, as in the company run listing.
+    const readable = await documentRunAccess(db).readableAgentIds(req.actor, issue.companyId);
+    res.json(redactRunLogValue(withholdUnreadableRunContent(result, readable)));
   });
 
   router.get("/heartbeat-runs/:runId/issues", async (req, res) => {

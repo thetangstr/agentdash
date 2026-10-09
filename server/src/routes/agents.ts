@@ -110,6 +110,7 @@ import {
 } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { documentRunAccess, withholdUnreadableRunContent, withoutRunContent } from "./document-run-access.js";
 import { founderStewardshipDeps, pairFounderWithAgent } from "../services/founder-stewardship.js";
 import { approvalDecisionEffectsService } from "../services/approval-decision-effects.js";
 import {
@@ -237,6 +238,9 @@ export function agentRoutes(
   // configuration. No-ops for `default`-profile companies.
   const governance = agentGovernanceService(db);
   const stewardships = agentStewardshipService(db);
+  // AgentDash (document access, slice 6b): steward-only run content while
+  // the company's document_access_enabled flag is on.
+  const documentRuns = documentRunAccess(db);
   const accountability = agentAccountabilityService(db);
   const approvalsSvc = approvalService(db);
   // Decision role for a hire approval recorded from the agent page. The
@@ -4992,7 +4996,9 @@ export function agentRoutes(
         agentVisibilityCondition(req, companyId, heartbeatRuns.agentId),
       ),
     });
-    res.json(runs);
+    // Document access (slice 6b): rows stay, free text of runs the actor may
+    // not read is dropped.
+    res.json(withholdUnreadableRunContent(runs, await documentRuns.readableAgentIds(req.actor, companyId)));
   });
 
   router.get("/companies/:companyId/live-runs", async (req, res) => {
@@ -5096,6 +5102,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, run.companyId);
+    await documentRuns.assertRunContentReadable(req, run);
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
     // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
     // excerpts — provider 401s can echo credentials into all of them.
@@ -5131,6 +5138,12 @@ export function agentRoutes(
     // AgentDash (GH #992): the cancelled row is served straight back; its
     // `error`/`resultJson`/`contextSnapshot` go through the same serve-time
     // pass as the detail route.
+    // Document access (slice 6b): cancelling stays an operator action, but a
+    // caller who may not read the run gets the row without its free text.
+    if (run && !(await documentRuns.canReadRunContent(req.actor, run))) {
+      res.json(redactRunLogValue(withoutRunContent(run)));
+      return;
+    }
     res.json(redactRunLogValue(run));
   });
 
@@ -5178,6 +5191,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, run.companyId);
+    await documentRuns.assertRunContentReadable(req, run);
 
     const afterSeq = Number(req.query.afterSeq ?? 0);
     const limit = Number(req.query.limit ?? 200);
@@ -5200,6 +5214,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, run.companyId);
+    await documentRuns.assertRunContentReadable(req, run);
 
     const offset = Number(req.query.offset ?? 0);
     const limitBytes = readRunLogLimitBytes(req.query.limitBytes);
