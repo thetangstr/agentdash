@@ -184,7 +184,7 @@ test.describe("sidebar keeps work, Settings holds configuration", () => {
     await page.goto(`${BASE_URL}/${company.issuePrefix}/dashboard`);
     const sidebar = page.locator("aside").filter({ has: page.getByRole("button", { name: "More", exact: true }) });
     // Expanded by default: every agent is in the left bar.
-    await expect(sidebar.getByRole("button", { name: "Hide agents" })).toHaveAttribute("aria-expanded", "true");
+    await expect(sidebar.getByRole("button", { name: "Hide team", exact: true })).toHaveAttribute("aria-expanded", "true");
     for (const name of ["Casper", "Maya", "Felix"]) {
       await expect(sidebar.getByRole("link", { name, exact: true })).toBeVisible();
     }
