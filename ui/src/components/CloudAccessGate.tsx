@@ -7,6 +7,7 @@ import { healthApi } from "@/api/health";
 import { onboardingApi } from "@/api/onboarding";
 import { queryKeys } from "@/lib/queryKeys";
 import { FIRST_COMPANY_PATH } from "@/lib/onboarding-route";
+import { authNextPath } from "@/lib/document-connect";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
   return (
@@ -160,7 +161,9 @@ export function CloudAccessGate() {
   }
 
   if (isAuthenticatedMode && !sessionQuery.data) {
-    const next = encodeURIComponent(`${location.pathname}${location.search}`);
+    // A document provider's callback query is a one-time code: it does not
+    // ride along in ?next= (authNextPath drops it for those paths only).
+    const next = encodeURIComponent(authNextPath(location.pathname, location.search));
     return <Navigate to={`/auth?next=${next}`} replace />;
   }
 

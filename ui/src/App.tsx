@@ -110,6 +110,7 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import MyAgent from "./pages/MyAgent";
 import { OAuthConsent } from "./pages/OAuthConsent";
+import DocumentConnectCallback from "./pages/DocumentConnectCallback";
 import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { FIRST_COMPANY_PATH, shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
@@ -417,6 +418,12 @@ export function App() {
               page, and it is company-agnostic so it lives outside
               :companyPrefix. */}
           <Route path="oauth/consent" element={<OAuthConsent />} />
+          {/* AgentDash (document access, slice 7): Microsoft returns here
+              after a person connects their own account from My Agent. Inside
+              the gate (posting the code needs the session) and outside
+              :companyPrefix, because the redirect URI registered with
+              Microsoft is one fixed path per instance. */}
+          <Route path="connect/:provider/callback" element={<DocumentConnectCallback />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="member-onboarding" element={<MemberOnboardingPage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />

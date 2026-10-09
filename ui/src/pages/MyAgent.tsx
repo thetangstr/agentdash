@@ -7,6 +7,7 @@ import { stewardshipsApi } from "../api/stewardships";
 import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ConnectYourTerminal } from "../components/agent/ConnectYourTerminal";
+import { DocumentConnectionsPanel } from "../components/agent/DocumentConnectionsPanel";
 import { DecisionsNeedingYou } from "../components/agent/DecisionsNeedingYou";
 import { QuestionsForYou } from "../components/agent/QuestionsForYou";
 import { AvailableOnRequest, isCapabilityNotFound } from "../components/AvailableOnRequest";
@@ -390,6 +391,10 @@ export default function MyAgent() {
         agentName={agent.name}
         companyId={selectedCompanyId!}
       />
+
+      {/* Per-steward document access: the agent reads Microsoft 365 as its
+          steward. Renders nothing while the company's flag is off. */}
+      <DocumentConnectionsPanel companyId={selectedCompanyId!} agentName={agent.name} />
 
       <section aria-labelledby="my-agent-work-heading" className="rounded-lg border">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">

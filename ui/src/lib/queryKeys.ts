@@ -142,6 +142,12 @@ export const queryKeys = {
     inboxScope: (companyId: string) => ["myAgent", "inboxScope", companyId] as const,
     channels: (companyId: string) => ["myAgent", "channels", companyId] as const,
     hubspot: (companyId: string) => ["myAgent", "hubspot", companyId] as const,
+    /**
+     * The person's own document-provider connection (slice 7). Keyed by
+     * company and provider only: a sign-in's code or state never goes in a key.
+     */
+    documents: (companyId: string, provider: "microsoft") =>
+      ["myAgent", "documents", companyId, provider] as const,
     overrideInbox: (companyId: string) => ["myAgent", "overrideInbox", companyId] as const,
     governance: (companyId: string, agentId: string) =>
       ["myAgent", "governance", companyId, agentId] as const,

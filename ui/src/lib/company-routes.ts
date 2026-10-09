@@ -91,6 +91,9 @@ const GLOBAL_ROUTE_ROOTS = new Set([
   "setup",
   "oauth",
   "member-onboarding",
+  // AgentDash (document access, slice 7): /connect/:provider/callback, where a
+  // document provider returns after sign-in. One fixed path per instance.
+  "connect",
 ]);
 
 /**

@@ -25,6 +25,7 @@ export const RESERVED_COMPANY_PREFIXES = [
   "claim",
   "cli-auth",
   "company-create",
+  "connect",
   "consulting",
   "demo",
   "docs",

@@ -40,6 +40,13 @@ const mockBridgeApi = vi.hoisted(() => ({ listMyEndpoints: vi.fn(), revoke: vi.f
 const mockStewardWebhooksApi = vi.hoisted(() => ({ list: vi.fn(), register: vi.fn(), revoke: vi.fn() }));
 const mockApprovalsApi = vi.hoisted(() => ({ approve: vi.fn(), reject: vi.fn() }));
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockDocumentsApi = vi.hoisted(() => ({
+  getMicrosoft: vi.fn(),
+  initiateMicrosoft: vi.fn(),
+  completeMicrosoft: vi.fn(),
+  revokeMicrosoft: vi.fn(),
+}));
+const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
 
 const mockCompany = vi.hoisted(() => ({
   value: { selectedCompanyId: "company-1", selectedCompany: { id: "company-1" } },
@@ -62,6 +69,8 @@ vi.mock("../api/health", () => ({ healthApi: mockHealthApi }));
 vi.mock("../api/auth", () => ({ authApi: mockAuthApi }));
 vi.mock("../api/bridge", () => ({ bridgeApi: mockBridgeApi }));
 vi.mock("../api/steward-webhooks", () => ({ stewardWebhooksApi: mockStewardWebhooksApi }));
+vi.mock("../api/documents", () => ({ documentsApi: mockDocumentsApi }));
+vi.mock("../api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
@@ -130,6 +139,16 @@ describe("MyAgent", () => {
     });
     mockBridgeApi.listMyEndpoints.mockResolvedValue({ endpoints: [] });
     mockStewardWebhooksApi.list.mockResolvedValue({ webhooks: [] });
+    // Document access is off unless a test turns it on: the route answers 404.
+    mockDocumentsApi.getMicrosoft.mockRejectedValue(new ApiError("Not found", 404, null));
+    // No `features`, so stewardship is decided by the inbox probe as before.
+    mockCapabilitiesApi.get.mockResolvedValue({
+      companyId: "company-1",
+      actorType: "user",
+      membershipRole: "member",
+      isInstanceAdmin: false,
+      capabilities: {},
+    });
     mockAgentsApi.createConnectCode.mockResolvedValue({
       code: "KVTX-8F02",
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
@@ -1024,6 +1043,86 @@ describe("MyAgent", () => {
 
     expect(container.textContent).toContain("CEO");
     expect(container.textContent).not.toContain("Ceo");
+  });
+
+  /**
+   * Per-steward document access (slice 7). The panel belongs to the flagged
+   * feature: with the flag off its route answers 404 and the page shows no
+   * trace of it, not an error and not an "available on request" notice.
+   */
+  describe("Microsoft 365 documents", () => {
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+      });
+    });
+
+    it("is hidden entirely when the capability route answers 404", async () => {
+      await render();
+      expect(mockDocumentsApi.getMicrosoft).toHaveBeenCalledWith("company-1");
+      expect(container.textContent).not.toMatch(/Microsoft 365|OneDrive|SharePoint/);
+      expect(container.querySelector('[aria-labelledby="my-agent-documents-heading"]')).toBeNull();
+    });
+
+    it("shows the connected account right after connecting the terminal", async () => {
+      mockDocumentsApi.getMicrosoft.mockResolvedValue({
+        configured: true,
+        connection: {
+          id: "conn-1",
+          account: "person.a@example.test",
+          scopes: ["User.Read", "Files.Read.All", "Sites.Read.All"],
+          writeScopes: [],
+          tier: "read",
+          status: "active",
+          lastError: null,
+          createdAt: "2026-10-08T00:00:00.000Z",
+          updatedAt: "2026-10-08T00:00:00.000Z",
+        },
+      });
+
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("person.a@example.test");
+      expect(text).toContain("Read only");
+      expect(text).toContain("Disconnect");
+      const connect = text.indexOf("Work with Casper from your own terminal");
+      const documents = text.indexOf("Microsoft 365 documents");
+      const doing = text.indexOf("What Casper is doing");
+      expect(connect).toBeGreaterThan(-1);
+      expect(connect).toBeLessThan(documents);
+      expect(documents).toBeLessThan(doing);
+    });
+
+    it("shows the last error with a way to reconnect", async () => {
+      mockDocumentsApi.getMicrosoft.mockResolvedValue({
+        configured: true,
+        connection: {
+          id: "conn-1",
+          account: "person.a@example.test",
+          scopes: ["User.Read", "Files.Read.All", "Sites.Read.All"],
+          writeScopes: [],
+          tier: "read",
+          status: "expired",
+          lastError: {
+            reason: "reconnect_required",
+            message: "Microsoft no longer accepts this connection. Reconnect Microsoft.",
+            at: "2026-10-09T00:00:00.000Z",
+          },
+          createdAt: "2026-10-08T00:00:00.000Z",
+          updatedAt: "2026-10-09T00:00:00.000Z",
+        },
+      });
+
+      await render();
+
+      expect(container.textContent).toContain("Microsoft no longer accepts this connection. Reconnect Microsoft.");
+      const reconnect = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Reconnect",
+      );
+      expect(reconnect).toBeTruthy();
+    });
   });
 
 });
