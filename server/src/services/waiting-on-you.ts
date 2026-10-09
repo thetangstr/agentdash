@@ -1,12 +1,13 @@
 import type { Request } from 'express';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { agents, agentStewardships, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
-import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview } from '@paperclipai/shared';
+import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview, type WaitingOnYouStoppedAgentIssue } from '@paperclipai/shared';
 import { agentVisibilityCondition, approvalVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything } from '../routes/visibility.js';
 import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "./assistant-digest.js";
 import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalService, issueApprovalService } from "./index.js";
+import { listStoppedAgentIssues } from "./stopped-agent-issues.js";
 import {
   APPROVAL_KIND_PHRASES,
   approvalAskPhrase,
@@ -41,7 +42,10 @@ import {
  *      or, for a `ready_for_review` deliverable on an issue no human created
  *      or is assigned, the agent's steward or accountable person, and when
  *      the agent has neither, company admins. Issues already assigned to the
- *      person are in (2), not here.
+ *      person are in (2), not here; and
+ *   5. issues an agent this person answers for has blocked — it stopped and
+ *      needs them (`stopped-agent-issues.ts`, the same definition as the
+ *      bridge digest's "Stopped and needs you"), within issue visibility.
  *
  * A user-less board actor (the local bootstrap operator) answers for the whole
  * company for approvals and assigned issues. Named questions require a user identity.
@@ -165,8 +169,40 @@ export function waitingOnYouService(db: Db) {
     };
   }
 
+  /**
+   * AgentDash: an agent that needs its steward comments and blocks the issue.
+   * Listed for the person the agent answers to, from the definition the bridge
+   * digest uses, narrowed by the composed issue visibility rule.
+   */
+  async function stoppedAgentIssues(companyId: string, actor: WaitingOnYouActor, actualRequest?: Request, limit = 25): Promise<{ items: WaitingOnYouStoppedAgentIssue[]; total: number }> {
+    const userId = actor.userId ?? null;
+    const req = actualRequest ?? ({ actor: { ...actor, type: 'board' } } as unknown as Request);
+    const mine = await digest.audienceAgents(companyId, userId);
+    if (mine.length === 0) return { items: [], total: 0 };
+    const scope = await resolveAgentVisibility(db, req, companyId);
+    const rows = await listStoppedAgentIssues(db, {
+      companyId,
+      agentIds: mine.map((agent) => agent.id),
+      visibleWhere: issueVisibilityCondition(req, companyId),
+    });
+    const nameById = new Map(mine.map((agent) => [agent.id, agent.name]));
+    const named = (agentId: string | null) =>
+      agentId && (scope.mode === 'all' || scope.visibleAgentIds.has(agentId)) ? nameById.get(agentId) ?? null : null;
+    return {
+      total: rows.length,
+      items: rows.slice(0, limit).map((row) => ({
+        issueId: row.id,
+        identifier: row.identifier,
+        title: row.title,
+        agentName: named(row.assigneeAgentId),
+        waitingSince: row.updatedAt.toISOString(),
+      })),
+    };
+  }
+
   return {
     pendingQuestions,
+    stoppedAgentIssues,
     /**
      * The pending-decisions payload: approvals with `canDecide` computed per
      * row by probing the one authority service, plus the person's open
@@ -281,12 +317,15 @@ export function waitingOnYouService(db: Db) {
       const tasks = await digest.tasksAssignedTo(companyId, userId);
       const questions = await pendingQuestions(companyId, actor, {}, actualRequest);
       const reviews = await reviewsWaiting(companyId, actor, actualRequest);
+      const stopped = await stoppedAgentIssues(companyId, actor, actualRequest);
       return {
         decisions,
         pendingQuestions: questions.items,
         pendingQuestionsTotal: questions.total,
         reviewsWaiting: reviews.items,
         reviewsWaitingTotal: reviews.total,
+        stoppedAgentIssues: stopped.items,
+        stoppedAgentIssuesTotal: stopped.total,
         total: ranked.length,
         shown: decisions.length,
         // UX-7 (#788): the manual/machine split is decided here, not in any

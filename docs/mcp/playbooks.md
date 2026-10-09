@@ -3,7 +3,7 @@ title: "Playbooks"
 summary: "The four operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which."
 ---
 
-> Generated at commit `a73c9eb07` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `ffb90624c` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 > 3 sections omitted: engagement-specific.
 
@@ -214,11 +214,13 @@ cycle stops answering.
 
 ## Handing work to a colleague
 Work assigned to a person who stewards an agent goes to that agent, whoever
-assigns it — a person or an agent, including the person themselves.
+assigns it — a person or an agent.
 `list_agents` shows each agent's `steward.userId`; assign the colleague or
 their agent and it reaches their agent either way. `assignToPerson: true`
-keeps an assignment with the person. So does a person with no agent, or whose
-agent is you or cannot take work (paused, terminated, pending approval).
+keeps an assignment with the person. So does a person assigning themselves, a
+reviewer or approver named by the issue's review stages, and a person with no
+agent, or whose agent is you or cannot take work (paused, terminated, pending
+approval, in error, or not set up to run).
 Handing your own issue back to the person who created it
 (`assigneeAgentId: null`, `assigneeUserId` = the creator) also stays with them.
 

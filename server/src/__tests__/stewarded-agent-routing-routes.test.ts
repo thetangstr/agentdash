@@ -9,6 +9,8 @@ import {
   agents,
   agentStewardships,
   agentWakeupRequests,
+  authSessions,
+  authUsers,
   companies,
   companyMemberships,
   createDb,
@@ -23,6 +25,7 @@ import { issueRoutes } from "../routes/issues.js";
 import { buildPaperclipTaskMarkdown, STEWARD_ROUTED_TASK_NOTE } from "../services/heartbeat.js";
 import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
 import { errorHandler } from "../middleware/index.js";
+import { withAgentHarnessPreflightMetadata } from "../services/agent-harness-preflight-readiness.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -122,17 +125,37 @@ describeEmbeddedPostgres("a person assignment is routed to the agent that person
   }
 
   /**
+   * A signed-in member with a live session row, so the PATCH path's current
+   * board identity re-read accepts them (it refuses a bare session actor).
+   */
+  async function sessionApp(userId: string, companyId = COMPANY) {
+    const sessionId = randomUUID();
+    const now = new Date();
+    await db.insert(authUsers).values({ id: userId, name: `Person ${userId.slice(-6)}`, email: `${userId}@test.invalid`, createdAt: now, updatedAt: now })
+      .onConflictDoNothing();
+    await db.insert(authSessions).values({ id: sessionId, userId, token: randomUUID(), expiresAt: new Date(Date.now() + 3_600_000), createdAt: now, updatedAt: now });
+    return app(memberActor(userId, companyId), { kind: "session", sessionId, userId });
+  }
+
+  /**
    * A steward and the agent they steward, made for one test so no other test's
    * issues or wakes are in its way.
    */
-  async function freshSteward(options: { withKey?: boolean; companyId?: string; visibility?: "owner" } = {}) {
+  async function freshSteward(options: {
+    withKey?: boolean;
+    companyId?: string;
+    visibility?: "owner";
+    status?: string;
+    metadata?: Record<string, unknown>;
+  } = {}) {
     const companyId = options.companyId ?? COMPANY;
     const userId = `steward-${randomUUID()}`;
     const agentId = randomUUID();
     await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: userId, status: "active", membershipRole: "member" });
     await db.insert(agents).values({
-      id: agentId, companyId, name: `Agent ${agentId.slice(0, 8)}`, role: "general", status: "idle", runtimeConfig: noRunRuntime,
+      id: agentId, companyId, name: `Agent ${agentId.slice(0, 8)}`, role: "general", status: options.status ?? "idle", runtimeConfig: noRunRuntime,
       ...(options.visibility ? { visibility: options.visibility } : {}),
+      ...(options.metadata ? { metadata: options.metadata } : {}),
     });
     await db.insert(agentStewardships).values({ companyId, agentId, userId });
     if (!options.withKey) return { userId, agentId, actor: null };
@@ -143,11 +166,12 @@ describeEmbeddedPostgres("a person assignment is routed to the agent that person
     return { userId, agentId, actor: { type: "agent", agentId, companyId, source: "agent_key", keyId, runId } };
   }
 
-  function app(actor: Record<string, unknown>) {
+  function app(actor: Record<string, unknown>, verifiedCredential?: Record<string, unknown>) {
     const server = express();
     server.use(express.json());
     server.use((req, _res, next) => {
       (req as any).actor = actor;
+      if (verifiedCredential) (req as any).verifiedCredential = verifiedCredential;
       next();
     });
     server.use("/api", issueRoutes(db, {} as never));
@@ -221,17 +245,175 @@ describeEmbeddedPostgres("a person assignment is routed to the agent that person
     expect(wake.payload).toMatchObject({ issueId: res.body.id, routedFromStewardUserId: steward.userId });
   });
 
-  it("routes a person assigning themselves to their own agent", async () => {
+  it("keeps a person's assignment of themselves: they are taking the work", async () => {
     const steward = await freshSteward();
     const res = await request(app(memberActor(steward.userId)))
       .post(`/api/companies/${COMPANY}/issues`)
       .send({ title: "Mine", status: "todo", assigneeUserId: steward.userId });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.assigneeUserId).toBe(steward.userId);
+    expect(res.body.assigneeAgentId).toBeNull();
+    expect(res.body.routedToStewardedAgent).toBeUndefined();
+  });
+
+  it("keeps a steward taking their agent's issue for themselves, with a comment (session PATCH)", async () => {
+    const steward = await freshSteward();
+    const [issue] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "My agent's work", status: "todo", assigneeAgentId: steward.agentId })
+      .returning();
+    const res = await request(await sessionApp(steward.userId))
+      .patch(`/api/issues/${issue!.id}`)
+      .send({ comment: "I'll take this one.", assigneeAgentId: null, assigneeUserId: steward.userId });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.assigneeUserId).toBe(steward.userId);
+    expect(res.body.assigneeAgentId).toBeNull();
+    expect(res.body.routedToStewardedAgent).toBeUndefined();
+  });
+
+  it("keeps the person when the caller cannot see their agent (session PATCH)", async () => {
+    const company = randomUUID();
+    await db.insert(companies).values({ id: company, name: "Visibility Patch Co", issuePrefix: `W${company.slice(0, 3).toUpperCase()}` });
+    const hidden = await freshSteward({ companyId: company, visibility: "owner" });
+    const viewer = `viewer-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: company, principalType: "user", principalId: viewer, status: "active", membershipRole: "member" });
+    const [issue] = await db.insert(issues).values({ companyId: company, title: "For someone", status: "todo" }).returning();
+    const res = await request(await sessionApp(viewer, company))
+      .patch(`/api/issues/${issue!.id}`)
+      .send({ assigneeUserId: hidden.userId });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.assigneeUserId).toBe(hidden.userId);
+    expect(res.body.assigneeAgentId).toBeNull();
+    expect(res.body.routedToStewardedAgent).toBeUndefined();
+  });
+
+  it("routes a signed-in person's PATCH of a colleague and says so in the response", async () => {
+    const steward = await freshSteward();
+    const assigner = `assigner-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: COMPANY, principalType: "user", principalId: assigner, status: "active", membershipRole: "member" });
+    const [issue] = await db.insert(issues).values({ companyId: COMPANY, title: "For a colleague", status: "todo" }).returning();
+    const res = await request(await sessionApp(assigner))
+      .patch(`/api/issues/${issue!.id}`)
+      .send({ assigneeUserId: steward.userId });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.assigneeAgentId).toBe(steward.agentId);
-    expect(res.body.assigneeUserId).toBeNull();
     expect(res.body.routedToStewardedAgent).toEqual({ fromUserId: steward.userId, toAgentId: steward.agentId });
-    const wake = await waitForWake(steward.agentId, res.body.id);
-    expect(wake.payload).toMatchObject({ routedFromStewardUserId: steward.userId, mutation: "create" });
+  });
+
+  it("keeps the person when their agent is in error", async () => {
+    const steward = await freshSteward({ status: "error" });
+    const res = await request(app(boardActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "For a steward whose agent errored", status: "todo", assigneeUserId: steward.userId });
+    expect(res.status).toBe(201);
+    expect(res.body.assigneeUserId).toBe(steward.userId);
+    expect(res.body.assigneeAgentId).toBeNull();
+  });
+
+  it("keeps the person when their agent's saved harness preflight did not pass", async () => {
+    const metadata = withAgentHarnessPreflightMetadata(null, {
+      adapterType: "process",
+      adapterConfig: {},
+      defaultEnvironmentId: null,
+      result: { adapterType: "process", status: "fail", testedAt: new Date().toISOString(), checks: [{ code: "probe_failed", level: "error", message: "cannot start" }] },
+    } as never);
+    const steward = await freshSteward({ metadata });
+    const res = await request(app(boardActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "For a steward whose agent cannot run", status: "todo", assigneeUserId: steward.userId });
+    expect(res.status).toBe(201);
+    expect(res.body.assigneeUserId).toBe(steward.userId);
+    expect(res.body.assigneeAgentId).toBeNull();
+  });
+
+  it("keeps the person when preflight is required and their agent has none", async () => {
+    const steward = await freshSteward();
+    const previous = process.env.AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT;
+    process.env.AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT = "true";
+    try {
+      const res = await request(app(boardActor))
+        .post(`/api/companies/${COMPANY}/issues`)
+        .send({ title: "Preflight required", status: "todo", assigneeUserId: steward.userId });
+      expect(res.status).toBe(201);
+      expect(res.body.assigneeUserId).toBe(steward.userId);
+      expect(res.body.assigneeAgentId).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT;
+      else process.env.AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT = previous;
+    }
+  });
+
+  it("keeps a reviewer named by the issue's review stage", async () => {
+    const reviewer = await freshSteward();
+    const worker = await freshSteward({ withKey: true });
+    const created = await request(app(boardActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({
+        title: "Needs review",
+        status: "todo",
+        assigneeAgentId: worker.agentId,
+        executionPolicy: { stages: [{ type: "review", participants: [{ type: "user", userId: reviewer.userId }] }] },
+      });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const res = await request(app(worker.actor!))
+      .patch(`/api/issues/${created.body.id}`)
+      .send({ status: "in_review", assigneeAgentId: null, assigneeUserId: reviewer.userId, comment: "Ready for your review." });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.assigneeUserId).toBe(reviewer.userId);
+    expect(res.body.assigneeAgentId).toBeNull();
+    expect(res.body.routedToStewardedAgent).toBeUndefined();
+  });
+
+  it("carries the steward context to the wake when a routed backlog issue is started", async () => {
+    const steward = await freshSteward();
+    const created = await request(app(boardActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Later", status: "backlog", assigneeUserId: steward.userId });
+    expect(created.status).toBe(201);
+    expect(created.body.assigneeAgentId).toBe(steward.agentId);
+    const started = await request(app({ type: "board", source: "local_implicit", userId: "owner", companyIds: [COMPANY] }))
+      .patch(`/api/issues/${created.body.id}`)
+      .send({ status: "todo" });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const wake = await waitForWake(steward.agentId, created.body.id);
+    expect(wake.payload).toMatchObject({ routedFromStewardUserId: steward.userId });
+  });
+
+  it("does not carry the steward context once the issue was reassigned directly", async () => {
+    const steward = await freshSteward();
+    const created = await request(app(boardActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Later, then direct", status: "backlog", assigneeUserId: steward.userId });
+    const operator = app({ type: "board", source: "local_implicit", userId: "owner", companyIds: [COMPANY] });
+    await request(operator).patch(`/api/issues/${created.body.id}`).send({ assigneeAgentId: AGENT_B });
+    await request(operator).patch(`/api/issues/${created.body.id}`).send({ assigneeAgentId: steward.agentId });
+    const started = await request(operator).patch(`/api/issues/${created.body.id}`).send({ status: "todo" });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const wake = await waitForWake(steward.agentId, created.body.id);
+    expect(wake.payload).not.toHaveProperty("routedFromStewardUserId");
+  });
+
+  it("refuses an agent without tasks:assign that is not the assignee handing an issue to its steward", async () => {
+    const steward = await freshSteward({ withKey: true });
+    const [issue] = await db.insert(issues).values({ companyId: COMPANY, title: "Not mine", status: "todo" }).returning();
+    const res = await request(app(steward.actor!))
+      .patch(`/api/issues/${issue!.id}`)
+      .send({ assigneeUserId: steward.userId });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+  });
+
+  it("refuses an agent without tasks:assign handing its issue to a person who is not its steward", async () => {
+    const steward = await freshSteward({ withKey: true });
+    const stranger = `member-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: COMPANY, principalType: "user", principalId: stranger, status: "active", membershipRole: "member" });
+    const [issue] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "Mine to hand off", status: "todo", assigneeAgentId: steward.agentId })
+      .returning();
+    const res = await request(app(steward.actor!))
+      .patch(`/api/issues/${issue!.id}`)
+      .send({ assigneeAgentId: null, assigneeUserId: stranger });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
   });
 
   it("routes a person's PATCH reassignment and wakes the agent with the steward context", async () => {

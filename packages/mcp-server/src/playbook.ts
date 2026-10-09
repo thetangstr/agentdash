@@ -217,11 +217,13 @@ cycle stops answering.
 
 ## Handing work to a colleague
 Work assigned to a person who stewards an agent goes to that agent, whoever
-assigns it — a person or an agent, including the person themselves.
+assigns it — a person or an agent.
 \`list_agents\` shows each agent's \`steward.userId\`; assign the colleague or
 their agent and it reaches their agent either way. \`assignToPerson: true\`
-keeps an assignment with the person. So does a person with no agent, or whose
-agent is you or cannot take work (paused, terminated, pending approval).
+keeps an assignment with the person. So does a person assigning themselves, a
+reviewer or approver named by the issue's review stages, and a person with no
+agent, or whose agent is you or cannot take work (paused, terminated, pending
+approval, in error, or not set up to run).
 Handing your own issue back to the person who created it
 (\`assigneeAgentId: null\`, \`assigneeUserId\` = the creator) also stays with them.
 

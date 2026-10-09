@@ -680,7 +680,10 @@ export function issueRoutes(
    * created it (the return-to-creator exemption in issue-patch-actions.ts) is
    * returning work for review, not delegating it, so it is left alone too.
    * Work is never given to an agent the caller cannot see (agent visibility),
-   * so a hidden steward's agent leaves the assignment with the person.
+   * so a hidden steward's agent leaves the assignment with the person. A
+   * person assigning themselves is taking the work, and a person named as a
+   * reviewer or approver by the issue's execution policy is that stage's
+   * participant: both keep the assignment.
    */
   async function routePersonAssigneeToStewardedAgent<
     T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
@@ -688,7 +691,12 @@ export function issueRoutes(
     req: Request,
     companyId: string,
     input: T,
-    current?: { assigneeUserId: string | null; assigneeAgentId: string | null; createdByUserId: string | null },
+    current?: {
+      assigneeUserId: string | null;
+      assigneeAgentId: string | null;
+      createdByUserId: string | null;
+      executionPolicy?: unknown;
+    },
   ): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
     const { assignToPerson, ...fields } = input;
     const rest = fields as T;
@@ -703,9 +711,17 @@ export function issueRoutes(
     ) {
       return { input: rest, routed: null };
     }
+    const requestedPolicy = (input as { executionPolicy?: unknown }).executionPolicy;
+    if (
+      typeof input.assigneeUserId === "string" &&
+      namesStageUser(requestedPolicy !== undefined ? requestedPolicy : current?.executionPolicy, input.assigneeUserId)
+    ) {
+      return { input: rest, routed: null };
+    }
     const routed = await resolveStewardedAgentRoute(db, {
       companyId,
       actorAgentId,
+      actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
       assigneeAgentId: input.assigneeAgentId,
       assigneeUserId: input.assigneeUserId,
       assignToPerson,
@@ -714,6 +730,19 @@ export function issueRoutes(
     const visibleIds = await visibleAgentIdsFor(db, req, companyId);
     if (visibleIds !== null && !visibleIds.has(routed.toAgentId)) return { input: rest, routed: null };
     return { input: { ...rest, assigneeAgentId: routed.toAgentId, assigneeUserId: null }, routed };
+  }
+
+  /** Whether an execution policy names this person as a stage participant. */
+  function namesStageUser(policy: unknown, userId: string): boolean {
+    const stages = (policy as { stages?: unknown } | null | undefined)?.stages;
+    if (!Array.isArray(stages)) return false;
+    return stages.some((stage) => {
+      const participants = (stage as { participants?: unknown } | null)?.participants;
+      return Array.isArray(participants) && participants.some((participant) => {
+        const p = participant as { type?: unknown; userId?: unknown } | null;
+        return p?.type === "user" && p.userId === userId;
+      });
+    });
   }
 
   /**

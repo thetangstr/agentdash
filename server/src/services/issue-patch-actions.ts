@@ -6,7 +6,7 @@ import { extractIssueReferenceMatches, preserveIssueRecoveryBudget, updateIssueR
 import { z } from "zod";
 import { conflict, notFound, HttpError } from "../errors.js";
 import { issueService } from "./issues.js";
-import { isActiveStewardOf } from "./stewarded-agent-routing.js";
+import { isActiveStewardOf, routedStewardForCurrentAssignment } from "./stewarded-agent-routing.js";
 import { issueReferenceService } from "./issue-references.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { routineService } from "./routines.js";
@@ -1294,6 +1294,12 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       (statusChangedFromBacklog || statusChangedFromBlockedToTodo || statusChangedFromClosedToTodo) &&
       issue.assigneeAgentId
     ) {
+      // AgentDash: a routed issue assigned in backlog had no assignment wake;
+      // the wake that starts it carries the steward context instead.
+      const routedFromStewardUserId = statusChangedFromBacklog
+        ? await routedStewardForCurrentAssignment(db, issue).catch(() => null)
+        : null;
+      const steward = routedFromStewardUserId ? { routedFromStewardUserId } : {};
       addWakeup(issue.assigneeAgentId, {
         source: "automation",
         triggerDetail: "system",
@@ -1303,6 +1309,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           mutation: "update",
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
+          ...steward,
         },
         requestedByActorType: actor.actorType,
         requestedByActorId: actor.actorId,
@@ -1311,6 +1318,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           source: "issue.status_change",
           ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
+          ...steward,
         },
       });
     }

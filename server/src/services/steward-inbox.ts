@@ -18,6 +18,7 @@ import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { approvalAuthorityService } from "./approval-authority.js";
+import { listStoppedAgentIssues } from "./stopped-agent-issues.js";
 import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
 
 /**
@@ -595,23 +596,8 @@ export function stewardInboxService(db: Db) {
     // 2. Then blockers. An agent that stopped is the next most useful thing to
     //    know: somebody is waiting on a person, and the mandate tells agents
     //    that reporting blocked is a respected outcome rather than a failure.
-    const blocked = await db
-      .select({
-        id: issues.id,
-        identifier: issues.identifier,
-        title: issues.title,
-        assigneeAgentId: issues.assigneeAgentId,
-        updatedAt: issues.updatedAt,
-      })
-      .from(issues)
-      .where(
-        and(
-          eq(issues.companyId, endpoint.companyId),
-          eq(issues.status, "blocked"),
-          inArray(issues.assigneeAgentId, agentIds),
-        ),
-      )
-      .orderBy(asc(issues.updatedAt));
+    //    The definition is shared with the web "waiting on you" list.
+    const blocked = await listStoppedAgentIssues(db, { companyId: endpoint.companyId, agentIds });
 
     // 3. Completions last, and capped hardest. Finished work is the least
     //    urgent thing in a digest; it is here so a steward can see progress,
