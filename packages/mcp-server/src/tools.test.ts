@@ -476,6 +476,14 @@ describe("documents_propose_upload", () => {
     expect(tool.description).toMatch(/agentdash-office-docs/);
   });
 
+  it("says only a draft the agent attached itself, on a task its steward can see, is accepted", () => {
+    const tool = getTool("documents_propose_upload");
+    expect(tool.description).toMatch(/attached yourself/i);
+    expect(tool.description).toMatch(/your steward can see/i);
+    expect(tool.description).toContain("attachment_not_uploaded_by_agent");
+    expect(tool.description).toContain("attachment_not_visible_to_steward");
+  });
+
   it("names Microsoft as an enum, so a later provider is additive, and has no operation to choose", () => {
     const tool = getTool("documents_propose_upload");
     const provider = tool.schema.shape.provider as { options?: string[] };

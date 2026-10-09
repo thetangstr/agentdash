@@ -71,10 +71,17 @@ describe("connector_send provider microsoft", () => {
     for (const path of ["../Other", "Projects/../../x", "Projects/./x", "a:b", "Projects\\x", "x".repeat(401)]) {
       expect(problem({ ...upload, target: { path } }), path).toBe("target_invalid");
     }
-    for (const folderId of ["01X/children", "01X?$top=1", "01X:", "", "x".repeat(300)]) {
+    for (const folderId of ["01X/children", "01X?$top=1", "01X:", "", "x".repeat(300), ".", "..", "..."]) {
       expect(problem({ ...upload, target: { folderId } }), folderId).toBe("target_invalid");
     }
     expect(problem({ ...upload, target: { folderId: "01X", driveId: "b!x/../y" } })).toBe("target_invalid");
+    // Dot-only ids are path segments to a URL parser, not ids: `..` would
+    // resolve /me/drive/items/.. to /me/drive/.
+    for (const driveId of [".", ".."]) {
+      expect(problem({ ...upload, target: { folderId: "01X", driveId } }), driveId).toBe("target_invalid");
+    }
+    // Dots inside a real id are still fine.
+    expect(problem({ ...upload, target: { folderId: "01X.Y" } })).toBeNull();
   });
 
   it("refuses file names that are not a plain name with a supported extension", () => {

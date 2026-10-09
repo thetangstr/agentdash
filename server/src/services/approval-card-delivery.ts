@@ -32,25 +32,59 @@ import { whatsappConnectorService } from "./whatsapp-connector.js";
 /** Statuses where a decision is still possible, so a card is still useful. */
 const DELIVERABLE_STATUSES = new Set(["pending", "revision_requested"]);
 
+/**
+ * The text of a channel card. Deliberately terse and payload-light: approval
+ * payloads carry adapterConfig and similar material, and a channel message is
+ * the least controlled surface in the system, so it names the ask and nothing
+ * else.
+ *
+ * AgentDash (per-steward document access, D8): a Microsoft `upload_new` leads
+ * with a server-written sentence saying what approving DOES (a file is saved in
+ * the steward's own OneDrive) and names the file and folder, before the
+ * agent-written summary. Otherwise the only description on the card would be
+ * text the agent controls, and "Acknowledge the status update" with an Approve
+ * button would save a file.
+ */
+export function approvalCardText(approval: typeof approvals.$inferSelect, agentName: string | null): string {
+  const payload = (approval.payload ?? {}) as Record<string, unknown>;
+  const agentSummary =
+    typeof payload.summary === "string" && payload.summary.trim().length > 0 ? payload.summary.trim() : null;
+  const footer = `\n\nRevision ${approval.revision}. Decide here or in AgentDash.`;
+  if (
+    approval.type === "connector_send" &&
+    typeof payload.provider === "string" &&
+    payload.provider.trim().toLowerCase() === "microsoft"
+  ) {
+    const who = agentName ?? "An agent";
+    const target = (payload.target ?? {}) as Record<string, unknown>;
+    const folder =
+      typeof target.path === "string" && target.path.trim().length > 0
+        ? target.path.trim() === "/"
+          ? "the top of your OneDrive"
+          : `the folder "${target.path.trim()}"`
+        : "a folder it named by id";
+    const fileName =
+      typeof payload.proposedFileName === "string" && payload.proposedFileName.length > 0
+        ? `"${payload.proposedFileName}"`
+        : "a new file";
+    const lines = [
+      `${who} wants to save a proposed copy of a document in your OneDrive.`,
+      `Approving saves ${fileName} as a new file in ${folder}. Nothing existing is changed.`,
+    ];
+    if (agentSummary) lines.push(`The agent's note: ${agentSummary}`);
+    return `${lines.join("\n")}${footer}`;
+  }
+  const summary = agentSummary ?? approval.type.replace(/_/g, " ");
+  const who = agentName ? `${agentName} requests` : "A request needs your decision";
+  return `${who}: ${summary}${footer}`;
+}
+
 export function approvalCardDeliveryService(db: Db) {
   const stewardships = agentStewardshipService(db);
   const accountability = agentAccountabilityService(db);
   const teams = teamsConnectorService(db);
   const telegram = telegramConnectorService(db);
   const whatsapp = whatsappConnectorService(db);
-
-  function summarize(approval: typeof approvals.$inferSelect, agentName: string | null) {
-    const payload = (approval.payload ?? {}) as Record<string, unknown>;
-    const summary =
-      typeof payload.summary === "string" && payload.summary.trim().length > 0
-        ? payload.summary.trim()
-        : approval.type.replace(/_/g, " ");
-    const who = agentName ? `${agentName} requests` : "A request needs your decision";
-    // Deliberately terse and payload-light. Approval payloads carry
-    // adapterConfig and similar material; a channel message is the least
-    // controlled surface in the system, so it names the ask and nothing else.
-    return `${who}: ${summary}\n\nRevision ${approval.revision}. Decide here or in AgentDash.`;
-  }
 
   /**
    * Deliver a card for one approval to every eligible channel.
@@ -113,7 +147,7 @@ export function approvalCardDeliveryService(db: Db) {
         .from(agents)
         .where(eq(agents.id, approval.requestedByAgentId))
         .then((rows) => rows[0] ?? null);
-      const text = summarize(approval, agent?.name ?? null);
+      const text = approvalCardText(approval, agent?.name ?? null);
 
       for (const binding of bindings) {
         // One failing channel must not stop the others: a steward with Telegram

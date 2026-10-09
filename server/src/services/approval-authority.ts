@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvals, companies } from "@paperclipai/db";
 import type { ApprovalDecisionChannel } from "@paperclipai/shared";
-import { badRequest, conflict, forbidden } from "../errors.js";
+import { badRequest, conflict, forbidden, HttpError } from "../errors.js";
 import { accessService } from "./access.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
 import { agentGovernanceService } from "./agent-governance.js";
@@ -55,6 +55,17 @@ export interface ApprovalDecisionRequest {
   channel?: ApprovalDecisionChannel;
 }
 
+/**
+ * AgentDash (per-steward document access, slice 5): a Microsoft
+ * `connector_send` saves a file in ONE person's OneDrive under THEIR
+ * credential, so it is that person's to decide and nobody else's.
+ */
+export function isDocumentProposalApproval(approval: Pick<ApprovalRow, "type" | "payload">): boolean {
+  if (approval.type !== "connector_send") return false;
+  const provider = (approval.payload as Record<string, unknown> | null)?.provider;
+  return typeof provider === "string" && provider.trim().toLowerCase() === "microsoft";
+}
+
 export function approvalAuthorityService(db: Db) {
   const access = accessService(db);
   const stewardships = agentStewardshipService(db);
@@ -85,6 +96,44 @@ export function approvalAuthorityService(db: Db) {
       membership?.status === "active" &&
       normalizeHumanRole(membership.membershipRole) === "admin"
     );
+  }
+
+  /**
+   * Who may decide a document proposal: only the steward it was filed for,
+   * and only while they are still the agent's steward. In EVERY profile: on a
+   * default-profile company any board member could otherwise approve, and on
+   * agentdash_mk an administrator could at `minimumApproval: "none"`. Either
+   * would move the approval to approved, the executor would then refuse it
+   * (`approver_not_steward`) with a terminal row, and the steward could never
+   * decide it. Refusing here, before anything is resolved, keeps it pending.
+   * Returns null when the approval is not a document proposal.
+   */
+  async function documentProposalDecider(
+    approval: ApprovalRow,
+    actor: ApprovalDecisionActor,
+  ): Promise<"steward" | null> {
+    if (!isDocumentProposalApproval(approval)) return null;
+    const stamped = (approval.payload as Record<string, unknown> | null)?.stewardUserId;
+    const current = approval.requestedByAgentId
+      ? await stewardships.activeByAgent(approval.companyId, approval.requestedByAgentId)
+      : null;
+    if (!current || typeof stamped !== "string" || current.userId !== stamped) {
+      throw new HttpError(
+        403,
+        "The agent's steward changed after this request was filed, so nobody can approve saving it into " +
+          "the OneDrive it names. The agent must file it again.",
+        { code: "steward_changed" },
+      );
+    }
+    if (!actor.userId || actor.userId !== stamped) {
+      throw new HttpError(
+        403,
+        "Only the agent's steward can decide a proposed copy for their own OneDrive; it is saved there " +
+          "under their Microsoft sign-in.",
+        { code: "approver_not_steward" },
+      );
+    }
+    return "steward";
   }
 
   /**
@@ -151,6 +200,8 @@ export function approvalAuthorityService(db: Db) {
     approval: ApprovalRow,
     actor: ApprovalDecisionActor,
   ): Promise<ApprovalDecisionRole | null> {
+    const documentDecider = await documentProposalDecider(approval, actor);
+    if (documentDecider) return documentDecider;
     if (!(await isProfileCompany(approval.companyId))) return null;
 
     // The local_trusted bootstrap board actor has no userId and no steward, but
@@ -246,9 +297,10 @@ export function approvalAuthorityService(db: Db) {
     body: ApprovalDecisionRequest,
   ): Promise<ApprovalDecisionContext> {
     assertDecisionChannelAllowed(actor, body.channel);
+    const documentDecider = await documentProposalDecider(approval, actor);
     if (!(await isProfileCompany(approval.companyId))) {
       return {
-        role: "board",
+        role: documentDecider ?? "board",
         channel: body.channel ?? "web",
         revision: body.revision ?? approval.revision,
         idempotencyKey: body.idempotencyKey ?? null,
@@ -275,11 +327,21 @@ export function approvalAuthorityService(db: Db) {
   async function requireEmergencyOverride(
     approval: ApprovalRow,
     actor: ApprovalDecisionActor,
-    body: ApprovalDecisionRequest & { overrideReason?: string },
+    body: ApprovalDecisionRequest & { overrideReason?: string; decision?: string },
   ): Promise<ApprovalDecisionContext> {
     assertDecisionChannelAllowed(actor, body.channel);
     if (!(await isAdministrator(approval.companyId, actor))) {
       throw forbidden("Only a company owner or administrator can override an approval decision");
+    }
+    // An override may kill a document proposal (nothing is written), never
+    // approve one: the file would land in someone else's OneDrive.
+    if (body.decision !== "rejected" && isDocumentProposalApproval(approval)) {
+      throw new HttpError(
+        403,
+        "An override cannot approve a proposed copy for someone's OneDrive; only their steward can. " +
+          "An override may reject it.",
+        { code: "approver_not_steward" },
+      );
     }
     if (!body.overrideReason || body.overrideReason.trim().length === 0) {
       throw badRequest("An emergency override requires a reason");

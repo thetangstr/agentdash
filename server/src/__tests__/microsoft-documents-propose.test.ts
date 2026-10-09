@@ -32,6 +32,8 @@ import {
   issueApprovals,
   issueAttachments,
   issues,
+  projectAccess,
+  projects,
 } from "@paperclipai/db";
 import {
   AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
@@ -177,9 +179,28 @@ describe("agentdash-office-docs skill", () => {
     // D9: python-docx is not on this host, so drafts are Markdown.
     expect(skill).toMatch(/python-docx/);
     expect(skill).toMatch(/Markdown/);
-    for (const reason of ["write_scope_missing", "steward_changed", "approver_not_steward", "no_connection"]) {
+    for (const reason of [
+      "write_scope_missing",
+      "steward_changed",
+      "approver_not_steward",
+      "no_connection",
+      "attachment_not_uploaded_by_agent",
+      "attachment_not_visible_to_steward",
+      "microsoft_unreachable",
+      "not_configured",
+      "storage_full",
+      "attachment_too_large",
+    ]) {
       expect(skill).toContain(reason);
     }
+  });
+
+  it("says Office pass-through needs the operator to allow OOXML attachment types", () => {
+    expect(skill).toContain("PAPERCLIP_ALLOWED_ATTACHMENT_TYPES");
+    // The default allowlist really has no OOXML type, which is why the skill must say so.
+    const types = readFileSync(path.join(repoRoot, "server/src/attachment-types.ts"), "utf8");
+    const defaults = types.slice(types.indexOf("DEFAULT_ALLOWED_TYPES"), types.indexOf("];", types.indexOf("DEFAULT_ALLOWED_TYPES")));
+    expect(defaults).not.toContain("openxmlformats");
   });
 });
 
@@ -290,6 +311,18 @@ describeEmbeddedPostgres("propose-upload behind steward approval (slice 5)", () 
         res.json({ id: FOLDER_ID, name: "Kickoff", folder: { childCount: 3 }, parentReference: { driveId: OWN_DRIVE } });
         return;
       }
+      if (call.method === "GET" && pathname === "/me/drive/root:/Projects/Shortcut") {
+        // A "shortcut to My files": it sits in the steward's drive, but the
+        // folder it opens lives in someone else's.
+        res.json({
+          id: "01SHORTCUT",
+          name: "Shortcut",
+          folder: { childCount: 1 },
+          parentReference: { driveId: OWN_DRIVE },
+          remoteItem: { id: "01THEIRFOLDER", folder: { childCount: 1 }, parentReference: { driveId: "b!someone-elses-drive" } },
+        });
+        return;
+      }
       if (call.method === "GET" && pathname === "/me/drive/root:/Projects/Report.docx") {
         res.json({ id: "01AFILE", name: "Report.docx", file: { mimeType: "x" }, parentReference: { driveId: OWN_DRIVE } });
         return;
@@ -375,7 +408,14 @@ describeEmbeddedPostgres("propose-upload behind steward approval (slice 5)", () 
 
   // -- helpers --------------------------------------------------------------
 
-  async function seedAttachment(companyId: string, issueId: string, contentType: string, body: Buffer) {
+  async function seedAttachment(
+    companyId: string,
+    issueId: string,
+    contentType: string,
+    body: Buffer,
+    /** Who uploaded it; Agent A unless a test says otherwise. */
+    by: { agentId?: string | null; userId?: string | null } = {},
+  ) {
     const stored = await getStorageService().putFile({
       companyId,
       namespace: `issues/${issueId}`,
@@ -393,7 +433,8 @@ describeEmbeddedPostgres("propose-upload behind steward approval (slice 5)", () 
         byteSize: stored.byteSize,
         sha256: stored.sha256,
         originalFilename: stored.originalFilename,
-        createdByAgentId: AGENT_A || null,
+        createdByAgentId: by.agentId === undefined ? AGENT_A || null : by.agentId,
+        createdByUserId: by.userId ?? null,
       })
       .returning()
       .then((rows) => rows[0]!);
@@ -667,16 +708,18 @@ describeEmbeddedPostgres("propose-upload behind steward approval (slice 5)", () 
     expect(execution).toMatchObject({ outcome: "failed", reason: "write_scope_missing", externalId: null });
   });
 
-  it("refuses with steward_changed, and calls Microsoft not at all, when the stewardship ended after filing", async () => {
+  it("refuses the former steward's decision, and calls Microsoft not at all, when the stewardship ended after filing", async () => {
     await connect(PERSON_A, "read_propose");
     const filed = await propose();
     await agentStewardshipService(db).releaseForAgent(COMPANY, AGENT_A, { releasedByUserId: PERSON_A, releaseReason: "handing the agent back" });
 
-    await decide(PERSON_A, filed.body.approvalId);
+    const decided = await decide(PERSON_A, filed.body.approvalId);
 
+    expect(decided.status, JSON.stringify(decided.body)).toBe(403);
+    expect(decided.body.details?.code).toBe("steward_changed");
     expect(graphCalls).toHaveLength(0);
     expect(tokenCalls).toHaveLength(0);
-    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "steward_changed" });
+    expect(await executionFor(filed.body.approvalId)).toBeNull();
   });
 
   it("refuses with steward_changed when the agent moved to another steward between approval and execution", async () => {
@@ -699,16 +742,351 @@ describeEmbeddedPostgres("propose-upload behind steward approval (slice 5)", () 
     expect(tokenCalls).toHaveLength(0);
   });
 
-  it("only the current steward's approval uploads into the steward's OneDrive", async () => {
+  it("refuses a non-steward's decision with 403 and leaves the request for the steward", async () => {
     await connect(PERSON_A, "read_propose");
     const filed = await propose();
 
-    // Person B is a member who may decide approvals in this company, but the
-    // file would land in Person A's OneDrive under Person A's credential.
-    await decide(PERSON_B, filed.body.approvalId);
+    // Person B is a member who may decide ordinary approvals in this company,
+    // but the file would land in Person A's OneDrive under Person A's
+    // credential, so Person B can neither approve nor reject it.
+    const approved = await decide(PERSON_B, filed.body.approvalId);
+    expect(approved.status, JSON.stringify(approved.body)).toBe(403);
+    const rejected = await decide(PERSON_B, filed.body.approvalId, "reject");
+    expect(rejected.status, JSON.stringify(rejected.body)).toBe(403);
+    // Nor can Person B send it back for changes and become its decider.
+    const revision = await request(asPerson(PERSON_B))
+      .post(`/api/approvals/${filed.body.approvalId}/request-revision`)
+      .send({});
+    expect(revision.status, JSON.stringify(revision.body)).toBe(403);
+
+    const stored = await db.select().from(approvals).where(eq(approvals.id, filed.body.approvalId)).then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
+    expect(stored.decidedByUserId).toBeNull();
+    expect(await executionFor(filed.body.approvalId)).toBeNull();
+    expect(graphCalls).toHaveLength(0);
+
+    // The request is still the steward's to decide, and it goes through.
+    const decided = await decide(PERSON_A, filed.body.approvalId);
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    expect(puts()).toHaveLength(1);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "succeeded" });
+  });
+
+  it("refuses an administrator on agentdash_mk too, even at minimumApproval none or by override, but lets an override reject it", async () => {
+    await db.update(companies).set({ productProfile: "agentdash_mk" }).where(eq(companies.id, COMPANY));
+    await db
+      .update(companyMemberships)
+      .set({ membershipRole: "admin" })
+      .where(and(eq(companyMemberships.companyId, COMPANY), eq(companyMemberships.principalId, PERSON_B)));
+    const governance = agentGovernanceService(db);
+    const current = await governance.getForAgent(COMPANY, AGENT_A);
+    await governance.updateOwnerCeiling(COMPANY, AGENT_A, {
+      policy: {
+        permissions: [AGENT_POLICY_WILDCARD],
+        monthlyBudgetCents: AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+        destructiveActions: "ask",
+        dataScopes: [AGENT_POLICY_WILDCARD],
+        providers: [AGENT_POLICY_WILDCARD],
+        minimumApproval: "none",
+      },
+      revision: current.revision,
+      actorUserId: PERSON_A,
+      channel: "web",
+    });
+    try {
+      await connect(PERSON_A, "read_propose");
+      const filed = await propose();
+      expect(filed.status, JSON.stringify(filed.body)).toBe(202);
+
+      const byAdmin = await decide(PERSON_B, filed.body.approvalId);
+      expect(byAdmin.status, JSON.stringify(byAdmin.body)).toBe(403);
+
+      const override = async (decision: "approved" | "rejected") => {
+        const row = await db.select().from(approvals).where(eq(approvals.id, filed.body.approvalId)).then((rows) => rows[0]!);
+        return request(asPerson(PERSON_B))
+          .post(`/api/approvals/${filed.body.approvalId}/override`)
+          .send({
+            decision,
+            overrideReason: "testing who may decide",
+            revision: row.revision,
+            idempotencyKey: `test-${randomUUID()}`,
+            channel: "web",
+          });
+      };
+      const overrideApprove = await override("approved");
+      expect(overrideApprove.status, JSON.stringify(overrideApprove.body)).toBe(403);
+      const pending = await db.select().from(approvals).where(eq(approvals.id, filed.body.approvalId)).then((rows) => rows[0]!);
+      expect(pending.status).toBe("pending");
+      expect(await executionFor(filed.body.approvalId)).toBeNull();
+      expect(graphCalls).toHaveLength(0);
+
+      // Killing it is still an administrator's emergency power: nothing is written.
+      const overrideReject = await override("rejected");
+      expect(overrideReject.status, JSON.stringify(overrideReject.body)).toBe(200);
+      expect(overrideReject.body.status).toBe("rejected");
+      expect(graphCalls).toHaveLength(0);
+    } finally {
+      await db.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, COMPANY));
+    }
+  });
+
+  it("still refuses at execute an approval recorded by anyone but the steward (defense in depth)", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    // Written behind the decision routes' back.
+    await db
+      .update(approvals)
+      .set({ status: "approved", decidedByUserId: PERSON_B, decidedAt: new Date() })
+      .where(eq(approvals.id, filed.body.approvalId));
+
+    const report = await connectorSendExecutionService(db).executeForApproval(filed.body.approvalId);
+
+    expect(report).toMatchObject({ outcome: "failed", refused: true, reason: "approver_not_steward" });
+    expect(graphCalls).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  // -- what may be proposed --------------------------------------------------
+
+  it("refuses an attachment the agent did not upload, even on an issue it can see", async () => {
+    await connect(PERSON_A, "read_propose");
+    const agentB = await db
+      .insert(agents)
+      .values({ companyId: COMPANY, name: "Agent B", role: "engineer", status: "idle", adapterType: "process" })
+      .returning()
+      .then((rows) => rows[0]!.id);
+    const byPerson = await seedAttachment(COMPANY, ISSUE, "text/markdown", Buffer.from("# a person's notes\n"), {
+      agentId: null,
+      userId: PERSON_B,
+    });
+    const byOtherAgent = await seedAttachment(COMPANY, ISSUE, "text/markdown", Buffer.from("# Agent B's notes\n"), {
+      agentId: agentB,
+    });
+
+    for (const attachmentId of [byPerson.attachmentId, byOtherAgent.attachmentId]) {
+      const res = await propose({ attachmentId });
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.details?.code).toBe("attachment_not_uploaded_by_agent");
+    }
+    expect(await db.select().from(approvals).where(eq(approvals.companyId, COMPANY))).toHaveLength(0);
+  });
+
+  async function restrictedIssueFor(principal: { agentId: string }, visibility: "restricted" | "company" = "restricted") {
+    const projectId = await db
+      .insert(projects)
+      .values({ companyId: COMPANY, name: `Project P ${randomUUID().slice(0, 6)}`, visibility, createdByUserId: PERSON_B })
+      .returning()
+      .then((rows) => rows[0]!.id);
+    await db
+      .insert(projectAccess)
+      .values({ projectId, principalType: "agent", principalId: principal.agentId, grantedByUserId: PERSON_B });
+    const issueId = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, projectId, title: "Client brief", status: "todo", createdByUserId: PERSON_B })
+      .returning()
+      .then((rows) => rows[0]!.id);
+    return { projectId, issueId };
+  }
+
+  it("refuses an attachment on an issue its steward cannot see", async () => {
+    await connect(PERSON_A, "read_propose");
+    // Agent A is on restricted project P; its steward, Person A, is not.
+    const { issueId } = await restrictedIssueFor({ agentId: AGENT_A });
+    const seeded = await seedAttachment(COMPANY, issueId, "text/markdown", Buffer.from("# restricted\n"));
+
+    const res = await propose({ attachmentId: seeded.attachmentId });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body.details?.code).toBe("attachment_not_visible_to_steward");
+    expect(await db.select().from(approvals).where(eq(approvals.companyId, COMPANY))).toHaveLength(0);
+  });
+
+  it("re-checks at execute who uploaded the attachment", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    expect(filed.status).toBe(202);
+    const attachment = await db.select().from(issueAttachments).where(eq(issueAttachments.id, ATTACHMENT)).then((rows) => rows[0]!);
+    await db.update(assets).set({ createdByAgentId: null, createdByUserId: PERSON_B }).where(eq(assets.id, attachment.assetId));
+
+    await decide(PERSON_A, filed.body.approvalId);
 
     expect(graphCalls).toHaveLength(0);
-    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "approver_not_steward" });
+    expect(tokenCalls).toHaveLength(0);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "attachment_not_uploaded_by_agent" });
+  });
+
+  it("re-checks at execute that the steward can still see the attachment's issue", async () => {
+    await connect(PERSON_A, "read_propose");
+    const { projectId, issueId } = await restrictedIssueFor({ agentId: AGENT_A }, "company");
+    const seeded = await seedAttachment(COMPANY, issueId, "text/markdown", Buffer.from("# soon restricted\n"));
+    const filed = await propose({ attachmentId: seeded.attachmentId });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(202);
+    await db
+      .update(approvals)
+      .set({ status: "approved", decidedByUserId: PERSON_A, decidedAt: new Date() })
+      .where(eq(approvals.id, filed.body.approvalId));
+    // The project was restricted after filing; Person A is not on it.
+    await db.update(projects).set({ visibility: "restricted" }).where(eq(projects.id, projectId));
+
+    const report = await connectorSendExecutionService(db).executeForApproval(filed.body.approvalId);
+
+    expect(report).toMatchObject({ outcome: "failed", refused: true, reason: "attachment_not_visible_to_steward" });
+    expect(graphCalls).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  // -- apply-time guards -------------------------------------------------------
+
+  it("refuses with document_access_disabled, and calls Microsoft not at all, when the flag was turned off after filing", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    await featureFlagsService(db).set(COMPANY, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS, false);
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(graphCalls).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "document_access_disabled" });
+  });
+
+  it("refuses with payload_changed when the stored request was edited after filing", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    const row = await db.select().from(approvals).where(eq(approvals.id, filed.body.approvalId)).then((rows) => rows[0]!);
+    await db
+      .update(approvals)
+      .set({ payload: { ...(row.payload as Record<string, unknown>), target: { path: "Somewhere/Else" } } })
+      .where(eq(approvals.id, row.id));
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(graphCalls).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "payload_changed" });
+  });
+
+  it("refuses with connection_changed when the steward disconnected and connected again after filing", async () => {
+    const first = await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    const revoked = await request(asPerson(PERSON_A)).post(`/api/companies/${COMPANY}/me/connections/microsoft/revoke`).send({});
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    const second = await connect(PERSON_A, "read_propose");
+    expect(second).not.toBe(first);
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(puts()).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "connection_changed" });
+  });
+
+  it("refuses with approval_expired once the request outlived its lifetime", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    await db
+      .update(approvals)
+      .set({
+        status: "approved",
+        decidedByUserId: PERSON_A,
+        decidedAt: new Date(),
+        expiresAt: new Date(Date.now() - 60_000),
+      })
+      .where(eq(approvals.id, filed.body.approvalId));
+
+    const report = await connectorSendExecutionService(db).executeForApproval(filed.body.approvalId);
+
+    expect(report).toMatchObject({ outcome: "failed", refused: true, reason: "approval_expired" });
+    expect(graphCalls).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  it("refuses a .pdf proposal whose bytes are not a PDF", async () => {
+    await connect(PERSON_A, "read_propose");
+    const seeded = await seedAttachment(COMPANY, ISSUE, "application/pdf", Buffer.from("not a pdf at all"));
+    const filed = await propose({ fileName: "Brief.pdf", attachmentId: seeded.attachmentId });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(202);
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(puts()).toHaveLength(0);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "attachment_type_mismatch" });
+  });
+
+  it("refuses a file larger than an attachment may be before reading it or asking for a token", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    const attachment = await db.select().from(issueAttachments).where(eq(issueAttachments.id, ATTACHMENT)).then((rows) => rows[0]!);
+    // Above the process attachment ceiling (10 MiB by default), below Graph's 250 MB.
+    await db.update(assets).set({ byteSize: 11 * 1024 * 1024 }).where(eq(assets.id, attachment.assetId));
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(graphCalls).toHaveLength(0);
+    expect(tokenCalls).toHaveLength(0);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "attachment_too_large" });
+  });
+
+  it("records reconnect_required when Microsoft refuses the token on the upload", async () => {
+    await connect(PERSON_A, "read_propose");
+    putHandler = () => ({ status: 401, body: { error: { code: "InvalidAuthenticationToken" } } });
+    const filed = await propose();
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(puts()).toHaveLength(1);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "reconnect_required" });
+  });
+
+  it("records storage_full, not outcome_unknown, when the steward's OneDrive is full (507)", async () => {
+    await connect(PERSON_A, "read_propose");
+    putHandler = () => ({ status: 507, body: { error: { code: "quotaLimitReached" } } });
+    const filed = await propose();
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(puts()).toHaveLength(1);
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "storage_full" });
+  });
+
+  it("refuses a shortcut folder that opens into someone else's drive", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose({ target: { path: "Projects/Shortcut" } });
+    expect(filed.status).toBe(202);
+
+    await decide(PERSON_A, filed.body.approvalId);
+
+    expect(puts()).toHaveLength(0);
+    const lookup = graphCalls.find((call) => call.path.startsWith("/me/drive/root:/Projects/Shortcut"));
+    expect(lookup?.path).toContain("remoteItem");
+    expect(await executionFor(filed.body.approvalId)).toMatchObject({ outcome: "failed", reason: "target_not_own_drive" });
+  });
+
+  it("re-opens a proposal unchanged on a resubmit with no payload, and re-validates what is stored", async () => {
+    await connect(PERSON_A, "read_propose");
+    const filed = await propose();
+    const sendBack = async () => {
+      const res = await request(asPerson(PERSON_A))
+        .post(`/api/approvals/${filed.body.approvalId}/request-revision`)
+        .send({ decisionNote: "pick another folder" });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    };
+
+    await sendBack();
+    const reopened = await request(asAgent()).post(`/api/approvals/${filed.body.approvalId}/resubmit`).send({});
+    expect(reopened.status, JSON.stringify(reopened.body)).toBe(200);
+    expect(reopened.body.status).toBe("pending");
+    const after = await db.select().from(approvals).where(eq(approvals.id, filed.body.approvalId)).then((rows) => rows[0]!);
+    expect((after.payload as Record<string, unknown>).target).toEqual({ path: "Projects/Kickoff" });
+
+    // A stored payload that no longer passes the shape check cannot be re-opened.
+    await sendBack();
+    await db
+      .update(approvals)
+      .set({ payload: { ...(after.payload as Record<string, unknown>), operation: "delete" } })
+      .where(eq(approvals.id, filed.body.approvalId));
+    const refused = await request(asAgent()).post(`/api/approvals/${filed.body.approvalId}/resubmit`).send({});
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body.details?.code).toBe("connector_send_operation_invalid");
   });
 
   it("refuses a destination outside the steward's own OneDrive before writing", async () => {

@@ -40,7 +40,8 @@ You cannot edit, overwrite, rename, move, share or delete any document. To propo
 
 1. **Ask first.** Before you draft anything for upload, ask your steward with `ask_user_questions` on the issue: which folder in their OneDrive it should go in (there is no default folder; offer the folder the original is in as one option if you know it), and whether a proposed copy is what they want. Stop and wait for the answer.
 2. **Draft the copy in your workspace.** Write it as **Markdown** (`.md`): the server turns it into a Word document when you ask for a `.docx`. (`python-docx` and `python-pptx` are not installed on this host, so do not try to build Office files yourself.) A PDF, plain-text or CSV draft is uploaded as it is. There is no way to propose a `.pptx` or `.xlsx` from Markdown: say so and offer a Word document or a written list of changes instead.
-3. **Attach it** to the issue with `attach_file`. Keep the returned `attachmentId`.
+   A finished `.docx`, `.pptx` or `.xlsx` can be passed through as it is only if the operator allows Office attachment types on this instance (`PAPERCLIP_ALLOWED_ATTACHMENT_TYPES`); the default list does not include them. If `attach_file` refuses the file's content type, do not rename or re-label it to get it through: draft Markdown for a Word document, or tell your steward that the operator would have to allow Office attachments.
+3. **Attach it yourself** to the issue with `attach_file`, on a task your steward can see. Keep the returned `attachmentId`. Only an attachment you uploaded is accepted: you cannot propose a copy of a file someone else attached.
 4. **File the request** with `documents_propose_upload`: `provider: "microsoft"`, `target` (`{path: "Folder/Sub"}` or `{folderId}`, exactly as your steward chose), `fileName` (the original's name and the output extension, e.g. `Kickoff notes.docx`), `attachmentId`, `sourceItemId` (the original's item id, if there is one), and a `summary` that tells your steward what the copy changes and why, in your own words, without pasting document text.
 5. **Report honestly.** The tool answers `202` with an `approvalId`. Nothing has been saved yet. Tell your steward the proposed copy is waiting for their approval; never say it was saved.
 
@@ -57,6 +58,8 @@ At filing (`documents_propose_upload`):
 - `422` `connector_send_operation_invalid`: you asked to update, replace or delete. Only a new proposed copy exists.
 - `422` `connector_send_target_invalid`: name exactly one folder your steward chose.
 - `422` `attachment_type_mismatch`: the draft's type cannot become the file type you named (for example Markdown into `.pptx`).
+- `422` `attachment_not_uploaded_by_agent`: you did not upload that attachment. Attach your own draft, then propose again.
+- `422` `attachment_not_visible_to_steward`: your steward cannot see the task it is attached to, so they cannot approve copying it out. Attach the draft to a task your steward can see, or ask them.
 - `404`: the attachment is not on an issue you can see.
 
 After approval, if the copy was not saved you are woken with `PAPERCLIP_WAKE_REASON=connector_send_failed` and the reason is posted on the approval and the issue:
@@ -66,4 +69,11 @@ After approval, if the copy was not saved you are woken with `PAPERCLIP_WAKE_REA
 - `target_not_found`, `target_not_folder`, `target_not_own_drive`: the folder is gone, is a file, or is not in your steward's own OneDrive. Ask where it should go.
 - `attachment_changed` or `attachment_missing`: the draft changed or was removed after filing. File again only with the draft your steward should see.
 - `reconnect_required`: Microsoft no longer accepts your steward's connection. Ask them to reconnect.
+- `storage_full`: your steward's OneDrive is full. Nothing was saved. Tell them; they decide whether to free space and have you file again.
+- `attachment_too_large`: the draft is bigger than this instance uploads in one approval. Offer a smaller file or a written list of changes.
+- `attachment_not_uploaded_by_agent` or `attachment_not_visible_to_steward`: the draft is no longer your own upload on a task your steward can see.
+- `microsoft_unreachable`, `not_configured` or `not_connected`: Microsoft could not be reached, sign-in is not set up on this instance, or your steward's connection is gone. Nothing was saved.
+- `approval_expired`, `payload_changed`, `connection_changed` or `document_access_disabled`: the request went stale, was changed, the connection was replaced, or document access was turned off.
+
+Every refusal after approval is final for that request, even one that sounds temporary like `microsoft_unreachable`: the same approval is never tried again. Ask your steward whether they still want the copy, and file a new request only if they say yes.
 - Woken with `PAPERCLIP_WAKE_REASON=connector_send_outcome_unknown` instead: nobody knows whether it was saved. Do not retry. Ask your steward to look in the folder.

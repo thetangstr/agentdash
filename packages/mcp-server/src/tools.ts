@@ -710,7 +710,9 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         + "\"<name> (proposed by <your name>).<ext>\" in the folder you name. Nothing is written until your steward "
         + "approves, and it never overwrites, edits or deletes an existing document; a name already in use gets a "
         + "numbered copy. Attach the draft to the issue first (attach_file) and pass its attachmentId; a Markdown "
-        + "draft proposed with a .docx fileName is converted to Word. Returns 202 with an approvalId: report that the request is with your steward, not "
+        + "draft proposed with a .docx fileName is converted to Word. Only a draft you attached yourself, on a task "
+        + "your steward can see, is accepted (422 attachment_not_uploaded_by_agent, attachment_not_visible_to_steward). "
+        + "Returns 202 with an approvalId: report that the request is with your steward, not "
         + "that a file was saved. Ask your steward which folder first (ask_user_questions); there is no default. "
         + "Load the agentdash-office-docs skill before using this. Refusals carry details.code (422) or "
         + "details.reason (403: no_active_steward, no_connection).",

@@ -83,8 +83,12 @@ const PROPOSED_COPY_FORMATS: readonly ProposedCopyFormat[] = Object.freeze([
 
 /** Characters OneDrive refuses in a name, plus the ones Graph path syntax uses. */
 const NAME_FORBIDDEN = /["*:<>?/\\|#%\u0000-\u001f\u007f]/;
-/** Graph item and drive ids: letters, digits and `!._-`; nothing that is path or query syntax. */
-const GRAPH_ID = /^[A-Za-z0-9!._-]{1,256}$/;
+/**
+ * Graph item and drive ids: letters, digits and `!._-`; nothing that is path or
+ * query syntax. An id made only of dots is refused: `encodeURIComponent` leaves
+ * dots alone, so a URL parser would read `.` or `..` as a dot segment.
+ */
+const GRAPH_ID = /^(?!\.+$)[A-Za-z0-9!._-]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function splitExtension(fileName: string): { stem: string; extension: string } | null {

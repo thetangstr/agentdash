@@ -15,14 +15,16 @@
 // the only way one is filed and those fields are never agent-written.
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
-import { agents, assets, issueAttachments } from "@paperclipai/db";
+import { agents, assets, companyMemberships, issueAttachments } from "@paperclipai/db";
 import {
   checkConnectorSendPayload,
   proposedCopyFileName,
   proposedCopyFormatFor,
 } from "@paperclipai/shared";
 import { HttpError, notFound, unprocessable } from "../errors.js";
+import { assertIssueIdVisible } from "../routes/visibility.js";
 import { insertActivity, publishActivity } from "./activity-log.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { approvalCardDeliveryService } from "./approval-card-delivery.js";
@@ -92,12 +94,83 @@ export async function loadProposalAttachment(db: Db, companyId: string, attachme
       contentType: assets.contentType,
       byteSize: assets.byteSize,
       sha256: assets.sha256,
+      createdByAgentId: assets.createdByAgentId,
     })
     .from(issueAttachments)
     .innerJoin(assets, eq(assets.id, issueAttachments.assetId))
     .where(and(eq(issueAttachments.id, attachmentId), eq(issueAttachments.companyId, companyId)))
     .then((rows) => rows[0] ?? null);
 }
+
+export type ProposalAttachmentRefusal = "attachment_not_uploaded_by_agent" | "attachment_not_visible_to_steward";
+
+/**
+ * Whether this attachment may travel into this steward's OneDrive at all.
+ *
+ * - The requesting agent must have uploaded it. "An issue attachment you
+ *   uploaded" is the contract the tool and skill state; without it an agent
+ *   could name any file it can merely see, such as a client PDF a person
+ *   attached on a restricted project.
+ * - The steward must be able to see the issue it is attached to, judged as
+ *   the steward (not the agent). Otherwise approving would copy a file out of
+ *   a project the steward is not on, past AgentDash's own visibility rules,
+ *   using the steward's credential.
+ *
+ * Asked at filing and again by the executor, because either can change in
+ * between (an asset re-attributed, a project restricted).
+ */
+export async function proposalAttachmentRefusal(
+  db: Db,
+  input: {
+    companyId: string;
+    agentId: string;
+    stewardUserId: string;
+    attachment: { issueId: string; createdByAgentId: string | null };
+  },
+): Promise<ProposalAttachmentRefusal | null> {
+  if (input.attachment.createdByAgentId !== input.agentId) return "attachment_not_uploaded_by_agent";
+  const membership = await db
+    .select()
+    .from(companyMemberships)
+    .where(
+      and(
+        eq(companyMemberships.companyId, input.companyId),
+        eq(companyMemberships.principalType, "user"),
+        eq(companyMemberships.principalId, input.stewardUserId),
+        eq(companyMemberships.status, "active"),
+      ),
+    )
+    .then((rows) => rows[0] ?? null);
+  if (!membership) return "attachment_not_visible_to_steward";
+  // The steward as a board actor, so the ONE visibility rule decides (project
+  // restriction and agent visibility), exactly as it would for their own request.
+  const asSteward = {
+    actor: {
+      type: "board",
+      source: "session",
+      userId: input.stewardUserId,
+      isInstanceAdmin: false,
+      companyIds: [input.companyId],
+      memberships: [membership],
+    },
+  } as unknown as Request;
+  try {
+    await assertIssueIdVisible(db, asSteward, input.attachment.issueId, "Attachment");
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 404) return "attachment_not_visible_to_steward";
+    throw error;
+  }
+  return null;
+}
+
+const ATTACHMENT_REFUSAL_TEXT: Record<ProposalAttachmentRefusal, string> = {
+  attachment_not_uploaded_by_agent:
+    "You can only propose a copy of an attachment you uploaded yourself. Attach your draft to the task with " +
+    "attach_file, then propose again with that attachment's id.",
+  attachment_not_visible_to_steward:
+    "Your steward cannot see the task this attachment is on, so they cannot approve copying it into their " +
+    "OneDrive. Attach the draft to a task your steward can see, then propose again.",
+};
 
 function refusal(status: number, reason: string, message: string): HttpError {
   return new HttpError(status, message, { reason });
@@ -163,6 +236,13 @@ export function microsoftDocumentProposalService(db: Db) {
     const attachment = await loadProposalAttachment(db, companyId, attachmentId);
     if (!attachment) throw notFound("Attachment not found");
     await input.assertIssueVisible(attachment.issueId);
+    const provenance = await proposalAttachmentRefusal(db, {
+      companyId,
+      agentId,
+      stewardUserId: steward.userId,
+      attachment,
+    });
+    if (provenance) throw unprocessable(ATTACHMENT_REFUSAL_TEXT[provenance], { code: provenance });
 
     const format = proposedCopyFormatFor(fileName)!;
     const contentType = baseContentType(attachment.contentType);

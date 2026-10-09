@@ -104,7 +104,9 @@ export function microsoftDocumentsWriteService() {
     if (!ownDriveId) return { ok: false, reason: "microsoft_unreachable" };
     if (target.driveId && target.driveId !== ownDriveId) return { ok: false, reason: "target_not_own_drive" };
 
-    const select = "?$select=id,name,folder,file,parentReference";
+    // `remoteItem` too: a "shortcut to My files" sits in this drive but opens a
+    // folder in someone else's, and is refused below whatever scopes are granted.
+    const select = "?$select=id,name,folder,file,parentReference,remoteItem";
     let lookup: string;
     if (target.folderId) {
       lookup = `/me/drive/items/${encodeURIComponent(target.folderId)}${select}`;
@@ -122,13 +124,20 @@ export function microsoftDocumentsWriteService() {
     if (!item.body.folder || typeof item.body.folder !== "object") return { ok: false, reason: "target_not_folder" };
     const itemDrive = parentDriveId(item.body);
     if (itemDrive && itemDrive !== ownDriveId) return { ok: false, reason: "target_not_own_drive" };
+    // The own-drive guarantee is enforced here, not left to the scope tier:
+    // with only Files.ReadWrite a write through a shortcut is a 403 today, but
+    // a wider grant later would let it land in another person's folder.
+    if (item.body.remoteItem !== undefined && item.body.remoteItem !== null) {
+      return { ok: false, reason: "target_not_own_drive" };
+    }
     return { ok: true, driveId: ownDriveId, folderId };
   }
 
   /**
    * Create one new file. `rename` on conflict: an existing name is never
-   * replaced. Never retried: a 5xx or a dropped connection may mean the file
-   * landed, and only a person can tell, so those are `outcome_unknown`.
+   * replaced. Never retried: a 5xx (other than 507, which means the drive is
+   * full) or a dropped connection may mean the file landed, and only a person
+   * can tell, so those are `outcome_unknown`.
    */
   async function uploadNewFile(
     accessToken: string,
@@ -158,6 +167,9 @@ export function microsoftDocumentsWriteService() {
       logger.warn({ err: error }, "microsoft document upload failed in transport");
       return { outcome: "outcome_unknown", reason: "transport_failure" };
     }
+    // 507 Insufficient Storage is a definite "nothing was written": the
+    // steward's OneDrive is full. Every other 5xx may have landed.
+    if (response.status === 507) return { outcome: "failed", reason: "storage_full" };
     if (response.status >= 500) return { outcome: "outcome_unknown", reason: `provider_${response.status}` };
     if (response.status === 401) return { outcome: "failed", reason: "reconnect_required" };
     if (!response.ok) return { outcome: "failed", reason: `provider_${response.status}` };

@@ -15,6 +15,7 @@ import {
   FEATURE_FLAG_KEYS,
   proposedCopyFormatFor,
 } from "@paperclipai/shared";
+import { MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { getStorageService } from "../storage/index.js";
@@ -29,6 +30,7 @@ import {
   baseContentType,
   loadProposalAttachment,
   microsoftProposalDigest,
+  proposalAttachmentRefusal,
 } from "./microsoft-document-proposals.js";
 import {
   MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES,
@@ -120,8 +122,11 @@ const REASON_TEXT: Record<string, string> = {
   malformed_token_response: "Microsoft returned no usable token",
   attachment_missing: "the file to upload is no longer attached",
   attachment_changed: "the file changed after the request was filed",
+  attachment_not_uploaded_by_agent: "the file to upload was not one the agent uploaded itself",
+  attachment_not_visible_to_steward: "the steward cannot see the task the file is attached to",
+  storage_full: "the steward's OneDrive is full; nothing was saved",
   attachment_type_mismatch: "the attached file is not the kind of document the request names",
-  attachment_too_large: "the file is larger than Microsoft accepts in one upload",
+  attachment_too_large: "the file is larger than AgentDash uploads to OneDrive in one approval",
   target_not_found: "the folder it names does not exist in the steward's OneDrive",
   target_not_folder: "the destination it names is a file, not a folder",
   target_not_own_drive: "the destination is not in the steward's own OneDrive",
@@ -199,6 +204,16 @@ export type ReconcileResult =
  * Whether bytes plausibly are the format their extension names: OOXML is a
  * zip, a PDF starts with `%PDF`. Text formats are not sniffed.
  */
+/**
+ * The most this executor will buffer and upload. It runs inside the steward's
+ * approve request, so it is held to the instance's attachment ceiling (10 MiB
+ * unless the operator raised it), not Graph's 250 MB simple-upload limit. An
+ * attachment cannot legitimately be bigger than that ceiling anyway.
+ */
+export function microsoftProposalMaxBytes(): number {
+  return Math.min(MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES, MAX_ATTACHMENT_BYTES);
+}
+
 function looksLike(extension: string, bytes: Buffer): boolean {
   if (extension === "docx" || extension === "pptx" || extension === "xlsx") {
     return bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
@@ -372,10 +387,19 @@ export function connectorSendExecutionService(
     const attachment = await loadProposalAttachment(db, approval.companyId, String(payload.attachmentId));
     if (!attachment) return refuse("attachment_missing");
     if (attachment.sha256 !== payload.attachmentSha256) return refuse("attachment_changed");
+    // Still the agent's own upload, on a task the steward can still see.
+    const provenance = await proposalAttachmentRefusal(db, {
+      companyId: approval.companyId,
+      agentId,
+      stewardUserId: steward.userId,
+      attachment,
+    });
+    if (provenance) return refuse(provenance);
     const format = proposedCopyFormatFor(String(payload.fileName));
     const contentType = baseContentType(attachment.contentType);
     if (!format || !format.accepts.includes(contentType)) return refuse("attachment_type_mismatch");
-    if (attachment.byteSize > MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES) return refuse("attachment_too_large");
+    const maxBytes = microsoftProposalMaxBytes();
+    if (attachment.byteSize > maxBytes) return refuse("attachment_too_large");
 
     // The CURRENT grant, which a refresh can narrow but never widen.
     let accessToken: string;
@@ -394,7 +418,7 @@ export function connectorSendExecutionService(
     for await (const chunk of stored.stream) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
       total += buffer.length;
-      if (total > MICROSOFT_SIMPLE_UPLOAD_MAX_BYTES) {
+      if (total > maxBytes) {
         stored.stream.destroy();
         return refuse("attachment_too_large");
       }
