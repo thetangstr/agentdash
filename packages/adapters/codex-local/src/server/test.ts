@@ -206,7 +206,7 @@ export async function testEnvironment(
           code: "codex_fast_mode_unsupported_model",
           level: "warn",
           message: execArgs.fastModeIgnoredReason,
-          hint: "Switch the agent model to GPT-5.4 or enter a manual model ID to enable Codex Fast mode.",
+          hint: "Switch the agent model to a gpt-6, gpt-5.6 or GPT-5.4 model, or enter a manual model ID, to enable Codex Fast mode.",
         });
       }
 
