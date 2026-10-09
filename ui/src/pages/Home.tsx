@@ -25,6 +25,7 @@ import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { ShippedWorkProductRow } from "../components/ShippedWorkProductRow";
 import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
+import { StoppedAgentIssueRow } from "../components/StoppedAgentIssueRow";
 import { decisionsListLength, useDecisionsCount } from "../hooks/useDecisionsBadge";
 import { FirstRunHomeNudges } from "../components/FirstRunHomeNudges";
 import { ControlPlanePanels } from "../components/dashboard/ControlPlanePanels";
@@ -213,6 +214,18 @@ function WaitingOnYouBlock({
           </li>
         ))}
       </ul>
+      {(data?.stoppedAgentIssues?.length ?? 0) > 0 ? (
+        <ul className="divide-y divide-border border-t border-border">
+          {data!.stoppedAgentIssues!.slice(0, HOME_LIST_LIMIT).map((item) => (
+            <StoppedAgentIssueRow key={item.issueId} item={item} testId="home-waiting-row" />
+          ))}
+        </ul>
+      ) : null}
+      <MoreLine
+        count={(data?.stoppedAgentIssuesTotal ?? 0) - Math.min(data?.stoppedAgentIssues?.length ?? 0, HOME_LIST_LIMIT)}
+        to="/decisions"
+        noun="stopped issues"
+      />
       {(data?.reviewsWaiting?.length ?? 0) > 0 ? (
         <ul className="divide-y divide-border border-t border-border">
           {data!.reviewsWaiting!.slice(0, HOME_LIST_LIMIT).map((review) => (

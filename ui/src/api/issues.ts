@@ -22,9 +22,16 @@ import type {
   UpsertIssueDocument,
 } from "@paperclipai/shared";
 import { api } from "./client";
+import type { StewardedAgentRouteNotice } from "../lib/stewarded-routing-notice";
 
 export type IssueUpdateResponse = Issue & {
   comment?: IssueComment | null;
+  /** AgentDash: set when a person assignee was replaced by the agent they steward. */
+  routedToStewardedAgent?: StewardedAgentRouteNotice;
+};
+
+export type IssueCreateResponse = Issue & {
+  routedToStewardedAgent?: StewardedAgentRouteNotice;
 };
 
 export interface QuestionRecoveryReceipt { issueId: string; interactionId: string; status: 'pending' | 'cancelled'; resolvedByUserId: string | null; resolvedAt: string | null }
@@ -97,7 +104,7 @@ export const issuesApi = {
   unarchiveFromInbox: (id: string) =>
     api.delete<{ id: string; archivedAt: Date } | { ok: true }>(`/issues/${id}/inbox-archive`),
   create: (companyId: string, data: Record<string, unknown>) =>
-    api.post<Issue>(`/companies/${companyId}/issues`, data),
+    api.post<IssueCreateResponse>(`/companies/${companyId}/issues`, data),
   update: (id: string, data: Record<string, unknown>) =>
     api.patch<IssueUpdateResponse>(`/issues/${id}`, data),
   // AgentDash (recovery budget remediation): "Clear recovery block & retry".

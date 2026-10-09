@@ -77,9 +77,9 @@ async function createApp(
   });
   // These approval/task fixtures contain no pending questions. Keep the real
   // waiting-on-you composition and its authority/visibility predicates; adapt
-  // only its added SELECT-only question and review readers to that explicit
-  // empty dataset (the review reader ends at `limit`, the question reader at
-  // `offset`).
+  // only its added SELECT-only question, review and stopped-agent readers to
+  // that explicit empty dataset (the review reader ends at `limit`, the
+  // question reader at `offset`, the stopped-agent reader at `orderBy`).
   const emptyQuestions: Record<string, unknown> = {
     from(table: Parameters<typeof getTableName>[0]) {
       if (!["issue_thread_interactions", "issues"].includes(getTableName(table))) throw new Error("Unexpected fixture query");
@@ -88,7 +88,7 @@ async function createApp(
     innerJoin: () => emptyQuestions,
     leftJoin: () => emptyQuestions,
     where: () => emptyQuestions,
-    orderBy: () => emptyQuestions,
+    orderBy: () => Object.assign(Promise.resolve([]), { limit: (emptyQuestions.limit as () => unknown) }),
     limit: () => Object.assign(Promise.resolve([]), { offset: async () => [] }),
   };
   app.use(assistantRoutes({ select: () => emptyQuestions } as never));

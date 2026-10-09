@@ -15,6 +15,7 @@ import { agentsApi } from "../api/agents";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
+import { useStewardedRoutingNotice } from "../hooks/useStewardedRoutingNotice";
 import { projectsApi } from "../api/projects";
 import { routinesApi } from "../api/routines";
 import { IssuesList } from "../components/IssuesList";
@@ -288,9 +289,11 @@ function ExecutionWorkspaceIssuesList({
 
   const liveIssueIds = useMemo(() => collectLiveIssueIds(liveRuns), [liveRuns]);
 
+  const announceRouting = useStewardedRoutingNotice(companyId);
   const updateIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => issuesApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      announceRouting(response);
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.listByExecutionWorkspace(companyId, workspaceId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
       if (project?.id) {

@@ -13,7 +13,8 @@ import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
 import { assetsApi } from "../api/assets";
-import { buildCompanyUserInlineOptions, buildMarkdownMentionOptions } from "../lib/company-members";
+import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildMarkdownMentionOptions } from "../lib/company-members";
+import { stewardedRoutingNotice } from "../lib/stewarded-routing-notice";
 import { queryKeys } from "../lib/queryKeys";
 import { orderReusableExecutionWorkspaces } from "../lib/reusable-execution-workspaces";
 import { useProjectOrder } from "../hooks/useProjectOrder";
@@ -579,6 +580,12 @@ export function NewIssueDialog() {
       return { issue, companyId, failures };
     },
     onSuccess: ({ issue, companyId, failures }) => {
+      const routedNotice = stewardedRoutingNotice(
+        issue.routedToStewardedAgent,
+        new Map((agents ?? []).map((agent) => [agent.id, agent])),
+        buildCompanyUserLabelMap(companyMembers?.users),
+      );
+      if (routedNotice) pushToast({ title: routedNotice, tone: "info" });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.listMineByMe(companyId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(companyId) });

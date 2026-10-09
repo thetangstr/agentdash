@@ -20,6 +20,7 @@ import { useToastActions } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, buildMarkdownMentionOptions } from "../lib/company-members";
+import { stewardedRoutingNotice } from "../lib/stewarded-routing-notice";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
@@ -1633,7 +1634,9 @@ export function IssueDetail() {
 
       return { previousDetailQueries, previousList, selectedCompanyId };
     },
-    onSuccess: ({ comment: _comment, ...nextIssue }) => {
+    onSuccess: ({ comment: _comment, routedToStewardedAgent, ...nextIssue }) => {
+      const routedNotice = stewardedRoutingNotice(routedToStewardedAgent, agentMap, userLabelMap);
+      if (routedNotice) pushToast({ title: routedNotice, tone: "info" });
       const issueRefs = new Set<string>([issueId!, nextIssue.id]);
       if (nextIssue.identifier) issueRefs.add(nextIssue.identifier);
       mergeIssueResponseIntoCaches(issueRefs, nextIssue);
@@ -1898,7 +1901,9 @@ export function IssueDetail() {
 
   const updateChildIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => issuesApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      const routedNotice = stewardedRoutingNotice(response.routedToStewardedAgent, agentMap, userLabelMap);
+      if (routedNotice) pushToast({ title: routedNotice, tone: "info" });
       if (resolvedCompanyId) {
         queryClient.invalidateQueries({ queryKey: ["issues", resolvedCompanyId] });
         queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(resolvedCompanyId) });
@@ -2222,8 +2227,10 @@ export function IssueDetail() {
         );
       }
 
-      const { comment, ...nextIssue } = result;
+      const { comment, routedToStewardedAgent, ...nextIssue } = result;
       queryClient.setQueryData(queryKeys.issues.detail(issueId!), nextIssue);
+      const routedNotice = stewardedRoutingNotice(routedToStewardedAgent, agentMap, userLabelMap);
+      if (routedNotice) pushToast({ title: routedNotice, tone: "info" });
       if (comment && context?.optimisticCommentId && cancelledQueuedOptimisticCommentIdsRef.current.has(context.optimisticCommentId)) {
         cancelledQueuedOptimisticCommentIdsRef.current.delete(context.optimisticCommentId);
         try {

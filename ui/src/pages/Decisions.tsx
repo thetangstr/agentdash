@@ -22,6 +22,7 @@ import { PageSkeleton } from "../components/PageSkeleton";
 import { cn } from "../lib/utils";
 import { DecisionsOtherSources } from "./DecisionsOtherSources";
 import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
+import { StoppedAgentIssueRow } from "../components/StoppedAgentIssueRow";
 import { useIsPhone } from "../hooks/useIsPhone";
 
 /**
@@ -218,6 +219,25 @@ export function Decisions() {
 
       {(waiting?.pendingQuestions.length ?? 0) > 0 && <section className="rounded-xl border bg-card" aria-label="Questions waiting for you"><h2 className="px-4 pt-3 text-sm font-semibold">Questions waiting for you</h2><ul className="divide-y">{waiting?.pendingQuestions.map(question => <PendingQuestionRow key={`${selectedCompanyId}:${question.interactionId}`} companyId={selectedCompanyId} question={question}/>)}</ul></section>}
       {(waiting?.pendingQuestionsTotal ?? 0) > (waiting?.pendingQuestions.length ?? 0) && <p className="text-sm">More questions are waiting; answer these to load the next questions.</p>}
+      {(waiting?.stoppedAgentIssues?.length ?? 0) > 0 ? (
+        <section className="rounded-xl border border-border bg-card" aria-label="Your agents are stopped and need you">
+          <header className="border-b border-border px-4 py-2.5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Your agents are stopped and need you
+            </h2>
+          </header>
+          <ul className="divide-y divide-border">
+            {waiting!.stoppedAgentIssues!.map((item) => (
+              <StoppedAgentIssueRow key={item.issueId} item={item} testId="decisions-stopped-row" />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {(waiting?.stoppedAgentIssuesTotal ?? 0) > (waiting?.stoppedAgentIssues?.length ?? 0) ? (
+        <p className="px-1 text-xs text-muted-foreground">
+          and {(waiting?.stoppedAgentIssuesTotal ?? 0) - (waiting?.stoppedAgentIssues?.length ?? 0)} more stopped
+        </p>
+      ) : null}
       {(waiting?.reviewsWaiting?.length ?? 0) > 0 ? (
         <section className="rounded-xl border border-border bg-card" aria-label="Waiting for your review">
           <header className="border-b border-border px-4 py-2.5">

@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `31955ca47` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `a73c9eb07` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -312,7 +312,7 @@ List comments for an approval
 
 ## `create_issue`
 
-Create a new issue. To give a colleague work, assign their agent (list_agents → steward.userId) via assigneeAgentId. assigneeUserId is for decisions only a human can make: when an agent assigns a person, the issue goes to the agent that person stewards unless assignToPerson is true.
+Create a new issue. Assigning a person (assigneeUserId) who stewards an agent gives the issue to that agent, whoever assigns it (list_agents → steward.userId); assignToPerson: true keeps it with the person.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -375,7 +375,7 @@ Create a new issue. To give a colleague work, assign their agent (list_agents �
 
 ## `update_issue`
 
-Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. To hand it to a colleague, assign their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment goes to that person's agent unless assignToPerson is true. Handing your own issue back to the person who created it (assigneeAgentId null, assigneeUserId = creator) stays with them.
+Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. Assigning a person who stewards an agent gives the issue to that agent unless assignToPerson is true. Work assigned to your steward comes to you: take the first pass, ask before completing unless your mandate lets you finish it (comment your recommendation, set blocked), and assign it to your steward (assigneeAgentId null, assigneeUserId = steward) only when they must do the work themselves. That hand-back stays with them, as does returning your issue to the person who created it.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -467,7 +467,7 @@ Add a comment to an issue; include resume=true when intentionally requesting fol
 
 ## `suggest_tasks`
 
-Create a suggest_tasks interaction on an issue. For a colleague's task, set assigneeAgentId to their agent (list_agents → steward.userId); assigneeUserId is for decisions only a human can make, and an agent's person assignment is drafted to that person's agent unless the task sets assignToPerson: true.
+Create a suggest_tasks interaction on an issue. A task assigned to a person who stewards an agent is drafted to that agent (list_agents → steward.userId) unless the task sets assignToPerson: true.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -491,6 +491,7 @@ Create a suggest_tasks interaction on an issue. For a colleague's task, set assi
 | `payload.tasks[].assigneeAgentId` | string \| null | no |  |
 | `payload.tasks[].assigneeUserId` | string \| null | no |  |
 | `payload.tasks[].assignToPerson` | boolean | no |  |
+| `payload.tasks[].routedFromStewardUserId` | string | no |  |
 | `payload.tasks[].projectId` | string \| null | no |  |
 | `payload.tasks[].goalId` | string \| null | no |  |
 | `payload.tasks[].billingCode` | string \| null | no |  |
