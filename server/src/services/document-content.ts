@@ -106,6 +106,7 @@ function getFrameKey(): Buffer {
 const PROVIDER_LABELS: Record<string, string> = {
   microsoft: "a Microsoft 365 document (OneDrive or SharePoint)",
   sharepoint: "a SharePoint document",
+  issue_attachment: "a file attached to an AgentDash issue",
 };
 
 const UNTRUSTED_NOTICE_HEAD = "The text between the markers below was read from";

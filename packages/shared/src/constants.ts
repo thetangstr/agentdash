@@ -1308,6 +1308,11 @@ export const FEATURE_FLAG_KEYS = {
    * an instance admin, and are purged after the document-run retention window.
    */
   DOCUMENT_ACCESS: "document_access_enabled",
+  /**
+   * The person's own Claude as co-worker: bridge work routes, and agents
+   * reading the text of issue attachments. Off by default.
+   */
+  COWORKER_BRIDGE: "coworker_bridge_enabled",
 } as const;
 
 // AgentDash (#157): billing-infra activity log action names.
