@@ -1,0 +1,9 @@
+{
+  "branch": null,
+  "head": "7618a10eeb061ab8837a40324b42bbd4af05ac46",
+  "sourceWorktreeName": "review-999",
+  "files": [
+    "server/src/__tests__/zz-review-999-probes.test.ts"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

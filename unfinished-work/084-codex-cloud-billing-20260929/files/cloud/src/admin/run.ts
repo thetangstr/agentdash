@@ -1,0 +1,165 @@
+// AgentDash: the operator CLI's logic, separate from the process wrapper so
+// tests can drive it. It talks to /internal/* with the admin bearer and
+// refuses to run at all without one.
+import { redact } from "../logger.js";
+export interface AdminIo {
+  out: (line: string) => void;
+  err: (line: string) => void;
+  fetch: typeof fetch;
+  /** Reads all of stdin (for `invites import`). */
+  readStdin?: () => Promise<string>;
+}
+
+export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <command>
+
+  settings get [key]         show all settings, or one
+  settings set <key> <value> change a setting (true/false, integers, a release tag, or null)
+  boxes list                 list boxes
+  boxes create <slug> <email> [release]
+                             create a box for <email> and request provisioning (kill switch and cap apply)
+  boxes retry <slug>         resume a failed box's provision job at its failed step
+  boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
+  fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
+  stripe configure-webhook  register/adopt the one signed cloud webhook (explicit operator operation)
+  stripe rotate-box-key     read one restricted Stripe key from stdin; update fleet variables (next deploy)
+  invites list               list self-hosted invite codes (ids and labels; codes are never stored)
+  invites import [label] [--allow-short]
+                             read codes from stdin (commas or newlines) and store their hashes;
+                             codes under 12 characters are refused unless --allow-short
+  invites add [label]        make one new code and print it once
+  invites revoke <id>        revoke a code
+  jobs list [state]          list jobs (all by default; queued, running, succeeded, failed, dead)
+  waitlist list [state]      list the waitlist (waiting by default; approved, rejected, all)
+  waitlist approve <id>      approve a waiting entry (the person is emailed)
+  waitlist approve-next <n>  approve the oldest n waiting entries
+  waitlist release           give approved entries their job if provisioning is open now (also runs every minute)
+
+env: CLOUD_CONTROL_URL (default http://localhost:3200; https required for any non-local host),
+     CLOUD_ADMIN_TOKEN (required)`;
+
+/**
+ * The admin bearer must never cross a network in clear text (GH #778): plain
+ * http is allowed only to this machine (localhost, 127.0.0.0/8, ::1).
+ * Returns an error message, or null when the URL is acceptable.
+ */
+export function checkControlUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `CLOUD_CONTROL_URL is not a valid URL`;
+  }
+  if (url.username || url.password) return "CLOUD_CONTROL_URL must not carry credentials";
+  if (url.protocol === "https:") return null;
+  if (url.protocol !== "http:") return `CLOUD_CONTROL_URL must be https (got ${url.protocol})`;
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const local = host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+  return local ? null : "refusing to send the admin bearer over plain http to a non-local host; use https";
+}
+
+export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: AdminIo): Promise<number> {
+  const token = env.CLOUD_ADMIN_TOKEN?.trim();
+  if (!token) {
+    io.err("refusing to run: CLOUD_ADMIN_TOKEN is not set (the admin bearer is required for every command)");
+    return 2;
+  }
+  const base = (env.CLOUD_CONTROL_URL?.trim() || "http://localhost:3200").replace(/\/+$/, "");
+  const bad = checkControlUrl(base);
+  if (bad) {
+    io.err(`refusing to run: ${bad}`);
+    return 2;
+  }
+  const call = async (method: string, path: string, body?: unknown) => {
+    const res = await io.fetch(`${base}/internal${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let json: unknown = text;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // keep text
+    }
+    return { ok: res.ok, status: res.status, json };
+  };
+  const print = (r: { ok: boolean; status: number; json: unknown }) => {
+    if (!r.ok) {
+      io.err(`error ${r.status}: ${typeof r.json === "string" ? r.json : JSON.stringify(r.json)}`);
+      return 1;
+    }
+    io.out(JSON.stringify(r.json, null, 2));
+    return 0;
+  };
+
+  const [group, action, ...rest] = argv;
+  // AgentDash (SC-8): secrets are stdin-only and provider bodies never reach terminal output.
+  if (group === "stripe") {
+    if (rest.length || !["configure-webhook", "rotate-box-key"].includes(action)) { io.err("invalid Stripe command; credentials must only be supplied on stdin"); return 2; }
+    let body: { key: string } | undefined;
+    if (action === "rotate-box-key") {
+      if (!io.readStdin) { io.err("stdin is required"); return 2; }
+      const key = (await io.readStdin()).trim();
+      if (!/^rk_(test|live)_[A-Za-z0-9]{8,}$/.test(key)) { io.err("stdin must contain one Stripe restricted key"); return 2; }
+      body = { key };
+    }
+    try {
+      const result = await call("POST", `/stripe/${action}`, body);
+      if (!result.ok) { io.err(`Stripe operator command failed (HTTP ${result.status}); inspect the redacted control-plane log`); return 1; }
+      // This endpoint's response is a non-secret summary. Treat unexpected output as untrusted.
+      if (!result.json || typeof result.json !== "object" || JSON.stringify(result.json).includes(body?.key ?? "\u0000")) { io.err("Stripe operator response invalid"); return 1; }
+      io.out(JSON.stringify(redact(result.json), null, 2));
+      return 0;
+    } catch { io.err("Stripe operator request failed"); return 1; }
+  }
+  if (group === "settings" && action === "get") {
+    return print(await call("GET", rest[0] ? `/settings/${encodeURIComponent(rest[0])}` : "/settings"));
+  }
+  if (group === "settings" && action === "set" && rest.length === 2) {
+    return print(await call("PUT", `/settings/${encodeURIComponent(rest[0]!)}`, { value: rest[1] }));
+  }
+  if (group === "boxes" && action === "list") return print(await call("GET", "/boxes"));
+  if (group === "boxes" && action === "create" && (rest.length === 2 || rest.length === 3)) {
+    return print(await call("POST", "/boxes", { slug: rest[0], email: rest[1], ...(rest[2] ? { releaseTag: rest[2] } : {}) }));
+  }
+  if (group === "boxes" && (action === "retry" || action === "abandon") && rest.length === 1) {
+    return print(await call("POST", `/boxes/${encodeURIComponent(rest[0]!)}/${action}`));
+  }
+  if (group === "fleet" && action === "edge-backfill") return print(await call("POST", "/fleet/edge-backfill"));
+  if (group === "invites" && action === "list") return print(await call("GET", "/invites"));
+  if (group === "invites" && action === "import") {
+    const allowShort = rest.includes("--allow-short");
+    const args = rest.filter((a) => a !== "--allow-short");
+    if (args.length > 1) {
+      io.err(USAGE);
+      return 64;
+    }
+    if (!io.readStdin) {
+      io.err("invites import reads codes from stdin");
+      return 2;
+    }
+    const codes = await io.readStdin();
+    return print(await call("POST", "/invites/import", { codes, ...(args[0] ? { label: args[0] } : {}), ...(allowShort ? { allowShort: true } : {}) }));
+  }
+  if (group === "invites" && action === "add" && rest.length <= 1) return print(await call("POST", "/invites", rest[0] ? { label: rest[0] } : {}));
+  if (group === "invites" && action === "revoke" && rest.length === 1) return print(await call("POST", `/invites/${encodeURIComponent(rest[0]!)}/revoke`));
+  if (group === "jobs" && action === "list") {
+    return print(await call("GET", `/jobs?state=${encodeURIComponent(rest[0] ?? "all")}`));
+  }
+  if (group === "waitlist" && action === "list") {
+    return print(await call("GET", `/waitlist?state=${encodeURIComponent(rest[0] ?? "waiting")}`));
+  }
+  if (group === "waitlist" && action === "approve-next" && rest.length === 1) {
+    return print(await call("POST", "/waitlist/approve-next", { count: Number(rest[0]) }));
+  }
+  if (group === "waitlist" && action === "release" && rest.length === 0) return print(await call("POST", "/waitlist/release"));
+  if (group === "waitlist" && action === "approve" && rest.length === 1) {
+    return print(await call("POST", `/waitlist/${encodeURIComponent(rest[0]!)}/approve`));
+  }
+  io.err(USAGE);
+  return 64;
+}

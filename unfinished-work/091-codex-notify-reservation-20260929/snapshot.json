@@ -1,0 +1,14 @@
+{
+  "branch": "refs/heads/codex/notify-reservation-20260929",
+  "head": "853c95ae7cad40f5e286386a4e06645bf4820a3b",
+  "sourceWorktreeName": "codex-notify-reservation-20260929",
+  "files": [
+    "doc/plans/2026-09-29-model-key-nudge-reservation.md",
+    "server/src/__tests__/onboarding-model-key-reservation-embedded.test.ts",
+    "server/src/__tests__/onboarding-v2-routes.test.ts",
+    "server/src/routes/onboarding-v2.ts",
+    "ui/src/components/onboarding/ProviderKeyBlocked.test.tsx",
+    "ui/src/components/onboarding/ProviderKeyBlocked.tsx"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

@@ -1,0 +1,10 @@
+{
+  "branch": "refs/heads/ota/integration-mkthink",
+  "head": "cc217bdca39d4724891d1ff6ce11c06c4a3705ca",
+  "sourceWorktreeName": "agentdash-ota-integration",
+  "files": [
+    "packages/shared/src/validators/issue.test.ts",
+    "packages/shared/src/validators/issue.ts"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

@@ -1,0 +1,32 @@
+{
+  "branch": "refs/heads/codex/workforce-onboarding-20260929",
+  "head": "072ca76b6767d996dd8b629cbe96b80b0277a7af",
+  "sourceWorktreeName": "codex-workforce-onboarding-20260929",
+  "files": [
+    "packages/mcp-server/src/human.ts",
+    "packages/shared/src/human-control.ts",
+    "packages/shared/src/validators/human-control.ts",
+    "server/src/__tests__/human-control.test.ts",
+    "server/src/__tests__/human-question-owner-recovery-runtime.test.ts",
+    "server/src/__tests__/human-question-owner-recovery.test.ts",
+    "server/src/onboarding-assets/ceo/AGENTS.md",
+    "server/src/onboarding-assets/chief_of_staff/AGENTS.md",
+    "server/src/onboarding-assets/default/AGENTS.md",
+    "server/src/routes/human-control.ts",
+    "server/src/routes/issues.ts",
+    "server/src/services/agent-creator-from-proposal.ts",
+    "server/src/services/agent-stewardships.ts",
+    "server/src/services/human-control/authority.ts",
+    "server/src/services/human-control/question-recovery.ts",
+    "server/src/services/issue-thread-interactions.ts",
+    "ui/src/api/workforce.ts",
+    "ui/src/components/QuestionOwnerRecovery.test.tsx",
+    "ui/src/components/QuestionOwnerRecovery.tsx",
+    "ui/src/components/WorkforceQuestions.tsx",
+    "ui/src/pages/IssueDetail.tsx",
+    "ui/src/pages/WorkforceDetailQueries.test.tsx",
+    "ui/src/pages/WorkforceOnboarding.test.tsx",
+    "ui/src/pages/WorkforceOnboarding.tsx"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

@@ -1,0 +1,655 @@
+diff --git a/cloud/src/__tests__/db.test.ts b/cloud/src/__tests__/db.test.ts
+index 92df4772278fa4e9fdd8b46c73c1b589b8aab7e5..315aae1bb2504195461ec3aa766debc1f0b02271 100644
+--- a/cloud/src/__tests__/db.test.ts
++++ b/cloud/src/__tests__/db.test.ts
+@@ -31,6 +31,7 @@ describe("migrations", () => {
+       "accounts",
+       "box_events",
+       "boxes",
++      "cloud_billing",
+       "cloud_sessions",
+       "email_tokens",
+       "invite_codes",
+@@ -40,6 +41,7 @@ describe("migrations", () => {
+       "rate_events",
+       "settings",
+       "signup_requests",
++      "stripe_deliveries",
+       "waitlist",
+     ]);
+   });
+diff --git a/cloud/src/admin/cli.ts b/cloud/src/admin/cli.ts
+index 355ff927688a353431d4d94674fbf9cf43018c93..df13c5edaa769d8157ef3d0d0d89caaffeb09431 100644
+--- a/cloud/src/admin/cli.ts
++++ b/cloud/src/admin/cli.ts
+@@ -1,5 +1,6 @@
+ // AgentDash: `pnpm --filter @agentdash/cloud-control admin …`
+ import { runAdmin } from "./run.js";
++import { redactString } from "../logger.js";
+ 
+ runAdmin(process.argv.slice(2), process.env, {
+   out: (l) => process.stdout.write(l + "\n"),
+@@ -13,7 +14,7 @@ runAdmin(process.argv.slice(2), process.env, {
+ }).then(
+   (code) => process.exit(code),
+   (err: unknown) => {
+-    process.stderr.write(`admin: ${err instanceof Error ? err.message : String(err)}\n`);
++    process.stderr.write(`admin: ${redactString(err instanceof Error ? err.message : String(err))}\n`);
+     process.exit(1);
+   },
+ );
+diff --git a/cloud/src/admin/run.ts b/cloud/src/admin/run.ts
+index d233da26ef518813d0a78bc3512969857e95261c..8c3de310da43b56c0acefb225c9d32d0c5aec648 100644
+--- a/cloud/src/admin/run.ts
++++ b/cloud/src/admin/run.ts
+@@ -1,6 +1,7 @@
+ // AgentDash: the operator CLI's logic, separate from the process wrapper so
+ // tests can drive it. It talks to /internal/* with the admin bearer and
+ // refuses to run at all without one.
++import { redact } from "../logger.js";
+ export interface AdminIo {
+   out: (line: string) => void;
+   err: (line: string) => void;
+@@ -19,6 +20,8 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
+   boxes retry <slug>         resume a failed box's provision job at its failed step
+   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
+   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
++  stripe configure-webhook  register/adopt the one signed cloud webhook (explicit operator operation)
++  stripe rotate-box-key     read one restricted Stripe key from stdin; update fleet variables (next deploy)
+   invites list               list self-hosted invite codes (ids and labels; codes are never stored)
+   invites import [label] [--allow-short]
+                              read codes from stdin (commas or newlines) and store their hashes;
+@@ -94,6 +97,25 @@ export async function runAdmin(argv: string[], env: NodeJS.ProcessEnv, io: Admin
+   };
+ 
+   const [group, action, ...rest] = argv;
++  // AgentDash (SC-8): secrets are stdin-only and provider bodies never reach terminal output.
++  if (group === "stripe") {
++    if (rest.length || !["configure-webhook", "rotate-box-key"].includes(action)) { io.err("invalid Stripe command; credentials must only be supplied on stdin"); return 2; }
++    let body: { key: string } | undefined;
++    if (action === "rotate-box-key") {
++      if (!io.readStdin) { io.err("stdin is required"); return 2; }
++      const key = (await io.readStdin()).trim();
++      if (!/^rk_(test|live)_[A-Za-z0-9]{8,}$/.test(key)) { io.err("stdin must contain one Stripe restricted key"); return 2; }
++      body = { key };
++    }
++    try {
++      const result = await call("POST", `/stripe/${action}`, body);
++      if (!result.ok) { io.err(`Stripe operator command failed (HTTP ${result.status}); inspect the redacted control-plane log`); return 1; }
++      // This endpoint's response is a non-secret summary. Treat unexpected output as untrusted.
++      if (!result.json || typeof result.json !== "object" || JSON.stringify(result.json).includes(body?.key ?? "\u0000")) { io.err("Stripe operator response invalid"); return 1; }
++      io.out(JSON.stringify(redact(result.json), null, 2));
++      return 0;
++    } catch { io.err("Stripe operator request failed"); return 1; }
++  }
+   if (group === "settings" && action === "get") {
+     return print(await call("GET", rest[0] ? `/settings/${encodeURIComponent(rest[0])}` : "/settings"));
+   }
+diff --git a/cloud/src/app.ts b/cloud/src/app.ts
+index 162df1f0d8ba213c76ac90aff6bc7fcbc04b7fa3..fbfaa26f022749c00a85074395daa369253491aa 100644
+--- a/cloud/src/app.ts
++++ b/cloud/src/app.ts
+@@ -14,6 +14,9 @@ import { frontDoor as makeFrontDoor, type FrontDoor } from "./front-door/service
+ import { logMailer, type Mailer, resendMailer, unconfiguredMailer } from "./front-door/mailer.js";
+ import { publicRoutes } from "./routes/public.js";
+ import { inviteService, inviteValidateRoutes } from "./invites.js";
++import { stripeWebhook } from "./billing/webhook.js";
++import { configureStripeEndpoint, rotateBoxKey } from "./billing/admin.js";
++import { logAlerter, type Alerter } from "./jobs/alerts.js";
+ 
+ /** The front door's mail transport from config (SC-7, GH #768). */
+ export function mailerFromConfig(config: CloudConfig, log: Logger): Mailer {
+@@ -30,11 +33,14 @@ export function createApp(opts: {
+   admin?: Omit<RequireAdminOptions, "onRefused">;
+   /** SC-7 (GH #768): the front door; built from config when omitted. Tests pass one with fakes. */
+   frontDoor?: FrontDoor;
++  alerter?: Alerter;
+ }): Express {
+   const { db, config, log } = opts;
+   const frontDoor = opts.frontDoor ?? makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
+   const app = express();
+   app.disable("x-powered-by");
++  // AgentDash (SC-8): this route MUST precede JSON parsing. Stripe signs bytes.
++  app.post("/api/cloud/stripe/webhook", express.raw({ type: "application/json", limit: "256kb", inflate: false }), stripeWebhook({ db, config, log, alerter: opts.alerter ?? logAlerter(log) }));
+   app.use(express.json({ limit: "32kb" }));
+ 
+   app.get("/health", async (_req, res) => {
+@@ -69,6 +75,7 @@ export function createApp(opts: {
+   app.use("/internal", requireAdmin(config, log, { onRefused, ...opts.admin }), internalRoutes(db, log, {
+     frontDoor,
+     invites: inviteService(db, config.dataKeys),
++    ...(config.billing?.controlKey ? { stripeConfigure: () => configureStripeEndpoint(db, config) } : {}),
+     // AgentDash (#807 review): the fleet step for when the edge router goes live.
+     ...(config.railwayToken && config.railwayWorkspaceId
+       ? {
+@@ -80,6 +87,7 @@ export function createApp(opts: {
+               edgeLive: config.edgeLive,
+               log,
+             }),
++          stripeRotate: (key) => rotateBoxKey(db, config, new RailwayClient({ token: config.railwayToken!, log }), config.railwayWorkspaceId!, key),
+         }
+       : {}),
+   }));
+diff --git a/cloud/src/config.ts b/cloud/src/config.ts
+index 719f1b872e8ad7bc1c48ec56481c025f1bc2042f..b42c447648c8dc9f86f5efe0a8a75a0c6536def7 100644
+--- a/cloud/src/config.ts
++++ b/cloud/src/config.ts
+@@ -16,6 +16,8 @@ export type ClientIpSource = "socket" | "x-real-ip";
+ export type DbRoleMode = "split" | "single";
+ 
+ export interface CloudConfig {
++  /** SC-8: optional until configured; production provisioning fails closed without all inputs. */
++  billing?: CloudBillingConfig;
+   port: number;
+   databaseUrl: Secret;
+   /** The current data key (encrypts) plus previous keys (decrypt only). */
+@@ -57,6 +59,33 @@ export interface CloudConfig {
+   frontDoor: FrontDoorConfig;
+ }
+ 
++export interface CloudBillingConfig {
++  controlKey: Secret | null;
++  boxKey: Secret | null;
++  webhookSecret: Secret | null;
++  priceIds: Record<string, string>;
++  resendManagementKey: Secret | null;
++  resendDomainId: string | null;
++}
++
++export function loadBillingConfig(env: NodeJS.ProcessEnv): CloudBillingConfig {
++  const key = (name: string) => env[name]?.trim() ? new Secret(env[name]!.trim()) : null;
++  for (const name of ["CLOUD_STRIPE_CONTROL_KEY", "CLOUD_STRIPE_BOX_KEY"]) {
++    if (env[name]?.trim() && !/^rk_(test|live)_[A-Za-z0-9]+$/.test(env[name]!.trim())) {
++      throw new ConfigError(`${name} must be a Stripe restricted key`);
++    }
++  }
++  const priceIds: Record<string, string> = {};
++  for (const [name, value] of Object.entries(env)) {
++    if (/^CLOUD_STRIPE_[A-Z0-9_]+_PRICE_ID$/.test(name) && value?.trim()) {
++      if (!/^price_[A-Za-z0-9]+$/.test(value.trim())) throw new ConfigError(`${name} must be a Stripe price ID`);
++      priceIds[name.slice("CLOUD_".length)] = value.trim();
++    }
++  }
++  return { controlKey: key("CLOUD_STRIPE_CONTROL_KEY"), boxKey: key("CLOUD_STRIPE_BOX_KEY"), webhookSecret: key("CLOUD_STRIPE_WEBHOOK_SECRET"), priceIds,
++    resendManagementKey: key("CLOUD_RESEND_MANAGEMENT_KEY"), resendDomainId: env.CLOUD_RESEND_DOMAIN_ID?.trim() || null };
++}
++
+ export interface FrontDoorConfig {
+   /** Where the /start pages live; links in emails point here. */
+   siteUrl: string;
+@@ -219,6 +248,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
+   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(sourceRepo)) throw new ConfigError("CLOUD_BOX_SOURCE_REPO must be <owner>/<repo>");
+   return {
+     port,
++    billing: loadBillingConfig(env),
+     databaseUrl: new Secret(required(env, "DATABASE_URL")),
+     dataKeys,
+     adminToken: new Secret(adminToken),
+diff --git a/cloud/src/db/migrations/meta/_journal.json b/cloud/src/db/migrations/meta/_journal.json
+index 4d61c278702382ceb071e0336553982adbefc218..97e7091a31e4235279a76fd5917b91cd740f2fc4 100644
+--- a/cloud/src/db/migrations/meta/_journal.json
++++ b/cloud/src/db/migrations/meta/_journal.json
+@@ -64,6 +64,13 @@
+       "when": 1790619960402,
+       "tag": "0008_invite_audit",
+       "breakpoints": true
++    },
++    {
++      "idx": 9,
++      "version": "7",
++      "when": 1790706024799,
++      "tag": "0009_cloud_billing",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/cloud/src/db/schema.ts b/cloud/src/db/schema.ts
+index 09377242e768a33c606560b630c147d21080a4be..29eb1e64c7b905245733d00588d414b31ea836d1 100644
+--- a/cloud/src/db/schema.ts
++++ b/cloud/src/db/schema.ts
+@@ -214,6 +214,11 @@ export const boxes = pgTable(
+     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+     claimedAt: timestamp("claimed_at", { withTimezone: true }),
+     planTier: text("plan_tier").notNull().default("free"),
++    // AgentDash (SC-8): reusable credentials are authenticated ciphertext,
++    // never job inputs. The provider ID alone permits eventual revocation.
++    stripeWebhookSecretEnc: text("stripe_webhook_secret_enc"),
++    resendApiKeyId: text("resend_api_key_id"),
++    resendApiKeyEnc: text("resend_api_key_enc"),
+     lastHealth: jsonb("last_health").$type<Record<string, unknown>>(),
+     lastHumanRequestAt: timestamp("last_human_request_at", { withTimezone: true }),
+     suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+@@ -354,6 +359,24 @@ export const settings = pgTable("settings", {
+   updatedBy: text("updated_by"),
+ });
+ 
++/** AgentDash (SC-8): singleton billing configuration; never returned by /settings. */
++export const cloudBilling = pgTable("cloud_billing", {
++  id: text("id").primaryKey().default("cloud"),
++  stripeEndpointId: text("stripe_endpoint_id"),
++  stripeEndpointUrl: text("stripe_endpoint_url"),
++  stripeEndpointSecretEnc: text("stripe_endpoint_secret_enc"),
++  stripeBoxKeyEnc: text("stripe_box_key_enc"),
++  updatedAt: updatedAt(),
++});
++
++/** Only successfully committed deliveries; Stripe is the retry queue. No raw event or credentials stored. */
++export const stripeDeliveries = pgTable("stripe_deliveries", {
++  eventId: text("event_id").primaryKey(),
++  payloadHash: text("payload_hash").notNull(),
++  boxId: uuid("box_id").notNull().references(() => boxes.id),
++  createdAt: createdAt(),
++});
++
+ // ---- Front door (SC-7, GH #768) ----------------------------------------
+ 
+ /**
+diff --git a/cloud/src/index.ts b/cloud/src/index.ts
+index 7852e3eeb0c745c2efc21a83cf6e49cf2b0e27da..4b0bdd0f994ae50187d8aed8356cc752e1e2b634 100644
+--- a/cloud/src/index.ts
++++ b/cloud/src/index.ts
+@@ -62,12 +62,13 @@ async function main() {
+       imageRepo: config.boxImageRepo,
+       sourceRepo: config.boxSourceRepo,
+       edgeLive: config.edgeLive,
++      billingConfig: config,
+     });
+     if (!config.escrowPublicKey) log.warn("CLOUD_ESCROW_PUBLIC_KEY is not set: every provision job will refuse to start");
+     if (!capabilities.claimTrackingReady) log.warn("claim tracking is not ready (SC-5, SC-6): provisioning stays off whatever the setting says");
+     runner = new JobRunner({ db, log, alerter, handlers: [
+         provision,
+-        deleteHandler({ client, workspaceId: config.railwayWorkspaceId }),
++        deleteHandler({ client, workspaceId: config.railwayWorkspaceId, billingConfig: config }),
+         closeSignupHandler({ client, workspaceId: config.railwayWorkspaceId }),
+       ] });
+     runner.start();
+@@ -94,7 +95,7 @@ async function main() {
+   ];
+   for (const t of passes) t.unref();
+ 
+-  const server = createApp({ db, config, log, frontDoor }).listen(config.port, () => {
++  const server = createApp({ db, config, log, frontDoor, alerter }).listen(config.port, () => {
+     log.info("listening", { port: config.port, release: config.release, railwayApi: config.railwayToken ? "configured" : "not configured" });
+   });
+   const shutdown = () => {
+diff --git a/cloud/src/jobs/alerts.ts b/cloud/src/jobs/alerts.ts
+index da14b3b7aa3504d83af77525670e4167b672047d..3a499a072dc589abdeb0e21a77eda60d3275f578 100644
+--- a/cloud/src/jobs/alerts.ts
++++ b/cloud/src/jobs/alerts.ts
+@@ -7,7 +7,7 @@ import { redact, redactString } from "../logger.js";
+ import type { Secret } from "../secret.js";
+ 
+ export interface Alert {
+-  kind: "job_failed" | "job_dead" | "cleanup_refused";
++  kind: "job_failed" | "job_dead" | "cleanup_refused" | "stripe_unknown_box";
+   subject: string;
+   boxId?: string | null;
+   slug?: string | null;
+diff --git a/cloud/src/jobs/cleanup.ts b/cloud/src/jobs/cleanup.ts
+index 1c9dc5daef37f92e423b529a717927040d623294..7ac54f794ed6a6c750e6620d379ed34453b9bfa0 100644
+--- a/cloud/src/jobs/cleanup.ts
++++ b/cloud/src/jobs/cleanup.ts
+@@ -99,7 +99,7 @@ export async function sweepCleanup(db: CloudDb, log: Logger, opts: SweepOptions
+   return { claimed, expired, flagged, enqueued };
+ }
+ 
+-export function deleteHandler(deps: { client: RailwayClient; workspaceId: string; fetch?: typeof fetch }): JobHandler {
++export function deleteHandler(deps: { client: RailwayClient; workspaceId: string; fetch?: typeof fetch; billingConfig?: import("../config.js").CloudConfig }): JobHandler {
+   return {
+     kind: "delete",
+     maxDurationMs: 30 * 60_000,
+@@ -133,10 +133,27 @@ export function deleteHandler(deps: { client: RailwayClient; workspaceId: string
+           }
+         },
+       },
++      {
++        name: "revoke_mail",
++        timeoutMs: 60_000,
++        async run(ctx) {
++          if (deps.billingConfig) {
++            const { revokeBoxMail } = await import("../billing/credentials.js");
++            const box = await ctx.box();
++            if (box.state !== "deleted") await revokeBoxMail(ctx.db, ctx.job.boxId, deps.billingConfig, { fetch: deps.fetch, signal: ctx.signal, requireCleanup: true });
++          }
++        },
++      },
+       {
+         name: "mark_deleted",
+         timeoutMs: 30_000,
+         async run(ctx) {
++          // SC-8: jobs created before this step was added can resume directly
++          // at mark_deleted. Apply the same idempotent revocation there too.
++          if (deps.billingConfig && (await ctx.box()).state !== "deleted") {
++            const { revokeBoxMail } = await import("../billing/credentials.js");
++            await revokeBoxMail(ctx.db, ctx.job.boxId, deps.billingConfig, { fetch: deps.fetch, signal: ctx.signal, requireCleanup: true });
++          }
+           const updated = await ctx.db
+             .update(boxes)
+             .set({ state: "deleted", updatedAt: new Date() })
+diff --git a/cloud/src/railway/provisioner.ts b/cloud/src/railway/provisioner.ts
+index fe34b3eef151292cde61d36e5813c5ee76c4546f..f273a3600acc3e582cc5dd90981faff9cce944c3 100644
+--- a/cloud/src/railway/provisioner.ts
++++ b/cloud/src/railway/provisioner.ts
+@@ -50,6 +50,8 @@ import { findProjectsByName } from "./delete.js";
+ import { assertBoxProjectName, boxProjectDescription, boxProjectName, projectTag } from "./names.js";
+ import { newAuthSecret, newClaimCode, newEdgeSecret, newMasterKey, newPostgresPassword, sealToEscrow } from "./secrets.js";
+ import { validateNewSlug, validateSlug } from "./slug.js";
++import type { CloudConfig } from "../config.js";
++import { assertBillingProvisioning, billingVariables, upsertBillingVariables } from "../billing/credentials.js";
+ 
+ /** Railway's Postgres image, major pinned (spike §2.2: the template now defaults to 18). */
+ export const PG_IMAGE = "ghcr.io/railwayapp-templates/postgres-ssl:17";
+@@ -66,6 +68,8 @@ export const START_COMMAND =
+   '/bin/sh -c "if [ \\"$(id -u)\\" = 0 ]; then chown node:node /paperclip && exec docker-entrypoint.sh node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js; else exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js; fi"';
+ 
+ export interface ProvisionerDeps {
++  /** SC-8: production entry point always supplies this; legacy test fixtures may omit it. */
++  billingConfig?: CloudConfig;
+   client: RailwayClient;
+   /** The dedicated boxes workspace; the only one boxes are created in. */
+   workspaceId: string;
+@@ -222,6 +226,9 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
+     steps: [
+       // 1. Slug rules, workspace capacity, release and what to run.
+       step("reserve", 60_000, async (ctx, box) => {
++        if (deps.billingConfig) {
++          try { assertBillingProvisioning(deps.billingConfig); } catch { throw new FatalJobError("SC-8 billing and box mail configuration is incomplete; refusing to provision"); }
++        }
+         if (box.projectId) validateSlug(box.slug);
+         else validateNewSlug(box.slug);
+         assertBoxProjectName(boxProjectName(box.slug));
+@@ -417,6 +424,7 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
+         }
+ 
+         const vars = boxVariables({ slug: box.slug, edgeDomain: deps.edgeDomain, railwayHost: host, releaseTag, claimEmail: acct.email, postgresServiceName: pg.name });
++        if (deps.billingConfig) Object.assign(vars, await billingVariables(ctx.db, box.id, deps.billingConfig, { fetch: f, signal: ctx.signal }));
+         const boxPatch: Partial<typeof boxes.$inferInsert> = { publicUrl: `https://${publicHost(box.slug, deps.edgeDomain)}` };
+ 
+         // Claim code and edge secret: the control plane keeps them encrypted (to re-send the link, to give the router),
+@@ -451,7 +459,8 @@ export function provisionHandler(deps: ProvisionerDeps): JobHandler {
+           generatedMasterKey = newMasterKey();
+           vars.PAPERCLIP_SECRETS_MASTER_KEY = generatedMasterKey;
+         }
+-        await upsertVariables(client, P, E, W, vars, { signal: ctx.signal });
++        if (deps.billingConfig) await upsertBillingVariables(ctx.db, deps.billingConfig, client, { projectId: P, environmentId: E, serviceId: W }, vars, ctx.signal);
++        else await upsertVariables(client, P, E, W, vars, { signal: ctx.signal });
+         const toEscrow = generatedMasterKey ?? liveMasterKey;
+         if (toEscrow && (!box.masterKeyEscrow || generatedMasterKey)) {
+           boxPatch.masterKeyEscrow = await sealToEscrow(deps.escrowPublicKey!, toEscrow);
+diff --git a/cloud/src/routes/internal.ts b/cloud/src/routes/internal.ts
+index 7bc54ff8c76624a440229bb0e2993024ab1a1422..4c9fc845f007dca7aae64cef8356ef2163d1f346 100644
+--- a/cloud/src/routes/internal.ts
++++ b/cloud/src/routes/internal.ts
+@@ -13,6 +13,8 @@ import { isSettingKey, SettingValidationError, settingsService } from "../settin
+ import { EdgeNotLive } from "../railway/edge-backfill.js";
+ import type { FrontDoor } from "../front-door/service.js";
+ import { type inviteService, parseCodeList } from "../invites.js";
++import { Secret } from "../secret.js";
++import { restrictedBoxKey } from "../billing/admin.js";
+ 
+ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+ const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
+@@ -24,10 +26,22 @@ export interface InternalRouteDeps {
+   invites?: ReturnType<typeof inviteService>;
+   /** The fleet edge-secret back-fill (#807 review); absent without a Railway token. */
+   edgeBackfill?: () => Promise<unknown>;
++  stripeConfigure?: () => Promise<unknown>;
++  stripeRotate?: (key: Secret) => Promise<unknown>;
+ }
+ 
+ export function internalRoutes(db: CloudDb, log: Logger, deps: InternalRouteDeps = {}): ExpressRouter {
+   const router = Router();
++  router.post("/stripe/configure-webhook", async (_req, res) => {
++    if (!deps.stripeConfigure) return void res.status(409).json({ error: "Stripe control key not configured" });
++    try { res.json(await deps.stripeConfigure()); } catch { log.error("Stripe endpoint configuration failed"); res.status(502).json({ error: "Stripe endpoint configuration failed" }); }
++  });
++  router.post("/stripe/rotate-box-key", async (req, res) => {
++    if (!deps.stripeRotate) return void res.status(409).json({ error: "Railway not configured" });
++    const key = req.body?.key;
++    if (typeof key !== "string" || !restrictedBoxKey(key)) return void res.status(400).json({ error: "one restricted key required" });
++    try { res.json(await deps.stripeRotate(new Secret(key))); } catch { log.error("Stripe fleet rotation failed"); res.status(502).json({ error: "Stripe fleet rotation failed" }); }
++  });
+ 
+   router.post("/fleet/edge-backfill", async (_req, res) => {
+     if (!deps.edgeBackfill) {
+diff --git a/doc/runbooks/cloud-control-plane.md b/doc/runbooks/cloud-control-plane.md
+index d6a9e5a634a8fe47b76aa9ee071934e7b9a82a66..f833fc91c3d463a8d3c71a578d2650e9ba831307 100644
+--- a/doc/runbooks/cloud-control-plane.md
++++ b/doc/runbooks/cloud-control-plane.md
+@@ -101,6 +101,71 @@ To read the old instance's codes without printing them: `railway variables --ser
+ 
+ **Rollback:** revert the `vercel.json` change and redeploy www; the old instance still answers `/api/*` until it is retired.
+ 
++## SC-8: Stripe forwarding and box mail (local implementation, 2026-09-29)
++
++This section implements #769/design §3.7. Commands below describe later approved operations; no provider registration, fleet update, mail or live billing acceptance was executed during this implementation. Claim tracking and provisioning/edge gates remain closed.
++
++### Configuration and permissions
++
++| Control-plane variable | Purpose |
++|---|---|
++| `CLOUD_STRIPE_CONTROL_KEY` | Manually created restricted `cloud-control` key: webhook endpoints read/write; subscriptions read. It stays on the control plane. |
++| `CLOUD_STRIPE_BOX_KEY` | Manually created restricted `agentdash-boxes` key, shared across boxes: customers, Checkout, subscriptions and billing portal operations needed by the box; price reads. No key-creation API exists. |
++| `CLOUD_STRIPE_PRO_PRICE_ID` | Pro seat price. Additional `CLOUD_STRIPE_*_PRICE_ID` values become the matching box `STRIPE_*_PRICE_ID` variable. |
++| `CLOUD_STRIPE_WEBHOOK_SECRET` | Optional saved signing secret for recovery/adoption of the existing cloud endpoint. Normal creation encrypts its returned secret in `cloud_billing`, outside public/operator settings. |
++| `CLOUD_RESEND_MANAGEMENT_KEY` | Separate full-access provider key for key creation/listing/deletion and domain verification; never given to a box. |
++| `CLOUD_RESEND_DOMAIN_ID` | Verified `mail.agentdash.cloud` domain ID; provisioning checks the provider's domain name and verified state. |
++| `CLOUD_MAIL_FROM` | Set front-door mail to `AgentDash <no-reply@mail.agentdash.cloud>`; its existing mail transport still uses `CLOUD_RESEND_API_KEY`. |
++
++Production provision jobs fail before creating a project when billing/mail inputs are incomplete. Tests may inject the existing legacy provisioner dependencies without billing config; the production entry point always supplies it.
++
++Boxes receive the shared restricted Stripe key, encrypted-record-backed **individual** webhook secret, price IDs, `STRIPE_TRIAL_DAYS=14`, `AGENTDASH_FREE_AGENT_CAP=2`, and a Resend key with `permission=sending_access` plus `domain_id` restricted to the verified domain. `AGENTDASH_EMAIL_FROM=AgentDash <no-reply@mail.agentdash.cloud>` is the sender variable the box actually reads. Checkout puts `companyId` and optional `box_slug` on both its session and subscription; self-hosted checkout omits the slug.
++
++### One Stripe endpoint
++
++After approval, through the existing private admin bearer plus IP allow-list:
++
++```sh
++pnpm --filter @agentdash/cloud-control admin stripe configure-webhook
++```
++
++The command registers `https://www.agentdash.cloud/api/cloud/stripe/webhook` (derived from `CLOUD_PUBLIC_SITE_URL`) with explicit supported events, including `customer.subscription.trial_will_end`, and a URL-derived stable idempotency key. The database stores the endpoint ID and authenticated encrypted signing secret; the CLI returns ID/URL only. Retry uses the stored endpoint. A crash after provider creation but before persistence is detected by listing matching endpoints: creation is refused until the operator supplies its saved `CLOUD_STRIPE_WEBHOOK_SECRET`. It never creates an extra endpoint to recover a lost secret. Multiple matching endpoints require operator recovery.
++
++The public route consumes uncompressed raw bytes, capped at 256kb, before JSON middleware. It verifies Stripe-format `t`/`v1` HMAC in constant time with a 300-second clock tolerance. Invalid body/signature returns 400; an unconfigured endpoint 503. Signed unknown/missing slug is dropped and alerted, without an outbound request. Only a known box's DB-recorded `*.up.railway.app` host is used; HTTPS, no redirects, 10-second timeout. The original bytes are forwarded to `/api/billing/webhook` with a fresh timestamp and that box's own Stripe-format signature.
++
++A successful delivery and `stripe_deliveries` ledger entry commit together under a box-row lock. Stripe retries on 502 until both succeed. Completed duplicates are acknowledged without forwarding; reusing an event ID with different bytes is refused. A crash after a box accepted but before commit can resend the event. The box now commits its original-event ledger and company entitlement in one transaction, so a failed entitlement write cannot poison a retry. Raw event bodies, payment data and credentials are never kept in the control-plane ledger.
++
++Subscription events retrieve current Stripe state on both sides. The box locks its company before its read, pins the subscription/customer/company and hosted slug, and applies current state using the entitlement policy (`pro_trial`, `pro_active`, `pro_past_due`, `pro_canceled`, or `free`). Its database lock wait is capped at 2 seconds; Stripe retrieval uses a 5-second timeout and zero SDK retries. A failure rolls back processing and leaves Stripe responsible for retry. Original signed bytes remain the box audit. Downgrade and trial reminders run after commit with existing best-effort notification semantics. Direct Railway forwarding carries the box's stored `x-agentdash-edge` header; this does not enable the edge gate.
++
++### Shared key rotation
++
++Create the replacement restricted key manually in Stripe, keeping the old key valid during rollout. Supply the new key via stdin, never a command argument or shell history:
++
++```sh
++# getpass reads the terminal without echoing; the key goes directly into the pipe.
++python3 -c 'import getpass; print(getpass.getpass("Replacement restricted Stripe key: "))' | pnpm --filter @agentdash/cloud-control admin stripe rotate-box-key
++```
++
++The command encrypts the replacement as the future provisioning source before fleet writes. Each DB-known live box must match the exact workspace, recorded project/environment/service IDs, expected `agentdash-box-<slug>` name and UUID control-plane tag. A failed variable read prevents an update. Results contain only updated/skipped slugs and fixed failure reasons. Retries converge failed boxes. A generation check/row lock prevents an older overlapping rotation from overwriting a newer key; provisioning refreshes its key under the same lock immediately before upsert.
++
++Upserts use `skipDeploys=true`: existing running processes retain the previous key until their separately approved redeployment. Check all target boxes have restarted with the new key, then revoke the old key manually. Rollback is the same stdin operation with the still-valid old key, followed by approved redeployment. A control-plane crash after the encrypted source commits is recovered by rerunning the operation with the same key; no credential is stored in job input/error or audit detail.
++
++### Resend crash recovery and deletion
++
++The stable provider key name is `agentdash-box-<box UUID>`. A key token is encrypted in the box row before Railway variable writes. A retry reuses it. If provider creation succeeded before a crash prevented persistence, all provider pages are listed, only exact stable-name orphan keys are revoked, and one replacement is created. Provider response/error text never reaches logs, job errors or CLI output.
++
++The existing guarded deletion must succeed before mail revocation. A refused project/claim guard leaves its mail key intact. A provider failure leaves cleanup pending with the encrypted token/ID available for retry; 404 is an idempotent successful revocation. `mark_deleted` also applies revocation so jobs created before the new step cannot bypass it when resumed. Keep previous `CLOUD_DATA_KEYS_PREVIOUS` entries until every new encrypted billing/mail column is re-encrypted, as with existing encrypted columns.
++
++### Acceptance still requiring approved live operations
++
++- Register the single endpoint under the control key; record its ID and current deployed full SHA.
++- Trial checkout on a synthetic company reaches `pro_trial`, with seat quantity and 14-day/no-card policy verified in Stripe and the box.
++- Authorized test events reach exactly one known box; unknown slug alerts ops. Record revoke/replay/retry proof without secrets.
++- Send a real invite/reset through a per-box sending-only domain-restricted key; deleting a disposable unclaimed box revokes its key.
++- Verify fleet key rollout/restart before old-key revocation. These operations remain unrun and provisioning/claim/edge gates remain closed.
++
++Primary sources checked 2026-09-29: [Stripe webhooks](https://docs.stripe.com/webhooks), [endpoint creation](https://docs.stripe.com/api/webhook_endpoints/create), [subscription retrieval](https://docs.stripe.com/api/subscriptions/retrieve), [Resend official OpenAPI (domain restriction and pagination)](https://raw.githubusercontent.com/resend/resend-openapi/main/resend.yaml), [Resend key deletion](https://resend.com/docs/api-reference/api-keys/delete-api-key).
++
+ ## 6. Retiring the old shared instance (founder, after #760)
+ 
+ The old instance is the Railway project `agentdash`, service `web` (`web-production-33a3b6.up.railway.app`). Nothing in the control plane can reach it (its token is scoped to the boxes workspace), and **no step here is automated**: the founder runs each one and approves the retirement on #760. Do not start until section 5's checklist has passed and www has served the new `vercel.json` for at least 7 days with no `/api/*` traffic you need (Vercel's logs show the 410s).
+diff --git a/server/src/__tests__/billing-checkout-routes.test.ts b/server/src/__tests__/billing-checkout-routes.test.ts
+index ab3b2313d43df140a166fbff27eaf16d627484ad..236fa9d588a6ba8a37d1a3b63e61238c8c91d350 100644
+--- a/server/src/__tests__/billing-checkout-routes.test.ts
++++ b/server/src/__tests__/billing-checkout-routes.test.ts
+@@ -131,6 +131,8 @@ describe("POST /api/billing/checkout-session", () => {
+       mode: "subscription",
+       customer: "cus_existing",
+       line_items: [{ price: "price_agentdash_pro", quantity: 1 }],
++      // SC-8: the session and subscription both carry company routing metadata.
++      metadata: { companyId: "company-1" },
+       // DO NOT REMOVE `payment_method_collection`. Stripe Checkout in
+       // subscription mode collects a card by DEFAULT, and the product promises
+       // a no-card trial on the pricing page, the terms page, the billing button
+diff --git a/server/src/__tests__/billing-trial-lifecycle.test.ts b/server/src/__tests__/billing-trial-lifecycle.test.ts
+index d469774c58f40edfb11d68fbfaa72ee8ce8fcc7f..678d866960486412835ce610d3f5bef7d09227ce 100644
+--- a/server/src/__tests__/billing-trial-lifecycle.test.ts
++++ b/server/src/__tests__/billing-trial-lifecycle.test.ts
+@@ -186,6 +186,9 @@ describeEmbeddedPostgres("billing trial lifecycle (integration)", () => {
+     event: Record<string, unknown>,
+     opts: { secret?: string } = {},
+   ) {
++    // SC-8: the production route now retrieves Stripe's current subscription.
++    // This lifecycle fixture deliberately advances the provider with each event.
++    vi.spyOn(stripe.subscriptions, "retrieve").mockResolvedValue(event.data && (event.data as any).object as any);
+     const payload = JSON.stringify(event);
+     const header = stripe.webhooks.generateTestHeaderString({
+       payload,
+diff --git a/server/src/routes/billing.ts b/server/src/routes/billing.ts
+index fe8ca87f56aabc1603f6a4ec1e009af8f3ba83dd..4a25838d75dad82f0e8a19fe5490727cd1e2815c 100644
+--- a/server/src/routes/billing.ts
++++ b/server/src/routes/billing.ts
+@@ -7,8 +7,7 @@ import {
+ } from "@paperclipai/db";
+ import { billingService } from "../services/billing.js";
+ import { usageBillingService } from "../services/usage-billing.js";
+-import { entitlementSync } from "../services/entitlement-sync.js";
+-import { stripeWebhookLedger } from "../services/stripe-webhook-ledger.js";
++import { billingWebhookProcessing } from "../services/billing-webhook-processing.js";
+ import { companyService } from "../services/companies.js";
+ import { conversationService } from "../services/conversations.js";
+ import { agentService } from "../services/agents.js";
+@@ -182,17 +181,9 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
+     }
+   }
+ 
+-  const sync = entitlementSync({
+-    companies: {
+-      findByStripeSubscriptionId: (id) => companies.findByStripeSubscriptionId(id),
+-      findByStripeCustomerId: (id) => companies.findByStripeCustomerId(id),
+-      getById: (id) =>
+-        companies.getById(id).then((c) =>
+-          c ? { id: c.id, planTier: c.planTier ?? "free" } : null,
+-        ),
+-      update: (id, patch) => companies.update(id, patch),
+-    },
+-    ledger: stripeWebhookLedger(db),
++  const sync = billingWebhookProcessing(db, {
++    stripe: cfg.stripe,
++    boxSlug: process.env.AGENTDASH_BOX_SLUG,
+     onTierDowngrade: notifyDowngrade,
+     onTrialWillEnd: notifyTrialWillEnd,
+   });
+diff --git a/server/src/services/billing.ts b/server/src/services/billing.ts
+index e58f2d4eeba9c2a4af589f63ab80976b03135975..1052eae861ced611aa7b897d535c280dd5f30724 100644
+--- a/server/src/services/billing.ts
++++ b/server/src/services/billing.ts
+@@ -29,6 +29,11 @@ interface Deps {
+ export function billingService(deps: Deps) {
+   return {
+     createCheckoutSession: async (companyId: string) => {
++      // AgentDash (SC-8, GH #769): the shared Stripe account routes both
++      // Checkout and subscription events by box; self-hosted metadata stays company-only.
++      const slug = process.env.AGENTDASH_BOX_SLUG?.trim();
++      if (slug && !/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/.test(slug)) throw new Error("Invalid AGENTDASH_BOX_SLUG");
++      const metadata = { companyId, ...(slug ? { box_slug: slug } : {}) };
+       const company = await deps.companies.getById(companyId);
+       if (!company) throw new Error("Company not found");
+       let customerId = company.stripeCustomerId ?? null;
+@@ -43,6 +48,7 @@ export function billingService(deps: Deps) {
+       const session = await deps.stripe.checkout.sessions.create({
+         mode: "subscription",
+         customer: customerId,
++        metadata,
+         line_items: [{ price: deps.config.proPriceId, quantity: 1 }],
+         // Stripe Checkout in subscription mode collects a card by DEFAULT.
+         // Without this flag the "no card required" promise on the pricing page,
+@@ -58,7 +64,7 @@ export function billingService(deps: Deps) {
+         subscription_data: {
+           trial_period_days: deps.config.trialDays,
+           trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
+-          metadata: { companyId },
++          metadata,
+         },
+         success_url: `${deps.config.publicBaseUrl}/billing?session=success`,
+         cancel_url: `${deps.config.publicBaseUrl}/billing?session=cancel`,
+diff --git a/server/src/services/entitlement-sync.ts b/server/src/services/entitlement-sync.ts
+index 7fe303c57f9274bc7eeabf6fef2746ac14640ee6..7c52e5ba217b83d7c948c17865c7bbc4be72a998 100644
+--- a/server/src/services/entitlement-sync.ts
++++ b/server/src/services/entitlement-sync.ts
+@@ -20,6 +20,8 @@ interface ActivityLogAdapter {
+ interface Deps {
+   companies: CompaniesAdapter;
+   ledger: LedgerAdapter;
++  /** SC-8: production webhook processing retrieves current state after locking its company. */
++  retrieveSubscription?: (id: string) => Promise<any>;
+   activityLog?: ActivityLogAdapter;
+   // AgentDash (#249): fired AFTER update when the tier transitions from
+   // pro_active/pro_trial → pro_canceled/pro_past_due. Best-effort: failures
+@@ -67,6 +69,8 @@ export function entitlementSync(deps: Deps) {
+       (await deps.companies.findByStripeSubscriptionId(sub.id)) ??
+       (await deps.companies.findByStripeCustomerId(sub.customer));
+     if (!company) throw new Error(`No company for subscription ${sub.id}`);
++    // AgentDash (SC-8): metadata cannot route current state into a different company.
++    if (sub.metadata?.companyId && sub.metadata.companyId !== company.id) throw new Error("Stripe subscription company routing mismatch");
+     const planTier = STATUS_TO_TIER[sub.status] ?? "free";
+     const planSeatsPaid = sub.items?.data?.[0]?.quantity ?? 0;
+     // AgentDash (P0.3): on Stripe API >= 2025-03-31, current_period_end moved
+@@ -170,7 +174,19 @@ export function entitlementSync(deps: Deps) {
+         case "customer.subscription.created":
+         case "customer.subscription.updated":
+         case "customer.subscription.deleted":
+-          if (obj) await applyFromSubscription(obj);
++          if (obj) {
++            let sub = obj;
++            if (deps.retrieveSubscription) {
++              sub = await deps.retrieveSubscription(obj.id);
++              const customerId = (customer: any) => typeof customer === "string" ? customer : customer?.id;
++              if (sub?.id !== obj.id || !customerId(sub.customer) || customerId(sub.customer) !== customerId(obj.customer)
++                || (obj.metadata?.companyId && sub.metadata?.companyId !== obj.metadata.companyId)
++                || (obj.metadata?.box_slug && sub.metadata?.box_slug !== obj.metadata.box_slug)) {
++                throw new Error("Stripe current subscription routing mismatch");
++              }
++            }
++            await applyFromSubscription(sub);
++          }
+           return;
+ 
+         // AgentDash (#157): invoice.payment_failed — write an audit trail.
+diff --git a/server/src/services/stripe-webhook-ledger.ts b/server/src/services/stripe-webhook-ledger.ts
+index 879f5f57ee40722628592c7058794f5b91b787ab..3480f92aa501627fae14bfbb4c8f26e3b85d60d4 100644
+--- a/server/src/services/stripe-webhook-ledger.ts
++++ b/server/src/services/stripe-webhook-ledger.ts
+@@ -1,16 +1,13 @@
+ import { stripeWebhookEvents } from "@paperclipai/db";
+-import { isUniqueViolation } from "../lib/pg-error.js";
+ 
+ export function stripeWebhookLedger(db: any) {
+   return {
+     record: async (eventId: string, eventType: string, payload: any) => {
+-      try {
+-        await db.insert(stripeWebhookEvents).values({ eventId, eventType, payload });
+-        return { inserted: true };
+-      } catch (err: any) {
+-        if (isUniqueViolation(err)) return { inserted: false }; // duplicate
+-        throw err;
+-      }
++      // AgentDash (SC-8): usable inside the entitlement transaction. Catching
++      // a unique violation would leave that PostgreSQL transaction aborted.
++      const inserted = await db.insert(stripeWebhookEvents).values({ eventId, eventType, payload })
++        .onConflictDoNothing({ target: stripeWebhookEvents.eventId }).returning({ eventId: stripeWebhookEvents.eventId });
++      return { inserted: inserted.length > 0 };
+     },
+   };
+ }

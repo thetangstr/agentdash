@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/devin/qa-goalid-scope-20261005",
+  "head": "46b868255d2fdac730d9aff8ee0ec118cbb22527",
+  "sourceWorktreeName": "qa-authz-1005",
+  "files": [
+    "server/src/qa-authz-harness.ts"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

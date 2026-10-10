@@ -1,0 +1,443 @@
+// AgentDash: control-plane schema for the self-serve cloud (spec
+// docs/superpowers/specs/2026-09-25-self-serve-cloud-design.md §3.2, §3.4).
+// This is the control plane's OWN database. It never imports or touches the
+// box schema in packages/db.
+//
+// Secrets: `*_enc` columns hold AES-256-GCM ciphertext under CLOUD_DATA_KEY
+// (see ../crypto.ts). A box's auth secret, secrets master key and Postgres
+// password are never stored here at all.
+import { sql } from "drizzle-orm";
+import {
+  bigserial,
+  boolean,
+  check,
+  customType,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+
+const citext = customType<{ data: string }>({
+  dataType() {
+    return "citext";
+  },
+});
+
+function inList(column: string, values: readonly string[]) {
+  return sql.raw(`${column} in (${values.map((v) => `'${v}'`).join(", ")})`);
+}
+
+// ---- States (§3.4) -------------------------------------------------------
+
+export const ACCOUNT_STATUSES = ["pending_verification", "active", "blocked", "deleted"] as const;
+export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
+
+export const EMAIL_TOKEN_PURPOSES = ["verify", "find"] as const;
+export type EmailTokenPurpose = (typeof EMAIL_TOKEN_PURPOSES)[number];
+
+export const BOX_KINDS = ["dedicated", "shared"] as const; // `shared` reserved for Option B
+export type BoxKind = (typeof BOX_KINDS)[number];
+
+export const BOX_STATES = [
+  "requested",
+  "waitlisted",
+  "provisioning",
+  "awaiting_claim",
+  "active",
+  "suspended",
+  "pending_delete",
+  "failed",
+  "cleanup",
+  "deleted",
+] as const;
+export type BoxState = (typeof BOX_STATES)[number];
+
+export const JOB_KINDS = ["provision", "close_signup", "suspend", "resume", "upgrade", "delete"] as const;
+export type JobKind = (typeof JOB_KINDS)[number];
+
+export const JOB_STATES = ["queued", "running", "succeeded", "failed", "dead"] as const;
+export type JobState = (typeof JOB_STATES)[number];
+
+export const WAITLIST_STATES = ["waiting", "approved", "rejected"] as const;
+export type WaitlistState = (typeof WAITLIST_STATES)[number];
+
+// ---- Allowed transitions (§3.4), enforced by DB triggers ----------------
+//
+// Migration 0001 installs BEFORE INSERT/UPDATE triggers that refuse any state
+// change not listed here, and any row inserted in a state other than the
+// initial ones. db.test.ts checks the database against these maps pair by
+// pair, so the two cannot drift. A same-state write is always allowed.
+
+export const BOX_INITIAL_STATES: readonly BoxState[] = ["requested", "waitlisted"];
+export const BOX_TRANSITIONS: Record<BoxState, readonly BoxState[]> = {
+  requested: ["waitlisted", "provisioning", "failed", "deleted"],
+  waitlisted: ["provisioning", "deleted"],
+  provisioning: ["awaiting_claim", "failed"],
+  awaiting_claim: ["active", "failed", "cleanup"],
+  active: ["suspended", "pending_delete"],
+  suspended: ["active", "pending_delete"],
+  pending_delete: ["deleted"],
+  failed: ["provisioning", "cleanup"],
+  cleanup: ["deleted", "failed"],
+  deleted: [],
+};
+
+export const JOB_INITIAL_STATES: readonly JobState[] = ["queued"];
+export const JOB_TRANSITIONS: Record<JobState, readonly JobState[]> = {
+  queued: ["running", "dead"],
+  running: ["queued", "succeeded", "failed", "dead"],
+  failed: ["queued", "dead"],
+  succeeded: [],
+  dead: [],
+};
+
+export const ACCOUNT_INITIAL_STATES: readonly AccountStatus[] = ["pending_verification"];
+export const ACCOUNT_TRANSITIONS: Record<AccountStatus, readonly AccountStatus[]> = {
+  pending_verification: ["active", "blocked", "deleted"],
+  active: ["blocked", "deleted"],
+  blocked: ["active", "deleted"],
+  deleted: [],
+};
+
+// AgentDash (SC-9, GH #770): invite_codes_changed records imports, adds and revokes (counts and ids, never a code).
+export const OPERATOR_AUDIT_KINDS = ["setting_changed", "admin_refused", "invite_codes_changed"] as const;
+export type OperatorAuditKind = (typeof OPERATOR_AUDIT_KINDS)[number];
+
+const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
+const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
+
+// ---- Tables (§3.2) -------------------------------------------------------
+
+/** A person on the front door. Not a box user (two identity domains, #623 D-S5). */
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: citext("email").notNull(),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+    signupIp: text("signup_ip"),
+    status: text("status").$type<AccountStatus>().notNull().default("pending_verification"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("accounts_email_uq").on(t.email),
+    check("accounts_status_ck", inList("status", ACCOUNT_STATUSES)),
+  ],
+);
+
+export const emailTokens = pgTable(
+  "email_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    purpose: text("purpose").$type<EmailTokenPurpose>().notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("email_tokens_hash_uq").on(t.tokenHash),
+    index("email_tokens_account_idx").on(t.accountId),
+    check("email_tokens_purpose_ck", inList("purpose", EMAIL_TOKEN_PURPOSES)),
+  ],
+);
+
+/** Shards boxes across Railway workspaces past the 100-projects-per-workspace limit. */
+export const railwayWorkspaces = pgTable(
+  "railway_workspaces",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    railwayWorkspaceId: text("railway_workspace_id").notNull(),
+    name: text("name").notNull(),
+    projectCount: integer("project_count").notNull().default(0),
+    capacity: integer("capacity").notNull().default(80),
+    accepting: boolean("accepting").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("railway_workspaces_railway_id_uq").on(t.railwayWorkspaceId)],
+);
+
+export const boxes = pgTable(
+  "boxes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    slug: text("slug").notNull(),
+    kind: text("kind").$type<BoxKind>().notNull().default("dedicated"),
+    state: text("state").$type<BoxState>().notNull().default("requested"),
+    // Each Railway ID is recorded the moment it is created (resumable jobs).
+    railwayWorkspaceId: uuid("railway_workspace_id").references(() => railwayWorkspaces.id),
+    projectId: text("project_id"),
+    environmentId: text("environment_id"),
+    webServiceId: text("web_service_id"),
+    pgServiceId: text("pg_service_id"),
+    // AgentDash (SC-2, GH #763): the volumes' IDs, the Postgres image (major
+    // pinned), how the web service was built, and the escrowed master key.
+    webVolumeId: text("web_volume_id"),
+    pgVolumeId: text("pg_volume_id"),
+    pgImage: text("pg_image"),
+    /** "image" (GHCR, by digest) or "source" (the release tag's commit, the fallback). */
+    buildSource: text("build_source"),
+    sourceCommit: text("source_commit"),
+    /**
+     * PAPERCLIP_SECRETS_MASTER_KEY sealed (libsodium sealed box) to the offline
+     * escrow public key, base64. The control plane can write it but never
+     * decrypt it; the plaintext key is never stored here.
+     */
+    masterKeyEscrow: text("master_key_escrow"),
+    /**
+     * The Railway volume IDs volumeCreate returned, recorded the moment they
+     * exist: Railway's project listing shows a new volume late, and a retry
+     * must wait for it rather than create a second one (GH #800 review).
+     */
+    pgVolumeCreatedId: text("pg_volume_created_id"),
+    webVolumeCreatedId: text("web_volume_created_id"),
+    upstreamHost: text("upstream_host"),
+    publicUrl: text("public_url"),
+    releaseTag: text("release_tag"),
+    imageDigest: text("image_digest"),
+    edgeSecretEnc: text("edge_secret_enc"),
+    claimCodeEnc: text("claim_code_enc"),
+    claimCodeHash: text("claim_code_hash"),
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    planTier: text("plan_tier").notNull().default("free"),
+    // AgentDash (SC-8): reusable credentials are authenticated ciphertext,
+    // never job inputs. The provider ID alone permits eventual revocation.
+    stripeWebhookSecretEnc: text("stripe_webhook_secret_enc"),
+    resendApiKeyId: text("resend_api_key_id"),
+    resendApiKeyEnc: text("resend_api_key_enc"),
+    lastHealth: jsonb("last_health").$type<Record<string, unknown>>(),
+    lastHumanRequestAt: timestamp("last_human_request_at", { withTimezone: true }),
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    deleteAfter: timestamp("delete_after", { withTimezone: true }),
+    holdUpgrades: boolean("hold_upgrades").notNull().default(false),
+    cohort: text("cohort"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("boxes_slug_uq").on(t.slug),
+    index("boxes_account_idx").on(t.accountId),
+    index("boxes_state_idx").on(t.state),
+    check("boxes_kind_ck", inList("kind", BOX_KINDS)),
+    check("boxes_state_ck", inList("state", BOX_STATES)),
+  ],
+);
+
+/**
+ * The provisioning job queue (SC-3, GH #764; runner in ../jobs/runner.ts).
+ * Workers claim rows with `FOR UPDATE SKIP LOCKED` on (state='queued',
+ * run_after <= now()) or an expired lease (state='running', locked_until <
+ * now(): a crashed worker), and hold a 5-minute lease in `locked_until`
+ * renewed by heartbeat. `step` is the step in progress, so a resumed job
+ * starts there; `attempt` counts claims; `started_at` is the first claim, for
+ * the per-kind cap (30 minutes for provision).
+ */
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    boxId: uuid("box_id")
+      .notNull()
+      .references(() => boxes.id),
+    kind: text("kind").$type<JobKind>().notNull(),
+    state: text("state").$type<JobState>().notNull().default("queued"),
+    step: text("step"),
+    attempt: integer("attempt").notNull().default(0),
+    runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    lockedBy: text("locked_by"),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /** Non-secret job input (e.g. who requested it, the release tag). Never a credential. */
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    /** Always passed through the redacting logger's `redactString()` before it is written. */
+    lastError: text("last_error"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("jobs_claim_idx").on(t.state, t.runAfter),
+    index("jobs_lease_idx").on(t.state, t.lockedUntil),
+    index("jobs_box_idx").on(t.boxId),
+    // At most one live job of a kind per box.
+    uniqueIndex("jobs_one_live_per_box_kind_uq")
+      .on(t.boxId, t.kind)
+      .where(sql`state in ('queued', 'running')`),
+    check("jobs_kind_ck", inList("kind", JOB_KINDS)),
+    check("jobs_state_ck", inList("state", JOB_STATES)),
+  ],
+);
+
+/** Append-only audit trail (UPDATE, DELETE and TRUNCATE refused by trigger, migration 0001). */
+export const boxEvents = pgTable(
+  "box_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    boxId: uuid("box_id").references(() => boxes.id),
+    kind: text("kind").notNull(),
+    actor: text("actor").notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("box_events_box_idx").on(t.boxId, t.createdAt)],
+);
+
+/**
+ * Append-only audit of the operator surface (GH #778): every setting change
+ * (old and new value) and every refused /internal request. UPDATE, DELETE and
+ * TRUNCATE are refused by trigger (migration 0001).
+ */
+export const operatorAudit = pgTable(
+  "operator_audit",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: text("kind").$type<OperatorAuditKind>().notNull(),
+    actor: text("actor").notNull(),
+    ip: text("ip"),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("operator_audit_kind_idx").on(t.kind, t.createdAt),
+    check("operator_audit_kind_ck", inList("kind", OPERATOR_AUDIT_KINDS)),
+  ],
+);
+
+/** The self-hosted invite validator's codes (§7). Only hashes are stored. */
+export const inviteCodes = pgTable(
+  "invite_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    codeHash: text("code_hash").notNull(),
+    label: text("label"),
+    createdAt: createdAt(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("invite_codes_hash_uq").on(t.codeHash)],
+);
+
+export const waitlist = pgTable(
+  "waitlist",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").references(() => accounts.id),
+    email: citext("email").notNull(),
+    requestedSlug: text("requested_slug"),
+    state: text("state").$type<WaitlistState>().notNull().default("waiting"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: text("approved_by"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("waitlist_state_idx").on(t.state, t.createdAt),
+    check("waitlist_state_ck", inList("state", WAITLIST_STATES)),
+  ],
+);
+
+/** Operator settings. Missing rows fall back to the launch defaults in ../settings.ts. */
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: updatedAt(),
+  updatedBy: text("updated_by"),
+});
+
+/** AgentDash (SC-8): singleton billing configuration; never returned by /settings. */
+export const cloudBilling = pgTable("cloud_billing", {
+  id: text("id").primaryKey().default("cloud"),
+  stripeEndpointId: text("stripe_endpoint_id"),
+  stripeEndpointUrl: text("stripe_endpoint_url"),
+  stripeEndpointSecretEnc: text("stripe_endpoint_secret_enc"),
+  stripeBoxKeyEnc: text("stripe_box_key_enc"),
+  updatedAt: updatedAt(),
+});
+
+/** Only successfully committed deliveries; Stripe is the retry queue. No raw event or credentials stored. */
+export const stripeDeliveries = pgTable("stripe_deliveries", {
+  eventId: text("event_id").primaryKey(),
+  payloadHash: text("payload_hash").notNull(),
+  boxId: uuid("box_id").notNull().references(() => boxes.id),
+  createdAt: createdAt(),
+});
+
+// ---- Front door (SC-7, GH #768) ----------------------------------------
+
+/**
+ * A signup on /start, before its email is verified. The box is created only
+ * when the magic link is used (spec §5.1: verification before provisioning),
+ * so an unverified signup never holds a slug for long: it counts against a
+ * slug only while its link is unexpired.
+ */
+export const signupRequests = pgTable(
+  "signup_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    emailTokenId: uuid("email_token_id").references(() => emailTokens.id),
+    slug: text("slug").notNull(),
+    workspaceName: text("workspace_name").notNull(),
+    /** The client address the signup came from (per-IP limits, spec §5.1). */
+    ip: text("ip"),
+    /** True when no bot check ran (Turnstile not configured): the box may only wait on the list. */
+    unverifiedHuman: boolean("unverified_human").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    boxId: uuid("box_id").references(() => boxes.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("signup_requests_slug_idx").on(t.slug, t.expiresAt),
+    index("signup_requests_ip_idx").on(t.ip, t.createdAt),
+    index("signup_requests_account_idx").on(t.accountId),
+  ],
+);
+
+/** A short-lived front-door session, set when a magic link is used. Only the token's hash is stored. */
+export const cloudSessions = pgTable(
+  "cloud_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("cloud_sessions_hash_uq").on(t.tokenHash)],
+);
+
+/**
+ * Rate-limit hits for the public API, one row per counted request. Durable
+ * and shared across replicas; counted over a sliding window. The runtime
+ * role has no DELETE, so rows are never removed (they are tiny).
+ */
+export const rateEvents = pgTable(
+  "rate_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    bucket: text("bucket").notNull(),
+    key: text("key").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("rate_events_lookup_idx").on(t.bucket, t.key, t.createdAt)],
+);

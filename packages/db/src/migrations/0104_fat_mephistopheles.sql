@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "connections_hubspot_active_owner_uq" ON "connections" USING btree ("company_id","owner_type","owner_id") WHERE "connections"."provider" = 'hubspot' and "connections"."revoked_at" is null;

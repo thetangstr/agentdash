@@ -1,0 +1,1361 @@
+diff --git a/packages/mcp-server/src/human.ts b/packages/mcp-server/src/human.ts
+index eef1e33ce0ff12508808bf3eedd39eb3403e9aac..7cab918aa84b1de927d6574fed99321abc56ad37 100644
+--- a/packages/mcp-server/src/human.ts
++++ b/packages/mcp-server/src/human.ts
+@@ -4,7 +4,7 @@ import { humanConfirmRequestSchema, humanDiscoverRequestSchema, humanOperationRe
+ import type { PaperclipMcpConfig } from './config.js';
+ import type { ToolDefinition } from './tools.js';
+ 
+-export const HUMAN_PLAYBOOK = `You relay the signed-in human's intent. Call human_identity and explicitly select an authorized target. Discover operation schemas before use. Never infer a company from source content. For each mutation, prepare, show the complete readback including sharing and execution effects, and obtain the person's consent before confirm. personSaid is context, never proof of consent. A handle is permanently bound to its original target. Required browser security ceremonies must still be completed. On recovery_required, inspect the canonical resource and report uncertainty; never blindly repeat an unknown effect. This human surface currently covers only the operations returned by discovery. Other page families remain pending.`;
++export const HUMAN_PLAYBOOK = `You relay the signed-in human's intent. Call human_identity and explicitly select an authorized target. Discover operation schemas before use. Never infer a company from source content. For each mutation, prepare, show the complete readback including sharing and execution effects, and obtain the person's consent before confirm. personSaid is context, never proof of consent. A handle is permanently bound to its original target. Required browser security ceremonies must still be completed. On recovery_required, inspect the canonical resource and report uncertainty; never blindly repeat an unknown effect. For an unavailable original question owner, discover human_questions.recovery.list and prepare/confirm human_questions.recovery.cancel using safe metadata. Cancellation leaves dependent work held; canonical replacement and a genuine current-owner answer are separate. Use targeted recovery.list inspection after uncertainty; an empty or refused inspection does not prove cancellation failed. This human surface currently covers only the operations returned by discovery. Other page families remain pending.`;
+ 
+ export function assertHumanConfig(config: PaperclipMcpConfig) {
+   if (!config.apiKey.startsWith('pcp_board_') || config.agentId || config.runId) throw new Error('Human mode requires an existing board key and no agent or run identity');
+diff --git a/packages/shared/src/human-control.ts b/packages/shared/src/human-control.ts
+index ac1748d09091db3ca22b993f1dbae58e06875207..acc0ff65bcfc492c42f542d8815ff3b4ad7bbb24 100644
+--- a/packages/shared/src/human-control.ts
++++ b/packages/shared/src/human-control.ts
+@@ -13,6 +13,7 @@ export const HUMAN_OPERATION_IDS = [
+   'workforce.skills.retry', 'workforce.first_job.start',
+   'human_questions.pending.list', 'human_questions.read', 'human_questions.respond',
+   'human_questions.cancel', 'human_questions.replace',
++  'human_questions.recovery.list', 'human_questions.recovery.cancel',
+   'human_questions.owner.assign', 'human_questions.stewardship.assign', 'human_questions.stewardship.transfer',
+ ] as const;
+ export type HumanOperationId = typeof HUMAN_OPERATION_IDS[number];
+@@ -23,7 +24,7 @@ export interface HumanOperationDescriptor {
+   actionId: string;
+   targetKind: HumanTarget['kind'];
+   behavior: 'read' | 'prepare_confirm';
+-  authority: 'company_access' | 'company_direction' | 'exact_question_owner' | 'agent_management';
++  authority: 'company_access' | 'company_direction' | 'exact_question_owner' | 'agent_management' | 'current_question_recovery_owner';
+   confirmation: 'none' | 'human_readback';
+   inputSchema: Record<string, unknown>;
+   outputSchema: Record<string, unknown>;
+diff --git a/packages/shared/src/validators/human-control.ts b/packages/shared/src/validators/human-control.ts
+index bfe1a333ade5c35ee224b77251136c14e7588f66..c13eec6152158dcab651a568cf0302532926c0ba 100644
+--- a/packages/shared/src/validators/human-control.ts
++++ b/packages/shared/src/validators/human-control.ts
+@@ -68,3 +68,21 @@ export function humanJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
+   if (schema instanceof z.ZodUnion) return { anyOf: def.options.map(humanJsonSchema) };
+   throw new Error('Unsupported human operation schema');
+ }
++
++// AgentDash: recovery metadata is deliberately independent of private question detail.
++export const questionRecoveryReferenceSchema = z.object({ issueId: z.string().uuid(), interactionId: z.string().uuid() }).strict();
++export const questionRecoveryListInputSchema = z.object({
++  issueId: z.string().uuid(), interactionId: z.string().uuid().optional(),
++  cursor: z.string().uuid().optional(), limit: z.number().int().min(1).max(50).default(20),
++}).strict().refine(value => !(value.interactionId && value.cursor), 'Targeted inspection and cursor are mutually exclusive');
++export const questionRecoveryCancelInputSchema = questionRecoveryReferenceSchema.extend({ expectedUpdatedAt: z.string().datetime({ offset: true }) }).strict();
++export const questionRecoveryMetadataSchema = questionRecoveryReferenceSchema.extend({
++  status: z.literal('pending'), updatedAt: z.string().datetime({ offset: true }), reason: z.literal('original_owner_unavailable'),
++}).strict();
++export const questionRecoveryReceiptSchema = questionRecoveryReferenceSchema.extend({ status: z.literal('cancelled'), replacementRequired: z.literal(true) }).strict();
++export const questionRecoveryListSchema = z.object({ items: z.array(z.union([questionRecoveryMetadataSchema, questionRecoveryReceiptSchema])), nextCursor: z.string().uuid().nullable() }).strict();
++export type QuestionRecoveryListInput = z.input<typeof questionRecoveryListInputSchema>;
++export type QuestionRecoveryCancelInput = z.infer<typeof questionRecoveryCancelInputSchema>;
++export type QuestionRecoveryMetadata = z.infer<typeof questionRecoveryMetadataSchema>;
++export type QuestionRecoveryReceipt = z.infer<typeof questionRecoveryReceiptSchema>;
++export type QuestionRecoveryList = z.infer<typeof questionRecoveryListSchema>;
+diff --git a/server/src/__tests__/human-control.test.ts b/server/src/__tests__/human-control.test.ts
+index 82d79ac68cf692774e74e16ad486d08da534eaf3..978fde71646947341a2b749082b3b04e67115bad 100644
+--- a/server/src/__tests__/human-control.test.ts
++++ b/server/src/__tests__/human-control.test.ts
+@@ -254,7 +254,7 @@ describe('human control HTTP contract with current named authority', () => {
+       expect((await client.listTools()).tools).toHaveLength(6);
+       expect((await invoke('human_select_target', { target: h.target })).error).not.toBe(true);
+       const found = await invoke('human_discover', { target: h.target });
+-      expect(found.body.operations).toHaveLength(20);
++      expect(found.body.operations).toHaveLength(22);
+       const p = await invoke('human_prepare', { target: h.target, operationId: 'workforce.first_job.start', version: 1, input: { agentId: worker.id } });
+       expect(await db.select().from(issues).where(eq(issues.companyId, h.company.id))).toHaveLength(0);
+       failAfterWake = true;
+diff --git a/server/src/__tests__/human-question-owner-recovery-runtime.test.ts b/server/src/__tests__/human-question-owner-recovery-runtime.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..faa557fae02db2defdbc48579b77ed19ddb6b7d4
+--- /dev/null
++++ b/server/src/__tests__/human-question-owner-recovery-runtime.test.ts
+@@ -0,0 +1,117 @@
++import { randomUUID } from 'node:crypto';
++import { mkdtemp, rm } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import express from 'express';
++import request from 'supertest';
++import { workforceRoutes } from '../routes/workforce.js';
++import { issueRoutes } from '../routes/issues.js';
++import type { StorageService } from '../storage/types.js';
++import { actorMiddleware } from '../middleware/auth.js';
++import { errorHandler } from '../middleware/index.js';
++import { eq, and } from 'drizzle-orm';
++import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
++import { agents, companies, companyMemberships, authUsers, authSessions, createDb, agentRuns, issueComments, issues } from '@paperclipai/db';
++import type { AdapterExecutionContext } from '@paperclipai/adapter-utils';
++import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
++import { workforceService } from '../services/workforce.js';
++import { heartbeatService } from '../services/heartbeat.js';
++import { issueThreadInteractionService } from '../services/issue-thread-interactions.js';
++
++const execute = vi.hoisted(() => vi.fn());
++vi.mock('../adapters/index.js', async () => {
++  const actual = await vi.importActual<typeof import('../adapters/index.js')>('../adapters/index.js');
++  return { ...actual, getServerAdapter: (type: string) => ({ ...actual.getServerAdapter(type), execute, supportsLocalAgentJwt: false }) };
++});
++vi.mock('../telemetry.js', () => ({ getTelemetryClient: () => ({ track: vi.fn() }) }));
++
++describe('inactive owner recovery with real heartbeat', () => {
++  let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
++  let db: ReturnType<typeof createDb>;
++  let home: string;
++  const priorHome = process.env.PAPERCLIP_HOME;
++  beforeAll(async () => {
++    home = await mkdtemp(path.join(tmpdir(), 'owner-recovery-runtime-'));
++    process.env.PAPERCLIP_HOME = home;
++    temp = await startEmbeddedPostgresTestDatabase('owner-recovery-runtime-'); db = createDb(temp.connectionString);
++  });
++  afterAll(async () => { await db?.$client.end({ timeout: 0 }); await temp?.cleanup(); if (priorHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = priorHome; await rm(home, { recursive: true, force: true }); });
++  it('holds the stranded KEYLESS job across recovery, then resumes it exactly once after Bob answers and keeps unrelated work usable', async () => {
++    const [company] = await db.insert(companies).values({ name: 'Runtime company', issuePrefix: randomUUID().slice(0, 8) }).returning();
++    await db.insert(companyMemberships).values({ companyId: company.id, principalType: 'user', principalId: 'owner', membershipRole: 'owner', status: 'active' });
++    await db.insert(authUsers).values({ id: 'owner', name: 'Owner', email: 'owner@runtime.test.invalid', createdAt: new Date(), updatedAt: new Date() });
++    await db.insert(companyMemberships).values({ companyId: company.id, principalType: 'user', principalId: 'bob', membershipRole: 'admin', status: 'active' });
++    await db.insert(authUsers).values({ id: 'bob', name: 'Bob', email: 'bob@recovery.test.invalid', createdAt: new Date(), updatedAt: new Date() });
++    const sessionId = randomUUID();
++    await db.insert(authSessions).values({ id: sessionId, token: randomUUID(), userId: 'bob', expiresAt: new Date(Date.now() + 600000), createdAt: new Date(), updatedAt: new Date() });
++    const [agent] = await db.insert(agents).values({ companyId: company.id, name: 'Worker', adapterType: 'codex_local', adapterConfig: { cwd: home, command: '/bin/true' }, autonomy: 'autonomous', accountableUserId: 'owner' }).returning();
++    const svc = workforceService(db), questions = issueThreadInteractionService(db), heartbeat = heartbeatService(db);
++    await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, { userId: 'owner' });
++    const job = await svc.startFirstJob(company.id, agent.id, { userId: 'owner' });
++    let interactionId = '';
++    const captured: AdapterExecutionContext[] = [];
++    execute.mockImplementation(async (ctx: AdapterExecutionContext) => {
++      captured.push(ctx);
++      if (captured.length === 1) {
++        const q = await questions.create(job, { kind: 'ask_user_questions', continuationPolicy: 'wake_assignee', sourceRunId: ctx.runId, payload: { version: 1, questions: [{ id: 'offer', prompt: 'What offer?', selectionMode: 'text', options: [], required: true }] } }, { agentId: agent.id });
++        interactionId = q.id;
++      }
++      if (typeof ctx.context.issueId === 'string') await db.insert(issueComments).values({ companyId: company.id, issueId: ctx.context.issueId, authorAgentId: agent.id, createdByRunId: ctx.runId, body: captured.length === 1 ? 'Waiting for required input.' : 'Used approved and issue-scoped input.' });
++      return { exitCode: 0, signal: null, timedOut: false, summary: 'Updated the issue with current status.', sessionId: 'resume-session', sessionParams: { sessionId: 'resume-session', cwd: home }, provider: 'test', model: 'fake', usage: { inputTokens: 1, outputTokens: 1 }, costUsd: 0 };
++    });
++    async function run(issueId: string, extra: Record<string, unknown> = {}) {
++      const queued = await heartbeat.invoke(agent.id, 'on_demand', { issueId, ...extra });
++      expect(queued).not.toBeNull();
++      await vi.waitFor(async () => {
++        expect((await heartbeat.getRun(queued!.id))?.status).toBe('succeeded');
++        expect(await db.select().from(agentRuns).where(eq(agentRuns.heartbeatRunId, queued!.id))).toHaveLength(1);
++      }, { timeout: 15000, interval: 50 });
++      return queued!;
++    }
++    await run(job.id, { paperclipWorkforce: { invented: 'forged' } });
++    expect(captured[0].context.paperclipWorkforce).toMatchObject({ brief: { revision: 0, facts: [] }, taskFacts: [] });
++    expect(interactionId).not.toBe('');
++    const before = captured.length;
++    for (let i = 0; i < 3; i++) expect(await heartbeat.invoke(agent.id, 'on_demand', { issueId: job.id, interactionStatus: 'answered' })).toBeNull();
++    expect(captured).toHaveLength(before);
++    expect(await db.select().from(agentRuns).where(eq(agentRuns.agentId, agent.id))).toHaveLength(1);
++    await db.update(companyMemberships).set({status:'inactive'}).where(and(eq(companyMemberships.companyId,company.id),eq(companyMemberships.principalId,'owner')));
++    await db.update(agents).set({accountableUserId:'bob'}).where(eq(agents.id,agent.id));
++    const app = express();
++    app.use(express.json());
++    app.use(actorMiddleware(db, { deploymentMode: 'authenticated', resolveSession: async () => ({ session: { id: sessionId, userId: 'bob' }, user: { id: 'bob', name: 'Bob', email: 'bob@recovery.test.invalid' } }) }));
++    app.use('/api', workforceRoutes(db));
++    app.use('/api', issueRoutes(db, {} as StorageService));
++    app.use(errorHandler);
++    const readinessPath = `/api/companies/${company.id}/workforce/agents/${agent.id}/readiness`;
++    expect((await request(app).get(readinessPath)).status).toBe(404);
++    const recoveryPath = `/api/issues/${job.id}/question-recovery`;
++    const metadata = await request(app).get(recoveryPath);
++    expect(metadata.status).toBe(200);
++    expect((await request(app).post(`${recoveryPath}/${interactionId}/cancel`).send({expectedUpdatedAt:metadata.body.items[0].updatedAt})).status).toBe(200);
++    expect(await heartbeat.invoke(agent.id,'on_demand',{issueId:job.id})).toBeNull();
++    expect(captured).toHaveLength(1);
++    const replacement = await request(app).post(`${recoveryPath}/${interactionId}/replace`).send({});
++    expect(replacement.status).toBe(201);
++    expect(replacement.body.payload.answerOwnerUserId).toBe('bob');
++    expect(await heartbeat.invoke(agent.id,'on_demand',{issueId:job.id})).toBeNull();
++    const responsePath = `/api/issues/${job.id}/interactions/${replacement.body.id}/respond`;
++    const responseBody = { answers: [{ questionId: 'offer', optionIds: [], text: 'Job-private trial offer' }] };
++    expect((await request(app).post(responsePath).send(responseBody)).status).toBe(200);
++    await vi.waitFor(async () => {
++      expect(captured).toHaveLength(2);
++      expect((await heartbeat.getRun(captured[1].runId))?.status).toBe('succeeded');
++      expect(await db.select().from(agentRuns).where(eq(agentRuns.agentId, agent.id))).toHaveLength(2);
++    }, { timeout: 15000, interval: 50 });
++    expect((await request(app).post(responsePath).send(responseBody)).status).toBe(409);
++    expect(captured).toHaveLength(2);
++    expect(captured[1].context.issueId).toBe(job.id);
++    expect((await request(app).get(readinessPath)).status).toBe(200);
++    expect(captured[1].runtime.sessionParams).toMatchObject({ sessionId: 'resume-session' });
++    expect(captured[1].context.paperclipWorkforce).toMatchObject({ taskFacts: [{ value: 'Job-private trial offer', issueId: job.id }], brief: { facts: [] } });
++    const [other] = await db.insert(issues).values({ companyId: company.id, title: 'Second job', assigneeAgentId: agent.id, status: 'todo' }).returning();
++    await run(other.id);
++    expect(captured[2].context.paperclipWorkforce).toMatchObject({ taskFacts: [], brief: { facts: [] } });
++    expect((await svc.getBrief(company.id)).facts).toEqual([]);
++  }, 45000);
++});
+diff --git a/server/src/__tests__/human-question-owner-recovery.test.ts b/server/src/__tests__/human-question-owner-recovery.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..77e2f3464befcd513f78758f87104c3dcca6e7d2
+--- /dev/null
++++ b/server/src/__tests__/human-question-owner-recovery.test.ts
+@@ -0,0 +1,401 @@
++import { agentService } from '../services/agents.js';
++import { agentStewardshipService } from '../services/agent-stewardships.js';
++import { boardAuthService } from '../services/board-auth.js';
++import { Client } from '@modelcontextprotocol/sdk/client/index.js';
++import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
++import { createAgentDashServer } from '../../../packages/mcp-server/src/index.js';
++import { PgDialect } from 'drizzle-orm/pg-core';
++import type { SQL } from 'drizzle-orm';
++import { randomUUID } from 'node:crypto';
++import { and, eq, sql } from 'drizzle-orm';
++import express from 'express';
++import request from 'supertest';
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
++import { createDb, companies, companyMemberships, authUsers, boardApiKeys, agents, issueThreadInteractions, activityLog, authSessions, agentApiKeys, humanActionHandles, instanceUserRoles, issues, projects, projectAccess, workforceEnrollments, goals, type Db } from '@paperclipai/db';
++import { actorMiddleware } from '../middleware/auth.js';
++import { errorHandler } from '../middleware/error-handler.js';
++import { issueRoutes } from '../routes/issues.js';
++import { humanControlRoutes } from '../routes/human-control.js';
++import { workforceRoutes } from '../routes/workforce.js';
++import { hashBearerToken } from '../services/board-auth.js';
++import { accessService } from '../services/access.js';
++import { workforceService } from '../services/workforce.js';
++import { issueThreadInteractionService } from '../services/issue-thread-interactions.js';
++import { workforceIssueInputs } from '../services/workforce-inputs.js';
++import type { StorageService } from '../storage/types.js';
++import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
++const effects = vi.hoisted(() => ({ wakeup: vi.fn(async () => null) }));
++vi.mock('../services/heartbeat.js', () => ({ heartbeatService: () => effects }));
++function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
++describe('inactive question owner recovery', () => {
++  let temporary: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>, db: Db;
++  beforeAll(async () => { temporary = await startEmbeddedPostgresTestDatabase('question-owner-recovery-'); db = createDb(temporary.connectionString); });
++  afterAll(async () => { await temporary?.cleanup(); });
++  async function human() {
++    const userId = randomUUID(), token = `pcp_board_${randomUUID()}`;
++    await db.insert(authUsers).values({ id: userId, name: 'Test human', email: `${userId}@test.invalid`, createdAt: new Date(), updatedAt: new Date() });
++    const [key] = await db.insert(boardApiKeys).values({ userId, name: 'Test key', keyHash: hashBearerToken(token) }).returning();
++    return { userId, token, key };
++  }
++  async function fixture() {
++    const alice = await human(), bob = await human();
++    const [company] = await db.insert(companies).values({ name: 'Recovery fixture', issuePrefix: randomUUID().slice(0,8) }).returning();
++    const members = await db.insert(companyMemberships).values([alice,bob].map(person => ({ companyId: company.id, principalType: 'user', principalId: person.userId, membershipRole: 'admin', status: 'active' }))).returning();
++    const [agent] = await db.insert(agents).values({ companyId: company.id, name: 'Worker', adapterType: 'codex_local', autonomy: 'autonomous', accountableUserId: alice.userId }).returning();
++    const svc = workforceService(db);
++    await svc.enroll(company.id, agent.id, { templateId: 'marketing-content' }, { userId: alice.userId });
++    const issue = await svc.startFirstJob(company.id, agent.id, { userId: alice.userId });
++    const q = await issueThreadInteractionService(db).create(issue, { kind: 'ask_user_questions', payload: { version: 1, questions: [{ id: 'SECRET_KEYLESS_ID', prompt: 'SECRET_ALICE_PROMPT', required: true, selectionMode: 'text', options: [] }] } }, { agentId: agent.id });
++    const aliceMember = members.find(m => m.principalId === alice.userId)!;
++    await db.update(companyMemberships).set({ status: 'inactive' }).where(eq(companyMemberships.id, aliceMember.id));
++    await db.update(agents).set({ accountableUserId: bob.userId }).where(eq(agents.id, agent.id));
++    return { alice, bob, company, agent, issue, q, aliceMember };
++  }
++  function app(connection = db, afterAuthentication?: express.RequestHandler, authentication: Parameters<typeof actorMiddleware>[1] = { deploymentMode: 'local_trusted' }) {
++    const a = express(); a.use(express.json()); a.use(actorMiddleware(db, authentication)); if (afterAuthentication) a.use(afterAuthentication);
++    a.use('/api/human-control', humanControlRoutes(connection, { heartbeat: effects }));
++    a.use('/human', humanControlRoutes(connection, { heartbeat: effects }));
++    a.use('/api', workforceRoutes(connection, { heartbeat: effects }));
++    a.use('/api', issueRoutes(connection, {} as StorageService)); a.use(errorHandler); return a;
++  }
++  async function waitForLock(fragment: string) {
++    const deadline = Date.now() + 5000;
++    while (Date.now() < deadline) {
++      const rows = await db.execute(sql`select query from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid() and wait_event_type='Lock' and query like ${`%${fragment}%`}`);
++      if (rows.length) return;
++      await new Promise(done => setTimeout(done, 10));
++    }
++    throw new Error(`Expected actual PostgreSQL lock wait: ${fragment}`);
++  }
++  it('has an immediate enforced parent FK and the exact membership uniqueness needed for absence stabilization', async () => {
++    const constraints = await db.execute(sql`select convalidated, condeferrable, condeferred, pg_get_constraintdef(oid) as definition from pg_constraint where conrelid='company_memberships'::regclass and contype='f'`);
++    expect(constraints).toContainEqual(expect.objectContaining({ convalidated: true, condeferrable: false, condeferred: false, definition: 'FOREIGN KEY (company_id) REFERENCES companies(id)' }));
++    const indexes = await db.execute(sql`select indexdef from pg_indexes where tablename='company_memberships'`);
++    expect(indexes.some(row => String(row.indexdef).includes('UNIQUE INDEX company_memberships_company_principal_unique_idx') && String(row.indexdef).includes('(company_id, principal_type, principal_id)'))).toBe(true);
++  });
++  it.each(['inactive','missing'] as const)('blocks real ensureMembership activation when the recovery %s lock wins', async kind => {
++    const f = await fixture();
++    if (kind === 'missing') await db.delete(companyMemberships).where(eq(companyMemberships.id, f.aliceMember.id));
++    const reached = deferred(), release = deferred();
++    const hold = db.transaction(async tx => {
++      await tx.select().from(companies).where(eq(companies.id, f.company.id)).for('update');
++      await tx.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, f.company.id), eq(companyMemberships.principalId, f.alice.userId))).for('share');
++      reached.resolve(); await release.promise;
++      const members = await tx.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, f.company.id), eq(companyMemberships.principalId, f.alice.userId)));
++      expect(members.some(m => m.status === 'active')).toBe(false);
++    });
++    await reached.promise;
++    const activation = accessService(db).ensureMembership(f.company.id, 'user', f.alice.userId, 'member', 'active');
++    try { await waitForLock(kind === 'missing' ? 'insert into "company_memberships"' : 'update "company_memberships"'); } finally { release.resolve(); }
++    await hold; expect((await activation).status).toBe('active');
++  });
++  it.each(['inactive','missing'] as const)('sees committed native activation when the %s writer wins', async kind => {
++    const f = await fixture();
++    if (kind === 'missing') await db.delete(companyMemberships).where(eq(companyMemberships.id, f.aliceMember.id));
++    const reached = deferred(), release = deferred();
++    const activation = db.transaction(async tx => {
++      await accessService(tx as unknown as Db).ensureMembership(f.company.id, 'user', f.alice.userId, 'member', 'active');
++      reached.resolve(); await release.promise;
++    });
++    await reached.promise;
++    const observe = db.transaction(async tx => {
++      await tx.select().from(companies).where(eq(companies.id, f.company.id)).for('update');
++      const members = await tx.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, f.company.id), eq(companyMemberships.principalId, f.alice.userId))).for('share');
++      expect(members[0].status).toBe('active');
++    });
++    try { await waitForLock(kind === 'missing' ? '"companies"' : '"company_memberships"'); } finally { release.resolve(); }
++    await activation; await observe;
++  });
++  it('recovers a KEYLESS pending question through safe metadata while readiness remains private', async () => {
++    const f = await fixture(), a = app(), auth = `Bearer ${f.bob.token}`;
++    const base = `/api/issues/${f.issue.id}/question-recovery`;
++    expect((await request(a).get(`/api/companies/${f.company.id}/workforce/agents/${f.agent.id}/readiness`).set('Connection', 'close').set('authorization', auth)).status).toBe(404);
++    const list = await request(a).get(base).set('Connection', 'close').set('authorization', auth);
++    expect(list.status).toBe(200);
++    expect(list.body.items).toEqual([{ issueId: f.issue.id, interactionId: f.q.id, status: 'pending', updatedAt: expect.stringMatching(/\.\d{6}Z$/), reason: 'original_owner_unavailable' }]);
++    expect(JSON.stringify(list.body)).not.toContain('SECRET');
++    effects.wakeup.mockClear();
++    const cancelled = await request(a).post(`${base}/${f.q.id}/cancel`).set('Connection', 'close').set('authorization', auth).send({ expectedUpdatedAt: list.body.items[0].updatedAt });
++    expect(cancelled.status).toBe(200);
++    expect(cancelled.body).toEqual({ issueId: f.issue.id, interactionId: f.q.id, status: 'cancelled', replacementRequired: true });
++    expect((await workforceIssueInputs(db, f.company.id, f.agent.id, f.issue.id)).pendingQuestionIds).toContain(f.q.id);
++    expect(effects.wakeup).not.toHaveBeenCalled();
++    const replacement = await request(a).post(`${base}/${f.q.id}/replace`).set('Connection', 'close').set('authorization', auth).send({});
++    expect(replacement.status).toBe(201);
++    expect(replacement.body.payload.answerOwnerUserId).toBe(f.bob.userId);
++    expect(replacement.body.payload.replacesInteractionId).toBe(f.q.id);
++    // Reload/unknown-replacement inspection uses the unchanged native authorized list.
++    const visible = await request(a).get(`/api/issues/${f.issue.id}/interactions`).set('Connection', 'close').set('authorization', auth);
++    expect(visible.status).toBe(200);
++    expect(visible.body.map((value: { id: string }) => value.id)).toEqual([replacement.body.id]);
++    const answered = await request(a).post(`/api/issues/${f.issue.id}/interactions/${replacement.body.id}/respond`).set('Connection', 'close').set('authorization', auth).send({ answers: [{ questionId: 'SECRET_KEYLESS_ID', optionIds: [], text: 'A genuine current-owner answer' }] });
++    expect(answered.status).toBe(200);
++    let sources: import('../services/workforce-inputs.js').WorkforceInputObservation | undefined;
++    const inputs = await workforceIssueInputs(db, f.company.id, f.agent.id, f.issue.id, { observeSources(value) { sources = value; } });
++    expect(inputs.pendingQuestionIds).toEqual([]);
++    expect(sources!.pendingSources.find(value => value.interactionId === f.q.id)?.roles).toEqual(['replacement_target']);
++    expect(sources!.pendingSources.find(value => value.interactionId === replacement.body.id)?.roles).toEqual(['sufficient_answer']);
++    const readiness = await request(a).get(`/api/companies/${f.company.id}/workforce/agents/${f.agent.id}/readiness`).set('Connection', 'close').set('authorization', auth);
++    expect(readiness.status).toBe(200);
++
++    const audits = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
++    expect(audits.filter(row => row.action === 'issue.thread_interaction_cancelled')).toHaveLength(1);
++    expect((await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, f.q.id)))[0].status).toBe('cancelled');
++  });  async function metadata(f: Awaited<ReturnType<typeof fixture>>) {
++    const result = await request(app()).get(`/api/issues/${f.issue.id}/question-recovery`).set('Connection', 'close').set('authorization', `Bearer ${f.bob.token}`);
++    expect(result.status).toBe(200); return result.body.items[0];
++  }
++  async function cancel(f: Awaited<ReturnType<typeof fixture>>, updatedAt: string, application = app()) {
++    return request(application).post(`/api/issues/${f.issue.id}/question-recovery/${f.q.id}/cancel`).set('Connection', 'close').set('authorization', `Bearer ${f.bob.token}`).send({ expectedUpdatedAt: updatedAt });
++  }
++  async function noCancellation(f: Awaited<ReturnType<typeof fixture>>) {
++    expect((await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, f.q.id)))[0].status).toBe('pending');
++    expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).filter(row => row.action === 'issue.thread_interaction_cancelled')).toEqual([]);
++  }
++  it.each(['active old member', 'absent old profile', 'missing pinned owner', 'unrelated human', 'instance admin', 'worker', 'unnamed local'] as const)('does not grant metadata or cancellation for %s', async scenario => {
++    const f = await fixture(); let token = f.bob.token;
++    if (scenario === 'active old member' || scenario === 'absent old profile') {
++      await accessService(db).ensureMembership(f.company.id, 'user', f.alice.userId);
++      if (scenario === 'absent old profile') await db.delete(authUsers).where(eq(authUsers.id, f.alice.userId));
++    }
++    if (scenario === 'missing pinned owner') { const payload = { ...f.q.payload }; delete (payload as any).answerOwnerUserId; await db.update(issueThreadInteractions).set({ payload }).where(eq(issueThreadInteractions.id, f.q.id)); }
++    if (scenario === 'unrelated human' || scenario === 'instance admin') {
++      const stranger = await human(); token = stranger.token;
++      await accessService(db).ensureMembership(f.company.id, 'user', stranger.userId);
++      if (scenario === 'instance admin') await db.insert(instanceUserRoles).values({ userId:stranger.userId, role:'instance_admin' });
++    }
++    if (scenario === 'worker') { token = `pcp_${randomUUID()}`; await db.insert(agentApiKeys).values({ companyId:f.company.id,agentId:f.agent.id,name:'Worker',keyHash:hashBearerToken(token) }); }
++    if (scenario === 'unnamed local') token = '';
++    const a = app(), auth = `Bearer ${token}`;
++    const list = await request(a).get(`/api/issues/${f.issue.id}/question-recovery`).set('Connection', 'close').set('authorization', auth);
++    if (['worker','unnamed local'].includes(scenario)) expect(list.status).toBeGreaterThanOrEqual(400);
++    else { expect(list.status).toBe(200); expect(list.body.items).toEqual([]); }
++    const mutation = await request(a).post(`/api/issues/${f.issue.id}/question-recovery/${f.q.id}/cancel`).set('Connection', 'close').set('authorization',auth).send({expectedUpdatedAt:new Date(f.q.updatedAt).toISOString()});
++    expect(mutation.status).toBeGreaterThanOrEqual(400); expect(JSON.stringify([list.body,mutation.body])).not.toContain('SECRET'); await noCancellation(f);
++  });
++  it.each(['session','local'] as const)('uses actual named native %s identity without issuing a board key', async source => {
++    const f = await fixture();
++    if (source === 'local') {
++      await db.insert(authUsers).values({id:'local-board',name:'Local',email:'recovery-local@test.invalid',createdAt:new Date(),updatedAt:new Date()}).onConflictDoNothing();
++      await accessService(db).ensureMembership(f.company.id,'user','local-board');
++      await db.update(agents).set({accountableUserId:'local-board'}).where(eq(agents.id,f.agent.id));
++    }
++    const token = randomUUID(), sessionId = randomUUID();
++    if (source === 'session') await db.insert(authSessions).values({id:sessionId,userId:f.bob.userId,token,expiresAt:new Date(Date.now()+60000),createdAt:new Date(),updatedAt:new Date()});
++    const application = app(db,undefined,source === 'session' ? {deploymentMode:'authenticated',resolveSession:async()=>({user:{id:f.bob.userId,name:'Bob',email:`${f.bob.userId}@test.invalid`},session:{id:sessionId,userId:f.bob.userId}})} : {deploymentMode:'local_trusted'});
++    const list = await request(application).get(`/api/issues/${f.issue.id}/question-recovery`);
++    expect(list.status,JSON.stringify(list.body)).toBe(200); expect(list.body.items).toHaveLength(1);
++    const result = await request(application).post(`/api/issues/${f.issue.id}/question-recovery/${f.q.id}/cancel`).send({expectedUpdatedAt:list.body.items[0].updatedAt});
++    expect(result.status).toBe(200);
++    expect((await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id,f.q.id)))[0].resolvedByUserId).toBe(source === 'local' ? 'local-board' : f.bob.userId);
++  });
++  it('uses subsequent issue binding and exact timestamp CAS, without enrollment goal/first-job visibility', async () => {
++    const f = await fixture();
++    const [later] = await db.insert(issues).values({companyId:f.company.id,title:'Subsequent workforce work',assigneeAgentId:f.agent.id}).returning();
++    await db.update(issueThreadInteractions).set({issueId:later.id}).where(eq(issueThreadInteractions.id,f.q.id));
++    await db.execute(sql`update ${issueThreadInteractions} set updated_at='2026-09-29T01:02:03.123456Z' where id=${f.q.id}`);
++    f.issue = later as typeof f.issue;
++    const [foreign] = await db.insert(companies).values({name:'Unrelated',issuePrefix:randomUUID().slice(0,8)}).returning();
++    const [foreignJob] = await db.insert(issues).values({companyId:foreign.id,title:'Private unrelated first job'}).returning();
++    const [foreignGoal] = await db.insert(goals).values({companyId:foreign.id,title:'Private unrelated goal'}).returning();
++    await db.update(workforceEnrollments).set({firstJobIssueId:foreignJob.id,goalId:foreignGoal.id}).where(eq(workforceEnrollments.agentId,f.agent.id));
++    const row = await metadata(f); expect(row.updatedAt).toBe('2026-09-29T01:02:03.123456Z');
++    expect((await cancel(f,'2026-09-29T01:02:03.123Z')).status).toBe(409); await noCancellation(f);
++    expect((await cancel(f,row.updatedAt)).status).toBe(200);
++  });
++  it('paginates only fully authorized metadata and rejects a private or mismatched cursor', async () => {
++    const f = await fixture();
++    // Independent pending questions pinned to the now unavailable original owner.
++    for (let index=0;index<3;index++) await db.insert(issueThreadInteractions).values({companyId:f.company.id,issueId:f.issue.id,kind:'ask_user_questions',status:'pending',payload:f.q.payload});
++    const auth = `Bearer ${f.bob.token}`, route = `/api/issues/${f.issue.id}/question-recovery`;
++    const first = await request(app()).get(`${route}?limit=2`).set('Connection', 'close').set('authorization',auth);
++    expect(first.body.items).toHaveLength(2); expect(first.body.nextCursor).toBe(first.body.items[1].interactionId);
++    const second = await request(app()).get(`${route}?limit=2&cursor=${first.body.nextCursor}`).set('Connection', 'close').set('authorization',auth);
++    expect(second.body.items).toHaveLength(2); expect(second.body.nextCursor).toBeNull();
++    expect(new Set([...first.body.items,...second.body.items].map((q:any)=>q.interactionId)).size).toBe(4);
++    expect((await request(app()).get(`${route}?cursor=${randomUUID()}`).set('Connection', 'close').set('authorization',auth)).status).toBe(400);
++    expect((await request(app()).get(`${route}?cursor=${first.body.nextCursor}&interactionId=${f.q.id}`).set('Connection', 'close').set('authorization',auth)).status).toBe(400);
++    expect((await request(app()).get(`${route}?limit=51`).set('Connection', 'close').set('authorization',auth)).status).toBe(400);
++    expect(JSON.stringify([first.body,second.body])).not.toContain('SECRET');
++  });
++  it('uses six actual registered MCP tools over real HTTP for metadata, one confirmed cancellation, replacement and genuine answer', async () => {
++    const f = await fixture(), target = {kind:'company',companyId:f.company.id};
++    const http = app().listen(0,'127.0.0.1'); await new Promise<void>(done=>http.once('listening',done));
++    const mcp = createAgentDashServer({apiUrl:`http://127.0.0.1:${(http.address() as {port:number}).port}/api`,apiKey:f.bob.token,companyId:null,agentId:null,runId:null},{toolset:'human'});
++    const client = new Client({name:'owner-recovery',version:'1'}), [a,b] = InMemoryTransport.createLinkedPair(); await mcp.connect(a); await client.connect(b);
++    async function invoke(name:string,args:Record<string,unknown>) {const response=await client.callTool({name,arguments:args});return {error:response.isError,body:JSON.parse((response.content as {text:string}[])[0].text)};}
++    try {
++      expect((await client.listTools()).tools.map(t=>t.name)).toEqual(['human_identity','human_select_target','human_discover','human_read','human_prepare','human_confirm']);
++      expect((await invoke('human_select_target',{target})).error).not.toBe(true);
++      const discovery = await invoke('human_discover',{target}); expect(discovery.body.operations).toHaveLength(22);
++      const listed = await invoke('human_read',{target,operationId:'human_questions.recovery.list',version:1,input:{issueId:f.issue.id}});
++      const prepared = await invoke('human_prepare',{target,operationId:'human_questions.recovery.cancel',version:1,input:{issueId:f.issue.id,interactionId:f.q.id,expectedUpdatedAt:listed.body.items[0].updatedAt}});
++      expect(prepared.error,JSON.stringify(prepared.body)).not.toBe(true); expect(JSON.stringify(prepared.body)).not.toContain('SECRET'); await noCancellation(f);
++      const confirmed = await invoke('human_confirm',{target,handle:prepared.body.handle}); expect(confirmed.error,JSON.stringify(confirmed.body)).not.toBe(true);
++      expect(confirmed.body.result).toEqual({issueId:f.issue.id,interactionId:f.q.id,status:'cancelled',replacementRequired:true});
++      await accessService(db).ensureMembership(f.company.id,'user',f.alice.userId);
++      const terminal = await invoke('human_confirm',{target,handle:prepared.body.handle}); expect(terminal.error).toBe(true); expect(terminal.body.status).toBe('completed');
++      expect(JSON.stringify(terminal.body)).not.toContain('SECRET');
++      const inspected = await invoke('human_read',{target,operationId:'human_questions.recovery.list',version:1,input:{issueId:f.issue.id,interactionId:f.q.id}}); expect(inspected.body.items[0]).toEqual(confirmed.body.result);
++      const replacement = await invoke('human_prepare',{target,operationId:'human_questions.replace',version:1,input:{issueId:f.issue.id,interactionId:f.q.id}}); expect(replacement.error).not.toBe(true);
++      const created = await invoke('human_confirm',{target,handle:replacement.body.handle}); expect(created.error,JSON.stringify(created.body)).not.toBe(true); expect(created.body.result.payload.answerOwnerUserId).toBe(f.bob.userId);
++      const answer = await invoke('human_prepare',{target,operationId:'human_questions.respond',version:1,input:{issueId:f.issue.id,interactionId:created.body.result.interactionId,answers:[{questionId:'SECRET_KEYLESS_ID',optionIds:[],text:'Genuine Bob input'}]}}); expect(answer.error).not.toBe(true);
++      expect((await invoke('human_confirm',{target,handle:answer.body.handle})).error).not.toBe(true);
++      const readiness = await invoke('human_read',{target,operationId:'workforce.readiness.read',version:1,input:{agentId:f.agent.id}}); expect(readiness.error).not.toBe(true); expect(readiness.body.pendingQuestionIds).toEqual([]);
++      const audits = await db.select().from(activityLog).where(eq(activityLog.companyId,f.company.id)); expect(audits.filter(row=>row.action==='issue.thread_interaction_cancelled')).toHaveLength(1);
++    } finally {await client.close();await mcp.close();await new Promise<void>(done=>http.close(()=>done()));}
++  });
++  it.each(['old owner activated','current owner changed','project revoked'] as const)('refuses stale bridge preparation when %s',async scenario=>{
++    const f=await fixture(),row=await metadata(f),target={kind:'company',companyId:f.company.id};
++    const prepared=await request(app()).post('/human/prepare').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,operationId:'human_questions.recovery.cancel',version:1,input:{issueId:f.issue.id,interactionId:f.q.id,expectedUpdatedAt:row.updatedAt}});
++    expect(prepared.status).toBe(200);
++    if(scenario==='old owner activated') await accessService(db).ensureMembership(f.company.id,'user',f.alice.userId);
++    if(scenario==='current owner changed') await db.update(agents).set({accountableUserId:f.alice.userId}).where(eq(agents.id,f.agent.id));
++    if(scenario==='project revoked') {await db.update(companyMemberships).set({membershipRole:'member'}).where(eq(companyMemberships.companyId,f.company.id));const[p]=await db.insert(projects).values({companyId:f.company.id,name:'Private',visibility:'restricted',createdByUserId:'someone-else'}).returning();await db.update(issues).set({projectId:p.id}).where(eq(issues.id,f.issue.id));}
++    const confirmed=await request(app()).post('/human/confirm').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,handle:prepared.body.handle}); expect(confirmed.status).toBeGreaterThanOrEqual(400); expect(JSON.stringify(confirmed.body)).not.toContain('SECRET');await noCancellation(f);
++  });
++  type Trace = { sql:string; params:unknown[]; transaction:number };
++  function traced(events:Trace[], hook?: (entry:Trace)=>Promise<void>, afterCommit?:()=>Promise<void>) {
++    const dialect=new PgDialect();let count=0;
++    return new Proxy(db,{get(target,key,receiver){if(key!=='transaction')return Reflect.get(target,key,receiver);return async(callback:(connection:Db)=>Promise<unknown>)=>{
++      const transaction=++count;let questionWritten=false;
++      const value=await target.transaction(tx=>callback(new Proxy(tx,{get(inner,prop,receiver){
++        const value=Reflect.get(inner,prop,receiver);
++        if(prop==='execute')return async(query:SQL)=>{const rows=await inner.execute(query), entry={transaction,...dialect.sqlToQuery(query)};events.push(entry);await hook?.(entry);return rows;};
++        if(prop==='select')return(fields?:Record<string,unknown>)=>{const query=(inner.select as Function)(fields),from=query.from.bind(query);query.from=(table:unknown)=>{const builder=from(table),then=builder.then.bind(builder);builder.then=(resolve:Function,reject:Function)=>then(async(rows:unknown)=>{const entry={transaction,...builder.toSQL()};events.push(entry);await hook?.(entry);return rows;}).then(resolve,reject);return builder;};return query;};
++        if(prop==='update'||prop==='insert')return(table:unknown)=>{if(table===issueThreadInteractions){questionWritten=true;events.push({transaction,sql:'question write',params:[]});}return value.call(inner,table);};
++        return typeof value==='function'?value.bind(inner):value;
++      }}) as unknown as Db));
++      if(questionWritten)await afterCommit?.();return value;
++    };}});
++  }
++  it.each(['inactive update','missing insert','delete reinsert'] as const)('native cancellation wins before %s and source locks share its actual executor',async kind=>{
++    const f=await fixture();if(kind==='missing insert')await db.delete(companyMemberships).where(eq(companyMemberships.id,f.aliceMember.id));
++    const row=await metadata(f),reached=deferred(),release=deferred(),events:Trace[]=[];let paused=false;
++    const connection=traced(events,async entry=>{if(!paused&&entry.sql.includes('"issue_thread_interactions"')&&entry.sql.endsWith('for share')){paused=true;reached.resolve();await release.promise;}});
++    const response=cancel(f,row.updatedAt,app(connection));
++    const running=response.then(value=>value);await reached.promise;
++    const writer=kind==='delete reinsert'?db.transaction(async tx=>{await tx.delete(companyMemberships).where(eq(companyMemberships.id,f.aliceMember.id));await accessService(tx as unknown as Db).ensureMembership(f.company.id,'user',f.alice.userId);}):accessService(db).ensureMembership(f.company.id,'user',f.alice.userId);
++    try{await waitForLock('company_memberships');}finally{release.resolve();}
++    expect((await running).status).toBe(200);await writer;
++    const mutation=events.find(entry=>entry.sql==='question write')!;expect(mutation).toBeDefined();
++    const sequence=events.filter(entry=>entry.transaction===mutation.transaction),company=sequence.findIndex(entry=>entry.sql.includes('"companies"')&&entry.sql.endsWith('for update'));
++    const member=sequence.findIndex(entry=>entry.sql.includes('"company_memberships"')&&entry.sql.endsWith('for share')&&entry.params.includes(f.aliceMember.id));
++    expect(company).toBe(0);if(kind!=='missing insert')expect(member).toBeGreaterThan(company);
++    expect(sequence.filter(entry=>entry.sql.endsWith('for share')).length).toBeGreaterThan(4);
++    const lastPredicate=sequence.findLastIndex(entry=>entry.sql.includes('::timestamptz'));expect(lastPredicate).toBeLessThan(sequence.findIndex(entry=>entry.sql==='question write'));expect(lastPredicate).toBeGreaterThan(member);
++    const inspection=await request(app()).get(`/api/issues/${f.issue.id}/question-recovery?interactionId=${f.q.id}`).set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`);expect(inspection.body.items[0].status).toBe('cancelled');
++  });
++  it.each(['inactive update','missing insert','delete reinsert'] as const)('refuses with no effects when native %s commits before source acceptance',async kind=>{
++    const f=await fixture();if(kind==='missing insert')await db.delete(companyMemberships).where(eq(companyMemberships.id,f.aliceMember.id));
++    const row=await metadata(f),reached=deferred(),release=deferred();
++    const writer=Promise.allSettled([db.transaction(async tx=>{if(kind==='delete reinsert')await tx.delete(companyMemberships).where(eq(companyMemberships.id,f.aliceMember.id));await accessService(tx as unknown as Db).ensureMembership(f.company.id,'user',f.alice.userId);reached.resolve();await release.promise;})]);
++    await reached.promise;
++    const running=cancel(f,row.updatedAt).then(value=>value);
++    try{await waitForLock(kind==='inactive update'?'company_memberships':'companies');}finally{release.resolve();}
++    expect((await writer)[0]).toMatchObject({status:'fulfilled'});expect((await running).status).toBe(404);await noCancellation(f);
++  });
++  it.each(['accountability','stewardship','project','credential'] as const)('refuses %s changed while actual source acceptance waits',async kind=>{
++    const f=await fixture(),other=await human();await accessService(db).ensureMembership(f.company.id,'user',other.userId);
++    if(kind==='stewardship'){await agentService(db).update(f.agent.id,{autonomy:'stewarded'});await agentStewardshipService(db).assign(f.company.id,{agentId:f.agent.id,userId:f.bob.userId,assignedByUserId:f.bob.userId});}
++    let projectId:string|undefined;
++    if(kind==='project'){await db.update(companyMemberships).set({membershipRole:'member'}).where(eq(companyMemberships.companyId,f.company.id));const[p]=await db.insert(projects).values({companyId:f.company.id,name:'Restricted',visibility:'restricted',createdByUserId:'other'}).returning();projectId=p.id;await db.update(issues).set({projectId:p.id}).where(eq(issues.id,f.issue.id));await db.insert(projectAccess).values({projectId:p.id,principalType:'user',principalId:f.bob.userId,grantedByUserId:'other'});}
++    const row=await metadata(f),reached=deferred(),release=deferred();let writer:Promise<PromiseSettledResult<unknown>[]>|undefined;
++    // Start after middleware has authenticated and updated lastUsedAt. Its wait is not our proof.
++    const application=app(db,async(_req,_res,next)=>{writer=Promise.allSettled([db.transaction(async tx=>{
++      const executor=tx as unknown as Db;
++      if(kind==='accountability')await agentService(executor).update(f.agent.id,{accountableUserId:other.userId});
++      if(kind==='stewardship')await agentStewardshipService(executor).transfer(f.company.id,f.agent.id,{userId:other.userId,transferredByUserId:f.bob.userId},{executor,publications:[]});
++      if(kind==='project')await tx.delete(projectAccess).where(eq(projectAccess.projectId,projectId!));
++      if(kind==='credential')await boardAuthService(executor).revokeBoardApiKey(f.bob.key.id);
++      reached.resolve();await release.promise;
++    })]);await reached.promise;next();});
++    const running=cancel(f,row.updatedAt,application).then(value=>value);await reached.promise;
++    try{await waitForLock(kind==='credential'?'board_api_keys':kind==='project'?'project_access':kind==='stewardship'?'companies':'agents');}finally{release.resolve();}
++    expect((await writer)![0]).toMatchObject({status:'fulfilled'});expect((await running).status).toBeGreaterThanOrEqual(400);await noCancellation(f);
++  });
++  it('checks the original credential deadline after the final actual timestamp SELECT immediately before native cancellation write',async()=>{
++    const f=await fixture(),row=await metadata(f),expiry=new Date(Date.now()+1000),events:Trace[]=[];await db.update(boardApiKeys).set({expiresAt:expiry}).where(eq(boardApiKeys.id,f.bob.key.id));let observed=false;
++    const connection=traced(events,async entry=>{if(entry.sql.includes('::timestamptz')){observed=true;await new Promise(done=>setTimeout(done,Math.max(0,expiry.getTime()-Date.now()+10)));}});
++    expect((await cancel(f,row.updatedAt,app(connection))).status).toBe(401);expect(observed).toBe(true);expect(events.some(entry=>entry.sql==='question write')).toBe(false);await noCancellation(f);
++  });
++  it.each(['native','foundation'] as const)('keeps committed %s cancellation unknown after lost transaction acknowledgement, with safe current inspection and no replay',async transport=>{
++    const f=await fixture(),row=await metadata(f),target={kind:'company',companyId:f.company.id},events:Trace[]=[];
++    const connection=traced(events,undefined,async()=>{throw new Error('lost cancellation acknowledgement');});
++    const prepared=transport==='foundation'?await request(app()).post('/human/prepare').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,operationId:'human_questions.recovery.cancel',version:1,input:{issueId:f.issue.id,interactionId:f.q.id,expectedUpdatedAt:row.updatedAt}}):null;
++    const result=prepared?await request(app(connection)).post('/human/confirm').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,handle:prepared.body.handle}):await cancel(f,row.updatedAt,app(connection));
++    expect(result.status,JSON.stringify(result.body)).toBe(409);expect(JSON.stringify(result.body)).not.toContain('SECRET');
++    if(prepared){expect(result.body.details.status).toBe('recovery_required');const replay=await request(app()).post('/human/confirm').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,handle:prepared.body.handle});expect(replay.status).toBe(409);}
++    else expect(result.body.details.persistenceOutcome).toBe('unknown');
++    const inspect=await request(app()).get(`/api/issues/${f.issue.id}/question-recovery?interactionId=${f.q.id}`).set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`);expect(inspect.body.items[0]).toEqual({issueId:f.issue.id,interactionId:f.q.id,status:'cancelled',replacementRequired:true});
++    expect(events.filter(entry=>entry.sql==='question write')).toHaveLength(1);expect((await db.select().from(activityLog).where(eq(activityLog.companyId,f.company.id))).filter(row=>row.action==='issue.thread_interaction_cancelled')).toHaveLength(1);
++  });
++  it('keeps a known cancellation applied when current metadata authority disappears before output, exposing action state only',async()=>{
++    const f=await fixture(),row=await metadata(f),target={kind:'company',companyId:f.company.id},other=await human();await accessService(db).ensureMembership(f.company.id,'user',other.userId);
++    const prepared=await request(app()).post('/human/prepare').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,operationId:'human_questions.recovery.cancel',version:1,input:{issueId:f.issue.id,interactionId:f.q.id,expectedUpdatedAt:row.updatedAt}});expect(prepared.status).toBe(200);
++    const connection=traced([],undefined,async()=>{await agentService(db).update(f.agent.id,{accountableUserId:other.userId});});
++    const result=await request(app(connection)).post('/human/confirm').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,handle:prepared.body.handle});expect(result.status).toBe(409);expect(result.body.details).not.toHaveProperty('result');expect(JSON.stringify(result.body)).not.toContain('SECRET');
++    expect((await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id,f.q.id)))[0].status).toBe('cancelled');
++    const repeated=await request(app()).post('/human/confirm').set('Connection', 'close').set('authorization',`Bearer ${f.bob.token}`).send({target,handle:prepared.body.handle});expect(repeated.status).toBe(409);expect(repeated.body.details).not.toHaveProperty('result');
++  });
++
++  it.each(['unenrolled','unassigned'] as const)('retains Branch B for a later %s issue, using the same prior workforce owner selection', async kind => {
++    const f = await fixture();
++    const [next] = await db.insert(agents).values({companyId:f.company.id,name:'Unenrolled reassignment',adapterType:'codex_local'}).returning();
++    await db.update(issues).set({assigneeAgentId:kind==='unassigned'?null:next.id}).where(eq(issues.id,f.issue.id));
++    const row = await metadata(f); expect((await cancel(f,row.updatedAt)).status).toBe(200);
++    const replacement=await request(app()).post(`/api/issues/${f.issue.id}/question-recovery/${f.q.id}/replace`).set('Connection','close').set('authorization',`Bearer ${f.bob.token}`).send({});
++    expect(replacement.status).toBe(201);expect(replacement.body.payload).toMatchObject({answerOwnerUserId:f.bob.userId,workforceAgentId:f.agent.id});
++  });
++  it('lets a restored former owner inspect a cancelled receipt only after becoming current canonical owner again', async () => {
++    const f=await fixture(),row=await metadata(f);expect((await cancel(f,row.updatedAt)).status).toBe(200);
++    await accessService(db).ensureMembership(f.company.id,'user',f.alice.userId);
++    await agentService(db).update(f.agent.id,{accountableUserId:f.alice.userId});
++    const result=await request(app()).get(`/api/issues/${f.issue.id}/question-recovery?interactionId=${f.q.id}`).set('Connection','close').set('authorization',`Bearer ${f.alice.token}`);
++    expect(result.status).toBe(200);expect(result.body.items).toEqual([{issueId:f.issue.id,interactionId:f.q.id,status:'cancelled',replacementRequired:true}]);
++  });
++  it('refuses the ID-only replacement adapter for ordinary ownerless cards', async () => {
++    const f=await fixture();const[job]=await db.insert(issues).values({companyId:f.company.id,title:'Ordinary job'}).returning();
++    const svc=issueThreadInteractionService(db),q=await svc.create(job,{kind:'ask_user_questions',payload:{version:1,questions:[{id:'ordinary',prompt:'Ordinary?',selectionMode:'text',options:[],required:true}]}},{userId:f.bob.userId});
++    await svc.cancelQuestions(job,q.id,{}, {userId:f.bob.userId});
++    const count=(await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId,job.id))).length;
++    const result=await request(app()).post(`/api/issues/${job.id}/question-recovery/${q.id}/replace`).set('Connection','close').set('authorization',`Bearer ${f.bob.token}`).send({});
++    expect(result.status).toBe(403);expect(await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId,job.id))).toHaveLength(count);
++  });
++  it.each(['accountability','stewardship','project','credential'] as const)('commits cancellation before a later %s writer without retaining private output authority',async kind=>{
++    const f=await fixture(),other=await human();await accessService(db).ensureMembership(f.company.id,'user',other.userId);
++    if(kind==='stewardship'){await agentService(db).update(f.agent.id,{autonomy:'stewarded'});await agentStewardshipService(db).assign(f.company.id,{agentId:f.agent.id,userId:f.bob.userId,assignedByUserId:f.bob.userId});}
++    let projectId:string|undefined;
++    if(kind==='project'){await db.update(companyMemberships).set({membershipRole:'member'}).where(eq(companyMemberships.companyId,f.company.id));const[p]=await db.insert(projects).values({companyId:f.company.id,name:'Restricted',visibility:'restricted',createdByUserId:'other'}).returning();projectId=p.id;await db.update(issues).set({projectId:p.id}).where(eq(issues.id,f.issue.id));await db.insert(projectAccess).values({projectId:p.id,principalType:'user',principalId:f.bob.userId,grantedByUserId:'other'});}
++    const row=await metadata(f),reached=deferred(),release=deferred();let paused=false;
++    const connection=traced([],async entry=>{if(!paused&&entry.sql.includes('"issue_thread_interactions"')&&entry.sql.endsWith('for share')){paused=true;reached.resolve();await release.promise;}});
++    const running=cancel(f,row.updatedAt,app(connection)).then(value=>value);await reached.promise;
++    const writer=Promise.allSettled([kind==='accountability'?agentService(db).update(f.agent.id,{accountableUserId:other.userId}):kind==='stewardship'?agentStewardshipService(db).transfer(f.company.id,f.agent.id,{userId:other.userId,transferredByUserId:f.bob.userId}):kind==='credential'?boardAuthService(db).revokeBoardApiKey(f.bob.key.id):db.delete(projectAccess).where(eq(projectAccess.projectId,projectId!)).then(value=>value)]);
++    try{await waitForLock(kind==='credential'?'board_api_keys':kind==='project'?'project_access':kind==='stewardship'?'companies':'agents');}finally{release.resolve();}
++    const result=await running;const [outcome]=await writer;expect(outcome, JSON.stringify(outcome)).toMatchObject({status:'fulfilled'});expect([200,401,403,404,409]).toContain(result.status);expect(JSON.stringify(result.body)).not.toContain('SECRET');
++    expect((await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id,f.q.id)))[0].status).toBe('cancelled');
++    expect((await db.select().from(activityLog).where(eq(activityLog.companyId,f.company.id))).filter(row=>row.action==='issue.thread_interaction_cancelled')).toHaveLength(1);
++    const inspect=await request(app()).get(`/api/issues/${f.issue.id}/question-recovery?interactionId=${f.q.id}`).set('Connection','close').set('authorization',`Bearer ${f.bob.token}`);expect(inspect.status).toBeGreaterThanOrEqual(400);expect(JSON.stringify(inspect.body)).not.toContain('SECRET');
++  });
++  it('seals the prepared owner source identities even if a changed membership remains unavailable',async()=>{
++    const f=await fixture(),row=await metadata(f),target={kind:'company',companyId:f.company.id};
++    const prepare=await request(app()).post('/human/prepare').set('Connection','close').set('authorization',`Bearer ${f.bob.token}`).send({target,operationId:'human_questions.recovery.cancel',version:1,input:{issueId:f.issue.id,interactionId:f.q.id,expectedUpdatedAt:row.updatedAt}});expect(prepare.status).toBe(200);
++    await db.update(companyMemberships).set({status:'suspended'}).where(eq(companyMemberships.id,f.aliceMember.id));
++    const confirmed=await request(app()).post('/human/confirm').set('Connection','close').set('authorization',`Bearer ${f.bob.token}`).send({target,handle:prepare.body.handle});expect(confirmed.status).toBe(409);await noCancellation(f);
++  });
++
++  it('refuses unavailable current template binding even when prior enrollment identifiers match',async()=>{
++    const f=await fixture();
++    await db.update(workforceEnrollments).set({templateId:'unavailable-template'}).where(eq(workforceEnrollments.agentId,f.agent.id));
++    await db.update(issueThreadInteractions).set({payload:{...f.q.payload,workforceTemplateId:'unavailable-template'}}).where(eq(issueThreadInteractions.id,f.q.id));
++    const result=await request(app()).get(`/api/issues/${f.issue.id}/question-recovery?interactionId=${f.q.id}`).set('Connection','close').set('authorization',`Bearer ${f.bob.token}`);
++    expect(result.status).toBe(404);await noCancellation(f);
++  });
++
++  it('does not serialize malformed private persisted values through recovery errors',async()=>{
++    const f=await fixture();const payload=JSON.parse(JSON.stringify(f.q.payload));payload.questions[0].selectionMode='SECRET_PRIVATE_INVALID';await db.update(issueThreadInteractions).set({payload}).where(eq(issueThreadInteractions.id,f.q.id));
++    const targeted=await request(app()).get(`/api/issues/${f.issue.id}/question-recovery?interactionId=${f.q.id}`).set('Connection','close').set('authorization',`Bearer ${f.bob.token}`);
++    expect(JSON.stringify(targeted.body)).not.toContain('SECRET_PRIVATE_INVALID');expect(targeted.status).toBe(404);
++  });
++
++});
+diff --git a/server/src/onboarding-assets/ceo/AGENTS.md b/server/src/onboarding-assets/ceo/AGENTS.md
+index 8c681aaaf8e022bcdc8d7d77bc9cec852b04b0e6..bea196ca3eabbd1a2c894b9624515c70d1e72fd1 100644
+--- a/server/src/onboarding-assets/ceo/AGENTS.md
++++ b/server/src/onboarding-assets/ceo/AGENTS.md
+@@ -60,3 +60,10 @@ bundle's complete current/historical tree-source authority, atomic accepted DB
+ changes, postcommit runtime uncertainty/readback, final pause admission and
+ private historical deletion refusal. No separate persona, replay or repair grant.
+ /AgentDash: exact-tree-acceptance -->
++
++<!-- AgentDash: inactive-question-owner-recovery — DO NOT REMOVE OR REORDER THIS BLOCK
++This retired persona stays inert. The unified default worker bundle owns safe metadata,
++human-confirmed cancellation, separate canonical replacement and genuine-answer recovery.
++Dependent work remains held; uncertain outcomes require inspection without replay.
++No leadership label grants private-question access or human impersonation authority.
++/AgentDash: inactive-question-owner-recovery -->
+diff --git a/server/src/onboarding-assets/chief_of_staff/AGENTS.md b/server/src/onboarding-assets/chief_of_staff/AGENTS.md
+index e7bb34ff344ddc1a3ec43282c919a82e85358b36..a3685453919d0e8555e8378e269b2ff26ed33b8d 100644
+--- a/server/src/onboarding-assets/chief_of_staff/AGENTS.md
++++ b/server/src/onboarding-assets/chief_of_staff/AGENTS.md
+@@ -60,3 +60,10 @@ bundle's complete current/historical tree-source authority, atomic accepted DB
+ changes, postcommit runtime uncertainty/readback, final pause admission and
+ private historical deletion refusal. No separate persona, replay or repair grant.
+ /AgentDash: exact-tree-acceptance -->
++
++<!-- AgentDash: inactive-question-owner-recovery — DO NOT REMOVE OR REORDER THIS BLOCK
++This retired persona stays inert. The unified default worker bundle owns safe metadata,
++human-confirmed cancellation, separate canonical replacement and genuine-answer recovery.
++Dependent work remains held; uncertain outcomes require inspection without replay.
++No leadership label grants private-question access or human impersonation authority.
++/AgentDash: inactive-question-owner-recovery -->
+diff --git a/server/src/onboarding-assets/default/AGENTS.md b/server/src/onboarding-assets/default/AGENTS.md
+index cd58123168ec6836afae9f1ab3da81c608baed96..289c33b8697b023c0bee90f0b623cedc42e9aaae 100644
+--- a/server/src/onboarding-assets/default/AGENTS.md
++++ b/server/src/onboarding-assets/default/AGENTS.md
+@@ -505,7 +505,7 @@ Humans review proposed facts through `GET /api/companies/:companyId/workforce/pr
+ 
+ <!-- AgentDash: human-control-transport — DO NOT REMOVE OR REORDER THIS BLOCK -->
+ The named human may use the trusted local `human` MCP toolset through `/api/human-control` to read workforce state and resolve the same issue/interaction/question IDs. This human channel uses that person's existing board key, explicit company selection, and prepare/readback/confirm; it does not grant a worker human authority. Never request, copy or use a human key, forge human consent, impersonate the pinned answer owner, or treat `personSaid` as proof. A card OR comment can present the requested input, but only the canonical named-owner response resolves it. Private answers stay private unless the eligible owner explicitly selects company sharing. Cancelled required questions still hold dependent work; replacement retains their required IDs and fact keys and resolves the current named owner. A transport result of `recovery_required` means the effect is uncertain: inspect the referenced canonical resource and report it instead of blindly repeating the action. Existing worker proposal, learning, approval, quota and permission rules still apply.
+-Current human authority is rechecked for reads, preparation, confirmation, returned results and recovery references. A readable first-job issue or administrator role does not grant access to someone else's private question or answer. Human readiness can be unavailable when a contributing private source is unreadable; do not substitute a guessed readiness result. Ordinary ownerless non-workforce cards retain their native behavior. If a pinned question owner becomes inactive, report the unresolved ownership blocker; do not impersonate that owner or invent a replacement answer.
++Current human authority is rechecked for reads, preparation, confirmation, returned results and recovery references. A readable first-job issue or administrator role does not grant access to someone else's private question or answer. Human readiness can be unavailable when a contributing private source is unreadable; do not substitute a guessed readiness result. Ordinary ownerless non-workforce cards retain their native behavior. If a pinned question owner becomes inactive, direct the current accountable human to the separate safe recovery workflow below; do not impersonate that owner or invent a replacement answer.
+ Enrollment and skill installation are separate accepted stages. Files or catalog entries may remain after a later authorization refusal or installation failure. Inspect the existing enrollment, catalog and agent skill assignment through authorized reads before retrying; a consumed handle or saved file alone does not prove installation completed. An uncertain assignment acknowledgment must not trigger automatic replay or cleanup. Known accepted first-job and question continuations still use ordinary runtime holds, budgets and quota gates.
+ <!-- /AgentDash: human-control-transport -->
+ 
+@@ -548,3 +548,8 @@ Accepted tree hold/status/release and matching unclaimed wake-request changes co
+ 
+ An active pause is checked again at final enqueue and queued-run admission. Only verified canonical comment interactions retain the existing interaction exception; a `treeHoldInteraction` field cannot grant it. Resume selects pause holds rooted in the current subtree; restore selects active cancel holds at the exact requested root. These rules do not add recovery authority or resolve an original uncertain workspace/routine run.
+ <!-- /AgentDash: exact-tree-acceptance -->
++
++<!-- AgentDash: inactive-question-owner-recovery — DO NOT REMOVE OR REORDER THIS BLOCK -->
++If a required question's pinned owner is no longer an active company member, the current named accountable human can inspect safe metadata through `GET /api/issues/:issueId/question-recovery` (even when readiness is private). The human explicitly confirms `POST /api/issues/:issueId/question-recovery/:interactionId/cancel` with `{ "expectedUpdatedAt": "<metadata timestamp>" }`, then separately creates the canonical replacement through `POST /api/issues/:issueId/question-recovery/:interactionId/replace` with `{}`. This grants no private old-question read or answer override. The replacement belongs to the current human, who must provide a genuine answer through the usual response endpoint. Dependent work stays held after cancellation; independent work can continue.
++The same named-human bridge exposes version1 `human_questions.recovery.list` and `human_questions.recovery.cancel` with explicit company selection and prepare/readback/confirm, followed by existing `human_questions.replace` and `human_questions.respond`. Workers may explain this workflow in a card OR comment but must not impersonate a human or confirm on their behalf. No knowledge is published by cancellation. If the response is lost or marked uncertain, inspect metadata with `interactionId` and report uncertainty; do not repeat the mutation. Empty or refused inspection does not prove that cancellation failed. Current project, membership and canonical accountability must still authorize every step.
++<!-- /AgentDash: inactive-question-owner-recovery -->
+diff --git a/server/src/routes/human-control.ts b/server/src/routes/human-control.ts
+index e3f74a4a8a0f6360bcd0c5500b83c621ec9ecb70..3bdab2bdec2f7ee335a6b7fa36b898cb3d482bd8 100644
+--- a/server/src/routes/human-control.ts
++++ b/server/src/routes/human-control.ts
+@@ -1,3 +1,4 @@
++import { recoveryHumanOperations } from '../services/human-control/question-recovery.js';
+ import { ownershipHumanOperations } from "../services/human-control/ownership.js";
+ import { questionHumanOperations } from "../services/human-control/questions.js";
+ // AgentDash: trusted local human bridge; canonical REST authority is unchanged.
+@@ -10,7 +11,7 @@ import { heartbeatService } from '../services/heartbeat.js';
+ export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnType<typeof heartbeatService>, 'wakeup'> } = {}) {
+   const router = Router();
+   const heartbeat = options.heartbeat ?? heartbeatService(db);
+-  const svc = humanControlService(db, [...workforceHumanOperations(heartbeat), ...questionHumanOperations(heartbeat), ...ownershipHumanOperations()]);
++  const svc = humanControlService(db, [...workforceHumanOperations(heartbeat), ...questionHumanOperations(heartbeat), ...ownershipHumanOperations(), ...recoveryHumanOperations()]);
+   router.get('/identity', async (req, res) => res.json(await svc.identity(req)));
+   router.post('/discover', async (req, res) => {
+     const input = humanDiscoverRequestSchema.parse(req.body);
+diff --git a/server/src/routes/issues.ts b/server/src/routes/issues.ts
+index 2143f8ee714f0dbbe232f54434cb4dbc5ee3bb16..15dab8465895d655af35fcfd7ab1ba1a1d802ceb 100644
+--- a/server/src/routes/issues.ts
++++ b/server/src/routes/issues.ts
+@@ -1,3 +1,6 @@
++import { questionRecoveryCancelInputSchema, questionRecoveryListInputSchema, questionRecoveryReferenceSchema } from '@paperclipai/shared';
++import { cancelQuestionRecovery, listQuestionRecovery } from '../services/human-control/question-recovery.js';
++import { questionReplacement } from '../services/human-control/authority.js';
+ import { issueCurrentAuthority } from "../services/issue-current-authority.js";
+ import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
+ import {
+@@ -2286,6 +2289,47 @@ export function issueRoutes(
+   async function currentQuestion(req: Request, authority: ReturnType<typeof foundationAuthority>, issue: { id: string; companyId: string }, interactionId: string) {
+     return protectedQuestions(req, authority, issue.companyId, 'human_questions.read', { issueId: issue.id, interactionId }, executor => issueThreadInteractionService(executor).getById(interactionId));
+   }
++  // AgentDash: dedicated safe metadata/receipt routes preserve the full interaction API.
++  router.get('/issues/:id/question-recovery', async (req, res) => {
++    const authority = foundationAuthority(req);
++    const input = questionRecoveryListInputSchema.parse({ ...req.query, issueId: req.params.id,
++      ...(req.query.limit === undefined ? {} : { limit: Number(req.query.limit) }) });
++    const issue = await svc.getById(input.issueId);
++    if (!issue) throw notFound('Issue not found');
++    const result = await protectedQuestions(req, authority, issue.companyId, 'human_questions.recovery.list', input,
++      executor => listQuestionRecovery(executor, req, issue.companyId, input));
++    res.json(result);
++  });
++  router.post('/issues/:id/question-recovery/:interactionId/cancel', async (req, res) => {
++    const authority = foundationAuthority(req);
++    const input = questionRecoveryCancelInputSchema.parse({ ...req.body, issueId: req.params.id, interactionId: req.params.interactionId });
++    const issue = await svc.getById(input.issueId);
++    if (!issue) throw notFound('Issue not found');
++    await protectedQuestions(req, authority, issue.companyId, 'human_questions.recovery.cancel', input,
++      (executor, acceptance, guards) => cancelQuestionRecovery(executor, req, issue.companyId, input, acceptance, guards), true);
++    const result = await protectedQuestions(req, authority, issue.companyId, 'human_questions.recovery.list', { issueId: input.issueId, interactionId: input.interactionId },
++      executor => listQuestionRecovery(executor, req, issue.companyId, { issueId: input.issueId, interactionId: input.interactionId }));
++    res.json(result.items[0]);
++  });
++  router.post('/issues/:id/question-recovery/:interactionId/replace', async (req, res) => {
++    const authority = foundationAuthority(req);
++    const input = questionRecoveryReferenceSchema.parse({ ...req.body, issueId: req.params.id, interactionId: req.params.interactionId });
++    const issue = await svc.getById(input.issueId);
++    if (!issue) throw notFound('Issue not found');
++    const value = await protectedQuestions(req, authority, issue.companyId, 'human_questions.replace', input, async (executor, acceptance, guards) => {
++      const prior = await issueThreadInteractionService(executor).getById(input.interactionId);
++      if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled' || prior.companyId !== issue.companyId || prior.issueId !== issue.id) throw notFound('Cancelled question not found');
++      if (!req.actor.userId?.trim() || !prior.payload.workforceAgentId) throw forbidden('A named workforce question owner is required');
++      const body = questionReplacement(prior);
++      const actor = { userId: req.actor.userId! };
++      const resolved = await issueThreadInteractionService(executor).previewCreate(issue, body, actor);
++      if (resolved.kind !== 'ask_user_questions' || resolved.payload.answerOwnerUserId !== actor.userId) throw forbidden('Only the current named answer owner may replace this question');
++      const created = await issueThreadInteractionService(executor).create(issue, body, actor, acceptance, guards);
++      acceptance.publications.push(await insertActivity(executor, { companyId: issue.companyId, actorType: 'user', actorId: actor.userId, action: 'issue.thread_interaction_created', entityType: 'issue', entityId: issue.id, details: { interactionId: created.id, interactionKind: created.kind, interactionStatus: created.status } }, guards.beforeWrite));
++      return created;
++    }, true);
++    res.status(201).json(await currentQuestion(req, authority, issue, value.id));
++  });
+   router.get("/issues/:id/interactions", async (req, res) => {
+     const authority = req.actor.type === 'board' ? foundationAuthority(req) : null;
+     const id = req.params.id as string;
+diff --git a/server/src/services/agent-creator-from-proposal.ts b/server/src/services/agent-creator-from-proposal.ts
+index 8e04ab468d383478fd6d1854bbc4f2bd23f6dd98..8e26d809e1c44c9b4117f71c8a04574cf5bde694 100644
+--- a/server/src/services/agent-creator-from-proposal.ts
++++ b/server/src/services/agent-creator-from-proposal.ts
+@@ -79,6 +79,9 @@ export function agentCreatorFromProposal(deps: Deps) {
+ // AgentDash: accepted-hire-recovery is inherited verbatim from the canonical default
+ // bundle: repair accepted IDs without replaying interview/plan confirmations.
+ // AgentDash: this remains the proposal creator's agent-facing prompt surface.
++// AgentDash: inactive-question-owner-recovery is inherited from the unified default bundle:
++// safe metadata, human-only confirmed cancellation, separate replacement/genuine answer,
++// continued dependent hold and uncertain-outcome inspection without replay or impersonation.
+ // AgentDash: human fact-review and target-update guidance remains in the canonical bundle.
+ // AgentDash: current-source authority, separate guarded skill stages and unknown-outcome
+ // recovery are inherited with human-control-transport; generated hires get no private-owner override.
+diff --git a/server/src/services/agent-stewardships.ts b/server/src/services/agent-stewardships.ts
+index 4f779f64c8f34fa4802fca02cc82cfe137fc0e34..f443b44453aa9184d2309beb453b1b45329d440d 100644
+--- a/server/src/services/agent-stewardships.ts
++++ b/server/src/services/agent-stewardships.ts
+@@ -7,6 +7,7 @@ import {
+   agentStewardships,
+   authUsers,
+   companyMemberships,
++  companies,
+   bridgeEndpoints,
+   humanChannelBindings,
+ } from "@paperclipai/db";
+@@ -396,6 +397,15 @@ export function agentStewardshipService(db: Db) {
+           throw conflict("Agent stewardship transfer already in progress");
+         }
+ 
++        // AgentDash: take the successor INSERT's existing company FK lock before
++        // membership/agent locks, matching company-first source authorization.
++        const parent = await tx.execute(sql`
++          select ${companies.id} from ${companies}
++          where ${companies.id} = ${companyId}
++          for key share
++        `);
++        if (resultRows(parent).length === 0) throw notFound("Company not found");
++
+         await lockActiveUserMember(tx, companyId, input.userId);
+         await lockTransferCompanyAgent(tx, companyId, agentId);
+ 
+diff --git a/server/src/services/human-control/authority.ts b/server/src/services/human-control/authority.ts
+index cc30b19f05fc43e31ee1c8ab15f95c227a3375f5..07dd2ca9137f9fb1fea8a1cd793497ede599af39 100644
+--- a/server/src/services/human-control/authority.ts
++++ b/server/src/services/human-control/authority.ts
+@@ -16,6 +16,7 @@ import { agentAccountabilityService } from '../agent-accountability.js';
+ import { getDefaultCompanyGoal } from '../goals.js';
+ import { workforceService, type WorkforceSkillStages } from '../workforce.js';
+ import { boardAuthService } from '../board-auth.js';
++import { listQuestionRecovery, recoveryQuestion } from './question-recovery.js';
+ import { waitingOnYouService } from '../waiting-on-you.js';
+ import type { WorkforceQuestionDependency } from '../workforce-inputs.js';
+ 
+@@ -222,6 +223,19 @@ export function foundationAuthority(req: Request) {
+           }
+         }
+       }
++    } else if (op === 'human_questions.recovery.list' || op === 'human_questions.recovery.cancel') {
++      await source.member(req.actor.userId);
++      await source.issue(input.issueId as string);
++      const observe = async (value: Awaited<ReturnType<typeof recoveryQuestion>>) => {
++        row(state, '24:interaction', issueThreadInteractions, value.q.id);
++        // All actually consumed current enrollment rows, without unrelated goal/job traversal.
++        if (value.selection.persistedIssue.assigneeAgentId) await source.enrollmentRow(value.selection.persistedIssue.assigneeAgentId);
++        await source.enrollmentRow(value.enrollment.agentId);
++        await source.ownerFacts(value.enrollment.agentId);
++        if (value.oldMembership) row(state, '09:membership', companyMemberships, value.oldMembership.id);
++      };
++      if (op === 'human_questions.recovery.list') await listQuestionRecovery(executor, req, companyId, input, observe);
++      else await observe(await recoveryQuestion(executor, req, companyId, input.issueId as string, input.interactionId as string, selection.recovery));
+     } else if (op === 'human_questions.pending.list') {
+       const pending = await waitingOnYouService(executor).pendingQuestions(companyId, req.actor, { limit: 2147483647 }, req);
+       for (const value of pending.items) await source.question(value.interactionId, value.issueId);
+@@ -346,6 +360,8 @@ export function foundationAuthority(req: Request) {
+         async assertSource(supplied: Db, issue: { id: string; companyId: string }) {
+           if (supplied !== executor || issue.companyId !== selection.companyId) throw conflict('Current authority executor changed');
+           await sources(executor, selection, state).issue(issue.id);
++          // Same sealed collection after native target-lock/validation awaits; never stage again.
++          if (selection.operationId === 'human_questions.recovery.cancel') await collect(executor, selection, state);
+         },
+         async seal() { await collect(executor, selection, state); identity.checkTime(); },
+         async visibleQuestion(id: string, issueId: string) {
+diff --git a/server/src/services/human-control/question-recovery.ts b/server/src/services/human-control/question-recovery.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0867c95f9a7b6fdbdddfb2efdba756c44a99594
+--- /dev/null
++++ b/server/src/services/human-control/question-recovery.ts
+@@ -0,0 +1,120 @@
++// AgentDash: narrowly authorized metadata/cancellation; private rows never leave this service.
++import type { Request } from 'express';
++import { and, asc, eq, isNull, sql } from 'drizzle-orm';
++import { agents, agentStewardships, companyMemberships, issues, issueThreadInteractions, projects, workforceEnrollments, type Db } from '@paperclipai/db';
++import { resolveWorkforceTemplate, humanJsonSchema, questionRecoveryCancelInputSchema, questionRecoveryListInputSchema, questionRecoveryListSchema, questionRecoveryReceiptSchema,
++  type AskUserQuestionsInteraction, type QuestionRecoveryList, type QuestionRecoveryReceipt } from '@paperclipai/shared';
++import { badRequest, conflict, forbidden, notFound } from '../../errors.js';
++import { assertProjectVisible } from '../../routes/visibility.js';
++import { hydrateInteraction, issueThreadInteractionService, resolveQuestionCreateInput, selectWorkforceQuestionOwner, type QuestionWriteGuards } from '../issue-thread-interactions.js';
++import { insertActivity } from '../activity-log.js';
++import type { ActivityAcceptance } from '../workforce.js';
++import type { HumanOperation } from '../human-control.js';
++import { questionReplacement } from './authority.js';
++import { humanCompany } from './workforce.js';
++
++type Reader = Pick<Db, 'select'>;
++// Preserve database precision; Date's millisecond projection cannot pin a microsecond row.
++const exactUpdatedAt = sql<string>`to_char(${issueThreadInteractions.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
++export async function recoveryIssue(reader: Reader, req: Request, companyId: string, issueId: string) {
++  if (req.actor.type !== 'board' || !req.actor.userId?.trim()) throw forbidden('Named active human required');
++  const [member] = await reader.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, req.actor.userId), eq(companyMemberships.status, 'active')));
++  if (!member) throw forbidden('Named active company member required');
++  const [issue] = await reader.select().from(issues).where(and(eq(issues.companyId, companyId), eq(issues.id, issueId)));
++  if (!issue || issue.hiddenAt) throw notFound('Issue not found');
++  if (issue.projectId) {
++    const [project] = await reader.select().from(projects).where(and(eq(projects.id, issue.projectId), eq(projects.companyId, companyId)));
++    if (!project) throw notFound('Project not found');
++    await assertProjectVisible(reader, req, project);
++  }
++  return issue;
++}
++export async function recoveryQuestion(reader: Reader, req: Request, companyId: string, issueId: string, interactionId: string, allowCancelled = false) {
++  const issue = await recoveryIssue(reader, req, companyId, issueId);
++  const [stored] = await reader.select({ row: issueThreadInteractions, updatedAt: exactUpdatedAt }).from(issueThreadInteractions).where(and(eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.issueId, issue.id), eq(issueThreadInteractions.id, interactionId)));
++  if (!stored || stored.row.kind !== 'ask_user_questions') throw notFound('Recovery question not found');
++  let q: AskUserQuestionsInteraction;
++  try { q = hydrateInteraction(stored.row) as AskUserQuestionsInteraction; }
++  catch { throw notFound('Recovery question not found'); } // Persisted private validation values must not become public errors.
++  if ((q.status !== 'pending' && !(allowCancelled && q.status === 'cancelled')) || !q.payload.answerOwnerUserId || (q.status === 'pending' && q.payload.answerOwnerUserId === req.actor.userId) || !q.payload.workforceAgentId || !q.payload.questions.some(value => value.required)) throw notFound('Recovery question not found');
++  const selection = await selectWorkforceQuestionOwner(reader, issue, q.payload);
++  if (!selection.agentId || selection.owner !== req.actor.userId || ['done','cancelled'].includes(issue.status)) throw notFound('Recovery question not found');
++  const [enrollment] = await reader.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, companyId), eq(workforceEnrollments.agentId, selection.agentId)));
++  if (!enrollment || !resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion) || (selection.branch === 'prior' && (enrollment.id !== q.payload.workforceEnrollmentId || enrollment.templateId !== q.payload.workforceTemplateId || enrollment.templateVersion !== q.payload.workforceTemplateVersion))) throw notFound('Recovery question not found');
++  // A cancelled receipt depends on current replacement authority, not the former membership.
++  const [oldMembership] = q.status === 'pending' ? await reader.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, 'user'), eq(companyMemberships.principalId, q.payload.answerOwnerUserId))) : [];
++  if (q.status === 'pending' && oldMembership?.status === 'active') throw notFound('Recovery question not found');
++  if (q.status === 'cancelled') {
++    const next = await resolveQuestionCreateInput(reader, issue, questionReplacement(q), { userId: req.actor.userId });
++    if (next.kind !== 'ask_user_questions' || next.payload.answerOwnerUserId !== req.actor.userId) throw notFound('Recovery question not found');
++  }
++  const [ownerAgent] = await reader.select({ id: agents.id, accountableUserId: agents.accountableUserId, autonomy: agents.autonomy, updatedAt: agents.updatedAt }).from(agents).where(and(eq(agents.companyId, companyId), eq(agents.id, selection.agentId)));
++  if (!ownerAgent) throw notFound('Recovery question not found');
++  const stewardships = await reader.select({ id: agentStewardships.id, userId: agentStewardships.userId, updatedAt: agentStewardships.updatedAt }).from(agentStewardships).where(and(eq(agentStewardships.companyId, companyId), eq(agentStewardships.agentId, selection.agentId), isNull(agentStewardships.endedAt))).orderBy(asc(agentStewardships.id));
++  const ownerPin = { branch: selection.branch, owner: selection.owner, agent: { ...ownerAgent, updatedAt: ownerAgent.updatedAt.toISOString() }, stewardships: stewardships.map(value => ({ ...value, updatedAt: value.updatedAt.toISOString() })) };
++  return { issue, q, selection, enrollment, oldMembership, ownerPin, updatedAt: stored.updatedAt };
++}
++export function recoveryReceipt(issueId: string, interactionId: string): QuestionRecoveryReceipt {
++  return { issueId, interactionId, status: 'cancelled', replacementRequired: true };
++}
++export async function listQuestionRecovery(reader: Reader, req: Request, companyId: string, raw: Record<string, unknown>, observe?: (value: Awaited<ReturnType<typeof recoveryQuestion>>) => Promise<void>): Promise<QuestionRecoveryList> {
++  const input = questionRecoveryListInputSchema.parse(raw);
++  await recoveryIssue(reader, req, companyId, input.issueId);
++  const ids = input.interactionId ? [{ id: input.interactionId }] : await reader.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions).where(and(eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.issueId, input.issueId), eq(issueThreadInteractions.kind, 'ask_user_questions'), eq(issueThreadInteractions.status, 'pending'))).orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id));
++  const eligible: QuestionRecoveryList['items'] = [];
++  for (const { id } of ids) {
++    let value: Awaited<ReturnType<typeof recoveryQuestion>>;
++    try { value = await recoveryQuestion(reader, req, companyId, input.issueId, id, Boolean(input.interactionId)); }
++    catch (error) { if (!input.interactionId && (error as {status?:number}).status === 404) continue; throw error; }
++    await observe?.(value);
++    eligible.push(value.q.status === 'cancelled' ? recoveryReceipt(input.issueId, id) : { issueId: input.issueId, interactionId: id, status: 'pending', updatedAt: value.updatedAt, reason: 'original_owner_unavailable' });
++  }
++  const cursorIndex = input.cursor ? eligible.findIndex(value => value.interactionId === input.cursor) : -1;
++  if (input.cursor && cursorIndex < 0) throw badRequest('Recovery cursor is no longer authorized; refresh metadata');
++  const start = cursorIndex + 1, items = eligible.slice(start, start + input.limit);
++  return { items, nextCursor: start + items.length < eligible.length ? items.at(-1)!.interactionId : null };
++}
++export async function cancelQuestionRecovery(executor: Db, req: Request, companyId: string, input: Record<string, unknown>, acceptance: ActivityAcceptance, guards: QuestionWriteGuards) {
++  const p = questionRecoveryCancelInputSchema.parse(input);
++  const selected = await recoveryQuestion(executor, req, companyId, p.issueId, p.interactionId);
++  const check = async (same: Db, issue: { id: string; companyId: string }) => {
++    await guards.assertSource?.(same, issue);
++    const current = await recoveryQuestion(same, req, companyId, p.issueId, p.interactionId);
++    const [matches] = await same.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, current.q.id), sql`${issueThreadInteractions.updatedAt} = ${p.expectedUpdatedAt}::timestamptz`));
++    if (!matches) throw conflict('Recovery question changed; inspect current metadata');
++  };
++  await issueThreadInteractionService(executor).cancelQuestions(selected.issue, selected.q.id, { reason: 'Original answer owner unavailable; replacement and genuine answer required.' }, { userId: req.actor.userId! }, acceptance, { assertSource: check, beforeWrite: guards.beforeWrite });
++  acceptance.publications.push(await insertActivity(executor, { companyId, actorType: 'user', actorId: req.actor.userId!, action: 'issue.thread_interaction_cancelled', entityType: 'issue', entityId: p.issueId, details: { interactionId: p.interactionId, interactionKind: 'ask_user_questions', interactionStatus: 'cancelled', reason: 'original_owner_unavailable' } }, guards.beforeWrite));
++  return recoveryReceipt(p.issueId, p.interactionId);
++}
++export function recoveryHumanOperations(): HumanOperation[] {
++  const list: HumanOperation = {
++    descriptor: { operationId: 'human_questions.recovery.list', version: 1, pageId: 'inbox', actionId: 'recovery.list', targetKind: 'company', behavior: 'read', authority: 'current_question_recovery_owner', confirmation: 'none', inputSchema: humanJsonSchema(questionRecoveryListInputSchema), outputSchema: humanJsonSchema(questionRecoveryListSchema), content: { fullText: true, pagination: 'cursor' } },
++    input: questionRecoveryListInputSchema, output: questionRecoveryListSchema, authorize() {},
++    async resolve() { throw badRequest('Metadata is a read operation'); },
++    read: (ctx, p) => listQuestionRecovery(ctx.db, ctx.req, humanCompany(ctx), p),
++  };
++  const cancel: HumanOperation = {
++    descriptor: { operationId: 'human_questions.recovery.cancel', version: 1, pageId: 'inbox', actionId: 'recovery.cancel', targetKind: 'company', behavior: 'prepare_confirm', authority: 'current_question_recovery_owner', confirmation: 'human_readback', inputSchema: humanJsonSchema(questionRecoveryCancelInputSchema), outputSchema: humanJsonSchema(questionRecoveryReceiptSchema), content: { fullText: true, pagination: 'none' } },
++    input: questionRecoveryCancelInputSchema, output: questionRecoveryReceiptSchema, authorize() {},
++    async resolve(ctx, p) {
++      const value = await recoveryQuestion(ctx.db, ctx.req, humanCompany(ctx), p.issueId as string, p.interactionId as string);
++      const [matches] = await ctx.db.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, value.q.id), sql`${issueThreadInteractions.updatedAt} = ${p.expectedUpdatedAt}::timestamptz`));
++      if (!matches) throw conflict('Recovery question changed; inspect current metadata');
++      return { payload: p, preconditions: { updatedAt: value.updatedAt, owner: value.q.payload.answerOwnerUserId, payload: value.q.payload, issueUpdatedAt: value.issue.updatedAt.toISOString(), assigneeAgentId: value.issue.assigneeAgentId, oldMembership: value.oldMembership ? { id: value.oldMembership.id, status: value.oldMembership.status } : null, enrollment: { id: value.enrollment.id, templateId: value.enrollment.templateId, templateVersion: value.enrollment.templateVersion, updatedAt: value.enrollment.updatedAt.toISOString() }, currentOwner: value.ownerPin }, readback: { effects: ['Cancel the unanswered question.', 'Dependent work stays held.', 'A separate replacement and genuine answer are still required.'] } };
++    },
++    execute: (ctx, p) => cancelQuestionRecovery(ctx.db, ctx.req, humanCompany(ctx), p, ctx.acceptance!, { assertSource: ctx.assertQuestionSource, beforeWrite: ctx.beforeWrite }),
++    recoveryReference: value => { const receipt = value as QuestionRecoveryReceipt; return { issueId: receipt.issueId, interactionId: receipt.interactionId }; },
++    async afterCommit(_ctx, _p, receipt) { return receipt; }, // no wake: cancellation is not input.
++    async currentOutput(ctx, p) {
++      const value = await recoveryQuestion(ctx.db, ctx.req, humanCompany(ctx), p.issueId as string, p.interactionId as string, true);
++      if (value.q.status !== 'cancelled') throw conflict('Cancellation is not confirmed; inspect current metadata');
++      return recoveryReceipt(value.issue.id, value.q.id);
++    },
++    async authorizeRecovery(ctx, p, reference) {
++      const value = await recoveryQuestion(ctx.db, ctx.req, humanCompany(ctx), p.issueId as string, p.interactionId as string, true);
++      return value.q.id === reference.interactionId && value.issue.id === reference.issueId ? { issueId: value.issue.id, interactionId: value.q.id } : null;
++    },
++  };
++  return [list, cancel];
++}
+diff --git a/server/src/services/issue-thread-interactions.ts b/server/src/services/issue-thread-interactions.ts
+index 31b63eafccb46a92d10fcafe391f5acba40a6e84..27374bdffcb4fe54071549600150a626ecc4b166 100644
+--- a/server/src/services/issue-thread-interactions.ts
++++ b/server/src/services/issue-thread-interactions.ts
+@@ -429,6 +429,20 @@ async function expireStaleRequestConfirmationTarget(db: Db | any, args: {
+ }
+ 
+ 
++// AgentDash: one factual Branch A/current assignee then Branch B/prior binding selection.
++// Callers retain their own create/cancelled/required-definition authorization checks.
++export async function selectWorkforceQuestionOwner(connection: Pick<Db, "select">,
++  issue: { id: string; companyId: string }, previous?: AskUserQuestionsInteraction["payload"]) {
++  const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
++  if (!persistedIssue) throw notFound('Issue not found');
++  const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
++  const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
++  const agentId = template ? persistedIssue.assigneeAgentId : previous?.workforceAgentId;
++  const owner = agentId ? await agentAccountabilityService(connection).escalationUserId(issue.companyId, agentId) : null;
++  return { persistedIssue, enrollment, template, owner, agentId,
++    branch: template ? 'current' as const : previous?.workforceAgentId ? 'prior' as const : null };
++}
++
+ // AgentDash: native SELECT-only question pins; factual resolution is not authorization.
+ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
+     issue: { id: string; companyId: string },
+@@ -437,10 +451,10 @@ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
+   ) {
+     const data = createIssueThreadInteractionSchema.parse(input);
+     if (data.kind === 'ask_user_questions') {
+-      const [persistedIssue] = await connection.select().from(issues).where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+-      if (!persistedIssue) throw notFound('Issue not found');
+-      const [enrollment] = persistedIssue.assigneeAgentId ? await connection.select().from(workforceEnrollments).where(and(eq(workforceEnrollments.companyId, issue.companyId), eq(workforceEnrollments.agentId, persistedIssue.assigneeAgentId))) : [];
+-      const template = enrollment && resolveWorkforceTemplate(enrollment.templateId, enrollment.templateVersion);
++      const [prior] = data.payload.replacesInteractionId ? await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id))) : [];
++      const previous = prior?.kind === 'ask_user_questions' ? askUserQuestionsPayloadSchema.parse(prior.payload) : undefined;
++      const selection = await selectWorkforceQuestionOwner(connection, issue, previous);
++      const { persistedIssue, enrollment, template } = selection;
+       const accountability = agentAccountabilityService(connection);
+       // The server pins the target, never a body-supplied agent identifier.
+       delete data.payload.workforceAgentId;
+@@ -453,7 +467,7 @@ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
+         if (actor.agentId && actor.agentId !== persistedIssue.assigneeAgentId) throw forbidden('Only the enrolled assignee may request workforce input');
+         if (!actor.agentId && !actor.userId) throw forbidden('An authenticated human or assigned worker is required');
+         if (data.payload.questions.some(q => q.companyFactKey && !template.requiredFactKeys.includes(q.companyFactKey))) throw unprocessable('Question must reference a known fact key of the assigned workforce template');
+-        const owner = await accountability.escalationUserId(issue.companyId, persistedIssue.assigneeAgentId);
++        const owner = selection.owner;
+         if (!owner) throw conflict('Assign an active accountable company member before asking workforce questions');
+         if (data.payload.answerOwnerUserId && data.payload.answerOwnerUserId !== owner) throw conflict('Question owner must be the assignee’s current accountable member');
+         data.payload.answerOwnerUserId = owner;
+@@ -464,13 +478,12 @@ export async function resolveQuestionCreateInput(connection: Pick<Db, "select">,
+       }
+       if (data.payload.answerOwnerUserId) await accountability.assertAccountableMember(issue.companyId, data.payload.answerOwnerUserId);
+       if (data.payload.replacesInteractionId) {
+-        const [prior] = await connection.select().from(issueThreadInteractions).where(and(eq(issueThreadInteractions.id, data.payload.replacesInteractionId), eq(issueThreadInteractions.companyId, issue.companyId), eq(issueThreadInteractions.issueId, issue.id)));
+         if (!prior || prior.kind !== 'ask_user_questions' || prior.status !== 'cancelled') throw unprocessable('Replace an explicitly cancelled question on this issue');
+         const previous = askUserQuestionsPayloadSchema.parse(prior.payload);
+         if (previous.workforceAgentId && !data.payload.workforceAgentId) {
+           if (actor.agentId || !actor.userId) throw forbidden('A human must replace a workforce question after reassignment to an unenrolled worker');
+           if (['done', 'cancelled'].includes(persistedIssue.status)) throw conflict('Cannot request required input on a closed job');
+-          const owner = await accountability.escalationUserId(issue.companyId, previous.workforceAgentId);
++          const owner = selection.owner;
+           if (!owner) throw conflict('Assign an active accountable member before replacing this question');
+           await accountability.assertAccountableMember(issue.companyId, owner);
+           data.payload.answerOwnerUserId = owner;
+diff --git a/ui/src/api/workforce.ts b/ui/src/api/workforce.ts
+index 9622941d8927d012bcd89b0676ca215f3dd71f94..113048f54a8d37a5b01b9910d5463b68bbf529e9 100644
+--- a/ui/src/api/workforce.ts
++++ b/ui/src/api/workforce.ts
+@@ -15,3 +15,20 @@ export const workforceApi = {
+   start: (c: string, a: string) => api.post<Issue>(`${base(c)}/agents/${a}/first-job`, {}),
+   retrySkills: (c: string, a: string) => api.post<WorkforceEnrollment>(`${base(c)}/agents/${a}/install-skills`, {}),
+ };
++
++// AgentDash: safe recovery metadata has a separate cache and never masquerades as an interaction.
++export const questionRecoveryKeys = {
++  all: (companyId: string, issueId: string) => ['question-recovery', companyId, issueId] as const,
++  list: (companyId: string, issueId: string, cursor?: string) => ['question-recovery', companyId, issueId, 'list', cursor ?? null] as const,
++};
++export const questionRecoveryApi = {
++  list: (issueId: string, options: { interactionId?: string; cursor?: string } = {}) => {
++    const params = new URLSearchParams();
++    if (options.cursor) params.set('cursor', options.cursor);
++    if (options.interactionId) params.set('interactionId', options.interactionId);
++    const query = params.toString();
++    return api.get<import('@paperclipai/shared').QuestionRecoveryList>(`/issues/${issueId}/question-recovery${query ? `?${query}` : ''}`);
++  },
++  cancel: (issueId: string, interactionId: string, expectedUpdatedAt: string) => api.post<import('@paperclipai/shared').QuestionRecoveryReceipt>(`/issues/${issueId}/question-recovery/${interactionId}/cancel`, { expectedUpdatedAt }),
++  replace: (issueId: string, interactionId: string) => api.post<import('@paperclipai/shared').AskUserQuestionsInteraction>(`/issues/${issueId}/question-recovery/${interactionId}/replace`, {}),
++};
+diff --git a/ui/src/components/QuestionOwnerRecovery.test.tsx b/ui/src/components/QuestionOwnerRecovery.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7f916be34043622d6c9d93576e45748236d2e06a
+--- /dev/null
++++ b/ui/src/components/QuestionOwnerRecovery.test.tsx
+@@ -0,0 +1,121 @@
++// @vitest-environment jsdom
++import { act } from 'react';
++import { createRoot } from 'react-dom/client';
++import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
++import { MemoryRouter } from 'react-router-dom';
++import { beforeEach, afterEach, expect, it, vi } from 'vitest';
++import { CompanyProvider } from '@/context/CompanyContext';
++import { WorkforceAgentPanel } from '@/pages/WorkforceOnboarding';
++import { TooltipProvider } from './ui/tooltip';
++import { queryKeys } from '@/lib/queryKeys';
++let host: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClient;
++let requests: {url:string; method:string; body:unknown}[], lost = false, cancelled = false, answered = false;
++let multiple = false, lostReplacement = false, secondCancelled = false;
++let created: typeof owned[] = [];
++const metadata = { issueId: 'job', interactionId: 'old', status: 'pending', updatedAt: '2026-09-29T00:00:00.000000Z', reason: 'original_owner_unavailable' };
++const receipt = { issueId: 'job', interactionId: 'old', status: 'cancelled', replacementRequired: true };
++const owned = { id: 'new', issueId: 'job', companyId: 'one', kind: 'ask_user_questions', status: 'pending', payload: { version: 1, answerOwnerUserId: 'bob', workforceAgentId: 'worker', replacesInteractionId: 'old', questions: [{ id: 'required', prompt: 'Your replacement question', required: true, selectionMode: 'text', options: [] }] }, result: null, createdAt: '2026-09-29T00:00:00Z', updatedAt: '2026-09-29T00:00:00Z' };
++async function flush() { await act(async () => { await new Promise(resolve => setTimeout(resolve,20)); }); }
++async function click(text: string) { const b = [...document.querySelectorAll('button')].find(b => b.textContent?.trim() === text); expect(b, text).toBeTruthy(); await act(async () => b!.click()); await flush(); }
++beforeEach(() => {
++  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
++  host = document.createElement('div'); document.body.append(host); root = createRoot(host); requests = []; lost = false; cancelled = false; answered = false;
++  sessionStorage.clear(); multiple = false; lostReplacement = false; secondCancelled = false; created = [];
++  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
++  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
++    const method = init?.method ?? 'GET', body = init?.body ? JSON.parse(String(init.body)) : null; requests.push({ url, method, body });
++    let data: unknown = [];
++    if (url.endsWith('/enrollment')) data = { id:'enrollment', companyId:'one', agentId:'worker', templateId:'marketing-content', templateVersion:1, firstJobIssueId:'job', metrics:[], installedSkillKeys:[] };
++    else if (url.endsWith('/readiness')) return Response.json({ error: 'Readiness is private' }, { status:404 });
++    else if (url.endsWith('/members')) return Response.json({ error: 'Member directory denied' }, { status:403 });
++    else if (url.includes('/auth/')) data = { user:{id:'bob'}, session:{userId:'bob'} };
++    else if (url.endsWith('/question-recovery')) data = { items:[...(!cancelled ? [metadata] : []), ...(multiple && !secondCancelled ? [{...metadata,interactionId:'second'}] : [])], nextCursor:null };
++    else if (url.includes('/question-recovery?')) data = { items:cancelled ? [receipt] : [metadata], nextCursor:null };
++    else if (url.endsWith('/old/cancel')) { cancelled = true; if (lost) throw new TypeError('Lost response'); data = receipt; }
++    else if (url.endsWith('/old/replace')) { created = [owned]; if (lostReplacement) throw new TypeError('Lost replacement response'); data = owned; }
++    else if (url.endsWith('/new/cancel')) data = {...owned,status:'cancelled'};
++    else if (url.endsWith('/new/replace')) data = {...owned,id:'newer',payload:{...owned.payload,replacesInteractionId:'new'}};
++    else if (url.endsWith('/second/cancel')) { secondCancelled = true; data = {...receipt,interactionId:'second'}; }
++    else if (url.endsWith('/new/respond')) { answered = true; data = { ...owned, status:'answered', result:{version:1,answers:(body as any).answers} }; }
++    else if (url.endsWith('/interactions')) data = created.map(q => answered ? {...q,status:'answered'} : q);
++    return Response.json(data);
++  }));
++});
++afterEach(() => { act(() => root.unmount()); client.clear(); host.remove(); vi.unstubAllGlobals(); });
++function mount() { act(() => root.render(<QueryClientProvider client={client}><MemoryRouter><CompanyProvider><TooltipProvider><WorkforceAgentPanel companyId="one" agent={{ id:'worker',companyId:'one',name:'Mira',adapterType:'codex_local',accountable:{userId:'bob',name:'Bob',via:'assignment'} } as any} /></TooltipProvider></CompanyProvider></MemoryRouter></QueryClientProvider>)); }
++it('recovers independently of readiness404 or member-list403, confirms, then answers only the newly owned card', async () => {
++  const existing = [{...owned,id:'existing'}];
++  client.setQueryData(queryKeys.issues.interactions('job'),existing);
++  mount(); await flush(); await flush();
++  expect(host.textContent).toContain('Readiness is private');
++  await click('Recover required question');
++  expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
++  expect(document.body.textContent).toContain('Dependent work stays held');
++  await click('Confirm cancellation');
++  expect(requests.find(r => r.url.endsWith('/old/cancel'))?.body).toEqual({expectedUpdatedAt: metadata.updatedAt});
++  expect(client.getQueryData(queryKeys.issues.interactions('job'))).toEqual(existing);
++  expect(host.querySelector('[aria-label="Required question recovery"] textarea')).toBeNull();
++  await click('Create replacement question');
++  expect(requests.find(r => r.url.endsWith('/old/replace'))?.body).toEqual({});
++  expect(host.textContent).toContain('Your replacement question');
++  const textarea = host.querySelector('[aria-label="Required question recovery"] textarea')!;
++  await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(textarea,'My genuine answer'); textarea.dispatchEvent(new Event('input',{bubbles:true})); });
++  await click('Submit answers');
++  expect(answered).toBe(true);
++  expect(requests.find(r => r.url.endsWith('/new/respond'))?.body).toMatchObject({answers:[{questionId:'required',optionIds:[],text:'My genuine answer'}],shareWithCompany:false});
++  expect(requests.some(r => r.url.includes('/old/respond'))).toBe(false);
++  expect(host.querySelector('[aria-label="Required question recovery"] textarea')).toBeNull();
++});
++it('shows uncertain cancellation and inspects safe state without replaying the mutation', async () => {
++  lost = true; mount(); await flush(); await flush(); await click('Recover required question'); await click('Confirm cancellation');
++  expect(host.textContent).toContain('Cancellation outcome is uncertain');
++  expect(requests.filter(r => r.url.endsWith('/old/cancel'))).toHaveLength(1);
++  await click('Inspect current recovery state');
++  expect(requests.filter(r => r.url.endsWith('/old/cancel'))).toHaveLength(1);
++  expect(host.textContent).toContain('Create replacement question');
++});
++
++async function reload() {
++  act(() => root.unmount()); client.clear(); root = createRoot(host); mount(); await flush(); await flush();
++}
++async function answerReplacement() {
++  const textarea = host.querySelector('[aria-label="Required question recovery"] textarea')!;
++  await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(textarea,'Genuine answer'); textarea.dispatchEvent(new Event('input',{bubbles:true})); });
++  await click('Submit answers');
++}
++it('restores a cancelled target after reload using fresh safe inspection, without another cancellation',async()=>{
++  mount();await flush();await flush();await click('Recover required question');await click('Confirm cancellation');
++  await reload();await click('Inspect current recovery state');
++  expect(host.textContent).toContain('Create replacement question');
++  expect(requests.filter(r=>r.url.endsWith('/old/cancel'))).toHaveLength(1);
++  expect(JSON.stringify(sessionStorage)).not.toContain('Your replacement question');
++});
++it('restores an owned replacement after reload and answers it while readiness stays private',async()=>{
++  mount();await flush();await flush();await click('Recover required question');await click('Confirm cancellation');await click('Create replacement question');
++  await reload();await click('Inspect current recovery state');
++  expect(host.textContent).toContain('Your replacement question');await answerReplacement();expect(answered).toBe(true);
++  expect(requests.filter(r=>r.url.endsWith('/old/replace'))).toHaveLength(1);
++});
++it('inspects a lost replacement response without replay and without treating absence as noncommit',async()=>{
++  lostReplacement=true;mount();await flush();await flush();await click('Recover required question');await click('Confirm cancellation');await click('Create replacement question');
++  const saved=created;created=[];await click('Inspect current recovery state');
++  expect(host.textContent).toContain('does not establish whether replacement committed');
++  created=saved;await click('Inspect current recovery state');expect(host.textContent).toContain('Your replacement question');
++  expect(requests.filter(r=>r.url.endsWith('/old/replace'))).toHaveLength(1);
++});
++it('continues to a second recoverable question after answering the first owned replacement',async()=>{
++  multiple=true;mount();await flush();await flush();await click('Recover required question');await click('Confirm cancellation');await click('Create replacement question');await answerReplacement();
++  await click('Recover another question');await click('Recover required question');await click('Confirm cancellation');
++  expect(requests.filter(r=>r.url.endsWith('/old/cancel'))).toHaveLength(1);
++  expect(requests.filter(r=>r.url.endsWith('/second/cancel'))).toHaveLength(1);
++  expect(host.textContent).toContain('Create replacement question');
++});
++
++it('keeps an explicitly cancelled new owned card replaceable instead of leaving a stale answer form',async()=>{
++  mount();await flush();await flush();await click('Recover required question');await click('Confirm cancellation');await click('Create replacement question');
++  await click('Cancel question');
++  expect(host.querySelector('[aria-label="Required question recovery"] textarea')).toBeNull();
++  await click('Create replacement question');
++  expect(requests.filter(r=>r.url.endsWith('/new/replace'))).toHaveLength(1);
++  expect(host.querySelector('[aria-label="Required question recovery"] textarea')).not.toBeNull();
++});
+diff --git a/ui/src/components/QuestionOwnerRecovery.tsx b/ui/src/components/QuestionOwnerRecovery.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..599827425e662a277c39a7888fe7f1e6ef82c5ba
+--- /dev/null
++++ b/ui/src/components/QuestionOwnerRecovery.tsx
+@@ -0,0 +1,108 @@
++import { useState } from 'react';
++import { useQuery, useQueryClient } from '@tanstack/react-query';
++import type { AskUserQuestionsInteraction, QuestionRecoveryMetadata, QuestionRecoveryReceipt } from '@paperclipai/shared';
++import { questionRecoveryApi, questionRecoveryKeys } from '@/api/workforce';
++import { issuesApi } from '@/api/issues';
++import { Button } from './ui/button';
++import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './ui/dialog';
++import { QuestionCard, useQuestionActions } from './WorkforceQuestions';
++
++// Only IDs and the attempted action survive a reload. Every resumed view must
++// obtain fresh authorized data; storage is neither a receipt nor authority.
++type RecoveryAttempt = { interactionId: string; phase: 'cancel' | 'replace' };
++function savedAttempt(key: string): RecoveryAttempt | null {
++  try {
++    const value = JSON.parse(sessionStorage.getItem(key) ?? 'null');
++    return value && typeof value.interactionId === 'string' && ['cancel', 'replace'].includes(value.phase) ? value : null;
++  } catch { return null; }
++}
++export function QuestionOwnerRecovery(props: { companyId: string; issueId: string }) {
++  return <RecoveryForIssue key={`${props.companyId}:${props.issueId}`} {...props} />;
++}
++function RecoveryForIssue({ companyId, issueId }: { companyId: string; issueId: string }) {
++  const client = useQueryClient();
++  const refreshQuestions = useQuestionActions(companyId, issueId);
++  const [cursor, setCursor] = useState<string>();
++  const metadata = useQuery({ queryKey: questionRecoveryKeys.list(companyId, issueId, cursor), queryFn: () => questionRecoveryApi.list(issueId, { cursor }), retry: false });
++  const [confirm, setConfirm] = useState<QuestionRecoveryMetadata | null>(null);
++  const [receipt, setReceipt] = useState<QuestionRecoveryReceipt | null>(null);
++  const storageKey = `question-recovery:${companyId}:${issueId}`;
++  const [uncertain, setUncertain] = useState<RecoveryAttempt | null>(() => savedAttempt(storageKey));
++  const [replacement, setReplacement] = useState<AskUserQuestionsInteraction | null>(null);
++  const [error, setError] = useState<string | null>(null);
++  const [busy, setBusy] = useState(false);
++  function remember(attempt: RecoveryAttempt | null) {
++    try {
++      if (attempt) sessionStorage.setItem(storageKey, JSON.stringify(attempt));
++      else sessionStorage.removeItem(storageKey);
++    } catch { /* The current view remains usable when browser storage is disabled. */ }
++  }
++  function showOwnedQuestion(value: AskUserQuestionsInteraction) {
++    if (value.status === 'cancelled') {
++      setReplacement(null);
++      setReceipt({ issueId, interactionId: value.id, status: 'cancelled', replacementRequired: true });
++      remember({ interactionId: value.id, phase: 'cancel' });
++    } else {
++      setReplacement(value);
++      if (value.status === 'answered') remember(null);
++    }
++  }
++  async function refresh() {
++    await Promise.all([refreshQuestions(), client.invalidateQueries({ queryKey: questionRecoveryKeys.all(companyId, issueId) })]);
++  }
++  async function cancel() {
++    if (!confirm || busy) return;
++    const selected = confirm;
++    setConfirm(null); setBusy(true); setError(null);
++    const attempt: RecoveryAttempt = { interactionId: selected.interactionId, phase: 'cancel' };
++    remember(attempt);
++    try { setReceipt(await questionRecoveryApi.cancel(issueId, selected.interactionId, selected.updatedAt)); await refresh(); }
++    catch { setUncertain(attempt); }
++    finally { setBusy(false); }
++  }
++  async function inspect() {
++    if (!uncertain || busy) return;
++    setBusy(true); setError(null);
++    try {
++      if (uncertain.phase === 'replace') {
++        const rows = await issuesApi.listInteractions(issueId);
++        const owned = rows.find(value => value.kind === 'ask_user_questions' && value.payload.replacesInteractionId === uncertain.interactionId);
++        if (owned?.kind === 'ask_user_questions') {
++          showOwnedQuestion(owned); setUncertain(null);
++          await refresh();
++        } else setError('No authorized replacement is visible. This does not establish whether replacement committed. Keep inspecting; do not repeat the uncertain action.');
++      } else {
++        const state = await questionRecoveryApi.list(issueId, { interactionId: uncertain.interactionId });
++        const current = state.items.find(value => value.interactionId === uncertain.interactionId);
++        if (current?.status === 'cancelled') { setReceipt(current); setUncertain(null); await refresh(); }
++        else setError('Cancellation is not confirmed. Keep inspecting current state; do not repeat the uncertain action.');
++      }
++    } catch { setError('Current recovery state is unavailable. This does not establish whether the attempted action committed.'); }
++    finally { setBusy(false); }
++  }
++  async function replace() {
++    if (!receipt || busy) return;
++    setBusy(true); setError(null);
++    const attempt: RecoveryAttempt = { interactionId: receipt.interactionId, phase: 'replace' };
++    remember(attempt);
++    try { setReplacement(await questionRecoveryApi.replace(issueId, receipt.interactionId)); await refresh(); }
++    catch { setUncertain(attempt); }
++    finally { setBusy(false); }
++  }
++  const pending = metadata.data?.items.filter((value): value is QuestionRecoveryMetadata => value.status === 'pending') ?? [];
++  if (!pending.length && !receipt && !replacement && !uncertain && !metadata.error && !cursor) return null;
++  return <section className="space-y-3 rounded-lg border p-3" aria-label="Required question recovery">
++    <h3 className="font-medium">Required question recovery</h3>
++    <p className="text-sm text-muted-foreground">An unavailable original owner can leave required input unresolved. Cancelling supplies no answer.</p>
++    {metadata.error && <p role="alert">Recovery metadata is unavailable: {metadata.error.message}</p>}
++    {error && <p role="alert">{error}</p>}
++    {!uncertain && !receipt && !replacement && pending.map(value => <div key={value.interactionId}><Button variant="outline" disabled={busy} onClick={() => setConfirm(value)}>Recover required question</Button></div>)}
++    {!receipt && !replacement && !uncertain && metadata.data?.nextCursor && <Button variant="outline" onClick={() => setCursor(metadata.data!.nextCursor!)}>More recoverable questions</Button>}
++    {cursor && <Button variant="outline" onClick={() => setCursor(undefined)}>First recovery page</Button>}
++    {uncertain && <div className="space-y-2"><p role="alert">{uncertain.phase === 'cancel' ? 'Cancellation' : 'Replacement'} outcome is uncertain. It may have committed. Do not repeat it.</p><Button disabled={busy} onClick={() => void inspect()}>Inspect current recovery state</Button></div>}
++    {receipt && !replacement && !uncertain && <div className="space-y-2"><p>Question cancelled. Dependent work stays held until a replacement receives a genuine answer.</p><Button disabled={busy || Boolean(error)} onClick={() => void replace()}>Create replacement question</Button></div>}
++    {replacement && <QuestionCard companyId={companyId} question={replacement} onUpdated={showOwnedQuestion} />}
++    {replacement && replacement.status !== 'pending' && pending.length > 0 && <Button variant="outline" onClick={() => { setReceipt(null); setReplacement(null); setError(null); setCursor(undefined); remember(null); }}>Recover another question</Button>}
++    <Dialog open={Boolean(confirm)} onOpenChange={open => { if (!open) setConfirm(null); }}><DialogContent><DialogTitle>Cancel unanswered question?</DialogTitle><DialogDescription>Dependent work stays held. A separate replacement and your genuine answer are still required.</DialogDescription><DialogFooter><Button variant="outline" onClick={() => setConfirm(null)}>Go back</Button><Button disabled={busy} onClick={() => void cancel()}>Confirm cancellation</Button></DialogFooter></DialogContent></Dialog>
++  </section>;
++}
+diff --git a/ui/src/components/WorkforceQuestions.tsx b/ui/src/components/WorkforceQuestions.tsx
+index 8d6a20d5802beeadba88e6c4b33fa7d9be0d256f..0df294f54ae4c1fcf80d5603041cadc665297a5b 100644
+--- a/ui/src/components/WorkforceQuestions.tsx
++++ b/ui/src/components/WorkforceQuestions.tsx
+@@ -11,7 +11,7 @@ import { IssueThreadInteractionCard } from './IssueThreadInteractionCard';
+ import { Button } from './ui/button';
+ import type { AskUserQuestionsInteraction } from '@/lib/issue-thread-interactions';
+ 
+-function useQuestionActions(companyId: string, issueId: string) {
++export function useQuestionActions(companyId: string, issueId: string) {
+   const client = useQueryClient();
+   return async () => {
+     await Promise.all([
+@@ -22,14 +22,14 @@ function useQuestionActions(companyId: string, issueId: string) {
+     ]);
+   };
+ }
+-function QuestionCard({ companyId, question }: { companyId: string; question: AskUserQuestionsInteraction }) {
++export function QuestionCard({ companyId, question, onUpdated }: { companyId: string; question: AskUserQuestionsInteraction; onUpdated?: (question: AskUserQuestionsInteraction) => void }) {
+   const refresh = useQuestionActions(companyId, question.issueId);
+   const [error, setError] = useState<string | null>(null);
+   async function perform(action: () => Promise<unknown>) { setError(null); try { await action(); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : "Question update failed"); } }
+   const session = useQuery({ queryKey: queryKeys.auth.session, queryFn: () => authApi.getSession() });
+   return <div>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<IssueThreadInteractionCard interaction={question} currentUserId={session.data?.user?.id ?? session.data?.session?.userId ?? null}
+-    onSubmitInteractionAnswers={(q, answers, shareWithCompany) => perform(() => issuesApi.respondToInteraction(q.issueId, q.id, { answers, shareWithCompany }))}
+-    onCancelInteraction={q => perform(() => issuesApi.cancelInteraction(q.issueId, q.id, 'Explicit human cancellation; required input remains unresolved'))} />
++    onSubmitInteractionAnswers={(q, answers, shareWithCompany) => perform(async () => { const updated = await issuesApi.respondToInteraction(q.issueId, q.id, { answers, shareWithCompany }); if (updated.kind === 'ask_user_questions') onUpdated?.(updated); })}
++    onCancelInteraction={q => perform(async () => { const updated = await issuesApi.cancelInteraction(q.issueId, q.id, 'Explicit human cancellation; required input remains unresolved'); if (updated.kind === 'ask_user_questions') onUpdated?.(updated); })} />
+   </div>;
+ }
+ export function PendingQuestionRow({ companyId, question }: { companyId: string; question: WaitingOnYouQuestion }) {
+diff --git a/ui/src/pages/IssueDetail.tsx b/ui/src/pages/IssueDetail.tsx
+index f8afa11e3330d0b28021f4c3b20ee895b2ce0f19..b882610ae4fa079dfe1d64ab8d14d4a5fe78fadb 100644
+--- a/ui/src/pages/IssueDetail.tsx
++++ b/ui/src/pages/IssueDetail.tsx
+@@ -1,3 +1,4 @@
++import { QuestionOwnerRecovery } from '@/components/QuestionOwnerRecovery';
+ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type Ref } from "react";
+ import { pickTextColorForPillBg } from "@/lib/color-contrast";
+ import { Link, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
+@@ -3644,6 +3645,7 @@ export function IssueDetail() {
+           ))}
+         </TabsList>
+ 
++        <QuestionOwnerRecovery companyId={issue.companyId} issueId={issue.id} />
+         <TabsContent value="chat">
+           {detailTab === "chat" ? (
+             <IssueDetailChatTab
+diff --git a/ui/src/pages/WorkforceDetailQueries.test.tsx b/ui/src/pages/WorkforceDetailQueries.test.tsx
+index 023cc6912bcc83863fb8dcd1ae484b3a55616dce..f74a667675d33794b83580c32e6de8226fc8dc83 100644
+--- a/ui/src/pages/WorkforceDetailQueries.test.tsx
++++ b/ui/src/pages/WorkforceDetailQueries.test.tsx
+@@ -35,6 +35,7 @@ beforeEach(() => {
+     const method = init?.method ?? 'GET'; const body = init?.body ? JSON.parse(init.body as string) : null;
+     requests.push({ url, method, body });
+     let data: any = [];
++    if (url.includes('/question-recovery')) return Response.json({ items: [], nextCursor: null });
+     if (method === 'PATCH' || (method === 'POST' && (url.endsWith('/agent-stewardships') || url.endsWith('/stewardship/transfer')))) {
+       agent = { ...agent, accountable: { userId: 'active-human', name: 'Nora', email: 'nora@example.test', via: agent.autonomy === 'autonomous' ? 'assignment' : 'steward' } }; data = agent;
+     } else if (url.startsWith('/api/agents/')) data = agent;
+diff --git a/ui/src/pages/WorkforceOnboarding.test.tsx b/ui/src/pages/WorkforceOnboarding.test.tsx
+index a876b9573d05a01bc444a44f467e49b044cb3302..2d4f46c96c453874fe3fa983e9c4818671426aaf 100644
+--- a/ui/src/pages/WorkforceOnboarding.test.tsx
++++ b/ui/src/pages/WorkforceOnboarding.test.tsx
+@@ -40,6 +40,7 @@ beforeEach(() => {
+     const method = init?.method ?? 'GET';
+     const body = init?.body ? JSON.parse(init.body as string) : null; requests.push({ url, method, body });
+     let data: any = [];
++    if (url.includes('/question-recovery')) return Response.json({ items: [], nextCursor: null });
+     if (url.includes('/two/')) data = url.endsWith('/brief') ? { ...brief, revision: 0, sources: [], facts: [] } : [];
+     else if (url.endsWith('/proposals')) data = proposals;
+     else if (url.endsWith('/review')) { if (conflict) return new Response(JSON.stringify({ error: 'Company sources changed; request a new proposal' }), { status: 409 }); proposals = proposals.map(p => url.includes(p.id) ? { ...p, status: body.decision === 'approve' ? 'approved' : 'rejected' } : p); data = proposals[0]; }
+diff --git a/ui/src/pages/WorkforceOnboarding.tsx b/ui/src/pages/WorkforceOnboarding.tsx
+index b16137ad18f90af33a43166bd7e0be40dcfd7741..f43714fb8662fdfaa3bce2098b065a776013870b 100644
+--- a/ui/src/pages/WorkforceOnboarding.tsx
++++ b/ui/src/pages/WorkforceOnboarding.tsx
+@@ -1,3 +1,4 @@
++import { QuestionOwnerRecovery } from '@/components/QuestionOwnerRecovery';
+ import { useState } from 'react';
+ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+ import type { Agent, WorkforceBrief, WorkforceEnrollment } from '@paperclipai/shared';
+@@ -153,7 +154,7 @@ export function WorkforceAgentPanel({ companyId, agent }: { companyId: string; a
+         <p className="text-sm">{r.reason}</p>{r.missingFactKeys.length > 0 && <p className="text-sm">Missing facts: {r.missingFactKeys.join(', ')}</p>}<p className="text-sm">{r.acceptedVerdictId ? 'Neutral review accepted' : 'First-job acceptance not yet established'}</p>{r.firstJobIssueId && <Link disableIssueQuicklook to={`/issues/${r.firstJobIssueId}`} className="text-sm underline">Open first job, artifacts and review</Link>}</div>}{e.skillInstallError && <WorkforceError error={e.skillInstallError} />}<div className="flex flex-wrap gap-2">
+         {r?.phase !== 'ready' && <Button disabled={action.isPending || !ownerActive} onClick={() => action.mutate('start')}>{e.firstJobIssueId ? 'Resume first job' : 'Start first job'}</Button>}
+         <Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('retry')}>Retry skill installation</Button>
+-      </div>{!ownerActive && <a className="text-sm underline" href="#workforce-accountability">Assign an active human before starting a job that needs input</a>}{r?.firstJobIssueId && <WorkforceQuestions companyId={companyId} issueId={r.firstJobIssueId} agent={agent} requiredIds={r.pendingQuestionIds} />}</>}
++      </div>{!ownerActive && <a className="text-sm underline" href="#workforce-accountability">Assign an active human before starting a job that needs input</a>}{e.firstJobIssueId && <QuestionOwnerRecovery companyId={companyId} issueId={e.firstJobIssueId} />}{r?.firstJobIssueId && <WorkforceQuestions companyId={companyId} issueId={r.firstJobIssueId} agent={agent} requiredIds={r.pendingQuestionIds} />}</>}
+   </section>;
+ }
+ export function WorkforceWorkspace({ companyId }: { companyId: string }) {

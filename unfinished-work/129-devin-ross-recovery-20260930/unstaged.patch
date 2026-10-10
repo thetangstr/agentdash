@@ -1,0 +1,61 @@
+diff --git a/server/src/__tests__/heartbeat-process-recovery.test.ts b/server/src/__tests__/heartbeat-process-recovery.test.ts
+index cc83298c33441d9c40fbbb32858d0ebf2dae084e..b5cf1b2f87a5fbd6934874b85b7cce70eca35cc6 100644
+--- a/server/src/__tests__/heartbeat-process-recovery.test.ts
++++ b/server/src/__tests__/heartbeat-process-recovery.test.ts
+@@ -1574,9 +1574,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
+     expect(res.status, JSON.stringify(res.body)).toBe(201);
+     expectRecoveryBudgetNotice(res.body, issueId);
+ 
+-    const issue = await expectRecoveryBudgetKept(issueId);
+-    expect(issue.status).toBe("todo");
+-
++    // The comment reopens the issue and wakes the assignee, but the wake is
++    // unlinked — the persisted marker refuses it at claim and the post-commit
++    // reblock pulls the live-work-looking issue back to `blocked`.
+     const humanRun = await waitForValue(async () => {
+       const rows = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+       return rows.find((row) =>
+@@ -1589,7 +1589,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
+     expect(humanRun?.errorCode).toBe("task_recovery_budget_exhausted");
+     await waitForHeartbeatIdle(db, 5_000);
+     expect(mockAdapterExecute.mock.calls.length).toBe(adapterCallsBefore);
+-    await expectRecoveryBudgetKept(issueId);
++
++    const issue = await expectRecoveryBudgetKept(issueId);
++    expect(issue.status).toBe("blocked");
+     await expectLinkedRetryRefused(agentId, issueId, humanRun!.id);
+   });
+ 
+@@ -1935,7 +1937,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
+     ].sort());
+   });
+ 
+-  it("keeps a queued person-started wake when the budget first trips", async () => {
++  it("refuses a person-started wake queued before the trip once the marker persists", async () => {
+     const { companyId, agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("attempts");
+     const humanWakeId = randomUUID();
+     const humanRunId = randomUUID();
+@@ -1997,12 +1999,17 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
+       }), 5_000);
+     expect(tripped?.errorCode).toBe("task_recovery_budget_exhausted");
+ 
+-    const [humanRun, automaticSibling] = await Promise.all([
+-      db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, humanRunId)).then((rows) => rows[0] ?? null),
+-      db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, automaticSiblingId)).then((rows) => rows[0] ?? null),
+-    ]);
+-    expect(humanRun?.status).toBe("scheduled_retry");
+-    expect(humanRun?.errorCode).toBeNull();
++    // The marker write cancels every still-pending sibling wake on the issue
++    // — including a person-started one, which carries no permit. It never
++    // reaches claim.
++    const humanRun = await waitForValue(async () =>
++      db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, humanRunId)).then((rows) => {
++        const row = rows[0] ?? null;
++        return row && row.status !== "scheduled_retry" && row.status !== "queued" ? row : null;
++      }), 5_000);
++    const automaticSibling = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, automaticSiblingId)).then((rows) => rows[0] ?? null);
++    expect(humanRun?.status).toBe("cancelled");
++    expect(humanRun?.errorCode).toBe("task_recovery_budget_exhausted");
+     expect(automaticSibling?.status).toBe("cancelled");
+     expect(automaticSibling?.errorCode).toBe("task_recovery_budget_exhausted");
+     expect(mockAdapterExecute).not.toHaveBeenCalled();

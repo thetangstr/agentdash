@@ -1,0 +1,12 @@
+{
+  "branch": "refs/heads/devin/c4-hire-ux-20261004",
+  "head": "4d148b82295f1cf00842daac18f196ccdf8717c2",
+  "sourceWorktreeName": "devin-cos-facts",
+  "files": [
+    "pr-body-c3-access.md",
+    "pr-body-c4-hire-ux.md",
+    "pr-body-cos-facts-followups.md",
+    "pr-body-cos-facts.md"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

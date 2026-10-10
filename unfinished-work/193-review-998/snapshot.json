@@ -1,0 +1,13 @@
+{
+  "branch": null,
+  "head": "9ff4bab10d9370ac1122366259238c8f6d6f2d79",
+  "sourceWorktreeName": "review-998",
+  "files": [
+    "packages/shared/src/__probe__/probe.test.ts",
+    "packages/shared/src/__probe__/probe2.test.ts",
+    "packages/shared/src/__probe__/probe3.test.ts",
+    "server/src/__tests__/zz-probe-998.test.ts",
+    "server/src/__tests__/zz-probe-998b.test.ts"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

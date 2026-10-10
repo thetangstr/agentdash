@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/devin/cloud-backup-prune-20261005",
+  "head": "a6886f9ffbb98efb0e3e3619a5b37f0d5de91a57",
+  "sourceWorktreeName": "cloud-backup-prune",
+  "files": [
+    "pr-body-cloud-backup-prune.md"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

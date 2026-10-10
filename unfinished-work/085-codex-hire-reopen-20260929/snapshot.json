@@ -1,0 +1,11 @@
+{
+  "branch": "refs/heads/codex/hosted-hire-reopen-20260929",
+  "head": "e56479af5de33d1388683987d9219a9be891adae",
+  "sourceWorktreeName": "codex-hire-reopen-20260929",
+  "files": [
+    "ui/src/components/NewAgentDialog.hosted.test.tsx",
+    "ui/src/components/NewAgentDialog.tsx",
+    "doc/plans/2026-09-29-hosted-hire-reopen.md"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

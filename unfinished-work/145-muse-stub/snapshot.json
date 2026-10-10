@@ -1,0 +1,9 @@
+{
+  "branch": null,
+  "head": "bb345a76cfa240f58489054144b9317e4a5b210d",
+  "sourceWorktreeName": "muse-stub",
+  "files": [
+    "tools/spikes/muse-mcp-stub/server.mjs"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

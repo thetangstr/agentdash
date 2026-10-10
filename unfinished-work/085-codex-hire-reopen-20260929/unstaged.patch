@@ -1,0 +1,158 @@
+diff --git a/ui/src/components/NewAgentDialog.hosted.test.tsx b/ui/src/components/NewAgentDialog.hosted.test.tsx
+index fa706bc3b7afcb42e46cb3c408d3f06e9b8f5fc2..cb015dc0f74c71279b5511e1ed79a2ed4f2c0b6d 100644
+--- a/ui/src/components/NewAgentDialog.hosted.test.tsx
++++ b/ui/src/components/NewAgentDialog.hosted.test.tsx
+@@ -139,6 +139,16 @@ function renderDialog(container: HTMLDivElement) {
+   return { root, queryClient };
+ }
+ 
++function rerenderDialog({ root, queryClient }: ReturnType<typeof renderDialog>) {
++  act(() => {
++    root.render(
++      <QueryClientProvider client={queryClient}>
++        <NewAgentDialog />
++      </QueryClientProvider>,
++    );
++  });
++}
++
+ describe("NewAgentDialog on a hosted box", () => {
+   let container: HTMLDivElement;
+ 
+@@ -147,6 +157,7 @@ describe("NewAgentDialog on a hosted box", () => {
+     container = document.createElement("div");
+     document.body.appendChild(container);
+     dialogState.newAgentOpen = true;
++    companyState.selectedCompanyId = "company-1";
+     dialogState.closeNewAgent.mockReset();
+     dialogState.openNewIssue.mockReset();
+     routerState.navigate.mockReset();
+@@ -184,6 +195,66 @@ describe("NewAgentDialog on a hosted box", () => {
+     act(() => root.unmount());
+   });
+ 
++  it("can submit another hire after a successful hire and reopening", async () => {
++    const view = renderDialog(container);
++    await waitForAssertion(() => expect(container.textContent).toContain("Ask your Chief of Staff"));
++    await setInputValue(container.querySelector('input[placeholder*="Role"]') as HTMLInputElement, "Engineer");
++    const submit = () => Array.from(container.querySelectorAll("button"))
++      .find((button) => /Ask your Chief of Staff|Asking/.test(button.textContent ?? ""))!;
++    await act(async () => submit().click());
++    await waitForAssertion(() => expect(mockConversationsApi.post).toHaveBeenCalled());
++    dialogState.newAgentOpen = false;
++    rerenderDialog(view);
++    dialogState.newAgentOpen = true;
++    rerenderDialog(view);
++    await setInputValue(container.querySelector('input[placeholder*="Role"]') as HTMLInputElement, "Designer");
++    expect(submit().disabled).toBe(false);
++    expect(submit().textContent).toContain("Ask your Chief of Staff");
++    await act(async () => submit().click());
++    expect(mockConversationsApi.post).toHaveBeenLastCalledWith("conv-1", "Please hire Designer.", "company-1");
++    act(() => view.root.unmount());
++  });
++
++  it("does not post or close a new dialog session when an old inbox lookup finishes", async () => {
++    let resolveInbox!: (value: { id: string }) => void;
++    mockConversationsApi.companyInbox.mockImplementationOnce(() => new Promise((resolve) => { resolveInbox = resolve; }));
++    mockConversationsApi.post.mockClear();
++    const view = renderDialog(container);
++    await waitForAssertion(() => expect(container.textContent).toContain("Ask your Chief of Staff"));
++    await setInputValue(container.querySelector('input[placeholder*="Role"]') as HTMLInputElement, "Engineer");
++    await act(async () => Array.from(container.querySelectorAll("button"))
++      .find((button) => button.textContent?.includes("Ask your Chief of Staff"))!.click());
++    dialogState.newAgentOpen = false;
++    rerenderDialog(view);
++    dialogState.newAgentOpen = true;
++    rerenderDialog(view);
++    await setInputValue(container.querySelector('input[placeholder*="Role"]') as HTMLInputElement, "New request");
++    await act(async () => resolveInbox({ id: "old-conversation" }));
++    expect(mockConversationsApi.post).not.toHaveBeenCalled();
++    expect(dialogState.closeNewAgent).not.toHaveBeenCalled();
++    expect((container.querySelector('input[placeholder*="Role"]') as HTMLInputElement).value).toBe("New request");
++    act(() => view.root.unmount());
++  });
++
++  it("does not navigate or clear the new company's draft after an earlier company's post completes", async () => {
++    let resolvePost!: (value: { id: string }) => void;
++    mockConversationsApi.post.mockImplementationOnce(() => new Promise((resolve) => { resolvePost = resolve; }));
++    const view = renderDialog(container);
++    await waitForAssertion(() => expect(container.textContent).toContain("Ask your Chief of Staff"));
++    await setInputValue(container.querySelector('input[placeholder*="Role"]') as HTMLInputElement, "Engineer");
++    await act(async () => Array.from(container.querySelectorAll("button"))
++      .find((button) => button.textContent?.includes("Ask your Chief of Staff"))!.click());
++    companyState.selectedCompanyId = "company-2";
++    companyState.selectedCompany = { ...companyState.selectedCompany, id: "company-2", name: "Second company" };
++    rerenderDialog(view);
++    await setInputValue(container.querySelector('input[placeholder*="Role"]') as HTMLInputElement, "Second company draft");
++    await act(async () => resolvePost({ id: "old-message" }));
++    expect(dialogState.closeNewAgent).not.toHaveBeenCalled();
++    expect(routerState.navigate).not.toHaveBeenCalled();
++    expect((container.querySelector('input[placeholder*="Role"]') as HTMLInputElement).value).toBe("Second company draft");
++    act(() => view.root.unmount());
++  });
++
+   it("renders a placeholder instead of the adapter path while health loads", async () => {
+     mockHealthApi.get.mockReturnValue(new Promise(() => undefined));
+     const { root } = renderDialog(container);
+diff --git a/ui/src/components/NewAgentDialog.tsx b/ui/src/components/NewAgentDialog.tsx
+index ea171245e0758a0f8dab7e326989f1110323b641..58024ed10c315a0195dfaff8c8580eccacbcd75f 100644
+--- a/ui/src/components/NewAgentDialog.tsx
++++ b/ui/src/components/NewAgentDialog.tsx
+@@ -1,4 +1,4 @@
+-import { useState, useMemo } from "react";
++import { useState, useMemo, useEffect, useRef } from "react";
+ import { useQuery } from "@tanstack/react-query";
+ import { useNavigate } from "@/lib/router";
+ import { useDialog } from "../context/DialogContext";
+@@ -44,6 +44,17 @@ export function NewAgentDialog() {
+   const [hireWork, setHireWork] = useState("");
+   const [hireSubmitting, setHireSubmitting] = useState(false);
+   const [hireError, setHireError] = useState<string | null>(null);
++  const hireSession = useRef({ submitting: false });
++  // AgentDash: a reopened dialog or another company starts a new request
++  // session. Earlier async work must not post, clear, close or navigate it.
++  useEffect(() => {
++    hireSession.current = { submitting: false };
++    setHireRole("");
++    setHireWork("");
++    setHireError(null);
++    setHireSubmitting(false);
++    return () => { hireSession.current = { submitting: false }; };
++  }, [newAgentOpen, selectedCompanyId]);
+   const disabledTypes = useDisabledAdaptersSync();
+   const isMkProfile = selectedCompany?.productProfile === "agentdash_mk";
+ 
+@@ -139,7 +150,9 @@ export function NewAgentDialog() {
+   }
+ 
+   async function handleAskChiefOfStaff() {
+-    if (!selectedCompanyId || hireSubmitting) return;
++    const session = hireSession.current;
++    if (!selectedCompanyId || session.submitting) return;
++    session.submitting = true;
+     setHireSubmitting(true);
+     setHireError(null);
+     const role = hireRole.trim() || "an agent";
+@@ -149,14 +162,21 @@ export function NewAgentDialog() {
+       (work ? ` It should work on: ${work}.` : "");
+     try {
+       const conversation = await conversationsApi.companyInbox(selectedCompanyId);
++      if (hireSession.current !== session) return;
+       await conversationsApi.post(conversation.id, body, selectedCompanyId);
++      if (hireSession.current !== session) return;
+       setHireRole("");
+       setHireWork("");
+       closeNewAgent();
+       navigate("/cos");
+     } catch {
++      if (hireSession.current !== session) return;
+       setHireError("Couldn't send that. Try again.");
+-      setHireSubmitting(false);
++    } finally {
++      if (hireSession.current === session) {
++        session.submitting = false;
++        setHireSubmitting(false);
++      }
+     }
+   }
+ 

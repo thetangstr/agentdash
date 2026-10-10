@@ -1,105 +1,32 @@
-# AgentDash
+# AgentDash local preservation — 2026-10-10
 
-**A CoS-led, multi-human AI workspace.** Type a request to your Chief of Staff, the CoS routes work to the right agent, multiple humans on the same workspace see the same thread.
+This archive preserves local source work before retirement of the development SSD. It is separate from the application main branch. Unfinished snapshots have not been integrated or validated as a working product.
 
-Built on [paperclipai/paperclip](https://github.com/paperclipai/paperclip).
+## Preserved
 
----
+- A binary incremental Git bundle retaining local branch/tag/backup/review history beyond the live GitHub baseline: 2,431 commits and 1,428 bundle refs.
+- A manifest of all 3,829 recorded Git refs, including 2,275 nonremote refs and 413 local branches. The remaining nonremote refs resolve through the baseline history retained by this archive commit's parents.
+- 100 unfinished source/doc files, metadata and separate staged/unstaged binary patches from the dirty working trees. Files retain their recorded HEAD provenance.
 
-## Get started
+Credential review: 90 history and 39 unfinished-source scanner findings were independently reviewed as synthetic fixtures or code patterns. Twenty private working-tree items (credential, runtime logs and unreviewed screenshots) were excluded. Ignored runtime state, database dumps, private company evidence and credentials require a separate protected backup and are not part of this public archive.
 
-One command, three prompts.
+## Restore source history
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap.sh | bash
-```
-
-That clones AgentDash to `~/agentdash`, installs deps, links the `agentdash` CLI onto your PATH, and runs the setup wizard. The wizard asks:
-
-1. **Pick an adapter** — Claude Code / Codex / Hermes / Cursor / … Runs `<adapter> --version` to verify it's installed; prints the install command if not.
-2. **Your email** — founding user / workspace owner.
-3. **Start setting up the agents now?** — press Enter to boot the dev server. You land in your Chief of Staff at <http://localhost:3100/cos>.
-
-Requires Node 20+, pnpm, and git. Set `ANTHROPIC_API_KEY` in the shell beforehand for real Claude replies (otherwise you get a stub). Everything else (embedded Postgres, local storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults.
-
-To re-run later: `agentdash setup` (or `agentdash setup adapter` / `setup server` / `setup bootstrap` for one section).
-
----
-
-### Already cloned the repo?
+Clone this repository normally, with this archive branch available. Its parent commits retain the baseline history required by the incremental bundle. In a separate clone:
 
 ```sh
-pnpm install && pnpm install-cli && agentdash setup
+git switch archive/local-preservation-20261010
+cat history/history.bundle.part-* > /tmp/agentdash-local-history.bundle
+git bundle verify /tmp/agentdash-local-history.bundle
+git fetch /tmp/agentdash-local-history.bundle '+refs/*:refs/restored-local/*'
 ```
 
-`pnpm install-cli` symlinks `agentdash` into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin` (whichever is writable). The wizard's last step offers to start the server; if you skip it, run `pnpm dev` from the repo root.
+Check the combined file against the SHA-256 in history-manifest.json before importing. The imported refs are under refs/restored-local to avoid overwriting the clone's current branches or tags. local-refs.tsv records the original names and exact object IDs. To recreate the original nonremote refs, do it in a separate dedicated restoration repository, using that manifest after confirming the target objects exist. The original checkout had shallow history; a normal GitHub clone supplies complete public baseline ancestry, while the independent offline restore simulation retained the original shallow marker.
 
-### Going to production
+## Restore unfinished work
 
-The flow above runs in `local_trusted` mode — no auth, no billing, single user. To deploy AgentDash with real auth, real Stripe, and real Claude, see **[doc/LAUNCH.md](doc/LAUNCH.md)**: the dependency-ordered checklist from clean clone to first paying customer.
+For each unfinished-work snapshot, start from the HEAD recorded in snapshot.json. Apply staged.patch to the index, then unstaged.patch to working files, and restore the saved untracked files from files/. These snapshots preserve work in progress and staged/unstaged distinctions; run the relevant application checks before integration.
 
----
+## Drive removal boundary
 
-## About this fork
-
-AgentDash is a fork of Paperclip. We use Paperclip's main agent harness (heartbeats, adapters, plugin SDK) and layer five named features on top: a UI redesign with Claude design system, the `/assess` agent-readiness flow, a CoS-led onboarding flow, Free + Pro per-seat billing with a Stripe trial, and a multi-human + CoS chat substrate (typed cards, `@`-mention summons, WebSocket bus).
-
-We **don't** carry forward upstream's CRM, HubSpot stub, AutoResearch stub, Action Proposals + Policy Engine, Pipeline Orchestrator, Budget+Capacity, Skills Registry workflow, or Smart Model Routing. See [doc/UPSTREAM-POLICY.md](doc/UPSTREAM-POLICY.md) for the cherry-pick rubric — we don't bulk-merge upstream.
-
-For Paperclip's product story, see the [upstream README](https://github.com/paperclipai/paperclip) and [doc/PRODUCT.md](doc/PRODUCT.md).
-
----
-
-## Reference
-
-### Project layout
-
-Monorepo (pnpm workspaces). AgentDash-specific code is tagged with `// AgentDash:` comments.
-
-| Layer | Tech | Entry |
-|---|---|---|
-| API server | Express 5, WebSocket | [server/src/index.ts](server/src/index.ts) |
-| Dashboard UI | React 19, Vite, Tailwind 4 | [ui/src/main.tsx](ui/src/main.tsx) |
-| Marketing UI | React, cream/light theme | [ui/src/marketing/](ui/src/marketing/) |
-| CLI | Commander, esbuild | [cli/src/index.ts](cli/src/index.ts) |
-| Database | PostgreSQL, Drizzle ORM | [packages/db/src/schema/](packages/db/src/schema/) |
-| Shared types | Zod validators, constants | [packages/shared/src/](packages/shared/src/) |
-| Agent adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, acpx | [packages/adapters/](packages/adapters/) |
-| Plugins | JSON-RPC workers, event bus | [packages/plugins/](packages/plugins/) |
-
-### Common commands
-
-```sh
-pnpm dev                  # server + UI with watching (localhost:3100)
-pnpm dev:once             # without watching
-pnpm -r typecheck         # type-check all packages
-pnpm test:run             # run all tests once
-pnpm build                # build server + UI + CLI
-pnpm db:generate          # generate migration after schema change
-pnpm db:migrate           # apply pending migrations
-
-# E2E
-pnpm exec playwright test --config tests/e2e/playwright-multiuser.config.ts
-pnpm exec playwright test --config tests/e2e/playwright-multiuser-authenticated.config.ts
-```
-
-Run the regression suite before any handoff: `pnpm -r typecheck && pnpm test:run && pnpm build`.
-
-### Docs
-
-| Doc | What it covers |
-|---|---|
-| [doc/LAUNCH.md](doc/LAUNCH.md) | Step-by-step from clean clone to first paying customer |
-| [doc/UPSTREAM-POLICY.md](doc/UPSTREAM-POLICY.md) | Cherry-pick rubric for upstream paperclip commits |
-| [doc/DEVELOPING.md](doc/DEVELOPING.md) | Detailed dev guide |
-| [docs/superpowers/specs/](docs/superpowers/specs/) | Per-sub-project design specs |
-| [.claude/commands/](.claude/commands/) | MAW slash commands (PM, Builder, Tester, TPM, Admin) |
-| [CLAUDE.md](CLAUDE.md) | Codebase entry point for AI coding assistants |
-
----
-
-## License
-
-MIT, same as upstream. See [LICENSE](LICENSE).
-
-Built on [Paperclip](https://github.com/paperclipai/paperclip) — credit and thanks to the Paperclip team for the agent harness AgentDash is built on.
+This archive preserves source work. Four internal-disk linked worktrees still depend on the original SSD Git directory, and 42 private runtime skill-cache symlinks target the SSD. Repair those pointers and move the private artifact archive to durable protected storage before formatting. The emergency local archive under /private/tmp is temporary.

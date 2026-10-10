@@ -1,0 +1,102 @@
+[
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-company-menu.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-nav-mobile.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-sidebar-advanced-bottom.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-sidebar-advanced.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-sidebar-desktop.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-sidebar-mk.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/after-single-company-no-rail.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/before-nav-mobile.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/before-sidebar-advanced.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/before-sidebar-desktop.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "099-devin-787",
+    "path": "shots-787/before-sidebar-mk.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "145-muse-stub",
+    "path": "tools/spikes/muse-mcp-stub/.bearer",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "145-muse-stub",
+    "path": "tools/spikes/muse-mcp-stub/server.out",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "145-muse-stub",
+    "path": "tools/spikes/muse-mcp-stub/tunnel.log",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "104-devin-793",
+    "path": "shots-793/after-connections-mk.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "104-devin-793",
+    "path": "shots-793/after-connections.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "104-devin-793",
+    "path": "shots-793/after-settings-mk.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "104-devin-793",
+    "path": "shots-793/after-settings.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "104-devin-793",
+    "path": "shots-793/before-settings-mk.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  },
+  {
+    "snapshot": "104-devin-793",
+    "path": "shots-793/before-settings.png",
+    "reason": "private credential, runtime log, or unreviewed screenshot"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/devin/a11y-followups-20261003",
+  "head": "a7c350859a4d445b1d0c0bdc28d449d2402bcaef",
+  "sourceWorktreeName": "devin-redact",
+  "files": [
+    "pr-body-c3-a11y.md"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

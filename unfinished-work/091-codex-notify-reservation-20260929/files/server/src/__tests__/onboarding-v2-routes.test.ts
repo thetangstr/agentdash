@@ -1,0 +1,1655 @@
+import express from "express";
+import request from "supertest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const mockOrchestrator = { bootstrap: vi.fn() };
+const mockConversations = {
+  paginate: vi.fn().mockResolvedValue([]),
+  postMessage: vi.fn().mockResolvedValue({ id: "m1" }),
+  findByCompany: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: "conv1" }),
+  addParticipant: vi.fn().mockResolvedValue(undefined),
+};
+const mockAgents = {
+  create: vi.fn(),
+  getById: vi.fn(),
+  createApiKey: vi.fn(),
+  list: vi.fn().mockResolvedValue([]),
+  listKeys: vi.fn().mockResolvedValue([]),
+};
+const mockAccess = {
+  listActiveUserMemberships: vi.fn().mockResolvedValue([]),
+};
+const mockCompanies = {
+  getById: vi.fn().mockResolvedValue({ id: "c1", name: "Acme", planTier: "pro_active" }),
+};
+const mockInterview = { nextTurn: vi.fn() };
+const mockProposer = { propose: vi.fn() };
+const mockCreator = { create: vi.fn() };
+const mockInstructions = { materializeManagedBundle: vi.fn().mockResolvedValue({}) };
+const mockCosState = {
+  getOrCreate: vi.fn(),
+  recordTurn: vi.fn(),
+  setGoals: vi.fn(),
+  advancePhase: vi.fn().mockResolvedValue(undefined),
+};
+const mockMaterializeOnboardingGoals = vi.fn().mockResolvedValue({
+  created: 0,
+  skipped: 0,
+});
+
+const mockInvites = {
+  createCompanyInvite: vi.fn(),
+};
+const mockSendEmail = vi.fn().mockResolvedValue({ status: "skipped" });
+const mockLogActivity = vi.fn().mockResolvedValue(undefined);
+
+vi.mock("../auth/email.js", () => ({
+  sendEmail: (...args: unknown[]) => mockSendEmail(...args),
+  // AgentDash (GH #794): echo-shaped stub so tests can inspect exactly what
+  // the route put in the email (names + settings URL, never key material).
+  modelKeyRequestEmailTemplate: ({
+    settingsUrl,
+    companyName,
+    requesterName,
+  }: {
+    settingsUrl: string;
+    companyName: string | null;
+    requesterName: string | null;
+  }) => ({
+    subject: `${requesterName ?? "A teammate"} needs a model key for ${companyName ?? "the workspace"}`,
+    html: `<a href="${settingsUrl}">${requesterName ?? ""} ${companyName ?? ""}</a>`,
+    text: `Open ${settingsUrl} — ${requesterName ?? ""} / ${companyName ?? ""}`,
+  }),
+  inviteEmailTemplate: ({
+    inviteUrl,
+    companyName,
+    inviterName,
+  }: {
+    inviteUrl: string;
+    companyName: string | null;
+    inviterName: string | null;
+  }) => ({
+    subject: `${inviterName ?? "x"}→${companyName ?? "y"}: ${inviteUrl}`,
+    html: `<a>${inviteUrl}</a>`,
+    text: `Invite ${inviteUrl}`,
+  }),
+  sanitizeDisplayName: (s: string | null) => s,
+}));
+
+// AgentDash (#725): the hermes-provider handler has its own route test; here
+// only the delegation from setup-adapter is checked.
+const mockHermesProviderHandler = vi.hoisted(() =>
+  vi.fn(async (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+    res.status(201).json({ delegated: true });
+  }),
+);
+vi.mock("../routes/hermes-provider-setup.js", () => ({
+  createHermesProviderSetupHandler: () => mockHermesProviderHandler,
+}));
+
+const mockDispatchLLM = vi.fn();
+vi.mock("../services/dispatch-llm.js", () => ({
+  dispatchLLM: (...args: unknown[]) => mockDispatchLLM(...args),
+}));
+
+vi.mock("../services/materialize-onboarding-goals.js", () => ({
+  materializeOnboardingGoals: () => mockMaterializeOnboardingGoals,
+}));
+
+vi.mock("../services/index.js", () => ({
+  agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
+  onboardingOrchestrator: () => mockOrchestrator,
+  OnboardingTierCapacityExceededError: class OnboardingTierCapacityExceededError extends Error {
+    action: "invite" | "hire";
+
+    constructor(action: "invite" | "hire") {
+      super(action);
+      this.action = action;
+    }
+  },
+  cosInterview: () => mockInterview,
+  agentProposer: () => mockProposer,
+  agentCreatorFromProposal: () => mockCreator,
+  conversationService: () => mockConversations,
+  agentService: () => mockAgents,
+  accessService: () => mockAccess,
+  companyService: () => mockCompanies,
+  agentInstructionsService: () => mockInstructions,
+  cosOnboardingStateService: () => mockCosState,
+  inviteService: () => mockInvites,
+  logActivity: (...args: unknown[]) => mockLogActivity(...args),
+}));
+
+const mockFinalize = vi.fn();
+vi.mock("../services/deep-interview-crystallize.js", () => ({
+  crystallizeAndAdvanceCos: () => mockFinalize,
+}));
+
+vi.mock("@paperclipai/db", () => ({
+  authUsers: { id: "id", name: "name", email: "email" },
+  activityLog: { companyId: "company_id", action: "action", actorId: "actor_id", createdAt: "created_at" },
+  companies: { id: "id", name: "name" },
+  companyMemberships: {
+    id: "id",
+    companyId: "company_id",
+    principalType: "principal_type",
+    principalId: "principal_id",
+    status: "status",
+    membershipRole: "membership_role",
+  },
+  instanceUserRoles: { userId: "user_id", role: "role" },
+  assistantConversations: { id: "id", companyId: "company_id" },
+  deepInterviewStates: { id: "id", scope: "scope", scopeRefId: "scope_ref_id" },
+  assistantMessages: {
+    conversationId: "conversation_id",
+    cardKind: "card_kind",
+    createdAt: "created_at",
+  },
+}));
+
+vi.mock("drizzle-orm", () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
+  gt: vi.fn(),
+  inArray: vi.fn(),
+  ne: vi.fn(),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
+}));
+
+import { onboardingV2Routes } from "../routes/onboarding-v2.js";
+import { errorHandler } from "../middleware/error-handler.js";
+
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalPublicUrl = process.env.PAPERCLIP_PUBLIC_URL;
+
+beforeEach(() => {
+  mockAccess.listActiveUserMemberships.mockResolvedValue([]);
+  mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "pro_active" });
+  mockAgents.list.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+  else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+  delete process.env.AGENTDASH_BILLING_DISABLED;
+  if (originalPublicUrl === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
+  else process.env.PAPERCLIP_PUBLIC_URL = originalPublicUrl;
+});
+
+function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res: any, next: any) => {
+    req.actor = actor;
+    next();
+  });
+  // Stub db: each `select().from().where()...orderBy?...limit?` chain pops the
+  // next preset result. The chain's terminal state is awaitable as a Promise of an array.
+  const queue = [...dbResults];
+  const makeChain = (): any => {
+    const chain: any = {
+      select: () => chain,
+      from: () => chain,
+      where: () => chain,
+      orderBy: () => chain,
+      limit: () => chain,
+      then: (onF: any, onR: any) =>
+        Promise.resolve(queue.length > 0 ? queue.shift() : []).then(onF, onR),
+    };
+    return chain;
+  };
+  const stubDb: any = makeChain();
+  let transactionTail = Promise.resolve();
+  stubDb.execute = vi.fn().mockResolvedValue([{ locked: true }]);
+  stubDb.transaction = vi.fn((fn: (tx: any) => Promise<unknown>) => {
+    const run = transactionTail.then(() => fn(stubDb));
+    transactionTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  });
+  app.use("/api/onboarding", onboardingV2Routes(stubDb));
+  app.use(errorHandler);
+  return app;
+}
+
+describe("POST /api/onboarding/bootstrap", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConversations.postMessage.mockResolvedValue({ id: "m1" });
+  });
+
+  it("returns the bootstrapped IDs (welcome sequence is owned by orchestrator, not the route)", async () => {
+    mockOrchestrator.bootstrap.mockResolvedValue({
+      companyId: "c1",
+      cosAgentId: "a1",
+      conversationId: "conv1",
+    });
+    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    const res = await request(app).post("/api/onboarding/bootstrap").send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      companyId: "c1",
+      cosAgentId: "a1",
+      conversationId: "conv1",
+    });
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1");
+    // The route must NOT post any messages itself anymore.
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 for unauthenticated callers", async () => {
+    const app = buildApp({ type: "none", source: "none" });
+    const res = await request(app).post("/api/onboarding/bootstrap").send({});
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /api/onboarding/complete-initial-assessment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOrchestrator.bootstrap.mockResolvedValue({
+      companyId: "c1",
+      cosAgentId: "cos1",
+      conversationId: "conv1",
+    });
+    mockCosState.getOrCreate.mockResolvedValue({ conversationId: "conv1" });
+    mockCosState.setGoals.mockResolvedValue({ conversationId: "conv1" });
+    mockCosState.advancePhase.mockResolvedValue({ conversationId: "conv1", phase: "plan" });
+  });
+
+  it("attaches the short assessment to CoS onboarding state and advances to plan", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app)
+      .post("/api/onboarding/complete-initial-assessment")
+      .send({
+        companyId: "c1",
+        assessmentMarkdown: "## AI Adoption Starting Point\nStart with proposal response.",
+        assessmentInput: {
+          companyName: "Acme",
+          industry: "Healthcare",
+          challenges: "Sales teams wait too long for compliant proposal answers.",
+          currentSystems: "Salesforce, SharePoint",
+          targets: "Shorten proposal response time by 50%.",
+          selectedFunctions: ["sales"],
+          aiUsageLevel: "individual",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      companyId: "c1",
+      cosAgentId: "cos1",
+      conversationId: "conv1",
+      redirectUrl: "/cos",
+    });
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1");
+    expect(mockCosState.getOrCreate).toHaveBeenCalledWith("conv1");
+    expect(mockCosState.setGoals).toHaveBeenCalledWith(
+      "conv1",
+      expect.objectContaining({
+        shortTerm: "Shorten proposal response time by 50%.",
+        longTerm: expect.stringContaining("Acme"),
+        constraints: expect.objectContaining({
+          source: "initial_company_assessment",
+          industry: "Healthcare",
+          currentSystems: "Salesforce, SharePoint",
+          selectedFunctions: ["sales"],
+          assessmentSummary: expect.stringContaining("AI Adoption Starting Point"),
+        }),
+      }),
+    );
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
+  });
+});
+
+describe("POST /api/onboarding/agent/confirm", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConversations.postMessage.mockResolvedValue({ id: "m1" });
+    mockConversations.paginate.mockResolvedValue([]);
+  });
+
+  it("hires an agent and returns the proposal + apiKey", async () => {
+    mockProposer.propose.mockResolvedValue({
+      name: "Reese",
+      role: "SDR",
+      oneLineOkr: "ok",
+      rationale: "x",
+    });
+    mockCreator.create.mockResolvedValue({
+      agentId: "agent-2",
+      apiKey: { id: "k", token: "agk_x" },
+    });
+    // Closes #330: route asserts companyAccess against body.companyId
+    // (per PR #282 / #230 security fix). Actor must include the
+    // company in its companyIds list or the route returns 403.
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv1",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      agent: { id: "agent-2", name: "Reese", title: "SDR" },
+      apiKey: { token: "agk_x" },
+    });
+  });
+
+  it("allows the first onboarding agent on a Free workspace", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAgents.list.mockResolvedValue([]);
+    mockProposer.propose.mockResolvedValue({
+      name: "Casey",
+      role: "Chief of Staff",
+      oneLineOkr: "ok",
+      rationale: "x",
+    });
+    mockCreator.create.mockResolvedValue({
+      agentId: "cos1",
+      apiKey: { id: "k", token: "agk_x" },
+    });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
+
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv1",
+      reportsToAgentId: "owner",
+      companyId: "c1",
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      agent: { id: "cos1", name: "Casey", title: "Chief of Staff" },
+      apiKey: { token: "agk_x" },
+    });
+  });
+
+  it("blocks onboarding agent confirmation on Free workspaces that already have the CoS", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", status: "idle" },
+    ]);
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }]]);
+
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv1",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockProposer.propose).not.toHaveBeenCalled();
+    expect(mockCreator.create).not.toHaveBeenCalled();
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent Free onboarding agent confirmations so only one agent is created", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    const activeAgents: Array<{ id: string; role: string; status: string }> = [];
+    mockAgents.list.mockImplementation(async () => activeAgents);
+
+    let proposalCalls = 0;
+    let releaseProposals!: () => void;
+    const bothRequestsReachedProposal = new Promise<void>((resolve) => {
+      releaseProposals = resolve;
+    });
+    mockProposer.propose.mockImplementation(async () => {
+      proposalCalls += 1;
+      if (proposalCalls === 2) releaseProposals();
+      await bothRequestsReachedProposal;
+      return {
+        name: "Casey",
+        role: "Chief of Staff",
+        oneLineOkr: "ok",
+        rationale: "x",
+      };
+    });
+    mockCreator.create.mockImplementation(async () => {
+      const id = `agent-${activeAgents.length + 1}`;
+      activeAgents.push({ id, role: "chief_of_staff", status: "idle" });
+      return {
+        agentId: id,
+        apiKey: { id: `key-${id}`, token: `agk_${id}` },
+      };
+    });
+
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[{ companyId: "c1" }], [{ companyId: "c1" }]]);
+    const requestBody = {
+      conversationId: "conv1",
+      reportsToAgentId: "owner",
+      companyId: "c1",
+    };
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/onboarding/agent/confirm").send(requestBody),
+      request(app).post("/api/onboarding/agent/confirm").send(requestBody),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([201, 402]);
+    expect([first.body.code, second.body.code]).toContain("agent_cap_exceeded");
+    expect(mockCreator.create).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+  });
+  it("refuses a conversation from another company (no transcript read, no hire, no post)", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ companyId: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv-of-c2",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(404);
+    expect(mockConversations.paginate).not.toHaveBeenCalled();
+    expect(mockProposer.propose).not.toHaveBeenCalled();
+    expect(mockCreator.create).not.toHaveBeenCalled();
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown conversation", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[]]);
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "missing",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+    expect(res.status).toBe(404);
+    expect(mockCreator.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/onboarding/finalize-assessment", () => {
+  it("refuses a state whose conversation belongs to another company", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "conv-of-c2" }], [{ companyId: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(403);
+  });
+
+  it("404s an unknown state id", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] }, [[]]);
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "nope" });
+    expect(res.status).toBe(404);
+  });
+
+  it("finalizes an assess-path state whose scopeRefId is the caller's company id", async () => {
+    mockFinalize.mockResolvedValueOnce({ specId: "spec1", conversationId: "c1" });
+    // db queue: [state row, no conversation with that id, company row]
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "c1" }], [], [{ id: "c1" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(200);
+    expect(res.body.specId).toBe("spec1");
+    expect(mockFinalize).toHaveBeenCalledWith("s1");
+  });
+
+  it("refuses an assess-path state scoped to another company's id", async () => {
+    mockFinalize.mockClear();
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "c2" }], [], [{ id: "c2" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(403);
+    expect(mockFinalize).not.toHaveBeenCalled();
+  });
+
+  it("404s a state whose scopeRefId is neither a conversation nor a company", async () => {
+    mockFinalize.mockClear();
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "cos_onboarding", scopeRefId: "ghost" }], [], []],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(404);
+    expect(mockFinalize).not.toHaveBeenCalled();
+  });
+
+  it("404s a state that is not a CoS onboarding interview", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ scope: "assess_project", scopeRefId: "p1" }]],
+    );
+    const res = await request(app).post("/api/onboarding/finalize-assessment").send({ stateId: "s1" });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/onboarding/confirm-plan", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates one agent per plan-card entry, posts a closing message, advances phase to ready", async () => {
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", name: "CoS" },
+    ]);
+    let createdCount = 0;
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: `agent-${++createdCount}`,
+      companyId,
+      name: data.name,
+      adapterConfig: {},
+    }));
+
+    const planPayload = {
+      rationale: "ship + seed",
+      agents: [
+        {
+          role: "engineering_lead",
+          name: "Ellie",
+          adapterType: "hermes_local",
+          responsibilities: ["own dashboard"],
+          kpis: ["ship Q3"],
+        },
+        {
+          role: "qa",
+          name: "Quinn",
+          adapterType: "hermes_local",
+          responsibilities: ["test nightly"],
+          kpis: ["zero P0 escapes"],
+        },
+      ],
+      alignmentToShortTerm: "ships v2",
+      alignmentToLongTerm: "lays groundwork",
+    };
+    const app = buildApp(
+      // Closes #330: includes companyIds per PR #282/#230 assertCompanyAccess.
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        // 1st db chain: lookup conversation
+        [{ id: "conv1", companyId: "c1" }],
+        // 2nd db chain: lookup latest agent_plan_proposal_v1 message
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({
+      companyId: "c1",
+      createdAgentIds: ["agent-1", "agent-2"],
+    });
+    expect(mockAgents.create).toHaveBeenCalledTimes(2);
+    expect(mockAgents.create).toHaveBeenNthCalledWith(
+      1,
+      "c1",
+      expect.objectContaining({ name: "Ellie", adapterType: "hermes_local", reportsTo: "cos1" }),
+    );
+    expect(mockAgents.create).toHaveBeenNthCalledWith(
+      2,
+      "c1",
+      expect.objectContaining({ name: "Quinn", adapterType: "hermes_local" }),
+    );
+    expect(mockInstructions.materializeManagedBundle).toHaveBeenCalledTimes(2);
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "materializing");
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "ready");
+    // Closing message posted authored by the CoS.
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        authorId: "cos1",
+        body: expect.stringContaining("Done"),
+      }),
+    );
+  });
+
+  it("blocks plan materialization on Free workspaces that already have the CoS", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", name: "CoS", status: "idle" },
+    ]);
+    const planPayload = {
+      rationale: "ship + seed",
+      agents: [
+        {
+          role: "engineering_lead",
+          name: "Ellie",
+          adapterType: "hermes_local",
+          responsibilities: ["own dashboard"],
+          kpis: ["ship Q3"],
+        },
+      ],
+      alignmentToShortTerm: "ships v2",
+      alignmentToLongTerm: "lays groundwork",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockCosState.advancePhase).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockInstructions.materializeManagedBundle).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the conversation has no plan card", async () => {
+    const app = buildApp(
+      // Closes #330: includes companyIds per PR #282/#230 assertCompanyAccess.
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }], // conversation lookup
+        [], // no plan card
+      ],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/onboarding/revise-plan", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Closes #330: route is no longer Phase-F-deferred (#210 / #231
+  // implemented it). With an empty conversation lookup, the route
+  // returns 404 "Conversation not found" — assert that contract.
+  it("returns 404 when the conversation is missing", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[]], // conversation lookup returns no rows
+    );
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/onboarding/invites", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInvites.createCompanyInvite.mockReset();
+  });
+
+  it("creates one invite per email, sends an email per invite, and returns URLs + emailStatus", async () => {
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    let n = 0;
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return {
+        id: `invite-${n}`,
+        token: `pcp_invite_tok${n}`,
+        expiresAt: expires,
+      };
+    });
+    mockSendEmail.mockResolvedValue({ status: "skipped" });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app)
+      .post("/api/onboarding/invites")
+      .set("x-forwarded-proto", "https")
+      .set("x-forwarded-host", "app.example.com")
+      .send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com", "carol@acme.com"],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1", "invite-2"]);
+    expect(res.body.errors).toEqual([]);
+    expect(res.body.invites).toEqual([
+      {
+        id: "invite-1",
+        email: "bob@acme.com",
+        invitePath: "/invite/pcp_invite_tok1",
+        inviteUrl: "https://app.example.com/invite/pcp_invite_tok1",
+        expiresAt: expires.toISOString(),
+        emailStatus: "skipped",
+      },
+      {
+        id: "invite-2",
+        email: "carol@acme.com",
+        invitePath: "/invite/pcp_invite_tok2",
+        inviteUrl: "https://app.example.com/invite/pcp_invite_tok2",
+        expiresAt: expires.toISOString(),
+        emailStatus: "skipped",
+      },
+    ]);
+    expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(2);
+    expect(mockInvites.createCompanyInvite).toHaveBeenNthCalledWith(1, {
+      companyId: "c1",
+      invitedByUserId: "u1",
+      email: "bob@acme.com",
+      autoApprove: false,
+    });
+    // sendEmail invoked per invite, with the URL we just minted.
+    expect(mockSendEmail).toHaveBeenCalledTimes(2);
+    expect(mockSendEmail).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        to: "bob@acme.com",
+        subject: expect.stringContaining("https://app.example.com/invite/pcp_invite_tok1"),
+      }),
+    );
+  });
+
+  it("allows the first teammate invite on a Free workspace with no active humans", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAccess.listActiveUserMemberships.mockResolvedValue([]);
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    mockInvites.createCompanyInvite.mockResolvedValue({
+      id: "invite-1",
+      token: "tok1",
+      expiresAt: expires,
+    });
+    mockSendEmail.mockResolvedValue({ status: "skipped" });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["owner@acme.com"],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks teammate invites on Free workspaces that already have one human", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAccess.listActiveUserMemberships.mockResolvedValue([
+      { id: "member-1", principalType: "user", status: "active" },
+    ]);
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["teammate@acme.com"],
+    });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("seat_cap_exceeded");
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("rechecks teammate capacity inside the lock before creating onboarding invites", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAccess.listActiveUserMemberships
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: "member-1", principalType: "user", status: "active" }]);
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["teammate@acme.com"],
+    });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("seat_cap_exceeded");
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("propagates sendEmail status into the response (sent / failed both flow through)", async () => {
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    let n = 0;
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return { id: `invite-${n}`, token: `tok${n}`, expiresAt: expires };
+    });
+    mockSendEmail
+      .mockResolvedValueOnce({ status: "sent", messageId: "msg-1" })
+      .mockResolvedValueOnce({ status: "failed", error: "rate limited" });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["a@x.com", "b@x.com"],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.invites.map((i: { emailStatus: string }) => i.emailStatus)).toEqual([
+      "sent",
+      "failed",
+    ]);
+    expect(res.body.errors).toEqual([]); // failed email is NOT a create failure
+  });
+
+  it("rejects batches over MAX_INVITE_BATCH (25) without touching the invite service", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const big = Array.from({ length: 26 }, (_, i) => `u${i}@x.com`);
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: big,
+    });
+    expect(res.status).toBe(400);
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed emails inline (no @, no domain dot) and dedupes within the batch", async () => {
+    let n = 0;
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return {
+        id: `invite-${n}`,
+        token: `tok${n}`,
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      };
+    });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: [
+        "not-an-email",   // no @
+        "missing@domain", // no dot in domain
+        "ok@example.com",
+        "OK@example.com", // case-insensitive duplicate
+        "spaces in@email.com",
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(res.body.errors).toEqual([
+      { email: "not-an-email", reason: "invalid-email" },
+      { email: "missing@domain", reason: "invalid-email" },
+      { email: "OK@example.com", reason: "duplicate-email" },
+      { email: "spaces in@email.com", reason: "invalid-email" },
+    ]);
+    expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 403 for callers without access to companyId", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["other-company"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["bob@acme.com"],
+    });
+    expect(res.status).toBe(403);
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+  });
+
+  it("records per-email failures without aborting the batch", async () => {
+    mockInvites.createCompanyInvite
+      .mockResolvedValueOnce({
+        id: "invite-1",
+        token: "tok1",
+        expiresAt: new Date(),
+      })
+      .mockRejectedValueOnce(new Error("db down"));
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["ok@acme.com", "broken@acme.com"],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(res.body.errors).toEqual([
+      { email: "broken@acme.com", reason: "invite-create-failed" },
+    ]);
+    expect(res.body.invites).toHaveLength(1);
+    expect(res.body.invites[0]).toMatchObject({ id: "invite-1", email: "ok@acme.com" });
+  });
+
+  it("rejects empty emails inline without calling the service", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["   ", ""],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      inviteIds: [],
+      invites: [],
+      errors: [
+        { email: "   ", reason: "empty-email" },
+        { email: "", reason: "empty-email" },
+      ],
+    });
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
+  // These routes touch real process.env + a real env file; isolate both.
+  const ENV_KEYS = [
+    "AGENTDASH_DEFAULT_ADAPTER",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_BASE_URL",
+    "OPENAI_COMPAT_MODEL",
+    "PAPERCLIP_E2E_SKIP_LLM",
+    "AGENTDASH_ENV_FILE",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  let tmpDir: string;
+  // AgentDash (security): setup-adapter is instance-scoped (process env + the
+  // env file launchd sources), so the happy paths run as an instance admin.
+  const INSTANCE_ADMIN = { type: "board", userId: "u1", source: "session", isInstanceAdmin: true };
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    for (const k of ENV_KEYS) delete process.env[k];
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    tmpDir = mkdtempSync(join(tmpdir(), "agentdash-route-"));
+    process.env.AGENTDASH_ENV_FILE = join(tmpDir, "agentdash.env");
+  });
+
+  afterEach(() => {
+    const { rmSync } = require("node:fs");
+    rmSync(tmpDir, { recursive: true, force: true });
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it("rejects adapter-status without a board actor", async () => {
+    const app = buildApp({ type: "agent", userId: "a1" });
+    const res = await request(app).get("/api/onboarding/adapter-status");
+    expect(res.status).toBe(401);
+  });
+
+  it("returns status + the preset menu to a board user", async () => {
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app).get("/api/onboarding/adapter-status");
+    expect(res.status).toBe(200);
+    // minimax, matching dispatchLLM's default. These two disagreed: this surface
+    // reported claude_api while dispatch actually routed to minimax, so an
+    // unconfigured install described a provider it would never use.
+    expect(res.body.status).toMatchObject({ adapter: "minimax", ready: false });
+    expect(res.body.options.map((o: { preset: string }) => o.preset).sort()).toEqual(
+      ["claude", "gemini", "hermes", "minimax", "openai", "stub"],
+    );
+  });
+
+  it("rejects setup-adapter without a board actor", async () => {
+    const app = buildApp({ type: "agent", userId: "a1" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
+    expect(res.status).toBe(401);
+  });
+
+  it("applies the claude preset (201, ready, key persisted)", async () => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "claude", apiKey: "sk-ant-route-test" });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toMatchObject({ adapter: "claude_api", ready: true, preset: "claude" });
+    expect(res.body.applied).toContain("ANTHROPIC_API_KEY");
+    expect(res.body.persisted).toBe(true);
+    // The secret is never echoed in `applied` (keys only).
+    expect(JSON.stringify(res.body.applied)).not.toContain("sk-ant-route-test");
+  });
+
+  it("applies the stub preset without a key", async () => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
+    expect(res.status).toBe(201);
+    expect(res.body.status.ready).toBe(true);
+    expect(process.env.PAPERCLIP_E2E_SKIP_LLM).toBe("true");
+  });
+
+  it("400s on a hosted preset with no key", async () => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "openai" });
+    expect(res.status).toBe(400);
+  });
+
+  // AgentDash (#725)
+  it("hands the hermes preset with a provider to the Hermes provider handler", async () => {
+    mockHermesProviderHandler.mockClear();
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "hermes", provider: "zai", apiKey: "k", companyId: "c1" });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ delegated: true });
+    expect(mockHermesProviderHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the plain hermes preset (no provider) on the old path", async () => {
+    mockHermesProviderHandler.mockClear();
+    const app = buildApp({ type: "board", userId: "u1", isInstanceAdmin: true });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
+    expect(res.status).toBe(201);
+    expect(res.body.applied).toEqual(["AGENTDASH_DEFAULT_ADAPTER"]);
+    expect(mockHermesProviderHandler).not.toHaveBeenCalled();
+  });
+
+  it("reports the Hermes provider step in adapter-status, required only on a hosted box", async () => {
+    const app = buildApp({ type: "board", userId: "u1", isInstanceAdmin: true });
+    const onPrem = await request(app).get("/api/onboarding/adapter-status");
+    expect(onPrem.body.hermesProvider).toMatchObject({ required: false, canConfigure: true });
+    expect(onPrem.body.hermesProvider.options.map((o: { provider: string }) => o.provider)).toEqual([
+      "zai",
+      "openrouter",
+      "anthropic",
+      "openai",
+    ]);
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    try {
+      const hosted = await request(buildApp({ type: "board", userId: "u2" })).get("/api/onboarding/adapter-status");
+      expect(hosted.body.hermesProvider).toMatchObject({ required: true, canConfigure: false });
+    } finally {
+      delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    }
+  });
+
+  it("400s on an unknown preset", async () => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "grok" });
+    expect(res.status).toBe(400);
+  });
+
+  // AgentDash (security): any signed-in board user used to pass.
+  it("403s setup-adapter for a signed-in board user who is not instance admin", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u2",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["c1"],
+    });
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "claude", apiKey: "sk-ant-member" });
+    expect(res.status).toBe(403);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    const { existsSync } = require("node:fs");
+    expect(existsSync(process.env.AGENTDASH_ENV_FILE!)).toBe(false);
+  });
+
+  // AgentDash (security): Hermes is the only runtime on a hosted box, so a
+  // company owner (not the instance admin) may still select it. The preset
+  // collects no key and only sets AGENTDASH_DEFAULT_ADAPTER=hermes_local.
+  const COMPANY_OWNER = {
+    type: "board",
+    userId: "u-owner",
+    source: "session",
+    isInstanceAdmin: false,
+    companyIds: ["c1"],
+    memberships: [{ companyId: "c1", status: "active", membershipRole: "owner" }],
+  };
+
+  it("lets a company owner apply the Hermes preset", async () => {
+    const app = buildApp(COMPANY_OWNER);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(process.env.AGENTDASH_DEFAULT_ADAPTER).toBe("hermes_local");
+  });
+
+  it("403s a company owner applying a key-bearing preset", async () => {
+    const app = buildApp(COMPANY_OWNER);
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "claude", apiKey: "sk-ant-owner" });
+    expect(res.status).toBe(403);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it("403s an ordinary member applying the Hermes preset", async () => {
+    const app = buildApp({
+      ...COMPANY_OWNER,
+      userId: "u-member",
+      memberships: [{ companyId: "c1", status: "active", membershipRole: "member" }],
+    });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "hermes" });
+    expect(res.status).toBe(403);
+  });
+
+  it("allows setup-adapter for the local_implicit board (local_trusted founder)", async () => {
+    const app = buildApp({ type: "board", userId: "local-board", source: "local_implicit" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
+    expect(res.status).toBe(201);
+  });
+
+  it.each([
+    ["single-quote breakout", "sk-ant'; touch /tmp/pwn; '"],
+    ["command substitution", "sk-ant-$(touch /tmp/pwn)"],
+    ["backticks", "sk-ant-`touch /tmp/pwn`"],
+    ["embedded newline", "sk-ant-x\nPWN=1"],
+    ["semicolon", "sk-ant-x;touch /tmp/pwn"],
+  ])("400s an API key with shell metacharacters (%s) and writes nothing", async (_label, apiKey) => {
+    const app = buildApp(INSTANCE_ADMIN);
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "claude", apiKey });
+    expect(res.status).toBe(400);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    const { existsSync } = require("node:fs");
+    expect(existsSync(process.env.AGENTDASH_ENV_FILE!)).toBe(false);
+  });
+});
+
+// Proves the REAL-LLM parse path end-to-end without spending credits or
+// touching the mini: dispatchLLM is mocked to return a realistic hosted-LLM
+// reply (visible prose + a fenced agent_plan_proposal_v1 trailer), and the
+// route must run it through the REAL parseTrailer + isAgentPlanPayload and
+// post a plan card. The validators are NOT mocked, so this is a true parse
+// check. Mirrors what a claude_api / minimax / openai_compat model returns.
+describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Real (non-stub) path: PAPERCLIP_E2E_SKIP_LLM must be unset so
+    // generateInitialTeamPlan calls dispatchLLM (mocked) instead of the
+    // canned stub plan.
+    delete process.env.PAPERCLIP_E2E_SKIP_LLM;
+    mockConversations.postMessage.mockResolvedValue({ id: "m1" });
+    // Empty interview history — loadInterviewState reads this via the mocked
+    // conversation service, not the db queue.
+    mockConversations.paginate.mockResolvedValue([]);
+    // generateInitialTeamPlan needs a Chief of Staff agent to author the card.
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff" }]);
+    // cosInterview is a mocked factory, so force it to flip to ready_to_propose;
+    // that is what triggers generateInitialTeamPlan in the handler.
+    mockInterview.nextTurn.mockResolvedValue({
+      state: { status: "ready_to_propose" },
+      assistantMessage: "I have enough to propose a small team.",
+    });
+  });
+
+  it("parses a realistic hosted-LLM reply (prose + fenced plan JSON) into a plan card", async () => {
+    // Realistic claude_api / minimax / openai_compat reply: a visible preamble
+    // the customer reads, then a fenced JSON trailer carrying the plan. Uses a
+    // LOCAL execution adapterType (hermes_local) — the only kind the validator
+    // accepts for agent execution.
+    mockDispatchLLM.mockResolvedValue(
+      [
+        "Based on what you told me, here's the team I'd start with:",
+        "",
+        "- **Maya** — Operations Lead: triages incoming requests.",
+        "- **Dev** — Engineering Lead: ships product fixes.",
+        "",
+        "Want me to set them up, or revise anything?",
+        "",
+        "```json",
+        JSON.stringify(
+          {
+            plan: {
+              rationale: "A lean two-agent team covering operations and engineering to unblock onboarding.",
+              agents: [
+                { role: "operations_lead", name: "Maya", adapterType: "hermes_local", responsibilities: ["Triage incoming requests", "Draft standard replies"], kpis: ["Time-to-first-response"] },
+                { role: "engineering_lead", name: "Dev", adapterType: "hermes_local", responsibilities: ["Ship product fixes"], kpis: ["Issues closed per sprint"] },
+              ],
+              alignmentToShortTerm: "Unblocks manual onboarding within the first two weeks.",
+              alignmentToLongTerm: "Scales toward the 90-day goal.",
+            },
+          },
+          null,
+          2,
+        ),
+        "```",
+      ].join("\n"),
+    );
+
+    // db queue: [conversation-lookup row, plan-exists empty]
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], []],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "we use Stripe and Notion", cosAgentId: "cos1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.planGenerated).toBe(true);
+    // dispatchLLM was actually invoked — the real path ran, not the stub.
+    expect(mockDispatchLLM).toHaveBeenCalledTimes(1);
+    // The plan card was posted with the parsed, validated payload.
+    const cardCall = mockConversations.postMessage.mock.calls.find(
+      (c: any) => c[0]?.cardKind === "agent_plan_proposal_v1",
+    );
+    expect(cardCall).toBeTruthy();
+    const payload = cardCall![0].cardPayload;
+    expect(payload.agents).toHaveLength(2);
+    expect(payload.agents[0].name).toBe("Maya");
+    expect(payload.agents[0].adapterType).toBe("hermes_local");
+    expect(payload.rationale).toMatch(/two-agent/);
+  });
+
+  it("rejects a plan that smuggles a hosted adapterType and reports planError (no card posted)", async () => {
+    // A confused or prompt-injected model emits claude_api (hosted — not an
+    // agent-execution runtime). isAgentPlanPayload must reject the WHOLE plan
+    // rather than silently stripping the bad agent.
+    mockDispatchLLM.mockResolvedValue(
+      [
+        "Here's a team.",
+        "",
+        "```json",
+        JSON.stringify({
+          plan: {
+            rationale: "x",
+            agents: [
+              { role: "lead", name: "X", adapterType: "claude_api", responsibilities: [], kpis: [] },
+            ],
+            alignmentToShortTerm: "y",
+            alignmentToLongTerm: "z",
+          },
+        }),
+        "```",
+      ].join("\n"),
+    );
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], []],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "more detail", cosAgentId: "cos1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.planGenerated).toBe(false);
+    expect(res.body.planError).toMatch(/unparseable/);
+    const cardCall = mockConversations.postMessage.mock.calls.find(
+      (c: any) => c[0]?.cardKind === "agent_plan_proposal_v1",
+    );
+    expect(cardCall).toBeUndefined();
+  });
+
+  it("does not regenerate a plan when one already exists (idempotent)", async () => {
+    mockDispatchLLM.mockResolvedValue("```json\n" + JSON.stringify({
+      plan: {
+        rationale: "x",
+        agents: [{ role: "lead", name: "X", adapterType: "hermes_local", responsibilities: [], kpis: [] }],
+        alignmentToShortTerm: "y",
+        alignmentToLongTerm: "z",
+      },
+    }) + "\n```");
+    // db queue: [conversation row, plan-exists NON-empty → skip generation]
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], [{ id: "existing-plan-msg" }]],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "more", cosAgentId: "cos1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.planGenerated).toBe(false);
+    expect(mockDispatchLLM).not.toHaveBeenCalled();
+  });
+});
+
+describe("cosAgentId author validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.PAPERCLIP_E2E_SKIP_LLM = "true";
+    mockConversations.postMessage.mockResolvedValue({ id: "m1" });
+    mockConversations.paginate.mockResolvedValue([]);
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff" },
+      { id: "worker1", role: "general" },
+    ]);
+    mockInterview.nextTurn.mockResolvedValue({
+      state: { status: "interviewing" },
+      assistantMessage: "Tell me more.",
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.PAPERCLIP_E2E_SKIP_LLM;
+  });
+
+  const actor = { type: "board", userId: "u1", source: "session", companyIds: ["c1"] };
+
+  it("interview/turn refuses a cosAgentId that is not the company's CoS (no messages posted)", async () => {
+    for (const cosAgentId of ["worker1", "cos-of-other-company"]) {
+      mockConversations.postMessage.mockClear();
+      const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+      const res = await request(app)
+        .post("/api/onboarding/interview/turn")
+        .send({ conversationId: "conv1", userMessage: "hi", cosAgentId });
+      expect(res.status).toBe(403);
+      expect(mockConversations.postMessage).not.toHaveBeenCalled();
+    }
+    expect(mockAgents.list).toHaveBeenCalledWith("c1");
+  });
+
+  it("interview/turn posts the CoS reply when cosAgentId is the company's CoS", async () => {
+    const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "hi", cosAgentId: "cos1" });
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ authorKind: "agent", authorId: "cos1" }),
+    );
+  });
+
+  it("agent/reject refuses a cosAgentId that is not the company's CoS", async () => {
+    const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+    const res = await request(app)
+      .post("/api/onboarding/agent/reject")
+      .send({ conversationId: "conv1", cosAgentId: "worker1" });
+    expect(res.status).toBe(403);
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("agent/reject posts the acknowledgement as the company's CoS", async () => {
+    const app = buildApp(actor, [[{ id: "conv1", companyId: "c1" }]]);
+    const res = await request(app)
+      .post("/api/onboarding/agent/reject")
+      .send({ conversationId: "conv1", cosAgentId: "cos1" });
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ authorKind: "agent", authorId: "cos1" }),
+    );
+  });
+});
+
+// AgentDash (GH #794, UX-13): the model-key "who can fix it" + "let them know"
+// routes. The stub db pops one queued array per select; contact resolution
+// runs memberships → (instance_user_roles + auth_users) and request-model-key
+// interleaves requester + company lookups before the tail of that join.
+const MEMBERSHIPS = [
+  { principalId: "u-fix", principalType: "user", companyId: "c1", status: "active", membershipRole: "admin" },
+  { principalId: "u-admin", principalType: "user", companyId: "c1", status: "active", membershipRole: "admin" },
+  { principalId: "u-owner", principalType: "user", companyId: "c1", status: "active", membershipRole: "owner" },
+  { principalId: "u-member", principalType: "user", companyId: "c1", status: "active", membershipRole: "member" },
+];
+const CONTACT_USERS = [
+  { id: "u-fix", name: "Fixer Instance", email: "fixer@x.test" },
+  { id: "u-admin", name: "Admin Two", email: "admin@x.test" },
+  { id: "u-owner", name: "Owner Three", email: "owner@x.test" },
+  { id: "u-member", name: "Member Four", email: "member@x.test" },
+];
+
+function boardActor(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "board",
+    userId: "u-member",
+    source: "session",
+    companyIds: ["c1"],
+    memberships: [{ companyId: "c1", status: "active" }],
+    ...overrides,
+  };
+}
+
+describe("GET /api/onboarding/model-key-admins (#794)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects unauthenticated callers", async () => {
+    const app = buildApp({ type: "none", source: "none" });
+    const res = await request(app).get("/api/onboarding/model-key-admins?companyId=c1");
+    expect(res.status).toBe(401);
+  });
+
+  it("requires companyId", async () => {
+    const app = buildApp(boardActor());
+    const res = await request(app).get("/api/onboarding/model-key-admins");
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a user with no access to the company", async () => {
+    const app = buildApp(boardActor({ companyIds: ["c2"] }));
+    const res = await request(app).get("/api/onboarding/model-key-admins?companyId=c1");
+    expect(res.status).toBe(403);
+  });
+
+  it("returns active admin members with canFix for instance admins only", async () => {
+    const app = buildApp(boardActor(), [
+      MEMBERSHIPS,
+      [{ userId: "u-fix" }],
+      CONTACT_USERS,
+    ]);
+    const res = await request(app).get("/api/onboarding/model-key-admins?companyId=c1");
+    expect(res.status).toBe(200);
+    // owner normalizes to admin; member is not a contact; u-fix is the fixer.
+    expect(res.body.admins).toEqual([
+      expect.objectContaining({ userId: "u-fix", name: "Fixer Instance", canFix: true, membershipRole: "admin" }),
+      expect.objectContaining({ userId: "u-admin", name: "Admin Two", canFix: false }),
+      expect.objectContaining({ userId: "u-owner", name: "Owner Three", canFix: false, membershipRole: "admin" }),
+    ]);
+    expect(res.body.admins.map((a: { userId: string }) => a.userId)).not.toContain("u-member");
+  });
+});
+
+describe("POST /api/onboarding/request-model-key (#794)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendEmail.mockResolvedValue({ status: "sent" });
+  });
+
+  it("rejects unauthenticated callers and non-members", async () => {
+    const anon = buildApp({ type: "none", source: "none" });
+    expect(
+      (await request(anon).post("/api/onboarding/request-model-key").send({ companyId: "c1" })).status,
+    ).toBe(401);
+    const outsider = buildApp(boardActor({ companyIds: ["c2"] }));
+    expect(
+      (await request(outsider).post("/api/onboarding/request-model-key").send({ companyId: "c1" })).status,
+    ).toBe(403);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("emails only instance admins when they exist, excludes the requester, and logs the activity", async () => {
+    // Requester is u-owner (also an admin) — they must not email themselves.
+    // First fixture is the cooldown lookup; the rest are contacts/requester/company.
+    process.env.PAPERCLIP_PUBLIC_URL = "https://app.agentdash.test";
+    const app = buildApp(boardActor({ userId: "u-owner" }), [
+      [],
+      MEMBERSHIPS,
+      [{ id: "u-owner", name: "Owner Three" }],
+      [{ name: "Acme" }],
+      [{ userId: "u-fix" }],
+      CONTACT_USERS,
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      // A hostile caller supplies the wrong host; the email must still name
+      // the configured public URL, never the request's headers.
+      .set("x-forwarded-proto", "https")
+      .set("x-forwarded-host", "evil.example.com")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([{ name: "Fixer Instance", status: "sent" }]);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const email = mockSendEmail.mock.calls[0][0];
+    expect(email.to).toBe("fixer@x.test");
+    expect(email.subject).toContain("Owner Three");
+    expect(email.subject).toContain("Acme");
+    expect(email.text).toContain("https://app.agentdash.test/company/settings/model-key");
+    expect(email.text).not.toContain("evil.example.com");
+    // Redaction: nothing key-shaped goes out, and the response carries no emails.
+    expect(email.text).not.toMatch(/sk-|api[_-]?key\s*[:=]/i);
+    expect(JSON.stringify(res.body)).not.toContain("@x.test");
+
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "c1",
+        actorId: "u-owner",
+        action: "model_key.requested",
+        details: { recipientCount: 1 },
+      }),
+    );
+  });
+
+  it("falls back to company admins when no contact is an instance admin", async () => {
+    const app = buildApp(boardActor({ userId: "u-member" }), [
+      [],
+      MEMBERSHIPS,
+      [{ id: "u-member", name: "Member Four" }],
+      [{ name: "Acme" }],
+      [],
+      CONTACT_USERS,
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(mockSendEmail).toHaveBeenCalledTimes(3);
+    expect(mockSendEmail.mock.calls.map((call) => call[0].to).sort()).toEqual([
+      "admin@x.test",
+      "fixer@x.test",
+      "owner@x.test",
+    ]);
+    expect(res.body.results).toHaveLength(3);
+  });
+
+  // The cooldown is what makes the button honest: a member who keeps pressing
+  // "Let them know" cannot keep emailing the admins.
+  it("429s a repeat request inside the per-company+requester cooldown", async () => {
+    const app = buildApp(boardActor({ userId: "u-member" }), [
+      [{ createdAt: new Date() }],
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(429);
+    expect(res.body.error ?? res.body.message).toMatch(/request.*attempt/i);
+    expect(res.body.details?.retryAfterSeconds).toBeGreaterThan(0);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("uses the recent attempt returned by the mocked database to refuse another nudge", async () => {
+    // Lightweight response coverage only: this stub serializes callbacks and
+    // supplies the recent row. Real lock/pool/commit behavior is covered by
+    // onboarding-model-key-reservation-embedded.test.ts on PostgreSQL.
+    const app = buildApp(boardActor({ userId: "u-member" }), [
+      [], // req1: cooldown lookup → clear
+      MEMBERSHIPS,
+      [{ id: "u-member", name: "Member Four" }],
+      [{ name: "Acme" }],
+      [],
+      CONTACT_USERS,
+      [{ createdAt: new Date() }], // req2: cooldown lookup → fresh reservation
+    ]);
+    const [first, second] = await Promise.all([
+      request(app).post("/api/onboarding/request-model-key").send({ companyId: "c1" }),
+      request(app).post("/api/onboarding/request-model-key").send({ companyId: "c1" }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([200, 429]);
+    expect(mockSendEmail).toHaveBeenCalledTimes(3);
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports honest statuses when the mailer skips or fails", async () => {
+    mockSendEmail.mockResolvedValueOnce({ status: "skipped" });
+    const app = buildApp(boardActor({ userId: "u-owner" }), [
+      [],
+      [{ principalId: "u-fix", principalType: "user", companyId: "c1", status: "active", membershipRole: "admin" }],
+      [{ id: "u-owner", name: "Owner Three" }],
+      [{ name: "Acme" }],
+      [{ userId: "u-fix" }],
+      [{ id: "u-fix", name: "Fixer Instance", email: "fixer@x.test" }],
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([{ name: "Fixer Instance", status: "skipped" }]);
+  });
+
+  it("returns an empty result set when nobody reachable remains", async () => {
+    const app = buildApp(boardActor({ userId: "u-owner" }), [
+      [],
+      [{ principalId: "u-owner", principalType: "user", companyId: "c1", status: "active", membershipRole: "owner" }],
+      [{ id: "u-owner", name: "Owner Three" }],
+      [{ name: "Acme" }],
+      [],
+      [{ id: "u-owner", name: "Owner Three", email: "owner@x.test" }],
+    ]);
+    const res = await request(app)
+      .post("/api/onboarding/request-model-key")
+      .send({ companyId: "c1" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([]);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+});

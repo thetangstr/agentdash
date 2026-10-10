@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/codex/assistant-digest-visible-20260929",
+  "head": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+  "sourceWorktreeName": "codex-assistant-digest-20260929",
+  "files": [
+    "doc/plans/2026-09-29-assistant-visible-digest.md"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

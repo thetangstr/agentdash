@@ -1,0 +1,11 @@
+{
+  "branch": null,
+  "head": "054af55e4be28e5f4c3ecd32fb7e59c3482a597b",
+  "sourceWorktreeName": "review-990",
+  "files": [
+    "ui/src/lib/zz-probe-990.test.ts",
+    "ui/src/lib/zz-probe2-990.test.ts",
+    "ui/src/lib/zz-probe3-990.test.ts"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

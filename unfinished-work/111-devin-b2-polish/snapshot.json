@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/devin/b2-polish-20261003",
+  "head": "a8de933610243c89f6e8ebd6cd396f2eca6f5f20",
+  "sourceWorktreeName": "devin-b2-polish",
+  "files": [
+    "pr-body-b2-polish.md"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

@@ -1,0 +1,32 @@
+{
+  "bundleBytes": 99565989,
+  "bundleSha256": "758c487351994c56caa88fddbd4224e8f08ddc82feb0c4a380754a6db8e20a8b",
+  "parts": [
+    {
+      "path": "history/history.bundle.part-00",
+      "bytes": 26214400,
+      "sha256": "9fa05a7a251b454d27dbdc998c3fcc648b44f89d3420e608a530992ea3bbd3d7",
+      "gitBlobSha": "f4b106aeb268faea115b64efad95bbcdd5b32604"
+    },
+    {
+      "path": "history/history.bundle.part-01",
+      "bytes": 26214400,
+      "sha256": "8f031093d1001f9832dfcec0456422c1dc9fecd4164400763968cf4c5c7caa0e",
+      "gitBlobSha": "554612bd70aaadb5f3f34bc797bc7a9534034923"
+    },
+    {
+      "path": "history/history.bundle.part-02",
+      "bytes": 26214400,
+      "sha256": "6773d597d7808480775dcf8347b100a34b0ad227bc24d7a44faf4153420e0277",
+      "gitBlobSha": "98003f8e5d1ebe0cacd293c1ae89ba0e7cca017b"
+    },
+    {
+      "path": "history/history.bundle.part-03",
+      "bytes": 20922789,
+      "sha256": "2bfc99d874a6b691a636011819181f0d60db432ae13ec71f206a9a4a65ef8b2b",
+      "gitBlobSha": "0ff0376e462cfd27f91521a88bb1f39be6576d2b"
+    }
+  ],
+  "nonremoteRefs": 2275,
+  "candidateCommits": 2431
+}

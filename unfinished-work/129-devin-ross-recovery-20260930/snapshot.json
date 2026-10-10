@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/ross/devin-recovery-on-main",
+  "head": "11e1ff334c6fb2e85899655d42a3e287c3909043",
+  "sourceWorktreeName": "devin-ross-recovery-20260930",
+  "files": [
+    "server/src/__tests__/heartbeat-process-recovery.test.ts"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

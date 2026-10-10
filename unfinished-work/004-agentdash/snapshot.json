@@ -1,0 +1,9 @@
+{
+  "branch": "refs/heads/main",
+  "head": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+  "sourceWorktreeName": "agentdash",
+  "files": [
+    "company"
+  ],
+  "state": "unfinished; preserved without integration or product validation"
+}

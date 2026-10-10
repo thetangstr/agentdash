@@ -1,0 +1,20 @@
+diff --git a/tools/spikes/muse-mcp-stub/server.mjs b/tools/spikes/muse-mcp-stub/server.mjs
+index 50b08c553d3ff1b945addb4a0c999d7e619886c0..b04ed30d8038e2c60bb765a9262fb6c77bcf4dad 100644
+--- a/tools/spikes/muse-mcp-stub/server.mjs
++++ b/tools/spikes/muse-mcp-stub/server.mjs
+@@ -45,6 +45,15 @@ const CODE_TTL_MS = 5 * 60 * 1000;
+ // ---------------------------------------------------------------------------
+ /** DCR-registered clients: client_id -> { client_name, redirect_uris, client_uri? } */
+ const dcrClients = new Map();
++// Pre-registered clients for hosts (like Meta Muse) that ask the user for a
++// Client ID instead of registering themselves. Format:
++//   STUB_PRECONFIGURED_CLIENTS="muse-spike=https://a/cb|https://b/cb;other=..."
++// An empty redirect list is allowed: /authorize then logs the host's real
++// redirect_uri as authorize_redirect_mismatch, and it can be added on restart.
++for (const entry of (process.env.STUB_PRECONFIGURED_CLIENTS ?? "").split(";").filter(Boolean)) {
++  const [id, uris = ""] = entry.split("=");
++  dcrClients.set(id, { client_name: id, redirect_uris: uris.split("|").filter(Boolean), token_endpoint_auth_method: "none" });
++}
+ /** CIMD documents fetched from client_id URLs: url -> fetched doc */
+ const cimdDocuments = new Map();
+ /** Pending auth codes: code -> { clientId, redirectUri, codeChallenge, scope, resource, subject, expiresAt } */

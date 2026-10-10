@@ -1,0 +1,782 @@
+diff --git a/server/src/__tests__/live-events-ws.test.ts b/server/src/__tests__/live-events-ws.test.ts
+index b52c1106480200ebee4640c148f068596577a57c..ff06c898d4666bf6945985f2a56a89d6756e3ff7 100644
+--- a/server/src/__tests__/live-events-ws.test.ts
++++ b/server/src/__tests__/live-events-ws.test.ts
+@@ -1,9 +1,16 @@
+ import { EventEmitter } from "node:events";
+-import type { IncomingMessage } from "node:http";
++import { createHash, randomUUID } from "node:crypto";
++import { createServer, type IncomingMessage, type Server } from "node:http";
++import type { AddressInfo } from "node:net";
+ import type { Duplex } from "node:stream";
+-import { beforeEach, describe, expect, it, vi } from "vitest";
++import { eq } from "drizzle-orm";
++import { WebSocket } from "ws";
++import { agentApiKeys, agents, authSessions, authUsers, companies, companyMemberships, createDb, instanceUserRoles } from "@paperclipai/db";
++import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+ import { setupLiveEventsWebSocketServer } from "../realtime/live-events-ws.js";
+ import { logger } from "../middleware/logger.js";
++import { publishLiveEvent } from "../services/live-events.js";
++import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
+ 
+ vi.mock("../middleware/logger.js", () => ({
+   logger: {
+@@ -92,7 +99,7 @@ describe("setupLiveEventsWebSocketServer", () => {
+     });
+     const socket = new FakeUpgradeSocket();
+ 
+-    server.emit("upgrade", createUpgradeRequest(), socket as unknown as Duplex, Buffer.alloc(0));
++    server.emit("upgrade", createUpgradeRequest({ url: "/api/companies/company-1/events/ws?token=DO_NOT_LOG" }), socket as unknown as Duplex, Buffer.alloc(0));
+     expect(() => socket.emitSocketError(new Error("write EPIPE"))).not.toThrow();
+     resolveSession(null);
+     await flushPromises();
+@@ -103,6 +110,7 @@ describe("setupLiveEventsWebSocketServer", () => {
+     );
+     expect(socket.endedChunks).toEqual([]);
+     expect(socket.destroyed).toBe(true);
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain("DO_NOT_LOG");
+   });
+ 
+   it("destroys and cleans up listeners after flushing a rejection response", async () => {
+@@ -121,3 +129,376 @@ describe("setupLiveEventsWebSocketServer", () => {
+     expect(socket.listenerCount("finish")).toBe(0);
+   });
+ });
++
++const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
++const describeEmbedded = embeddedPostgresSupport.supported ? describe : describe.skip;
++
++// AgentDash (#708): real sockets and disposable DB rows exercise post-upgrade revocation.
++describeEmbedded("live websocket authorization after upgrade", () => {
++  let db: ReturnType<typeof createDb>;
++  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
++  const servers: Server[] = [];
++  const clients: WebSocket[] = [];
++  const websocketServers: Array<ReturnType<typeof setupLiveEventsWebSocketServer>> = [];
++
++  beforeAll(async () => {
++    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-ws-revocation-");
++    db = createDb(tempDb.connectionString);
++  }, 30_000);
++
++  afterEach(async () => {
++    vi.restoreAllMocks();
++    vi.useRealTimers();
++    for (const client of clients.splice(0)) client.terminate();
++    for (const wss of websocketServers.splice(0)) {
++      for (const socket of wss.clients) socket.terminate();
++      (wss as unknown as { close(): void }).close();
++    }
++    for (const server of servers.splice(0)) await new Promise<void>((resolve) => server.close(() => resolve()));
++    await db.delete(agentApiKeys);
++    await db.delete(agents);
++    await db.delete(companyMemberships);
++    await db.delete(instanceUserRoles);
++    await db.delete(authSessions);
++    await db.delete(authUsers);
++    await db.delete(companies);
++  });
++
++  afterAll(async () => {
++    await tempDb?.cleanup();
++  });
++
++  async function fixture() {
++    const [company] = await db.insert(companies).values({ name: "Websocket test", issuePrefix: `WS${randomUUID().slice(0, 5)}` }).returning();
++    const now = new Date();
++    const userId = randomUUID();
++    const [user] = await db.insert(authUsers).values({ id: userId, name: "Test user", email: `${userId}@example.test`, createdAt: now, updatedAt: now }).returning();
++    const [session] = await db.insert(authSessions).values({ id: randomUUID(), userId, token: randomUUID(), expiresAt: new Date(Date.now() + 86_400_000), createdAt: now, updatedAt: now }).returning();
++    const [membership] = await db.insert(companyMemberships).values({ companyId: company!.id, principalType: "user", principalId: userId, status: "active", membershipRole: "member" }).returning();
++    return { company: company!, user: user!, session: session!, membership: membership! };
++  }
++
++  async function connect(input: Awaited<ReturnType<typeof fixture>>, token?: string) {
++    const server = createServer();
++    servers.push(server);
++    const wss = setupLiveEventsWebSocketServer(server, db, {
++      deploymentMode: "authenticated",
++      // Deliberately cached: revocation must be checked against the session row.
++      resolveSessionFromHeaders: async () => ({ user: input.user, session: input.session }),
++    });
++    websocketServers.push(wss);
++    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
++    const port = (server.address() as AddressInfo).port;
++    const client = new WebSocket(`ws://127.0.0.1:${port}/api/companies/${input.company.id}/events/ws`, {
++      headers: token ? { authorization: `Bearer ${token}` } : { cookie: "synthetic-session-cookie" },
++    });
++    clients.push(client);
++    await new Promise<void>((resolve, reject) => {
++      client.once("open", resolve);
++      client.once("error", reject);
++    });
++    const received: number[] = [];
++    client.on("message", (data) => received.push(JSON.parse(data.toString()).payload.sequence));
++    const closed = new Promise<number>((resolve) => client.once("close", (code) => resolve(code)));
++    return { client, wss, received, closed };
++  }
++
++  function publish(companyId: string, sequence = 1) {
++    publishLiveEvent({ companyId, type: "activity.logged", payload: { sequence } });
++  }
++
++  async function agentKey(companyId: string) {
++    const [agent] = await db.insert(agents).values({ companyId, name: "Websocket agent", adapterType: "process", status: "idle" }).returning();
++    const token = `synthetic-token-${randomUUID()}`;
++    const [key] = await db.insert(agentApiKeys).values({ companyId, agentId: agent!.id, name: "Test key", keyHash: createHash("sha256").update(token).digest("hex") }).returning();
++    return { agent: agent!, key: key!, token };
++  }
++
++  it("withholds an event and closes when company membership is removed", async () => {
++    const input = await fixture();
++    const connection = await connect(input);
++    await db.delete(companyMemberships).where(eq(companyMemberships.id, input.membership.id));
++    publish(input.company.id);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(await connection.closed).toBe(1008);
++    expect(connection.received).toEqual([]);
++  });
++
++  it("closes a quiet subscription on the next heartbeat after membership suspension", async () => {
++    const input = await fixture();
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
++    const connection = await connect(input);
++    await db.update(companyMemberships).set({ status: "suspended" }).where(eq(companyMemberships.id, input.membership.id));
++    await vi.advanceTimersByTimeAsync(30_000);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(await connection.closed).toBe(1008);
++    publish(input.company.id);
++    await flushPromises();
++    expect(connection.received).toEqual([]);
++  });
++
++  it("withholds events for the revoked key even when its agent has another active key", async () => {
++    const input = await fixture();
++    const first = await agentKey(input.company.id);
++    await db.insert(agentApiKeys).values({ companyId: input.company.id, agentId: first.agent.id, name: "Other active key", keyHash: createHash("sha256").update("another-synthetic-key").digest("hex") });
++    const connection = await connect(input, first.token);
++    await db.update(agentApiKeys).set({ revokedAt: new Date() }).where(eq(agentApiKeys.id, first.key.id));
++    publish(input.company.id);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(await connection.closed).toBe(1008);
++    expect(connection.received).toEqual([]);
++  });
++
++  it("closes a quiet agent socket on its next heartbeat after key revocation", async () => {
++    const input = await fixture();
++    const first = await agentKey(input.company.id);
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
++    const connection = await connect(input, first.token);
++    await db.update(agentApiKeys).set({ revokedAt: new Date() }).where(eq(agentApiKeys.id, first.key.id));
++    await vi.advanceTimersByTimeAsync(30_000);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(connection.received).toEqual([]);
++  });
++
++  it.each(["revoked", "expired"])("withholds events for a %s session even if the session resolver returns cached data", async (change) => {
++    const input = await fixture();
++    const connection = await connect(input);
++    if (change === "revoked") await db.delete(authSessions).where(eq(authSessions.id, input.session.id));
++    else await db.update(authSessions).set({ expiresAt: new Date(0) }).where(eq(authSessions.id, input.session.id));
++    publish(input.company.id);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(connection.received).toEqual([]);
++  });
++
++  it("closes an instance administrator after demotion when they have no company membership", async () => {
++    const input = await fixture();
++    await db.delete(companyMemberships).where(eq(companyMemberships.id, input.membership.id));
++    const [role] = await db.insert(instanceUserRoles).values({ userId: input.user.id, role: "instance_admin" }).returning();
++    const connection = await connect(input);
++    await db.delete(instanceUserRoles).where(eq(instanceUserRoles.id, role!.id));
++    publish(input.company.id);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(connection.received).toEqual([]);
++  });
++
++  it("withholds events after the agent principal is terminated", async () => {
++    const input = await fixture();
++    const first = await agentKey(input.company.id);
++    const connection = await connect(input, first.token);
++    await db.update(agents).set({ status: "terminated" }).where(eq(agents.id, first.agent.id));
++    publish(input.company.id);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(connection.received).toEqual([]);
++  });
++
++  it("delivers events in order for a valid session", async () => {
++    const input = await fixture();
++    const connection = await connect(input);
++    publish(input.company.id, 1);
++    publish(input.company.id, 2);
++    publish(input.company.id, 3);
++    await expect.poll(() => connection.received).toEqual([1, 2, 3]);
++    expect(connection.client.readyState).toBe(WebSocket.OPEN);
++  });
++
++  it("does not write key lastUsedAt again during delivery or heartbeat refresh", async () => {
++    const input = await fixture();
++    const first = await agentKey(input.company.id);
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
++    const connection = await connect(input, first.token);
++    const [before] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.id, first.key.id));
++    publish(input.company.id, 1);
++    await expect.poll(() => connection.received).toEqual([1]);
++    await vi.advanceTimersByTimeAsync(30_000);
++    await flushPromises();
++    const [after] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.id, first.key.id));
++    expect(after!.lastUsedAt).toEqual(before!.lastUsedAt);
++  });
++
++  it("fails closed on an authorization database error and unsubscribes", async () => {
++    const input = await fixture();
++    const connection = await connect(input);
++    const select = vi.spyOn(db, "select").mockImplementation(() => { throw new Error("Synthetic database unavailable"); });
++    publish(input.company.id);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(connection.received).toEqual([]);
++    select.mockClear();
++    publish(input.company.id, 2);
++    await flushPromises();
++    expect(select).not.toHaveBeenCalled();
++  });
++
++  function delaySessionChecks(gate: Promise<void>) {
++    let checks = 0;
++    const originalSelect = db.select.bind(db);
++    vi.spyOn(db, "select").mockImplementation((...args) => {
++      const select = originalSelect(...args);
++      const originalFrom = select.from.bind(select);
++      select.from = ((table: Parameters<typeof originalFrom>[0]) => {
++        const query = originalFrom(table);
++        if (table === authSessions) {
++          checks += 1;
++          const originalThen = query.then.bind(query);
++          query.then = ((...callbacks: Parameters<typeof originalThen>) => gate.then(() => originalThen(...callbacks))) as typeof query.then;
++        }
++        return query;
++      }) as typeof select.from;
++      return select;
++    });
++    return () => checks;
++  }
++
++  function holdFirstSessionSnapshot(gate: Promise<void>, captured: () => void) {
++    let checks = 0;
++    const originalSelect = db.select.bind(db);
++    vi.spyOn(db, "select").mockImplementation((...args) => {
++      const select = originalSelect(...args);
++      const originalFrom = select.from.bind(select);
++      select.from = ((table: Parameters<typeof originalFrom>[0]) => {
++        const query = originalFrom(table);
++        if (table === authSessions) {
++          const originalThen = query.then.bind(query);
++          query.then = ((...callbacks: Parameters<typeof originalThen>) => {
++            checks += 1;
++            if (checks !== 1) return originalThen(...callbacks);
++            return originalThen(async (rows) => {
++              captured();
++              await gate;
++              return rows;
++            }).then(...callbacks);
++          }) as typeof query.then;
++        }
++        return query;
++      }) as typeof select.from;
++      return select;
++    });
++    return () => checks;
++  }
++
++  it("does not grant a post-revocation event from an older successful heartbeat snapshot", async () => {
++    const input = await fixture();
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
++    const connection = await connect(input);
++    let release = () => {};
++    const gate = new Promise<void>((resolve) => { release = resolve; });
++    let captured = () => {};
++    const snapshot = new Promise<void>((resolve) => { captured = resolve; });
++    const checks = holdFirstSessionSnapshot(gate, captured);
++    await vi.advanceTimersByTimeAsync(19_000);
++    await snapshot;
++    await db.delete(authSessions).where(eq(authSessions.id, input.session.id));
++    publish(input.company.id);
++    release();
++    await expect.poll(() => checks()).toBe(2);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(await connection.closed).toBe(1008);
++    expect(connection.received).toEqual([]);
++  });
++
++  it("starts a fresh heartbeat read after a pending event's pre-revocation snapshot", async () => {
++    const input = await fixture();
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
++    const connection = await connect(input);
++    let release = () => {};
++    const gate = new Promise<void>((resolve) => { release = resolve; });
++    let captured = () => {};
++    const snapshot = new Promise<void>((resolve) => { captured = resolve; });
++    const checks = holdFirstSessionSnapshot(gate, captured);
++    await vi.advanceTimersByTimeAsync(15_000);
++    publish(input.company.id);
++    await snapshot;
++    await db.delete(authSessions).where(eq(authSessions.id, input.session.id));
++    await vi.advanceTimersByTimeAsync(4_000);
++    expect(checks()).toBe(1);
++    release();
++    vi.useRealTimers();
++    await expect.poll(() => checks()).toBe(2);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(await connection.closed).toBe(1008);
++  });
++
++  it("stops a quiet subscription with stalled authorization within 30 seconds", async () => {
++    const input = await fixture();
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
++    const connection = await connect(input);
++    let release = () => {};
++    const gate = new Promise<void>((resolve) => { release = resolve; });
++    delaySessionChecks(gate);
++    await db.delete(authSessions).where(eq(authSessions.id, input.session.id));
++    const socket = [...connection.wss.clients][0]!;
++    const close = vi.spyOn(socket, "close");
++    await vi.advanceTimersByTimeAsync(30_000);
++    expect(close).toHaveBeenCalledWith(1008, "authorization changed");
++    vi.useRealTimers();
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    release();
++    publish(input.company.id);
++    await flushPromises();
++    expect(connection.received).toEqual([]);
++  });
++
++  it("terminates a peer that does not finish its revocation close handshake within 30 seconds", async () => {
++    const input = await fixture();
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
++    const connection = await connect(input);
++    let release = () => {};
++    const gate = new Promise<void>((resolve) => { release = resolve; });
++    delaySessionChecks(gate);
++    await db.delete(authSessions).where(eq(authSessions.id, input.session.id));
++    const socket = [...connection.wss.clients][0]!;
++    vi.spyOn(socket, "close").mockImplementation(() => {});
++    const terminate = vi.spyOn(socket, "terminate");
++    await vi.advanceTimersByTimeAsync(30_000);
++    expect(terminate).toHaveBeenCalledOnce();
++    vi.useRealTimers();
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    release();
++    publish(input.company.id);
++    await flushPromises();
++    expect(connection.received).toEqual([]);
++  });
++
++  it("avoids overlapping authorization checks with heartbeat and preserves queued event order", async () => {
++    const input = await fixture();
++    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
++    const connection = await connect(input);
++    let release = () => {};
++    const gate = new Promise<void>((resolve) => { release = resolve; });
++    const checks = delaySessionChecks(gate);
++    publish(input.company.id, 1);
++    publish(input.company.id, 2);
++    publish(input.company.id, 3);
++    await vi.advanceTimersByTimeAsync(30_000);
++    await flushPromises();
++    expect(connection.received).toEqual([]);
++    expect(checks()).toBe(1);
++    release();
++    await expect.poll(() => connection.received).toEqual([1, 2, 3]);
++  });
++
++  it("times out stalled authorization and never delivers queued events after a late success", async () => {
++    const input = await fixture();
++    const connection = await connect(input);
++    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
++    let release = () => {};
++    const gate = new Promise<void>((resolve) => { release = resolve; });
++    delaySessionChecks(gate);
++    publish(input.company.id, 1);
++    publish(input.company.id, 2);
++    await vi.advanceTimersByTimeAsync(5_000);
++    vi.useRealTimers();
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    release();
++    await flushPromises();
++    expect(connection.received).toEqual([]);
++  });
++
++  it("closes an overloaded delivery queue without sending its retained events", async () => {
++    const input = await fixture();
++    const connection = await connect(input);
++    for (let sequence = 0; sequence < 500; sequence += 1) publish(input.company.id, sequence);
++    await expect.poll(() => connection.client.readyState).toBe(WebSocket.CLOSED);
++    expect(await connection.closed).toBe(1013);
++    expect(connection.received).toEqual([]);
++  });
++});
+diff --git a/server/src/onboarding-assets/default/AGENTS.md b/server/src/onboarding-assets/default/AGENTS.md
+index f4dc3f0995dabbb4068d7be053625569c0a049e0..ab1e618f213001a2e7ced3abd2702ba77d5975f4 100644
+--- a/server/src/onboarding-assets/default/AGENTS.md
++++ b/server/src/onboarding-assets/default/AGENTS.md
+@@ -487,3 +487,9 @@ A workspace owner or admin can connect a GitHub repository to a project. When yo
+ - Never print, echo, commit, paste or post the credential, and never write it into a remote URL, a git config file or a comment. It is a fine-grained token limited to this one repository (Contents and Pull requests, read and write). If you come across any other or broader GitHub credential on the host, do not use it; report it on the issue.
+ - If `git push` or `gh` fails for a missing credential or permission, stop and comment on the issue with the exact error. A workspace owner or admin reconnects the repository from the project's Configuration tab.
+ <!-- /AgentDash: github-repo-access -->
++
++<!-- AgentDash: live-event-revocation — DO NOT REMOVE OR REORDER THIS BLOCK -->
++## Live event access can be revoked
++
++If you subscribe to `GET /api/companies/:companyId/events/ws`, access is rechecked before event delivery and on each heartbeat. A WebSocket close with code `1008` means access is no longer valid or could not be verified. Stop reconnecting with that credential; obtain current company access or a replacement key from the authorized human before resubscribing. Never use another company's key or an anonymous connection to bypass the refusal. Report the interruption in a task comment when your remaining access permits it.
++<!-- /AgentDash: live-event-revocation -->
+diff --git a/server/src/realtime/live-events-ws.ts b/server/src/realtime/live-events-ws.ts
+index 56005a71789d791ba4d1652abeafda207e19377f..57e6a7d885fedccb61d6573a6977882ee2f67b1f 100644
+--- a/server/src/realtime/live-events-ws.ts
++++ b/server/src/realtime/live-events-ws.ts
+@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
+ import type { IncomingMessage, Server as HttpServer } from "node:http";
+ import { createRequire } from "node:module";
+ import type { Duplex } from "node:stream";
+-import { and, eq, isNull } from "drizzle-orm";
++import { and, eq, gt, isNull } from "drizzle-orm";
+ import type { Db } from "@paperclipai/db";
+-import { agentApiKeys, companyMemberships, instanceUserRoles } from "@paperclipai/db";
++import { agentApiKeys, agents, authSessions, authUsers, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+ import type { DeploymentMode } from "@paperclipai/shared";
+ import type { BetterAuthSessionResult } from "../auth/better-auth.js";
+ import { logger } from "../middleware/logger.js";
+@@ -45,6 +45,11 @@ interface UpgradeContext {
+   companyId: string;
+   actorType: "board" | "agent";
+   actorId: string;
++  // AgentDash (#708): bind every refresh to the credential used for this upgrade.
++  authorization:
++    | { kind: "local_trusted" }
++    | { kind: "session"; sessionId: string }
++    | { kind: "agent_key"; keyId: string; tokenHash: string };
+ }
+ 
+ interface IncomingMessageWithContext extends IncomingMessage {
+@@ -114,6 +119,56 @@ function headersFromIncomingMessage(req: IncomingMessage): Headers {
+   return headers;
+ }
+ 
++// AgentDash (#708): direct session-row reads bypass any resolver cookie cache;
++// key refreshes never substitute another key or update lastUsedAt.
++async function isSubscriptionAuthorized(db: Db, context: UpgradeContext): Promise<boolean> {
++  const authorization = context.authorization;
++  if (authorization.kind === "local_trusted") return true;
++
++  if (authorization.kind === "agent_key") {
++    const key = await db
++      .select({ id: agentApiKeys.id, status: agents.status })
++      .from(agentApiKeys)
++      .innerJoin(agents, eq(agents.id, agentApiKeys.agentId))
++      .where(and(
++        eq(agentApiKeys.id, authorization.keyId),
++        eq(agentApiKeys.keyHash, authorization.tokenHash),
++        isNull(agentApiKeys.revokedAt),
++        eq(agentApiKeys.companyId, context.companyId),
++        eq(agentApiKeys.agentId, context.actorId),
++        eq(agents.companyId, context.companyId),
++      ))
++      .then((rows) => rows[0] ?? null);
++    return key !== null && key.status !== "terminated" && key.status !== "pending_approval";
++  }
++
++  const [session, role, membership] = await Promise.all([
++    db.select({ id: authSessions.id })
++      .from(authSessions)
++      .innerJoin(authUsers, eq(authUsers.id, authSessions.userId))
++      .where(and(
++        eq(authSessions.id, authorization.sessionId),
++        eq(authSessions.userId, context.actorId),
++        gt(authSessions.expiresAt, new Date()),
++      ))
++      .then((rows) => rows[0] ?? null),
++    db.select({ id: instanceUserRoles.id })
++      .from(instanceUserRoles)
++      .where(and(eq(instanceUserRoles.userId, context.actorId), eq(instanceUserRoles.role, "instance_admin")))
++      .then((rows) => rows[0] ?? null),
++    db.select({ id: companyMemberships.id })
++      .from(companyMemberships)
++      .where(and(
++        eq(companyMemberships.companyId, context.companyId),
++        eq(companyMemberships.principalType, "user"),
++        eq(companyMemberships.principalId, context.actorId),
++        eq(companyMemberships.status, "active"),
++      ))
++      .then((rows) => rows[0] ?? null),
++  ]);
++  return session !== null && (role !== null || membership !== null);
++}
++
+ async function authorizeUpgrade(
+   db: Db,
+   req: IncomingMessage,
+@@ -135,6 +190,7 @@ async function authorizeUpgrade(
+         companyId,
+         actorType: "board",
+         actorId: "board",
++        authorization: { kind: "local_trusted" },
+       };
+     }
+ 
+@@ -144,34 +200,15 @@ async function authorizeUpgrade(
+ 
+     const session = await opts.resolveSessionFromHeaders(headersFromIncomingMessage(req));
+     const userId = session?.user?.id;
+-    if (!userId) return null;
+-
+-    const [roleRow, memberships] = await Promise.all([
+-      db
+-        .select({ id: instanceUserRoles.id })
+-        .from(instanceUserRoles)
+-        .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+-        .then((rows) => rows[0] ?? null),
+-      db
+-        .select({ companyId: companyMemberships.companyId })
+-        .from(companyMemberships)
+-        .where(
+-          and(
+-            eq(companyMemberships.principalType, "user"),
+-            eq(companyMemberships.principalId, userId),
+-            eq(companyMemberships.status, "active"),
+-          ),
+-        ),
+-    ]);
+-
+-    const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
+-    if (!roleRow && !hasCompanyMembership) return null;
+-
+-    return {
++    if (!userId || !session?.session?.id || session.session.userId !== userId) return null;
++
++    const context: UpgradeContext = {
+       companyId,
+       actorType: "board",
+       actorId: userId,
++      authorization: { kind: "session", sessionId: session.session.id },
+     };
++    return await isSubscriptionAuthorized(db, context) ? context : null;
+   }
+ 
+   const tokenHash = hashToken(token);
+@@ -185,16 +222,20 @@ async function authorizeUpgrade(
+     return null;
+   }
+ 
++  const context: UpgradeContext = {
++    companyId,
++    actorType: "agent",
++    actorId: key.agentId,
++    authorization: { kind: "agent_key", keyId: key.id, tokenHash },
++  };
++  if (!await isSubscriptionAuthorized(db, context)) return null;
++
+   await db
+     .update(agentApiKeys)
+     .set({ lastUsedAt: new Date() })
+     .where(eq(agentApiKeys.id, key.id));
+ 
+-  return {
+-    companyId,
+-    actorType: "agent",
+-    actorId: key.agentId,
+-  };
++  return context;
+ }
+ 
+ export function setupLiveEventsWebSocketServer(
+@@ -208,17 +249,29 @@ export function setupLiveEventsWebSocketServer(
+   const wss = new WebSocketServer({ noServer: true });
+   const cleanupByClient = new Map<WsSocket, () => void>();
+   const aliveByClient = new Map<WsSocket, boolean>();
++  const refreshByClient = new Map<WsSocket, () => Promise<boolean>>();
+ 
+   const pingInterval = setInterval(() => {
+     for (const socket of wss.clients) {
+       if (!aliveByClient.get(socket)) {
++        cleanupByClient.get(socket)?.();
+         socket.terminate();
+         continue;
+       }
+-      aliveByClient.set(socket, false);
+-      socket.ping();
++      // AgentDash (#708): idle subscriptions also lose revoked authorization.
++      const refresh = refreshByClient.get(socket);
++      if (!refresh) continue;
++      void refresh().then((authorized) => {
++        if (!authorized || socket.readyState !== WebSocket.OPEN) return;
++        aliveByClient.set(socket, false);
++        socket.ping();
++      }).catch(() => {
++        cleanupByClient.get(socket)?.();
++        socket.terminate();
++      });
+     }
+-  }, 30000);
++  // AgentDash (#708): 19s poll + 5s prior round + 5s fresh round + 1s close grace <= 30s.
++  }, 19_000);
+ 
+   wss.on("connection", (socket: WsSocket, req: IncomingMessage) => {
+     const context = (req as IncomingMessageWithContext).paperclipUpgradeContext;
+@@ -227,23 +280,85 @@ export function setupLiveEventsWebSocketServer(
+       return;
+     }
+ 
+-    const unsubscribe = subscribeCompanyLiveEvents(context.companyId, (event) => {
+-      if (socket.readyState !== WebSocket.OPEN) return;
+-      socket.send(JSON.stringify(event));
++    let stopped = false;
++    let inFlight: Promise<boolean> | undefined;
++    let cancelRefresh: (() => void) | undefined;
++    let closeDeadline: ReturnType<typeof setTimeout> | undefined;
++    let queuedEvents = 0;
++    let delivery = Promise.resolve();
++    let unsubscribe = () => {};
++    const cleanup = () => {
++      if (stopped) return;
++      stopped = true;
++      unsubscribe();
++      cancelRefresh?.();
++      cleanupByClient.delete(socket);
++      aliveByClient.delete(socket);
++      refreshByClient.delete(socket);
++    };
++    const close = (code: number, reason: string) => {
++      cleanup();
++      socket.close(code, reason);
++      // A peer cannot keep a revoked connection alive by withholding its close reply.
++      closeDeadline = setTimeout(() => socket.terminate(), 1_000);
++      closeDeadline.unref?.();
++    };
++    const refresh = (): Promise<boolean> => {
++      if (stopped) return Promise.resolve(false);
++      if (inFlight) return inFlight;
++      let timeout: ReturnType<typeof setTimeout>;
++      const expires = new Promise<boolean>((resolve) => {
++        cancelRefresh = () => resolve(false);
++        timeout = setTimeout(() => resolve(false), 5_000);
++      });
++      inFlight = Promise.race([isSubscriptionAuthorized(db, context), expires])
++        .catch(() => false)
++        .then((authorized) => {
++          if (!authorized && !stopped) close(1008, "authorization changed");
++          return authorized && !stopped;
++        })
++        .finally(() => {
++          clearTimeout(timeout);
++          cancelRefresh = undefined;
++          inFlight = undefined;
++        });
++      return inFlight;
++    };
++
++    const refreshAfterPending = async (): Promise<boolean> => {
++      // Neither a new event nor an idle tick may use a snapshot from an older round.
++      // Waiting first retains one non-overlapping authorization round per socket.
++      if (inFlight && !await inFlight) return false;
++      return refresh();
++    };
++
++    unsubscribe = subscribeCompanyLiveEvents(context.companyId, (event) => {
++      if (stopped || socket.readyState !== WebSocket.OPEN) return;
++      // AgentDash (#708): serialize checks/sends so async authorization preserves
++      // event order; cap retained events while a database check is stalled.
++      if (queuedEvents >= 256) {
++        close(1013, "event delivery overloaded");
++        return;
++      }
++      queuedEvents += 1;
++      delivery = delivery.then(async () => {
++        if (stopped || !await refreshAfterPending() || socket.readyState !== WebSocket.OPEN) return;
++        socket.send(JSON.stringify(event));
++      }).catch(() => close(1011, "event delivery failed"))
++        .finally(() => { queuedEvents -= 1; });
+     });
+ 
+-    cleanupByClient.set(socket, unsubscribe);
++    cleanupByClient.set(socket, cleanup);
++    refreshByClient.set(socket, refreshAfterPending);
+     aliveByClient.set(socket, true);
+ 
+     socket.on("pong", () => {
+-      aliveByClient.set(socket, true);
++      if (!stopped) aliveByClient.set(socket, true);
+     });
+ 
+     socket.on("close", () => {
+-      const cleanup = cleanupByClient.get(socket);
+-      if (cleanup) cleanup();
+-      cleanupByClient.delete(socket);
+-      aliveByClient.delete(socket);
++      clearTimeout(closeDeadline);
++      cleanup();
+     });
+ 
+     socket.on("error", (err: Error) => {
+@@ -253,6 +368,7 @@ export function setupLiveEventsWebSocketServer(
+ 
+   wss.on("close", () => {
+     clearInterval(pingInterval);
++    for (const cleanup of cleanupByClient.values()) cleanup();
+   });
+ 
+   server.on("upgrade", (req, socket, head) => {
+@@ -261,8 +377,17 @@ export function setupLiveEventsWebSocketServer(
+       rejectUpgrade(socket, "403 Forbidden", "edge required");
+       return;
+     }
++    // AgentDash (#708): URL queries can contain bearer tokens and never enter logs.
++    let url: URL;
++    try {
++      url = new URL(req.url ?? "", "http://localhost");
++    } catch {
++      rejectUpgrade(socket, "400 Bad Request", "invalid url");
++      return;
++    }
++    const path = url.pathname;
+     const onRawSocketError = (err: Error) => {
+-      logger.warn({ err, path: req.url }, "live websocket upgrade socket error");
++      logger.warn({ err, path }, "live websocket upgrade socket error");
+     };
+     const cleanupRawSocketListeners = () => {
+       socket.off("error", onRawSocketError);
+@@ -277,7 +402,6 @@ export function setupLiveEventsWebSocketServer(
+       return;
+     }
+ 
+-    const url = new URL(req.url, "http://localhost");
+     const companyId = parseCompanyId(url.pathname);
+     if (!companyId) {
+       closeUpgradeSocket(socket);
+@@ -307,8 +431,8 @@ export function setupLiveEventsWebSocketServer(
+           wss.emit("connection", ws, reqWithContext);
+         });
+       })
+-      .catch((err) => {
+-        logger.error({ err, path: req.url }, "failed websocket upgrade authorization");
++      .catch(() => {
++        logger.error({ path }, "failed websocket upgrade authorization");
+         rejectUpgrade(socket, "500 Internal Server Error", "upgrade failed");
+       });
+   });
+diff --git a/server/src/services/agent-creator-from-proposal.ts b/server/src/services/agent-creator-from-proposal.ts
+index 18ff8bc6695ce9d5af1ca784316fdfae2cb4582d..f8e26c003d76c39e2a99edb683c4ce4d175596fc 100644
+--- a/server/src/services/agent-creator-from-proposal.ts
++++ b/server/src/services/agent-creator-from-proposal.ts
+@@ -187,6 +187,13 @@ When you make HTTP calls to the AgentDash API (\`/api/...\` endpoints):
+ The same key works for all \`/api/companies/:companyId/...\` endpoints under your company; cross-company access is rejected with HTTP 403.
+ <!-- /AgentDash: agent-api-auth -->
+ 
++<!-- AgentDash: live-event-revocation — DO NOT REMOVE OR REORDER THIS BLOCK -->
++## Live event access can be revoked
++
++If you subscribe to \`GET /api/companies/:companyId/events/ws\`, access is rechecked before event delivery and on each heartbeat. A WebSocket close with code \`1008\` means access is no longer valid or could not be verified. Stop reconnecting with that credential; obtain current company access or a replacement key from the authorized human before resubscribing. Never use another company's key or an anonymous connection to bypass the refusal. Report the interruption in a task comment when your remaining access permits it.
++<!-- /AgentDash: live-event-revocation -->
++
++
+ <!-- AgentDash: free-tier-capacity — DO NOT REMOVE OR REORDER THIS BLOCK -->
+ ## Free-tier capacity limits
+ 
