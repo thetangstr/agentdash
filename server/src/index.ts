@@ -1126,8 +1126,9 @@ export async function startServer(): Promise<StartedServer> {
   /**
    * Inbox email: a pointer-only email to a person when an agent's question or
    * an approval starts waiting on them, at most one per person per 15 minutes.
-   * Every minute; the sweep is a no-op (logged once) while RESEND_API_KEY is
-   * unset, and its batching state lives in steward_email_notices.
+   * Every minute; the sweep is a no-op (logged once) unless
+   * AGENTDASH_INBOX_EMAIL=true and RESEND_API_KEY are both set, and its
+   * batching state lives in steward_email_notices.
    */
   {
     const { stewardInboxEmailService } = await import("./services/steward-inbox-email.js");
