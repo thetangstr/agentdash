@@ -75,6 +75,45 @@ describe("agentdash-connect mcp", () => {
     expect(byName.inbox_propose).toContain("'have Agent A draft X'");
   });
 
+  /**
+   * The server is registered at user scope, so its instructions reach every
+   * Claude Code session on the machine, in any repo. An unscoped "review the
+   * inbox before anything else" would pull agent-written text into every
+   * coding session, unasked — the thing the inbox folder exists to prevent.
+   */
+  it("keeps the session-start review to the inbox folder, and waits to be asked elsewhere", async () => {
+    const { handle } = handler(() => ({}));
+    const init = await handle({ jsonrpc: "2.0", id: 40, method: "initialize", params: {} });
+    const list = await handle({ jsonrpc: "2.0", id: 41, method: "tools/list" });
+    const sync = list.result.tools.find((t) => t.name === "inbox_sync").description;
+    const sentences = (text) => text.replace(/\s+/g, " ").split(/(?<=[.;])\s+/);
+    for (const text of [init.result.instructions, sync]) {
+      const flat = text.replace(/\s+/g, " ");
+      // Every sentence that starts a session with the inbox names the inbox folder.
+      const startSentences = sentences(text).filter((s) => /start of a session|before anything else|session started/i.test(s));
+      expect(startSentences.length).toBeGreaterThan(0);
+      for (const sentence of startSentences) expect(sentence).toMatch(/inbox folder \(~\/agentdash-inbox\)/);
+      expect(flat).not.toMatch(/At the start of a session, review/);
+      // Elsewhere: only when asked.
+      expect(flat).toMatch(/when the person asks/);
+    }
+    expect(init.result.instructions.replace(/\s+/g, " ")).toMatch(/In any other session, use these tools only when the person asks/);
+    expect(sync.replace(/\s+/g, " ")).toMatch(/never call it unprompted in any other session/);
+  });
+
+  /**
+   * The server runs @latest, so these instructions reach machines whose inbox
+   * folder may not have the skill yet. The core honesty rule travels here too.
+   */
+  it("carries the never-invent rule itself, and says what to do without the skill", async () => {
+    const { handle } = handler(() => ({}));
+    const init = await handle({ jsonrpc: "2.0", id: 42, method: "initialize", params: {} });
+    const flat = init.result.instructions.replace(/\s+/g, " ");
+    expect(flat).toMatch(/Never invent facts or figures/);
+    expect(flat).toMatch(/unverified/);
+    expect(flat).toMatch(/If it is not available, follow the rules here/);
+  });
+
   it("offers exactly the inbox surface — no bridge task tools, nothing from the control plane", async () => {
     const { handle } = handler(() => ({}));
     const res = await handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });

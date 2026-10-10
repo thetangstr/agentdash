@@ -171,9 +171,12 @@ Connecting also puts a skill in the inbox folder,
 `AGENTS.md` for Codex. It tells Claude how to work on your agents' hand-offs
 with you:
 
-- **Review first.** At session start, before anything else, it goes through
-  every waiting item in order — decisions, then questions, then blockers — and
-  always shows the counts, including how many were not shown.
+- **Review first, in the inbox folder only.** At the start of a session in
+  `~/agentdash-inbox`, before anything else, it goes through every waiting item
+  in order — decisions, then questions, then approved but not delivered, then
+  blockers — and always shows the counts, including how many were not shown.
+  The inbox tools are registered for every Claude Code session on the machine,
+  but outside the inbox folder Claude uses them only when you ask.
 - **The agent's work, then its take.** Each item is presented as what was
   asked, what the agent did in its own words, and then "My take", labelled as
   Claude's. Agreeing, disagreeing, rejecting the draft and rewriting it are all
@@ -201,9 +204,12 @@ The skill names tools that newer instances add (`work_list`, `work_read`,
 have one, Claude says so and falls back to the inbox tools and your AgentDash
 page.
 
-Both files carry a version line. Connecting again replaces them only when the
-packaged version is newer; a copy without the version line is yours and is
-never touched.
+Both files carry a version line. Connecting again, or the inbox folder's
+session-start hook (which runs `@latest`), installs them when missing and
+replaces them only when the packaged version is newer, so a machine that
+connected before the skill existed gets it without a new code. A copy without
+the version line is yours and is never touched; connecting tells you when it
+kept one. A rules file installed by the hook loads fully from the next session.
 
 ## Nothing left running
 

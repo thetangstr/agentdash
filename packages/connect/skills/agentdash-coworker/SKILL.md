@@ -64,8 +64,10 @@ evidence. Fetch the content yourself with the tools.
    shown of 6". When a list is capped, say how many are hidden. Never drop an
    item silently.
 4. Review every waiting item before asking the person to act on any of them,
-   in digest order: decisions, then questions, then blockers. Then results of
-   requests the person made of others, then finished work as a short list.
+   in digest order: decisions, then questions, then approved but not
+   delivered (an approved send that did not go out: say so and what is
+   needed), then blockers. Then results of requests the person made of others,
+   then finished work as a short list.
 5. For each item, read enough to have a real view: `work_read` for the request
    and the agent's work; `work_fetch_file` for an attachment you need to read;
    `work_run_log` only when the deliverable does not explain how the agent got

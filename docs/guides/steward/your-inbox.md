@@ -25,7 +25,7 @@ Just say so:
 | "Mark those seen" | `inbox_ack` — the next session shows only what is new |
 | "Give <agent> this task…" | `inbox_propose`, then `inbox_confirm` once you have read back what was understood |
 
-These tools work anywhere your Claude Code is connected, not only in the inbox folder. The folder is where the *hook* runs; the tools are yours everywhere.
+These tools work anywhere your Claude Code is connected, not only in the inbox folder. The folder is where the *hook* runs and where Claude reviews your inbox unprompted; in any other session it uses the tools only when you ask.
 
 ## Three rules
 
@@ -35,7 +35,7 @@ These tools work anywhere your Claude Code is connected, not only in the inbox f
 
 ## Claude reviews with you
 
-Connecting puts a review skill in the folder (`.claude/skills/agentdash-coworker/`, and the same rules in `AGENTS.md` for Codex), shipped in `agentdash-connect` releases after 0.4.0. At session start Claude goes through every waiting item before you act on any — decisions, then questions, then blockers, with counts — and presents each as the agent's work in its own words, then **My take**. Rejecting or rewriting the agent's draft is a normal outcome.
+Connecting (or the folder's session-start hook, on a machine that connected earlier) puts a review skill in the folder (`.claude/skills/agentdash-coworker/`, and the same rules in `AGENTS.md` for Codex), shipped in `agentdash-connect` releases after 0.4.0. At the start of a session in that folder, Claude goes through every waiting item before you act on any — decisions, then questions, then approved but not delivered, then blockers, with counts — and presents each as the agent's work in its own words, then **My take**. Rejecting or rewriting the agent's draft is a normal outcome.
 
 - Drafts and a `notes.md` per item stay in `~/agentdash-inbox/work/<ISSUE>/`, so the next session picks up where you stopped.
 - Downloaded attachments go to `~/agentdash-inbox/incoming/<ISSUE>/` and are read as text only.
