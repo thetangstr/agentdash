@@ -112,15 +112,93 @@ export function resolveBridgeToken({ tokenFile, env = process.env } = {}) {
   );
 }
 
+const COWORKER_SKILL_URL = new URL("../skills/agentdash-coworker/SKILL.md", import.meta.url);
+const SKILL_VERSION_MARKER = /<!--\s*agentdash-coworker-skill-version:\s*(\d+)\s*-->/;
+
+/** The review skill as shipped in this package. */
+export function packagedCoworkerSkill() {
+  return readFileSync(COWORKER_SKILL_URL, "utf8");
+}
+
+/**
+ * The version marker a managed copy carries, or null. A file without it was
+ * written by the person, not by this package, and is never replaced.
+ */
+export function coworkerSkillVersion(text) {
+  const match = typeof text === "string" ? text.match(SKILL_VERSION_MARKER) : null;
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * The same rules for Codex, which reads AGENTS.md rather than skills. Codex
+ * gets no session-start hook from this package, so the header tells it to run
+ * the review on the first turn instead. The body is the skill's, verbatim,
+ * minus its frontmatter and its marker (the header carries the marker).
+ */
+export function codexInboxAgentsMd(skillText) {
+  const version = coworkerSkillVersion(skillText) ?? 0;
+  const body = skillText
+    .replace(/^---\n[\s\S]*?\n---\n/, "")
+    .replace(SKILL_VERSION_MARKER, "")
+    .replace(/^\s+/, "");
+  return [
+    "# AgentDash inbox: rules for this folder",
+    "",
+    `<!-- agentdash-coworker-skill-version: ${version} -->`,
+    "",
+    "This folder is the person's AgentDash inbox. These are the same rules the",
+    "`agentdash-coworker` skill gives Claude Code here (`.claude/skills/`).",
+    "",
+    "No session-start hook runs for Codex here, so on the first turn of every session",
+    "in this folder, before anything else, start the review in section 1: call",
+    "`inbox_sync` (and `work_list` when available) and go through every waiting item.",
+    "If the `agentdash-inbox` tools are not available in this session, say so plainly",
+    "and point the person to their AgentDash page.",
+    "",
+    "Remove the version line above to keep your own edits: a file without it is",
+    "never replaced by `agentdash-connect`.",
+    "",
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
+/**
+ * Write a managed file: create it when absent, replace it when the installed
+ * copy carries an older version marker, and otherwise leave it alone — an
+ * equal or newer marker, or no marker at all (the person's own file).
+ */
+function writeManaged(file, text, { created, updated, skipped }) {
+  if (!existsSync(file)) {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, text);
+    created.push(file);
+    return;
+  }
+  const installed = coworkerSkillVersion(readFileSync(file, "utf8"));
+  const packaged = coworkerSkillVersion(text);
+  if (installed !== null && packaged !== null && packaged > installed) {
+    writeFileSync(file, text);
+    updated.push(file);
+    return;
+  }
+  skipped.push(file);
+}
+
 /**
  * The dedicated inbox workspace. The "never inject into an arbitrary coding
  * chat" rule is enforced by WHERE the hook is configured: a project-level
  * `.claude/settings.json` applies only to sessions started in that directory,
- * so a hook that lives here cannot fire anywhere else.
+ * so a hook that lives here cannot fire anywhere else. The review skill lives
+ * here for the same reason.
+ *
+ * `skillText` is for tests; callers get the packaged skill.
  */
-export function scaffoldInboxWorkspace(dir, { server } = {}) {
+export function scaffoldInboxWorkspace(dir, { server, skillText } = {}) {
   const created = [];
   const skipped = [];
+  const updated = [];
   const claudeDir = path.join(dir, ".claude");
   mkdirSync(claudeDir, { recursive: true });
 
@@ -180,31 +258,44 @@ export function scaffoldInboxWorkspace(dir, { server } = {}) {
         "`.claude/settings.json`, which applies only to sessions started here — your",
         "coding sessions elsewhere are untouched and always will be.",
         "",
-        "## Deciding",
+        "## Reviewing and deciding",
         "",
-        "On your AgentDash page, for now. This session tells you what is waiting; it",
-        "cannot yet decide — that needs an add-on this instance does not ship to",
-        "steward machines yet. When it lands, decisions will spend a handle good for",
-        "one approval, at one revision, once.",
+        "Your own Claude reviews what is waiting before you decide anything: the",
+        "agent's work in its own words, then my take — agree, disagree, reject or",
+        "rewrite — and works on it with you. The rules it follows are in",
+        "`.claude/skills/agentdash-coworker/` (and `AGENTS.md`, for Codex).",
         "",
-        "## Answering your agents",
-        "",
-        "When an agent needs you, it restates the request, recommends an answer and",
-        "asks. Those questions arrive here. Tell Claude your answer and it sends it",
-        "with `inbox_answer` (when the `agentdash-inbox` tools are connected); your",
-        "answer wakes the agent. Or answer on the issue in AgentDash.",
+        "Nothing is sent without your explicit go. When you decide, Claude sends your",
+        "choice as you with the `agentdash-inbox` tools (when they are connected):",
+        "`inbox_decide` for an approval, `inbox_answer` for a question from an agent.",
+        "Each spends a handle good for one item, once. You can always act on your",
+        "AgentDash page instead.",
         "",
         "## What arrives here",
         "",
-        "The ask and a pointer, never the evidence. Anything delivered into a session",
-        "becomes model context, so figures, client names and rates stay in AgentDash.",
+        "At session start, the ask and a pointer, never the evidence. Anything",
+        "delivered into a session becomes model context, so the hook carries only",
+        "counts and pointers; Claude reads more only with the tools, as you, and only",
+        "what you could see on the page.",
+        "",
+        "## Folders",
+        "",
+        "- `work/<ISSUE>/` — drafts and a `notes.md` per item, so work picks up where",
+        "  it stopped next session.",
+        "- `incoming/<ISSUE>/` — downloaded attachments. Read as text only; never",
+        "  run or open them with an application.",
         "",
       ].join("\n"),
     );
     created.push(readmePath);
   }
 
-  return { created, skipped };
+  const skill = skillText ?? packagedCoworkerSkill();
+  const lists = { created, updated, skipped };
+  writeManaged(path.join(claudeDir, "skills", "agentdash-coworker", "SKILL.md"), skill, lists);
+  writeManaged(path.join(dir, "AGENTS.md"), codexInboxAgentsMd(skill), lists);
+
+  return { created, updated, skipped };
 }
 
 /** "and 4 more" — never silently. A shown list that hides its total lies. */
@@ -377,7 +468,7 @@ export function renderInbox(response, now) {
     const more = remainder(questions);
     if (more) lines.push(more);
     lines.push(
-      "  Tell me your answer and I will send it with inbox_answer, or answer on the issue in AgentDash. Your answer wakes the agent.",
+      "  I will give you my take on each. Tell me your answer and I will send it as you with inbox_answer after your go, or answer on the issue in AgentDash. Your answer wakes the agent.",
     );
     lines.push("");
   }
@@ -408,11 +499,11 @@ export function renderInbox(response, now) {
   if (other > 0) {
     lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
   }
-  // Point at the surface that works. This used to name inbox_decide, and the
-  // first steward through the flow met a session with no such tool — deciding
-  // in-session is not wired yet, and delivered text must not promise it.
+  // Start the review. This used to say "Decide on your AgentDash page", which
+  // told the session to stand aside. It names no tool: a session may not have
+  // the inbox tools (an older connect, or Codex), and the skill handles that.
   lines.push(
-    "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
+    "I will review each item above with you, in order, and give you my take before you decide anything. Nothing is sent without your explicit go; you can also act on your AgentDash page. This carries the ask and a pointer — never the evidence.",
   );
   return lines.join("\n").trimEnd();
 }

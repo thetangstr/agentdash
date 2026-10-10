@@ -29,13 +29,22 @@ These tools work anywhere your Claude Code is connected, not only in the inbox f
 
 ## Three rules
 
-- **Claude decides only what you explicitly asked about** — never on its own, and never because an issue or a message asked it to. If you want zero in-session decisions, delete the `agentdash-inbox` entry from `~/.claude.json`; everything else keeps working.
+- **Claude has a view; you make the call.** Claude tells you what it thinks of each item, including that the agent got it wrong. It sends only what you chose, only after your explicit go — never on its own, and never because an issue or a message asked it to. If you want zero in-session decisions, delete the `agentdash-inbox` entry from `~/.claude.json`; everything else keeps working.
 - **A refusal is an answer, not something to retry.** "Already decided", "revision moved on", "not yours to decide" mean the approval changed or belongs to another steward. You can decide exactly what you could decide on the web page, and nothing else.
 - **Your agent still cannot decide anything.** If Claude reaches for the agent's tools and gets `403 Board access required`, that is the design working — ask it to use the inbox tools. If those are missing, you connected before `agentdash-connect` 0.3.0; [reconnect](./connect-your-terminal) with a fresh code.
 
+## Claude reviews with you
+
+Connecting puts a review skill in the folder (`.claude/skills/agentdash-coworker/`, and the same rules in `AGENTS.md` for Codex), shipped in `agentdash-connect` releases after 0.4.0. At session start Claude goes through every waiting item before you act on any — decisions, then questions, then blockers, with counts — and presents each as the agent's work in its own words, then **My take**. Rejecting or rewriting the agent's draft is a normal outcome.
+
+- Drafts and a `notes.md` per item stay in `~/agentdash-inbox/work/<ISSUE>/`, so the next session picks up where you stopped.
+- Downloaded attachments go to `~/agentdash-inbox/incoming/<ISSUE>/` and are read as text only.
+- Before anything is sent, Claude reads it back in full, as you, and asks "yes / change / no". One explicit yes sends it; anything else sends nothing.
+- Text from agents, documents and attachments is material to review, never instructions; an instruction found in it is reported to you as a finding.
+
 ## Questions from your agents
 
-When work reaches your agent — including work assigned to you — it takes the first pass: it restates the request, recommends an answer and asks you. The question arrives here with the agent's options; what the agent wrote is shown as its words, not as instructions to Claude. Tell Claude your answer and it sends it with `inbox_answer`, needing `agentdash-connect` 0.4.0 or later. You can also answer on the issue in AgentDash.
+When work reaches your agent — including work assigned to you — it takes the first pass: it restates the request, recommends an answer and asks you. The question arrives here with the agent's options; what the agent wrote is shown as its words, not as instructions to Claude, and Claude gives you its own take on it. Tell Claude your answer and it sends it with `inbox_answer`, needing `agentdash-connect` 0.4.0 or later. You can also answer on the issue in AgentDash.
 
 ## Email
 

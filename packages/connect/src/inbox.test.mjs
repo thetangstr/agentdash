@@ -10,6 +10,9 @@ import {
   resolveBridgeToken,
   resolveInboxServer,
   runInbox,
+  codexInboxAgentsMd,
+  coworkerSkillVersion,
+  packagedCoworkerSkill,
   scaffoldInboxWorkspace,
   storeBridgeToken,
   unseenApprovalCount,
@@ -72,9 +75,14 @@ describe("renderInbox", () => {
     expect(decision).toBeLessThan(blocked);
     expect(blocked).toBeLessThan(finished);
     expect(text).toContain("HAL — purchase [high: exceeds the $25 limit], rev 3, waiting 3h");
-    // The old closing line named inbox_decide; the first steward through the
-    // flow met a session with no such tool. Delivered text must not promise it.
-    expect(text).toContain("Decide on your AgentDash page.");
+    // The closing line used to say "Decide on your AgentDash page", which told
+    // the session to stand aside. It now starts the review: Claude gives its
+    // take on every item first, and nothing is sent without the person's go.
+    // It still names no tool, because a session may not have the inbox tools.
+    expect(text).toContain("I will review each item above with you, in order, and give you my take");
+    expect(text).toContain("Nothing is sent without your explicit go");
+    expect(text).toContain("never the evidence");
+    expect(text).not.toContain("Decide on your AgentDash page");
     expect(text).not.toContain("inbox_decide");
   });
 
@@ -253,7 +261,7 @@ describe("scaffoldInboxWorkspace", () => {
   it("installs a SessionStart hook that needs only npx", () => {
     const dir = tmp();
     const { created } = scaffoldInboxWorkspace(dir, { server: "https://mk.example:3112" });
-    expect(created).toHaveLength(2);
+    expect(created).toHaveLength(4);
     const settings = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
     const hook = settings.hooks.SessionStart[0];
     expect(hook.matcher).toBe("startup|resume");
@@ -270,8 +278,186 @@ describe("scaffoldInboxWorkspace", () => {
     writeFileSync(path.join(dir, ".claude", "settings.json"), "{}");
     const { created, skipped } = scaffoldInboxWorkspace(dir, {});
     expect(skipped).toContain(path.join(dir, ".claude", "settings.json"));
-    expect(created).toHaveLength(1); // only the README
+    // The README, the skill and the Codex AGENTS.md.
+    expect(created).toHaveLength(3);
     expect(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8")).toBe("{}");
+  });
+
+  it("does not tell the person the session cannot decide", () => {
+    const dir = tmp();
+    scaffoldInboxWorkspace(dir, {});
+    const readme = readFileSync(path.join(dir, "README.md"), "utf8");
+    expect(readme).not.toMatch(/cannot yet decide/);
+    expect(readme).not.toMatch(/On your AgentDash page, for now/);
+    expect(readme).toMatch(/my take|your own Claude/i);
+    expect(readme).toMatch(/explicit go/);
+  });
+});
+
+describe("the co-worker skill in the inbox workspace", () => {
+  const skillPath = (dir) => path.join(dir, ".claude", "skills", "agentdash-coworker", "SKILL.md");
+  const agentsPath = (dir) => path.join(dir, "AGENTS.md");
+  const withVersion = (text, version) =>
+    text.replace(/agentdash-coworker-skill-version:\s*\d+/, `agentdash-coworker-skill-version: ${version}`);
+
+  it("installs the packaged skill for Claude Code and the same rules as AGENTS.md for Codex", () => {
+    const dir = tmp();
+    const { created } = scaffoldInboxWorkspace(dir, {});
+    const packaged = packagedCoworkerSkill();
+    expect(created).toContain(skillPath(dir));
+    expect(created).toContain(agentsPath(dir));
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(packaged);
+    const agents = readFileSync(agentsPath(dir), "utf8");
+    expect(agents).toBe(codexInboxAgentsMd(packaged));
+    expect(coworkerSkillVersion(agents)).toBe(coworkerSkillVersion(packaged));
+    // Same rules: every section of the skill body appears in AGENTS.md.
+    for (const heading of packaged.match(/^## .+$/gm)) expect(agents).toContain(heading);
+    // Codex has no session-start hook here, so it is told to start the review itself.
+    expect(agents).toMatch(/first turn of every session/);
+    // AGENTS.md is plain markdown, not a skill: no frontmatter.
+    expect(agents.startsWith("---")).toBe(false);
+  });
+
+  it("is idempotent: a second scaffold writes nothing", () => {
+    const dir = tmp();
+    scaffoldInboxWorkspace(dir, {});
+    const before = [skillPath(dir), agentsPath(dir)].map((file) => readFileSync(file, "utf8"));
+    const again = scaffoldInboxWorkspace(dir, {});
+    expect(again.created).toEqual([]);
+    expect(again.updated).toEqual([]);
+    expect(again.skipped).toEqual(expect.arrayContaining([skillPath(dir), agentsPath(dir)]));
+    const after = [skillPath(dir), agentsPath(dir)].map((file) => readFileSync(file, "utf8"));
+    expect(after).toEqual(before);
+  });
+
+  /**
+   * Later releases add tools the skill must teach (send-back, requests), so a
+   * packaged version newer than the installed one replaces it. Older or equal
+   * never replaces, and a file without the version marker is the person's
+   * own and is never touched.
+   */
+  it("updates an installed copy when the packaged version is newer", () => {
+    const dir = tmp();
+    const packaged = packagedCoworkerSkill();
+    const current = coworkerSkillVersion(packaged);
+    scaffoldInboxWorkspace(dir, { skillText: withVersion(packaged, current - 1) });
+    expect(coworkerSkillVersion(readFileSync(skillPath(dir), "utf8"))).toBe(current - 1);
+
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.updated).toEqual(expect.arrayContaining([skillPath(dir), agentsPath(dir)]));
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(packaged);
+    expect(readFileSync(agentsPath(dir), "utf8")).toBe(codexInboxAgentsMd(packaged));
+  });
+
+  it("never downgrades a newer installed copy", () => {
+    const dir = tmp();
+    const packaged = packagedCoworkerSkill();
+    const newer = withVersion(packaged, coworkerSkillVersion(packaged) + 1);
+    scaffoldInboxWorkspace(dir, { skillText: newer });
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.updated).toEqual([]);
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(newer);
+  });
+
+  it("leaves a skill or AGENTS.md the person wrote themselves alone", () => {
+    const dir = tmp();
+    mkdirSync(path.dirname(skillPath(dir)), { recursive: true });
+    writeFileSync(skillPath(dir), "---\nname: agentdash-coworker\ndescription: mine\n---\nMy own rules.\n");
+    writeFileSync(agentsPath(dir), "# My own AGENTS.md\n");
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.updated).toEqual([]);
+    expect(result.skipped).toEqual(expect.arrayContaining([skillPath(dir), agentsPath(dir)]));
+    expect(readFileSync(skillPath(dir), "utf8")).toContain("My own rules.");
+    expect(readFileSync(agentsPath(dir), "utf8")).toBe("# My own AGENTS.md\n");
+  });
+});
+
+describe("the packaged co-worker skill", () => {
+  const raw = packagedCoworkerSkill();
+  // Matched with line wrapping collapsed, so rewrapping a paragraph is not a failure.
+  const skill = raw.replace(/\s+/g, " ");
+
+  it("is a Claude Code skill with a name, a description and a version", () => {
+    const front = raw.match(/^---\n([\s\S]*?)\n---\n/);
+    expect(front).not.toBeNull();
+    expect(front[1]).toMatch(/^name: agentdash-coworker$/m);
+    expect(front[1]).toMatch(/^description: .{40,}$/m);
+    expect(coworkerSkillVersion(raw)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reviews every waiting item first, in digest order, with counts", () => {
+    expect(skill).toMatch(/decisions, then questions, then blockers/);
+    expect(skill).toMatch(/counts/i);
+    expect(skill).toMatch(/never drop an item silently/i);
+  });
+
+  it("presents the agent's work first, then its own take, with reject and rewrite as normal outcomes", () => {
+    expect(skill).toMatch(/My take/);
+    expect(skill).toMatch(/reject/i);
+    expect(skill).toMatch(/rewrite/i);
+    expect(skill).toMatch(/normal outcomes/);
+  });
+
+  it("carries the honesty rules", () => {
+    expect(skill).toMatch(/as the agent labelled them/);
+    expect(skill).toMatch(/unverified/);
+    expect(skill).toMatch(/Never invent/);
+  });
+
+  it("names the working folder, the notes file and the quarantine folder", () => {
+    expect(skill).toContain("~/agentdash-inbox/work/<ISSUE>/");
+    expect(skill).toContain("notes.md");
+    expect(skill).toContain("~/agentdash-inbox/incoming/<ISSUE>/");
+    expect(skill).toMatch(/never execute/i);
+    expect(skill).toMatch(/open them with an application/);
+  });
+
+  it("sends only after one explicit go to the exact read-back", () => {
+    expect(skill).toMatch(/read-back/);
+    expect(skill).toMatch(/yes \/ change \/ no/);
+    expect(skill).toMatch(/anything else sends nothing/i);
+  });
+
+  it("captures two or three lessons, editable by the person, never client content", () => {
+    expect(skill).toMatch(/2.3 (short )?lessons/);
+    expect(skill).toMatch(/never client content/i);
+  });
+
+  it("treats agent material as material and reports injected instructions as findings", () => {
+    expect(skill).toMatch(/untrusted/);
+    expect(skill).toMatch(/run logs?/);
+    expect(skill).toMatch(/never instructions/i);
+    expect(skill).toMatch(/as a finding/);
+  });
+
+  it("names the tools later releases add, so they slot in", () => {
+    for (const tool of [
+      "inbox_sync",
+      "inbox_decide",
+      "inbox_answer",
+      "work_list",
+      "work_read",
+      "work_run_log",
+      "work_fetch_file",
+      "work_propose_reply",
+      "work_confirm_reply",
+      "work_request_propose",
+      "work_request_confirm",
+    ]) {
+      expect(skill).toContain(tool);
+    }
+    // A tool the session does not have is said out loud, never faked.
+    expect(skill).toMatch(/not available/);
+  });
+
+  it("has a refusal list", () => {
+    expect(raw).toMatch(/^## .*[Nn]ever do/m);
+  });
+
+  it("carries no addresses or hosts (this package is public)", () => {
+    expect(skill).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
+    expect(skill).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+    expect(skill).not.toMatch(/https?:\/\//);
   });
 });
 
