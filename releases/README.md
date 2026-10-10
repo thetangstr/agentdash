@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1010.1](v2026.1010.1.md) | 2026-10-10 | Inbox email pointers off by default; bridge inbox in Claude or Codex is the channel; no migrations | Pending stable publication |
 | [v2026.1010.0](v2026.1010.0.md) | 2026-10-10 | Assigning a person assigns their agent, which takes a first pass and asks; agent questions answered from the person's own Claude or Codex session; email pointers; gpt-6 Codex models; My agent in the sidebar; steward-only document connections; document text kept out of stored runs; two migrations (0147, 0148) | Pending stable publication |
 | [v2026.1008.0](v2026.1008.0.md) | 2026-10-08 | Release preparation: accurate private Hermes SSH invocation records; stricter agent and approval authority; financial privacy; responsive log privacy checks; inactive-owner input recovery; public docs and updates; no migrations | Pending stable publication |
 | [v2026.1007.1](v2026.1007.1.md) | 2026-10-07 | Run-log reads yield between lines; chats and live transcripts follow the newest message; assignment-only wake policy with a run-window audit route; instance identity on the health check; no migrations | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1007.1) |

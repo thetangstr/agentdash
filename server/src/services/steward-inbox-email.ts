@@ -49,8 +49,15 @@ const BASELINE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Most pointers listed in one email; the rest are counted. */
 const MAX_LINES = 20;
 
+/**
+ * Inbox emails are OFF unless an operator turns them on with
+ * AGENTDASH_INBOX_EMAIL=true (and email is configured). The bridge inbox in the
+ * person's own Claude or Codex session is the channel for agent questions;
+ * contacting people outside the app is an explicit instance decision, never a
+ * side effect of having transactional email set up.
+ */
 export function isInboxEmailConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.RESEND_API_KEY?.trim());
+  return env.AGENTDASH_INBOX_EMAIL?.trim() === "true" && Boolean(env.RESEND_API_KEY?.trim());
 }
 
 /** A person's inbox-email choice. No row means the default: on. */
@@ -502,7 +509,7 @@ export function stewardInboxEmailService(
     if (!isConfigured()) {
       if (!loggedUnconfigured) {
         loggedUnconfigured = true;
-        logger.info("[inbox-email] RESEND_API_KEY not set — inbox emails are off");
+        logger.info("[inbox-email] inbox emails are off (set AGENTDASH_INBOX_EMAIL=true with RESEND_API_KEY to turn them on)");
       }
       return { sent: 0, configured: false };
     }

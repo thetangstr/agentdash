@@ -39,7 +39,7 @@ When work reaches your agent — including work assigned to you — it takes the
 
 ## Email
 
-When an agent asks you something or needs a decision, AgentDash emails you a pointer: the agent, the issue, a link, and a reminder that you can say "check my AgentDash inbox" in Claude or Codex. It never contains the question or the approval's details. You get at most one email every 15 minutes, covering everything new since the last one. Turn it off under **Email me when my agents need me** on **My Agent**. If your instance is not set up to send email, none is sent.
+Inbox emails are off unless your instance turns them on (an operator sets `AGENTDASH_INBOX_EMAIL=true`). Your agents' questions and decisions reach you in your own Claude or Codex session and on Home in AgentDash. When an instance does turn emails on, each one is a pointer only (the agent, the issue identifier and a link), at most one every 15 minutes, and you can turn it off under **Email me when my agents need me** on **My Agent**.
 
 ## Optional: have your agent keep watch
 
