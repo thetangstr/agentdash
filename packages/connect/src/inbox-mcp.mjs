@@ -1,7 +1,8 @@
 import readline from "node:readline";
 import process from "node:process";
 
-import { readBridgeOwner, resolveBridgeToken, resolveInboxServer } from "./inbox.mjs";
+import { defaultInboxDir, readBridgeOwner, resolveBridgeToken, resolveInboxServer } from "./inbox.mjs";
+import { WORK_INSTRUCTIONS, WORK_TOOLS } from "./work-tools.mjs";
 
 /**
  * `agentdash-connect mcp` — the person's own inbox, as MCP tools, over stdio.
@@ -195,7 +196,12 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
   const readServer = deps.readServer ?? (() => resolveInboxServer(opts));
   const owner = deps.owner !== undefined ? deps.owner : readBridgeOwner();
   const version = deps.version ?? "0.0.0";
-  const toolsByName = new Map(TOOLS.map((tool) => [tool.name, tool]));
+  const inboxDir = deps.inboxDir ?? defaultInboxDir();
+  // The work tools (work-tools.mjs) travel beside the inbox tools: same
+  // credential, their own routes (`tool.path`), and the file tool writes its
+  // own response (`tool.handleResponse`).
+  const allTools = [...TOOLS, ...WORK_TOOLS];
+  const toolsByName = new Map(allTools.map((tool) => [tool.name, tool]));
 
   async function callTool(name, input) {
     const tool = toolsByName.get(name);
@@ -214,7 +220,7 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
 
     let res;
     try {
-      res = await fetchImpl(`${server}/api/bridge/inbox/${tool.route}`, {
+      res = await fetchImpl(`${server}/api/bridge/${tool.path ?? `inbox/${tool.route}`}`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify(tool.body(input ?? {})),
@@ -224,6 +230,9 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
       return textResult(`AgentDash unreachable at ${server}: ${err?.message ?? String(err)}`, true);
     }
 
+    if (tool.handleResponse && res.ok) {
+      return tool.handleResponse(res, input ?? {}, { inboxDir, textResult });
+    }
     const raw = await res.text().catch(() => "");
     if (!res.ok) {
       return textResult(`AgentDash answered ${res.status}: ${raw.slice(0, 300)}`, true);
@@ -252,13 +261,13 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
           protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: "agentdash-inbox", version },
-          instructions: instructionsFor(owner),
+          instructions: [instructionsFor(owner), WORK_INSTRUCTIONS].join("\n"),
         });
       case "ping":
         return isRequest ? reply({}) : null;
       case "tools/list":
         return reply({
-          tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+          tools: allTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
         });
       case "tools/call":
         return reply(await callTool(params?.name, params?.arguments));

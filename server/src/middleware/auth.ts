@@ -87,6 +87,14 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // answers it through the canonical answer path after re-checking that the
   // question is still theirs -- see steward-inbox-answers.ts.
   "/api/bridge/inbox/answer",
+  // The person's own Claude reviewing their agents' work: read-only, scoped by
+  // the endpoint's owner, and refused without `bridge:work` and the company's
+  // coworker_bridge_enabled flag -- see steward-work.ts. `file` returns one
+  // attachment's bytes and logs the download.
+  "/api/bridge/work/list",
+  "/api/bridge/work/read",
+  "/api/bridge/work/run-log",
+  "/api/bridge/work/file",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

@@ -148,6 +148,38 @@ unknown option, a required question left empty) leaves it usable, and a
 question that was answered elsewhere, or is no longer yours, is refused.
 `inbox_answer` needs 0.4.0 or later.
 
+## Reviewing your agents' work
+
+The inbox carries the ask and a pointer. To review what your agent actually
+did, the same `agentdash-inbox` entry also serves four read-only tools:
+
+- `work_list` — what your agents have handed you: issues waiting on a decision,
+  a question, a blocker or a review, decisions first, oldest first, with counts.
+- `work_read` — one issue in full, as you see it on your page: the issue, its
+  parent and the request it came from, comments, documents (paged), attachment
+  metadata (name, size, type, sha256), and child issues.
+- `work_run_log` — the agent's own run log for that issue, paged, with secrets
+  redacted on the server.
+- `work_fetch_file` — saves one attachment into
+  `~/agentdash-inbox/incoming/<ISSUE>/`, readable only by you, after checking
+  its sha256. Allowlisted types within your company's attachment cap only; HTML
+  and SVG never come down.
+
+You see exactly what you could see on the page, narrowed to your own work:
+issues assigned to you or to an agent you answer for. Anything else answers as
+if it did not exist. Every piece of text that was written in AgentDash arrives
+inside `<untrusted-agent-material>` markers: Claude reads it as material to give
+you its own view on, never as instructions, and the run log is where an
+injected instruction is most likely to hide. A fetched file is for reading
+only; Claude never runs it or opens it with an application.
+
+These tools need two things: your machine's credential must carry `bridge:work`
+(connect codes redeemed from this release on include it, and existing
+inbox-enabled machines were upgraded on deploy, each upgrade recorded in the
+activity log), and an administrator must turn on `coworker_bridge_enabled` for
+the company. Until then they answer with the reason. Every file downloaded is
+recorded in the activity log by attachment and size, never by content.
+
 ## Nothing left running
 
 A config write with an exit code, not a prompt to paste — and `--remove`

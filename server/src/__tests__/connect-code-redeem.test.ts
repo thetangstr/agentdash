@@ -215,7 +215,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
    * never to the unauthenticated redeemer.
    */
   describe("the bridge endpoint minted alongside the key", () => {
-    it("binds to the code's creator, enrolled, with read and inbox capabilities", async () => {
+    it("binds to the code's creator, enrolled, with read, inbox and work capabilities", async () => {
       const { companyId, code } = await seed({ createdByUserId: "user-steward" });
 
       const res = await request(app)
@@ -231,7 +231,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
         companyId,
         userId: "user-steward",
         label: "chris-laptop",
-        capabilities: ["bridge:read", "bridge:inbox"],
+        capabilities: ["bridge:read", "bridge:inbox", "bridge:work"],
       });
       // Enrolled means approved: a usable credential exists only past that step.
       expect(endpoint?.enrolledAt).toBeTruthy();
