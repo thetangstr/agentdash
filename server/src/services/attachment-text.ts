@@ -26,10 +26,17 @@
 // project visibility, the same as downloading the file); this module trusts
 // that decision.
 //
-// Paging a long file reads and parses it once: extracted text is cached per
-// attachment and content hash for ten minutes, bounded by entries and
-// characters. Attachments are immutable (a changed file is a new attachment),
-// so the hash only guards against a reused id.
+// Memory is bounded three ways:
+// - At most `MAX_CONCURRENT_ATTACHMENT_READS` files are downloaded and
+//   extracted at once, plain text included; the rest wait their turn.
+//   Concurrent first reads of the same file share one download.
+// - Only the first `ATTACHMENT_MAX_TEXT_CHARS` characters of a file's text are
+//   served (`textLimit` says when a file has more), so every extraction fits
+//   the cache.
+// - Paging a long file reads and parses it once: extracted text is cached per
+//   attachment and content hash for ten minutes, bounded by entries and
+//   characters. Attachments are immutable (a changed file is a new
+//   attachment), so the hash only guards against a reused id.
 import type { Readable } from "node:stream";
 import type { StorageService } from "../storage/types.js";
 import { frameUntrustedDocumentText } from "./document-content.js";
@@ -81,6 +88,8 @@ export type AttachmentTextResult = {
   totalChars: number | null;
   slideCount: number | null;
   unreadable: { reason: AttachmentTextUnreadableReason; message: string } | null;
+  /** Set when the file's text is longer than is served: only its first `maxChars` characters are. */
+  textLimit: { maxChars: number; fullChars: number; message: string } | null;
 };
 
 export const ATTACHMENT_TEXT_NOT_ENABLED_MESSAGE =
@@ -91,15 +100,34 @@ const TOO_LARGE_MESSAGE =
   `This file is larger than ${DOCUMENT_MAX_BYTES / (1024 * 1024)} MB, so its text is not read. ` +
   "Ask the person who sent it for the part you need.";
 
+/** Most characters of a file's text that are served (about 33 pages). */
+export const ATTACHMENT_MAX_TEXT_CHARS = 2_000_000;
+
+/** Most files downloaded and extracted at once. */
+export const MAX_CONCURRENT_ATTACHMENT_READS = 2;
+
+function textLimitMessage(fullChars: number) {
+  return (
+    `This file's text is ${fullChars.toLocaleString("en-US")} characters long; only the first ` +
+    `${ATTACHMENT_MAX_TEXT_CHARS.toLocaleString("en-US")} are served. ` +
+    "Ask the person who sent it for the part you need, or for a shorter file."
+  );
+}
+
+/** What is cached and served: the extraction, its text cut to the served limit. */
+type ServedExtraction = { extraction: DocumentExtraction; fullChars: number | null };
+
 // -- cache -------------------------------------------------------------------
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 32;
-const CACHE_MAX_CHARS = 8_000_000;
+// Holds at least four files cut to the served limit.
+const CACHE_MAX_CHARS = 4 * ATTACHMENT_MAX_TEXT_CHARS;
 
-type CacheEntry = { at: number; chars: number; result: DocumentExtraction };
+type CacheEntry = { at: number; chars: number; result: ServedExtraction };
 const cache = new Map<string, CacheEntry>();
 let cachedChars = 0;
+const inFlight = new Map<string, Promise<ServedExtraction>>();
 
 function cacheKey(attachment: AttachmentForText): string {
   return `${attachment.id}:${attachment.sha256}`;
@@ -112,7 +140,7 @@ function dropEntry(key: string) {
   cachedChars -= entry.chars;
 }
 
-function getCached(key: string): DocumentExtraction | null {
+function getCached(key: string): ServedExtraction | null {
   const entry = cache.get(key);
   if (!entry) return null;
   if (Date.now() - entry.at > CACHE_TTL_MS) {
@@ -125,9 +153,8 @@ function getCached(key: string): DocumentExtraction | null {
   return entry.result;
 }
 
-function putCached(key: string, result: DocumentExtraction) {
-  const chars = result.ok ? result.text.length : 0;
-  if (chars > CACHE_MAX_CHARS) return;
+function putCached(key: string, result: ServedExtraction) {
+  const chars = result.extraction.ok ? result.extraction.text.length : 0;
   dropEntry(key);
   cache.set(key, { at: Date.now(), chars, result });
   cachedChars += chars;
@@ -141,6 +168,41 @@ function putCached(key: string, result: DocumentExtraction) {
 export function __resetAttachmentTextCacheForTests() {
   cache.clear();
   cachedChars = 0;
+}
+
+// -- concurrency ---------------------------------------------------------------
+
+let activeReads = 0;
+const readQueue: Array<() => void> = [];
+
+async function withReadSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeReads >= MAX_CONCURRENT_ATTACHMENT_READS) {
+    await new Promise<void>((resolve) => readQueue.push(resolve));
+  } else {
+    activeReads += 1;
+  }
+  try {
+    return await work();
+  } finally {
+    // The slot passes straight to the next waiter.
+    const next = readQueue.shift();
+    if (next) next();
+    else activeReads -= 1;
+  }
+}
+
+/** Cut text to the served limit, never between the halves of a surrogate pair. */
+function capText(extraction: DocumentExtraction): ServedExtraction {
+  if (!extraction.ok || extraction.text.length <= ATTACHMENT_MAX_TEXT_CHARS) {
+    return { extraction, fullChars: null };
+  }
+  let end = ATTACHMENT_MAX_TEXT_CHARS;
+  const last = extraction.text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return {
+    extraction: { ...extraction, text: extraction.text.slice(0, end) },
+    fullChars: extraction.text.length,
+  };
 }
 
 // -- reading -----------------------------------------------------------------
@@ -192,23 +254,38 @@ export function attachmentTextService(storage: StorageService) {
       totalChars: null,
       slideCount: null,
       unreadable: { reason, message },
+      textLimit: null,
     };
   }
 
-  async function extract(attachment: AttachmentForText, kind: DocumentKind): Promise<DocumentExtraction> {
+  async function download(attachment: AttachmentForText, kind: DocumentKind): Promise<ServedExtraction> {
+    return withReadSlot(async () => {
+      const object = await storage.getObject(attachment.companyId, attachment.objectKey);
+      try {
+        return capText(await extractDocumentText(await readCapped(object.stream, DOCUMENT_MAX_BYTES), kind));
+      } catch (error) {
+        if (!(error instanceof TooLargeError)) throw error;
+        return { extraction: { ok: false, reason: "too_large", message: TOO_LARGE_MESSAGE }, fullChars: null };
+      }
+    });
+  }
+
+  async function extract(attachment: AttachmentForText, kind: DocumentKind): Promise<ServedExtraction> {
     const key = cacheKey(attachment);
     const cached = getCached(key);
     if (cached) return cached;
-    const object = await storage.getObject(attachment.companyId, attachment.objectKey);
-    let result: DocumentExtraction;
-    try {
-      result = await extractDocumentText(await readCapped(object.stream, DOCUMENT_MAX_BYTES), kind);
-    } catch (error) {
-      if (!(error instanceof TooLargeError)) throw error;
-      result = { ok: false, reason: "too_large", message: TOO_LARGE_MESSAGE };
-    }
-    putCached(key, result);
-    return result;
+    const pending = inFlight.get(key);
+    if (pending) return pending;
+    const work = download(attachment, kind)
+      .then((result) => {
+        putCached(key, result);
+        return result;
+      })
+      .finally(() => {
+        inFlight.delete(key);
+      });
+    inFlight.set(key, work);
+    return work;
   }
 
   return {
@@ -231,7 +308,8 @@ export function attachmentTextService(storage: StorageService) {
       if (attachment.byteSize > DOCUMENT_MAX_BYTES) {
         return metadataOnly(attachment, kind, "too_large", TOO_LARGE_MESSAGE);
       }
-      const extracted = await extract(attachment, kind);
+      const served = await extract(attachment, kind);
+      const extracted = served.extraction;
       if (!extracted.ok) {
         return metadataOnly(
           attachment,
@@ -255,6 +333,10 @@ export function attachmentTextService(storage: StorageService) {
         totalChars: page.totalChars,
         slideCount: extracted.slideCount,
         unreadable: null,
+        textLimit:
+          served.fullChars === null
+            ? null
+            : { maxChars: ATTACHMENT_MAX_TEXT_CHARS, fullChars: served.fullChars, message: textLimitMessage(served.fullChars) },
       };
     },
   };

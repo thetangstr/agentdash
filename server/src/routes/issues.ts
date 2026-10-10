@@ -80,6 +80,7 @@ import { validate } from "../middleware/validate.js";
 import { verdictsService } from "../services/verdicts.js";
 import { featureFlagsService } from "../services/feature-flags.js";
 import { attachmentTextService } from "../services/attachment-text.js";
+import { frameRunForAgent, standInFrameRunId } from "../services/frame-run.js";
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.js";
 import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
 import * as serviceIndex from "../services/index.js";
@@ -4216,7 +4217,10 @@ export function issueRoutes(
   // agent that cannot read the file's bytes itself. Same readers as /content
   // (company access plus the issue's project visibility; invisible is 404).
   // The text is framed as untrusted material and bound to the requesting run
-  // so that run's stored log withholds it (services/attachment-text.ts).
+  // so that run's stored log withholds it (services/attachment-text.ts). The
+  // run is verified, never taken from the header as given
+  // (services/frame-run.ts): a person's frame never verifies, and an agent's
+  // only in one of its own live runs.
   // Gated by the company's coworker_bridge_enabled flag: off, the file's
   // details come back with reason "not_enabled" and nothing is read.
   router.get("/attachments/:attachmentId/text", async (req, res) => {
@@ -4248,10 +4252,22 @@ export function issueRoutes(
       return;
     }
     const actor = getActorInfo(req);
-    // A frame verifies only in the run it was minted for. Without a run (a
-    // person, or an agent outside a heartbeat) there is no stored run copy to
-    // protect, so a stand-in id is used and the frame never verifies.
-    const runId = actor.runId ?? `no-run:${actor.actorType}:${actor.actorId}`;
+    let runId: string;
+    if (req.actor.type === "agent" && actor.agentId) {
+      const run = await frameRunForAgent(db, {
+        companyId: attachment.companyId,
+        agentId: actor.agentId,
+        requestRunId: actor.runId,
+        jwtRunId: req.actor.jwtRunId ?? null,
+      });
+      if (!run.ok) {
+        res.status(run.status).json({ error: run.message, details: { reason: run.reason } });
+        return;
+      }
+      runId = run.runId;
+    } else {
+      runId = standInFrameRunId("user", actor.actorId);
+    }
     res.json(await attachmentTextSvc.read(attachment, { offset, runId }));
   });
 

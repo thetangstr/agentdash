@@ -11,7 +11,12 @@
 //   without the file being read from storage;
 // - a file over the extractor's size cap is refused without being read;
 // - a restricted project's attachment is 404 to an actor off its access list;
-// - with the company's `coworker_bridge_enabled` flag off, nothing is read.
+// - with the company's `coworker_bridge_enabled` flag off, nothing is read;
+// - the frame is bound only to a run the server verified: a live run of the
+//   requesting agent (a run JWT only for its own run); a person never gets a
+//   frame that verifies; an agent inside a run must say which;
+// - downloads are gated and deduplicated, and text past the served limit is
+//   cut there, so paging never re-reads the file.
 import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
@@ -32,6 +37,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRuns,
   issueAttachments,
   issues,
   projectAccess,
@@ -45,7 +51,11 @@ import {
 import { featureFlagsService } from "../services/feature-flags.ts";
 import { stripFramedDocumentText } from "../services/document-content.ts";
 import { DOCUMENT_MAX_BYTES, DOCUMENT_MAX_TEXT_CHARS } from "../services/document-extraction.ts";
-import { __resetAttachmentTextCacheForTests } from "../services/attachment-text.ts";
+import {
+  ATTACHMENT_MAX_TEXT_CHARS,
+  MAX_CONCURRENT_ATTACHMENT_READS,
+  __resetAttachmentTextCacheForTests,
+} from "../services/attachment-text.ts";
 import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/index.js";
 import type { StorageService } from "../storage/types.js";
@@ -106,15 +116,27 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
   const AGENT = randomUUID();
   const LISTED_AGENT = randomUUID();
   const UNFLAGGED_AGENT = randomUUID();
-  const RUN_ID = randomUUID();
+  const IDLE_AGENT = randomUUID();
+  const RUN_A = randomUUID();
+  const RUN_B = randomUUID();
+  const RUNS: Record<string, string> = { [AGENT]: RUN_A, [LISTED_AGENT]: RUN_B };
 
   const LONG_TEXT = `${"Line of the brief for Person A.\n".repeat(Math.ceil((DOCUMENT_MAX_TEXT_CHARS * 2) / 32))}END`;
 
   const objects = new Map<string, Buffer>();
+  // Downloads in flight, counted from the request until the stream is done.
+  const downloads = { active: 0, peak: 0, delayMs: 0 };
   const getObject = vi.fn(async (_companyId: string, objectKey: string) => {
     const body = objects.get(objectKey);
     if (!body) throw new Error(`no object ${objectKey}`);
-    return { stream: Readable.from(body), contentLength: body.length };
+    downloads.active += 1;
+    downloads.peak = Math.max(downloads.peak, downloads.active);
+    if (downloads.delayMs) await new Promise((resolve) => setTimeout(resolve, downloads.delayMs));
+    const stream = Readable.from(body);
+    stream.once("close", () => {
+      downloads.active -= 1;
+    });
+    return { stream, contentLength: body.length };
   });
   const storage = {
     provider: "local_disk",
@@ -169,6 +191,11 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
       { id: AGENT, companyId: COMPANY, name: "Agent A", role: "general" },
       { id: LISTED_AGENT, companyId: COMPANY, name: "Agent B", role: "general" },
       { id: UNFLAGGED_AGENT, companyId: UNFLAGGED_COMPANY, name: "Agent C", role: "general" },
+      { id: IDLE_AGENT, companyId: COMPANY, name: "Agent D", role: "general" },
+    ]);
+    await db.insert(heartbeatRuns).values([
+      { id: RUN_A, companyId: COMPANY, agentId: AGENT, status: "running" },
+      { id: RUN_B, companyId: COMPANY, agentId: LISTED_AGENT, status: "running" },
     ]);
     await db.insert(projects).values([
       { id: OPEN_PROJECT, companyId: COMPANY, name: "Open project", createdByUserId: "person-a" },
@@ -225,6 +252,18 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
       contentType: "text/plain",
       body: Buffer.from("Other company text"),
     });
+    await addAttachment("overlong", {
+      filename: "export.txt",
+      contentType: "text/plain",
+      body: Buffer.from(`${"x".repeat(ATTACHMENT_MAX_TEXT_CHARS)}PAST THE LIMIT`, "utf8"),
+    });
+    for (let i = 0; i < 4; i += 1) {
+      await addAttachment(`gate${i}`, {
+        filename: `gate-${i}.txt`,
+        contentType: "text/plain",
+        body: Buffer.from(`Gate file ${i}`),
+      });
+    }
   }, 60_000);
 
   afterAll(async () => {
@@ -248,7 +287,7 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
     return app;
   }
 
-  const asAgent = (agentId: string, companyId = COMPANY, runId: string | undefined = RUN_ID) => ({
+  const asAgent = (agentId: string, companyId = COMPANY, runId: string | null | undefined = RUNS[agentId]) => ({
     type: "agent",
     agentId,
     companyId,
@@ -256,10 +295,11 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
     companyIds: [companyId],
     ...(runId ? { runId } : {}),
   });
-  const asPerson = () => ({
+  const asPerson = (runId?: string) => ({
     type: "board",
     source: "session",
     userId: "person-a",
+    ...(runId ? { runId } : {}),
     companyIds: [COMPANY],
     memberships: [{ companyId: COMPANY, membershipRole: "member", status: "active" }],
   });
@@ -294,7 +334,7 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
 
   it("binds the frame to the requesting run, so the stored copy of that run withholds the text", async () => {
     const res = await readText(asAgent(AGENT), ids.docx!);
-    const stored = stripFramedDocumentText(`agent printed: ${res.body.text} done`, { runId: RUN_ID });
+    const stored = stripFramedDocumentText(`agent printed: ${res.body.text} done`, { runId: RUN_A });
     expect(stored).not.toContain("Scope of the survey");
     expect(stored).toContain(`[document text withheld: ${ids.docx} brief.docx`);
     // Another run's stream does not verify the frame (it is left, and reported as forged).
@@ -409,5 +449,123 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
     const res = await readText(asPerson(), ids.csv!);
     expect(res.status).toBe(200);
     expect(res.body.text).toContain("[[agentdash-untrusted-document:begin");
+  });
+  // -- run binding ----------------------------------------------------------------
+
+  const asJwt = (agentId: string, jwtRunId: string, headerRunId: string = jwtRunId) => ({
+    type: "agent",
+    agentId,
+    companyId: COMPANY,
+    source: "agent_jwt",
+    companyIds: [COMPANY],
+    runId: headerRunId,
+    jwtRunId,
+  });
+
+  it("refuses an agent naming another agent's run, so it never gets a frame that verifies there", async () => {
+    const borrowed = await readText(asAgent(AGENT, COMPANY, RUN_B), ids.docx!);
+    expect(borrowed.status).toBe(403);
+    expect(borrowed.body.details.reason).toBe("run_mismatch");
+    expect(JSON.stringify(borrowed.body)).not.toContain("Scope of the survey");
+    const unknown = await readText(asAgent(AGENT, COMPANY, randomUUID()), ids.docx!);
+    expect(unknown.status).toBe(403);
+    expect(unknown.body.details.reason).toBe("run_mismatch");
+    expect(getObject).not.toHaveBeenCalled();
+  });
+
+  it("refuses a run that has ended", async () => {
+    const ended = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: ended, companyId: COMPANY, agentId: AGENT, status: "succeeded" });
+    const res = await readText(asAgent(AGENT, COMPANY, ended), ids.docx!);
+    expect(res.status).toBe(403);
+    expect(res.body.details.reason).toBe("run_mismatch");
+    expect(res.body.error).toMatch(/ended/);
+    expect(getObject).not.toHaveBeenCalled();
+  });
+
+  it("gives a person a frame that never verifies, whatever run id they send", async () => {
+    const res = await readText(asPerson(RUN_A), ids.docx!);
+    expect(res.status).toBe(200);
+    expect(stripFramedDocumentText(res.body.text, { runId: RUN_A })).toContain("Scope of the survey");
+    expect(stripFramedDocumentText(res.body.text, { runId: RUN_B })).toContain("Scope of the survey");
+  });
+
+  it("binds a run JWT only to its own run", async () => {
+    const spoofed = await readText(asJwt(AGENT, RUN_A, RUN_B), ids.docx!);
+    expect(spoofed.status).toBe(403);
+    expect(spoofed.body.details.reason).toBe("run_mismatch");
+    const own = await readText(asJwt(AGENT, RUN_A), ids.docx!);
+    expect(own.status).toBe(200);
+    expect(stripFramedDocumentText(own.body.text, { runId: RUN_A })).not.toContain("Scope of the survey");
+  });
+
+  it("refuses an agent inside a run that does not say which run", async () => {
+    const res = await readText(asAgent(AGENT, COMPANY, null), ids.docx!);
+    expect(res.status).toBe(400);
+    expect(res.body.details.reason).toBe("run_id_required");
+    expect(res.body.error).toContain("X-Paperclip-Run-Id");
+    expect(getObject).not.toHaveBeenCalled();
+  });
+
+  it("serves an agent with no live run a stand-in frame, and takes a queued run only while none is running", async () => {
+    const outside = await readText(asAgent(IDLE_AGENT, COMPANY, null), ids.docx!);
+    expect(outside.status).toBe(200);
+    expect(outside.body.text).toContain("Scope of the survey");
+
+    const [queued, running] = [randomUUID(), randomUUID()];
+    await db.insert(heartbeatRuns).values({ id: queued, companyId: COMPANY, agentId: IDLE_AGENT, status: "queued" });
+    const queuedOk = await readText(asAgent(IDLE_AGENT, COMPANY, queued), ids.docx!);
+    expect(queuedOk.status).toBe(200);
+    expect(stripFramedDocumentText(queuedOk.body.text, { runId: queued })).not.toContain("Scope of the survey");
+
+    await db.insert(heartbeatRuns).values({ id: running, companyId: COMPANY, agentId: IDLE_AGENT, status: "running" });
+    const queuedNow = await readText(asAgent(IDLE_AGENT, COMPANY, queued), ids.docx!);
+    expect(queuedNow.status).toBe(403);
+    expect(queuedNow.body.details.reason).toBe("run_mismatch");
+    const silent = await readText(asAgent(IDLE_AGENT, COMPANY, null), ids.docx!);
+    expect(silent.status).toBe(400);
+    expect(silent.body.details.reason).toBe("run_id_required");
+  });
+
+  // -- bounded reading --------------------------------------------------------------
+
+  it("reads a file once for concurrent first reads, and downloads at most a few files at once", async () => {
+    downloads.peak = downloads.active;
+    downloads.delayMs = 50;
+    try {
+      const same = await Promise.all(Array.from({ length: 5 }, () => readText(asAgent(AGENT), ids.csv!)));
+      for (const res of same) expect(res.status).toBe(200);
+      expect(getObject).toHaveBeenCalledTimes(1);
+
+      getObject.mockClear();
+      __resetAttachmentTextCacheForTests();
+      const distinct = await Promise.all(
+        [0, 1, 2, 3].map((i) => readText(asAgent(AGENT), ids[`gate${i}`]!)),
+      );
+      distinct.forEach((res, i) => expect(res.body.text).toContain(`Gate file ${i}`));
+    } finally {
+      downloads.delayMs = 0;
+    }
+    expect(getObject).toHaveBeenCalledTimes(4);
+    expect(downloads.peak).toBe(MAX_CONCURRENT_ATTACHMENT_READS);
+    expect(downloads.active).toBe(0);
+  });
+
+  it("serves text only up to the limit, says so, and pages it without re-reading the file", async () => {
+    const first = await readText(asAgent(AGENT), ids.overlong!);
+    expect(first.status).toBe(200);
+    expect(first.body.totalChars).toBe(ATTACHMENT_MAX_TEXT_CHARS);
+    expect(first.body.textLimit).toMatchObject({ maxChars: ATTACHMENT_MAX_TEXT_CHARS, fullChars: ATTACHMENT_MAX_TEXT_CHARS + 14 });
+    expect(first.body.textLimit.message).toMatch(/first/);
+
+    const lastOffset = ATTACHMENT_MAX_TEXT_CHARS - 10;
+    const last = await readText(asAgent(AGENT), ids.overlong!, `?offset=${lastOffset}`);
+    expect(last.body).toMatchObject({ offset: lastOffset, nextOffset: null });
+    expect(last.body.text).not.toContain("PAST THE LIMIT");
+    expect(last.body.textLimit).not.toBeNull();
+    expect(getObject).toHaveBeenCalledTimes(1);
+
+    const short = await readText(asAgent(AGENT), ids.csv!);
+    expect(short.body.textLimit).toBeNull();
   });
 });
