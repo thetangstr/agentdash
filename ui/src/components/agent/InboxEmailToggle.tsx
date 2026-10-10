@@ -5,9 +5,9 @@ const QUERY_KEY = ["notification-preferences", "me"] as const;
 
 /**
  * The person's own switch for inbox emails: a pointer, at most every 15
- * minutes, when their agents ask them something or need a decision. On by
- * default. Says plainly when the instance sends no email, rather than offering
- * a switch that does nothing.
+ * minutes, when their agents ask them something or need a decision. Shown only
+ * when the instance has turned inbox emails on (AGENTDASH_INBOX_EMAIL=true);
+ * otherwise there is no switch to offer.
  */
 export function InboxEmailToggle() {
   const queryClient = useQueryClient();
@@ -17,8 +17,8 @@ export function InboxEmailToggle() {
     onSuccess: (data) => queryClient.setQueryData(QUERY_KEY, data),
   });
 
-  if (!prefs.data) return null;
-  const { inboxEmail, emailConfigured } = prefs.data;
+  if (!prefs.data || !prefs.data.emailConfigured) return null;
+  const { inboxEmail } = prefs.data;
 
   return (
     <section aria-labelledby="inbox-email-heading" className="rounded-lg border px-4 py-3">
@@ -39,11 +39,6 @@ export function InboxEmailToggle() {
           or here.
         </span>
       </label>
-      {!emailConfigured ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          This AgentDash instance is not set up to send email, so none will arrive until it is.
-        </p>
-      ) : null}
       {update.isError ? (
         <p className="mt-2 text-xs text-destructive">Could not save that. Try again.</p>
       ) : null}
