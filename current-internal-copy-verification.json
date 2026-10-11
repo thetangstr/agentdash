@@ -13,5 +13,10 @@
   "runtimeRepairApplied": false,
   "runtimeRepairBlocker": "Filesystem write permissions",
   "applicationBehaviorTested": false,
-  "safeToFormatSSD": false
+  "safeToFormatSSD": false,
+  "knownSSDLinksRemaining": 50,
+  "archivedDependencyLinksRemaining": 8,
+  "filesystemScanVisitedWorktrees": 144,
+  "filesystemScanExpectedWorktrees": 210,
+  "filesystemScanComplete": false
 }
