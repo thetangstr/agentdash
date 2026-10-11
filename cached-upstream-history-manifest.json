@@ -1,0 +1,45 @@
+{
+  "bundleBytes": 138191149,
+  "bundleSha256": "3dc37e97b825726e177e4dfb48059adbfef592d7cd57d3b2f72345c994cd2e7c",
+  "parts": [
+    {
+      "path": "history/cached-upstream.bundle.part-00",
+      "bytes": 26214400,
+      "sha256": "671f62572483da437896df6d6768bfcced00b9699785248d9e0558f135aecbb3",
+      "gitBlobSha": "54af7082b567be7b64ab5d90059528c7251f7402"
+    },
+    {
+      "path": "history/cached-upstream.bundle.part-01",
+      "bytes": 26214400,
+      "sha256": "bc5b20251c570be72abe8f22778903f484b02eae9f851b9da6fbafbd8bc5e654",
+      "gitBlobSha": "b7325ae3eb9a25b749efd06ba7afe981b62813b9"
+    },
+    {
+      "path": "history/cached-upstream.bundle.part-02",
+      "bytes": 26214400,
+      "sha256": "3619c4ce6ce24c96aace5edfa9ba1a9cf8c656e342e1d42271c30749937c131e",
+      "gitBlobSha": "2a827f437b6c1ebf7a0de483f2a708e1fa188afd"
+    },
+    {
+      "path": "history/cached-upstream.bundle.part-03",
+      "bytes": 26214400,
+      "sha256": "6db4e4161f60a93e0e13b3906bafcbc2a7ca400fc6f4176e9878ae2d1c046a0e",
+      "gitBlobSha": "bd6546efd368f112cbe0c7395f6126ac90dd9d51"
+    },
+    {
+      "path": "history/cached-upstream.bundle.part-04",
+      "bytes": 26214400,
+      "sha256": "aa577295b660112c93da433f97c8c6623c9542f5cc9a52607bbcf81e7d4c20a0",
+      "gitBlobSha": "50374bb2b3b7c449ffb0eb122f641c997e62c3f9"
+    },
+    {
+      "path": "history/cached-upstream.bundle.part-05",
+      "bytes": 7119149,
+      "sha256": "6dac38279a4253f6bfededa03d5a2047a9ba951a073c4cb730a7ce9d73006c08",
+      "gitBlobSha": "e4f6ba3f1b0f00e4ff16617d53a211e17a66389b"
+    }
+  ],
+  "exactRecoveryAnchors": 776,
+  "newCommits": 7283,
+  "requires": "Original local and recovered-local history bundles restored first"
+}

@@ -1,0 +1,1265 @@
+{
+  "count": 210,
+  "worktrees": [
+    {
+      "worktree_name": "agentdash",
+      "HEAD": "bb4910799eb8e4ae7d617b5add433a935aa81e7d",
+      "branch": "refs/heads/track-c-agentdash",
+      "on_ssd": false
+    },
+    {
+      "worktree_name": "agentdash-public-freeze-src",
+      "HEAD": "a65324105d152c4ec8be083342b6018026bfd10f",
+      "branch": "refs/heads/thetangstr/agentdash-public-freeze-src",
+      "on_ssd": false
+    },
+    {
+      "worktree_name": "dorado",
+      "HEAD": "a73c9eb07737123c202579743ff500d6ae3011ce",
+      "branch": "refs/heads/thetangstr/dorado",
+      "on_ssd": false
+    },
+    {
+      "worktree_name": "security",
+      "HEAD": "28395ba698decaeea3769508c57e06ca1bd9d490",
+      "branch": "refs/heads/thetangstr/security",
+      "on_ssd": false
+    },
+    {
+      "worktree_name": "agentdash",
+      "HEAD": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+      "branch": "refs/heads/main",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agentdash-ota-integration",
+      "HEAD": "cc217bdca39d4724891d1ff6ce11c06c4a3705ca",
+      "branch": "refs/heads/ota/integration-mkthink",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a0505439f84642af3",
+      "HEAD": "3a7e089db9accbf2fd72dd73035938431953379f",
+      "branch": "refs/heads/fix/505-user-directory-email",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a05b6891781753a39",
+      "HEAD": "d6b640e5f8a9e81dc6a86de733ecc132cbd03e98",
+      "branch": "refs/heads/fix/lane-j-onboarding-plain-language",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a05bf564be5c61eb0",
+      "HEAD": "a94594d0006360dab38b6ca9dd32a7876f683bf9",
+      "branch": "refs/heads/fix/710-routine-edit-guard",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a0aeeb45cb0956f36",
+      "HEAD": "c5dcc501db94dfd3ced8fb25f1d7ba26e964fadb",
+      "branch": "refs/heads/ross/m2-mcp-request-tool",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a0d39156c5f53731e",
+      "HEAD": "ccaabf37f260aeb6af97020169a80b8c63db4f7a",
+      "branch": "refs/heads/fix/recovery-followups-891",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a120873bd5c65ae2c",
+      "HEAD": "852f46fe87d6a1857fca2b2de0998f70cfb0fcda",
+      "branch": "refs/heads/ci/release-verify-shard",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a15e7750ebffcb12f",
+      "HEAD": "7e286f4d4cf5b1e4290bfdffab624fddb9515efe",
+      "branch": "refs/heads/fix/mobile-phone-floors",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a17bebcfb22e91183",
+      "HEAD": "baed8ad369d80a01d1bf5236d0c09f9a3a1326e6",
+      "branch": "refs/heads/fix/o1-token-figures-transcript-prose",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a1dcdd76b8d2694ca",
+      "HEAD": "14d965321744c5600d83b7dd71d9f775fdf2712d",
+      "branch": "refs/heads/fix/p2-visibility-863",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a1e8538df2a369138",
+      "HEAD": "0ab12438607c36f10227ef41669e4a4f883a08ad",
+      "branch": "refs/heads/claude/land-842",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a22860d0222ffbabc",
+      "HEAD": "296f40f325f17cc47bedc6eb4666b10e53aa83e7",
+      "branch": "refs/heads/cloud/sc8-stripe-forwarding",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a23b8f276b956f369",
+      "HEAD": "17178f0d6ee8c3f1fabaee89c7b4b791658a2402",
+      "branch": "refs/heads/fix/recovery-explicit-clear",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a2b06bf2574f2c8fe",
+      "HEAD": "5e4a3ba0dde21bb236f2cd6e9b52e718458a98b5",
+      "branch": "refs/heads/fix/review-loop",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a31e68d877602744c",
+      "HEAD": "d658687ea991e06142c036f1472331b624cec7fa",
+      "branch": "refs/heads/security/instance-admin-plugin-demo",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a357375ce8e930376",
+      "HEAD": "94091ea54c7f54c7744ab871eb7a0fe1148a5bad",
+      "branch": "refs/heads/fix/lane-m-setup-cos-review-loop",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a363826d2e3b15515",
+      "HEAD": "222d38295131d32e3dffcfb90d8bef7f876d32b2",
+      "branch": "refs/heads/fix/lane-h-identity-roles-stewards",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a3751ea019b17007d",
+      "HEAD": "900f4199583826f9811b35fc53e666e8faa31376",
+      "branch": "refs/heads/fix/hosted-canary1-lane-r",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a40bfe6e22e3976ae",
+      "HEAD": "9eb310d09140b5ad0cf35e05b20a937a645ff6bf",
+      "branch": "refs/heads/fix/mobile-floors-lane-p",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a4a00eb1d2b83b844",
+      "HEAD": "ab33c586ff3db715db89244907c6a1c527aabc82",
+      "branch": "refs/heads/feat/mobile-more-global",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a4a28b0c0336158db",
+      "HEAD": "4853bb56904bfb3b6c488ebd7d544d89f79abf56",
+      "branch": "refs/heads/feat/hermes-structured-transcript",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a4c33182b8effe9d9",
+      "HEAD": "ebe62bd6f645b19b69215ce8dce790faad3cc0b4",
+      "branch": "refs/heads/fix/review-queue-escalation-p1",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a4c6919dfa39f757c",
+      "HEAD": "b471d80b6090984f646280a039feed91a31f6c08",
+      "branch": "refs/heads/fix/709-import-ssrf",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a4c6d0560c8f95741",
+      "HEAD": "a9c1969a62dae9aca42262604dcf01dc41f4adcc",
+      "branch": "refs/heads/fix/lane-g-cos-plan-card",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a4e8056b630740570",
+      "HEAD": "3a4130087a6b20ed48a92bed7f18ceab6f81639d",
+      "branch": "refs/heads/fix/live-events-project-access",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a52671e87df48ec30",
+      "HEAD": "29653f4fca9d452464c57187909e7fe38c5e6fc3",
+      "branch": "refs/heads/fix/708-ws-revocation",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a582189009a035b24",
+      "HEAD": "11d789a2b329e1bbf6b234f066db7df3601a54cc",
+      "branch": "refs/heads/feat/sidebar-settings-ia",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a5b633bed36ec2340",
+      "HEAD": "001c2e2e97d9a33dab94ad46f05cf2412f316dec",
+      "branch": "refs/heads/security/connector-token-binding",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a62e3be54dd356332",
+      "HEAD": "22908d69cac04a014918dcb694b48bb3231145f2",
+      "branch": "refs/heads/fix/recovery-noise-settings",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a68bef99a451201bd",
+      "HEAD": "53c50176e1deefceb63a4259eb2ea5554667b091",
+      "branch": "refs/heads/fix/strict-bootstrap-company",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a6a63b9d8b6c97a19",
+      "HEAD": "9659fabb3ff6c93c9e28c2ff5b7d92a78512eea0",
+      "branch": "refs/heads/fix/902-budgets-overview-visibility",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a6bb275cde7b8b80e",
+      "HEAD": "f1f1650904d1b8a6806a1f6e6ef5fce641c9e542",
+      "branch": "refs/heads/fix/o2-identity-copy-console",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a70096b6617d86ab0",
+      "HEAD": "21c81deb0f3ad3aa5d09e82dbec74535178d22f9",
+      "branch": "refs/heads/fix/public-base-urls",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a701cd51879d79b9d",
+      "HEAD": "d6b269c141b2f8b0527b3fd02a8b4ceac41a4ef8",
+      "branch": "refs/heads/fix/claim-handoff-ui",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a7263aa922f310287",
+      "HEAD": "24a4697a3da94b40976bcb85454f57460ab2d744",
+      "branch": "refs/heads/chore/bump-hermes-pin",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a79a0c22381936d5b",
+      "HEAD": "6972c1118fd72a4006ce2643747ec550411aa92c",
+      "branch": "refs/heads/fix/940-backup-insert-path-text-literals",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a8decefbe3c3653ad",
+      "HEAD": "733673605ffeae76ec85d35a90a3ec3d89552855",
+      "branch": "refs/heads/feat/mobile-issue-ask",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a8e34c6c492043f2c",
+      "HEAD": "f50a96c06b90c9ea0ebc7ce2b9a048de3b37a06c",
+      "branch": "refs/heads/fix/home-polish",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a92e4a8e3812206bf",
+      "HEAD": "313adec78ba04f462f4fb7a4d70ae7b12ca83e0f",
+      "branch": "refs/heads/fix/first-session-cos",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a93199dfafb61a548",
+      "HEAD": "44679665c141a9165ab231a354cda32a6b084d13",
+      "branch": "refs/heads/claude/859c-human-control",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a955b35b9ee727728",
+      "HEAD": "2b2aff2f2daeeb5523b16c014734a7eef3ac07f6",
+      "branch": "refs/heads/feat/one-ux-mk-parity",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a95f8068413f6efa7",
+      "HEAD": "5d8cc2091e787e50b5547a18ef7f7666c65340c1",
+      "branch": "refs/heads/fix/cos-chat-polish-lane-n",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a9a292955c6f52f1b",
+      "HEAD": "a72c0ea46216f56a4376b613b3c0c261adf3bdef",
+      "branch": "refs/heads/fix/ask-page-sidebar",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-a9c82292276ad89ac",
+      "HEAD": "a32ace571c25e69b545b4af649c4b3391f5cb99d",
+      "branch": "refs/heads/cloud/sc10-fleet-health",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-aa2e7c6e26a0f8ce2",
+      "HEAD": "d479f97dc1a0e58bc3bdddcdb694a792a48e43d0",
+      "branch": "refs/heads/feat/readable-run-transcripts",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-aa98eb8566e7e5c38",
+      "HEAD": "aec3154bde6e9724c761291a06159844a7f919cf",
+      "branch": "refs/heads/feat/one-ux-shell",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ab792889b69bef99d",
+      "HEAD": "c349db598555454d36272d0f2a29726f664022ee",
+      "branch": "refs/heads/security/agent-self-edit-allowlist",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ab808381f38933ef0",
+      "HEAD": "40d09770d370ba89f0c0e9a873049448e14f9c2f",
+      "branch": "refs/heads/fix/launch-copy-site",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ac0295a0a7f47d760",
+      "HEAD": "4a541459ebe0687440a122d2b88e7428572e119c",
+      "branch": "refs/heads/fix/scan3-lane-l-noise-health-numbers",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ac161904390d740ef",
+      "HEAD": "c641eb4aa9b66842f230b0034f5dec3c03a0d6d4",
+      "branch": "refs/heads/fix/ota-approval-and-version-check",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ac5bd7c30e457802f",
+      "HEAD": "ee37383fd9f5722e120f46d4d7d470fd3463025c",
+      "branch": "refs/heads/feat/sidebar-collapsible-agents",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ac78e5e3bef814971",
+      "HEAD": "08c582d60c08bcf22d755ace886491e9c61aa70e",
+      "branch": "refs/heads/security/mandate-tenant-binding",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ac79ec2ec639d1f1f",
+      "HEAD": "550a3f6d6aad63a0c6c4748536f49de2440315aa",
+      "branch": "refs/heads/review/one-ux",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-aca138913fc2369f6",
+      "HEAD": "623b222d6e5699e6e9a6d90b475cf07c7a1f6b05",
+      "branch": "refs/heads/fix/907-backup-engine-schema-objects",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-accdff88389c4c5e1",
+      "HEAD": "7b1931c91e28097de611a691c28732b2d50afaaf",
+      "branch": "refs/heads/fix/restricted-issue-relations",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ad0977eedd0b8a657",
+      "HEAD": "709d70ccadf913d9b3e5c2d484857161cefe6d98",
+      "branch": "refs/heads/fix/steward-recovery-followups",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ad184a14caed6a3a5",
+      "HEAD": "835c650e6e66098662db94cb99a104496613f6fb",
+      "branch": "refs/heads/feat/review-accept-request-changes",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ad236cc6810539fbb",
+      "HEAD": "b78c66f05b46eac4ba9d8e5c84591dfa3454bd3f",
+      "branch": "refs/heads/fix/onboarding-scan2",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ae09c314de00dad3b",
+      "HEAD": "76c55b1ce433512328efc58c20689c8579ff4204",
+      "branch": "refs/heads/cloud/off-box-backups",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ae116fb417b06c87c",
+      "HEAD": "beb1a957516d4357576546acbb1ebf25f2265d64",
+      "branch": "refs/heads/security/workspace-cleanup-confinement",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-ae797dfc6fd2c07dc",
+      "HEAD": "c029122ef52c97c29b2e1e4cf4a2bade03f7cd92",
+      "branch": "refs/heads/feat/mobile-lists",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-af0118d94eda3a7aa",
+      "HEAD": "694190018edc385366d0f4ef9eb0956decc94b58",
+      "branch": "refs/heads/ross/recovery-permit-on-main",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-af200bd69022a6585",
+      "HEAD": "8fb70c4f3d0db010cc24f0b4839f5610cf6561c5",
+      "branch": "refs/heads/security/host-exec-admin-gate",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-af3858215830a11b6",
+      "HEAD": "784694a3864ad9673b442f6345aaa3951e71ee48",
+      "branch": "refs/heads/feat/one-ux-pages",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-af3cb9e0628875712",
+      "HEAD": "3d4ab1cfe46b9d9085beecec2596aca008cd229a",
+      "branch": "refs/heads/feat/one-ux-dashboard",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-af5d3f95d210f831d",
+      "HEAD": "b6bbc4a23a8e17bfcf08f53633554861d466687a",
+      "branch": "refs/heads/ross/lanes-on-main",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agent-afa18b0d93313bf27",
+      "HEAD": "5977498dc1eb1ec31569f220602f595227adfd75",
+      "branch": "refs/heads/cloud/sc12-fleet-upgrade",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "business-view",
+      "HEAD": "e6b594c6af74139d2334f681e4b29217a1c1b47b",
+      "branch": "refs/heads/feat/run-business-view",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "c4-trust-fixes",
+      "HEAD": "7200425c72ab8cf753e7805f37bf388cdd89afa3",
+      "branch": "refs/heads/devin/c4-trust-20261004",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "chat-autofollow",
+      "HEAD": "a449d2e2700ef0dab1490058051bbc869577d3cb",
+      "branch": "refs/heads/feat/chat-auto-follow",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "cloud-backup-prune",
+      "HEAD": "a6886f9ffbb98efb0e3e3619a5b37f0d5de91a57",
+      "branch": "refs/heads/devin/cloud-backup-prune-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "cloud-deploy",
+      "HEAD": "caef027fdd87bc26bad4b8f4ffc297b641ce3294",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-assistant-digest-20260929",
+      "HEAD": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+      "branch": "refs/heads/codex/assistant-digest-visible-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-backlog-20261007",
+      "HEAD": "ac846643c0013a9e86ec80a9646295055587e9e4",
+      "branch": "refs/heads/codex/backlog-security-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-backlog-docs-20261007",
+      "HEAD": "f4f4238ca0a43805a58a4b3cdaeca702d407b05b",
+      "branch": "refs/heads/codex/backlog-docs-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-backlog-question-recovery-20261007",
+      "HEAD": "f0b5392ca3950c2a304aa6a176548cef5784502a",
+      "branch": "refs/heads/codex/backlog-question-recovery-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-backlog-redaction-20261007",
+      "HEAD": "96cdaeea3a0eb6b0e11d064d261ec7d16f5074f7",
+      "branch": "refs/heads/codex/backlog-redaction-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-backlog-reliability-20261007",
+      "HEAD": "dcb14e4c6c0fce4da1a7f901490b151156408fdb",
+      "branch": "refs/heads/codex/backlog-reliability-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-backlog-ssh-20261007",
+      "HEAD": "c1a4adaebd1c3ab610523dbb2d6dc5eee137b1fc",
+      "branch": "refs/heads/codex/backlog-ssh-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-cloud-billing-20260929",
+      "HEAD": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+      "branch": "refs/heads/codex/cloud-billing-sc8-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-hire-reopen-20260929",
+      "HEAD": "e56479af5de33d1388683987d9219a9be891adae",
+      "branch": "refs/heads/codex/hosted-hire-reopen-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-hosted-invitation-beta-20261008",
+      "HEAD": "bfb9510829a1a09bbc896f69464fbb5cd2dfea83",
+      "branch": "refs/heads/codex/hosted-invitation-beta-20261008",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-http-timeout-20261008",
+      "HEAD": "53a5d05b4b2de81a8cd5029961ab43276acbbf97",
+      "branch": "refs/heads/codex/http-timeout-20261008",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-launch-20260929",
+      "HEAD": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+      "branch": "refs/heads/codex/launch-takeover-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-mcp-contracts-20261008",
+      "HEAD": "8a7057bacbdfd92968ddea78df9564870269b902",
+      "branch": "refs/heads/codex/mcp-contracts-20261008",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-next-release-20261008",
+      "HEAD": "286e3ed9b4f385f2de0c8039127c68c53e8553aa",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-notify-reservation-20260929",
+      "HEAD": "853c95ae7cad40f5e286386a4e06645bf4820a3b",
+      "branch": "refs/heads/codex/notify-reservation-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-platform-contract-batch-20261008",
+      "HEAD": "3ecb51e391ea3953bb3564292b9b23aff5869239",
+      "branch": "refs/heads/codex/platform-contract-batch-20261008",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-release-20261007",
+      "HEAD": "ffa268e2e2c940f3afb3a75fe978f08f06d39731",
+      "branch": "refs/heads/codex/backlog-integration-20261007",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-release-notes-20261008",
+      "HEAD": "92073d794182742c635d606be21f737ac73cc095",
+      "branch": "refs/heads/codex/release-notes-20261008",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-release-sharding-20261008",
+      "HEAD": "c2da9cfdb2d3f59cf9f92d5b85b39357b9f149d8",
+      "branch": "refs/heads/codex/release-sharding-20261008",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "codex-workforce-onboarding-20260929",
+      "HEAD": "072ca76b6767d996dd8b629cbe96b80b0277a7af",
+      "branch": "refs/heads/codex/workforce-onboarding-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "cos-chat-dispatch-1002",
+      "HEAD": "f360f63a35b48555fba85d84139a8515d88f07d3",
+      "branch": "refs/heads/fix/cos-chat-dispatch-1002",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-1022",
+      "HEAD": "3f8d09a4ad0eff481939e8729dc05ea8429bfc03",
+      "branch": "refs/heads/devin/c3-cos-hermes-strip",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-787",
+      "HEAD": "faf7484677577b76a050b82566d276df063c9bda",
+      "branch": "refs/heads/devin/787",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-789",
+      "HEAD": "e56479af5de33d1388683987d9219a9be891adae",
+      "branch": "refs/heads/devin/789",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-790",
+      "HEAD": "68aa706e243ae038989c2362b16cc017cd26564e",
+      "branch": "refs/heads/devin/790",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-791",
+      "HEAD": "b105092d38bf7baedf55cdf4481e7bd3e057ccbd",
+      "branch": "refs/heads/devin/791",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-792",
+      "HEAD": "15e2d69b3fcb4261b76e93cabda0fe82e8762a31",
+      "branch": "refs/heads/devin/792",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-793",
+      "HEAD": "4fe75184fd9fca0c9b040bb1a9f5013530aeb631",
+      "branch": "refs/heads/devin/793",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-794",
+      "HEAD": "f558020e9933956781248edbf8f7dd1bb7c6fd04",
+      "branch": "refs/heads/devin/794",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-795",
+      "HEAD": "2c92cdc2f53daa0e1183ab829af0d21c4d1bb128",
+      "branch": "refs/heads/devin/795",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-796",
+      "HEAD": "a2795abbcebf66aafe012742055c48954b5fd47a",
+      "branch": "refs/heads/devin/796",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-authz",
+      "HEAD": "7618a10eeb061ab8837a40324b42bbd4af05ac46",
+      "branch": "refs/heads/devin/authz-20261003",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-b2-agentpages",
+      "HEAD": "99c584bd1520c057d02600fda623c02c96ac5f29",
+      "branch": "refs/heads/devin/fix-886-config-read-authz-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-b2-numbers",
+      "HEAD": "801e4198f7625ba7cf60cc02e2038866200922b9",
+      "branch": "refs/heads/devin/c4-polish-20261004",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-b2-polish",
+      "HEAD": "a8de933610243c89f6e8ebd6cd396f2eca6f5f20",
+      "branch": "refs/heads/devin/b2-polish-20261003",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-b2-review",
+      "HEAD": "54c6d71fa766a234c5d474053512a56ca3552f5a",
+      "branch": "refs/heads/devin/c4-stops-20261004",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-backup",
+      "HEAD": "dd47c3fbc4af41f3a17c38988e93302b85cd0f9c",
+      "branch": "refs/heads/devin/backup-20261002",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-chat",
+      "HEAD": "ae4f473e138425441ac79391f3361d6de5b2f7cc",
+      "branch": "refs/heads/devin/cos-followups2-20261004",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-copy-followups",
+      "HEAD": "7c21c2b69100b4dec586ff4ec7d09810fd75153e",
+      "branch": "refs/heads/devin/copy-followups-20261003",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-cos-facts",
+      "HEAD": "4d148b82295f1cf00842daac18f196ccdf8717c2",
+      "branch": "refs/heads/devin/c4-hire-ux-20261004",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-costs-leak",
+      "HEAD": "babb6f89ba0b4758d9e4123cdf43760e87d728f3",
+      "branch": "refs/heads/devin/costs-by-project-leak",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-flakes",
+      "HEAD": "2117fa0268ffe11e0e1fa2f25986de59f1138494",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-gh919",
+      "HEAD": "ae7e66311d2d85dae029ecca265f6a48059b901b",
+      "branch": "refs/heads/devin/gh919-approval-tx",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-issue-933",
+      "HEAD": "08ba91774a05b4de5c7b0b3622c76e0fa7f2dc3e",
+      "branch": "refs/heads/devin/issue-933-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-issue-938",
+      "HEAD": "70cf732f7419bf1fbb493a4803200319ace3a656",
+      "branch": "refs/heads/devin/issue-938-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-leaks",
+      "HEAD": "3f5e56e0208084d9f8edc7ddd9358a9fa52a0891",
+      "branch": "refs/heads/devin/leaks-20261002",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-pr898",
+      "HEAD": "f14a9b82855cb984605c45cab43a864831eaa8ed",
+      "branch": "refs/heads/devin/pr898-rebase",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-redact",
+      "HEAD": "a7c350859a4d445b1d0c0bdc28d449d2402bcaef",
+      "branch": "refs/heads/devin/a11y-followups-20261003",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-relnotes",
+      "HEAD": "a6a7398501f7c0606f5be7a44a7d5d8e14fe6598",
+      "branch": "refs/heads/devin/release-notes-1005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-ross-assistant-20260930",
+      "HEAD": "fbaa13a048371bf1d1164ba4896a6ba92a29c811",
+      "branch": "refs/heads/ross/devin-assistant-20260930",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-ross-host-20260930",
+      "HEAD": "4da9bd4df628726f26e4554f00850e56eef8e817",
+      "branch": "refs/heads/ross/devin-host-20260930",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-ross-launch-base-20260930",
+      "HEAD": "ea7766590ac251559797a4a8132f90ff1d540b25",
+      "branch": "refs/heads/ross/devin-launch-base-20260930",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-ross-recovery-20260930",
+      "HEAD": "11e1ff334c6fb2e85899655d42a3e287c3909043",
+      "branch": "refs/heads/ross/devin-recovery-on-main",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-ross-reporting-20260930",
+      "HEAD": "b0917baab81ca5b1fab341c0edc90ffee576a056",
+      "branch": "refs/heads/ross/devin-reporting-20260930",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-sandbox",
+      "HEAD": "315778303cbe971b78528078d30a33c28dea3f17",
+      "branch": "refs/heads/devin/sandbox-20261002",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-secheaders",
+      "HEAD": "749b1aaf2358587ff907b1ef0f7a44b8b4158907",
+      "branch": "refs/heads/devin/security-headers-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-tidy2",
+      "HEAD": "853c95ae7cad40f5e286386a4e06645bf4820a3b",
+      "branch": "refs/heads/devin/tidy-followups-2",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-tiers-followups",
+      "HEAD": "0bf9d11deb81ac1179e53a96f8647d81fdc96c59",
+      "branch": "refs/heads/devin/tiers-followups-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "devin-urls",
+      "HEAD": "4e94fac527e6275c1af54444d7c148c2f3f3b8c5",
+      "branch": "refs/heads/devin/agent-scope-gen-test-20261002",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "e2e-port-guard",
+      "HEAD": "fbb04a9565db2c4b3da9bd13162a94f4d3da067c",
+      "branch": "refs/heads/devin/e2e-port-guard-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "edge-fix",
+      "HEAD": "325f0ccbc6380ee9f845ca412b7bdc225f460272",
+      "branch": "refs/heads/fix/edge-provisioning-health",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "execos-local",
+      "HEAD": "347ffaea5aba76cf818bccc3f3f9d19e0967d980",
+      "branch": "refs/heads/ops/execos-local",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "fix-deps-axios",
+      "HEAD": "54c8271263601137af707d631ba9984989401387",
+      "branch": "refs/heads/fix/deps-axios-1.20",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "fix1-security",
+      "HEAD": "c09d1fc312c1c3401740b34db3b04863ca3adc48",
+      "branch": "refs/heads/devin/fix-923-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "flip-claim",
+      "HEAD": "34196549e42bec682e9cdd7f15659727e19cea3c",
+      "branch": "refs/heads/ops/flip-claim-tracking",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "hermes-ssh",
+      "HEAD": "2771d26b620b238a283d27fdcad3095549c4acd0",
+      "branch": "refs/heads/feat/hermes-ssh-environment",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "hotfix-emoji",
+      "HEAD": "51cd4720b367f0f03f1a8dac1981da5a98f532ce",
+      "branch": "refs/heads/devin/redact-astral-hotfix-20261003",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "land-872",
+      "HEAD": "f687e95f3e9e014f85689bff01c266ef6a372f70",
+      "branch": "refs/heads/tmp/ci",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "muse-stub",
+      "HEAD": "bb345a76cfa240f58489054144b9317e4a5b210d",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "notes-1001-2",
+      "HEAD": "6e01239fe015d7346035a7d6632aec3e36b7597d",
+      "branch": "refs/heads/docs/release-notes-1001-2",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "notes-1002-0",
+      "HEAD": "ca538bce49423e9dc82eb558b7b24a48ad828f81",
+      "branch": "refs/heads/docs/release-notes-1002-0",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "notes-1002-1",
+      "HEAD": "a7dec4c5515b31ab0adf818ec3f3fd59c5ce0eb8",
+      "branch": "refs/heads/docs/release-notes-v2026.1002.1",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "notes-1002-2",
+      "HEAD": "5e3ed117bd23a35f8ff26985b57493f637893911",
+      "branch": "refs/heads/docs/release-notes-v2026.1002.2",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "qa-authz-1005",
+      "HEAD": "46b868255d2fdac730d9aff8ee0ec118cbb22527",
+      "branch": "refs/heads/devin/qa-goalid-scope-20261005",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "qa-b2-review",
+      "HEAD": "b28cd800fc991e11d06716e4477a565c9ca5b5df",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "qa-redact-1005",
+      "HEAD": "37cec33c77a790f747b1ae40c2c22a2f92357aab",
+      "branch": "refs/heads/devin/qa-1005-malformed-fixes",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "rebase-965",
+      "HEAD": "a28d86b57b1893ecbfbdcb53b4ecb556eb8ab54e",
+      "branch": "refs/heads/rebase-965",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "release-1001",
+      "HEAD": "5fd2228aba883b382b19e1b4acd4f073e71ab22f",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "release-1004",
+      "HEAD": "103bfd8ccccec07eee11f9ef78c7e73735721f18",
+      "branch": "refs/heads/docs/release-v2026.1004.0",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "release-1007",
+      "HEAD": "708c55d43d209efb7df39569a1337523d1b89288",
+      "branch": "refs/heads/docs/release-v2026.1007.0",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "release-10071",
+      "HEAD": "003ac164fddcefec0e8c46e1c86e0cbd3aec3405",
+      "branch": "refs/heads/docs/release-v2026.1007.1",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "release-930-1",
+      "HEAD": "40452d7bf3329a322966ca8a1224cdcfe633e155",
+      "branch": "refs/heads/release/v2026.930.1-notes",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "rereview-1002",
+      "HEAD": "b91aa16f028bc151bacc27fcc92a36b7b612e295",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "rereview-998",
+      "HEAD": "b42f0d2f8459dff43cbe0be86599fc1d92597c1e",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1000",
+      "HEAD": "41d843d2ee0fb0a28cea5b2164b58c8c1dca7b74",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1001",
+      "HEAD": "7529aea6279369926f16e9776c7d1be5d7169403",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1002",
+      "HEAD": "6794f9afd4867209f31a51f5e7cd3a80744ec634",
+      "branch": "refs/heads/review-1002",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1003",
+      "HEAD": "88a774148c0f795a1348b5127563ad196e7c1ed2",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1004",
+      "HEAD": "579ab77916a8ffe89e0e25d9a8e112a40f7c934e",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1005",
+      "HEAD": "64cc80ece44efa87df33c5d147eab854e1c668af",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1006",
+      "HEAD": "704c6ad3e0b480179dcae3b987591bfb7bab53a1",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1013",
+      "HEAD": "900bc6dd6053a148068d0cbfe92b4b04aa708660",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1014",
+      "HEAD": "df4d3ee63dbac0c66fd93ae8aecc9b29104fbc13",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1015",
+      "HEAD": "4071f43fbd0d3ea87227a83bc00e917fc713b197",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1016",
+      "HEAD": "376b59e62df5f71f3208bc5147d82cad09003905",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1017",
+      "HEAD": "f51c571f02bf37ca9bca18b93359f55cb221c783",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1019",
+      "HEAD": "2e5723f45688dfacd206ad240186c51623785208",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-1025",
+      "HEAD": "8dac83eda49757f9a0375ad8c6869e93ccd2a98c",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-964",
+      "HEAD": "b3bd59dcece9e7c6b804d12dc328d527a13d54ec",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-968",
+      "HEAD": "9c47eacd0e26dd25a2bdd613ec9771279b527ba5",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-969",
+      "HEAD": "82f76fb4bc442cc37c95b32155a0dd2fc1319846",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-970",
+      "HEAD": "b008fc804dbdfc62227d46ee657324c2b2b8caa2",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-972",
+      "HEAD": "d0ab83a02f7088a7c3259afe64224ad9dfd2928a",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-973",
+      "HEAD": "a9c1969a62dae9aca42262604dcf01dc41f4adcc",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-974",
+      "HEAD": "d6b640e5f8a9e81dc6a86de733ecc132cbd03e98",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-975",
+      "HEAD": "079f6bab19f1aeedd7cbf5a4facd0f0f0890df77",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-976",
+      "HEAD": "8002e25dae39a738c31104196e41032bf090a8dd",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-979",
+      "HEAD": "ee7d3cdefe045ec5d26ca3ddfcc2df16997d7878",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-981",
+      "HEAD": "315bceaf5906d6ad004d1df8663c9cd28c1a845f",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-982",
+      "HEAD": "9aa8a9fcb04478bd1e11f8f4041882543bc8f7b5",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-988",
+      "HEAD": "06e0c5476de2dad7e449fc39d1f3bbde575d050c",
+      "branch": "refs/heads/pr-988b",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-989",
+      "HEAD": "5d8cc2091e787e50b5547a18ef7f7666c65340c1",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-990",
+      "HEAD": "054af55e4be28e5f4c3ecd32fb7e59c3482a597b",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-991",
+      "HEAD": "f1f1650904d1b8a6806a1f6e6ef5fce641c9e542",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-993",
+      "HEAD": "9eb310d09140b5ad0cf35e05b20a937a645ff6bf",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-994",
+      "HEAD": "900f4199583826f9811b35fc53e666e8faa31376",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-998",
+      "HEAD": "9ff4bab10d9370ac1122366259238c8f6d6f2d79",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "review-999",
+      "HEAD": "7618a10eeb061ab8837a40324b42bbd4af05ac46",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ross-local-pilot-20260929",
+      "HEAD": "486169ca9624f2eb23f40fc3f175de366ba8b754",
+      "branch": "refs/heads/ross/local-pilot-20260929",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ross-pilot-main",
+      "HEAD": "1509b591e8dd69c198a8f70e987531dfd83b0718",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "runlog-perf",
+      "HEAD": "d8dc70cb98f78bf62abc7de833530a35b11be373",
+      "branch": "refs/heads/fix/run-log-redaction-stalls",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ux-1003",
+      "HEAD": "d0ae990cff9243c930d95ad5e118d4d747e373bb",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ux-1004",
+      "HEAD": "c1fac8baccfe0fc9ea54fb43d5bd5901d0c2172e",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ux4-scan",
+      "HEAD": "dff18c620a57b603fa7bf8947644c489626f5d87",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ux5-scan",
+      "HEAD": "76ae4553ecd9b53b926425240c5af96ff5803b5e",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "ux6-scan",
+      "HEAD": "6c8f0ea1c3eaa42c9e6509b3737b83f27cfdebe3",
+      "branch": null,
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "wake-policy",
+      "HEAD": "9abc8ab59f3fa130924e947b8f685f61546b8866",
+      "branch": "refs/heads/feat/assignment-only-wake-policy",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "whats-new",
+      "HEAD": "602e2a2966f9c21d8c7490485d0b46a9b44ca435",
+      "branch": "refs/heads/feat/www-whats-new",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agentdash-cloud",
+      "HEAD": "27e76faf48dd0567876f7b32482d12838d582e7d",
+      "branch": "refs/heads/ws/agentdash-cloud",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agentdash-deal-view",
+      "HEAD": "c4ae7e362184d6729eeb6dcf4b08514c4fe05179",
+      "branch": "refs/heads/feat/deal-view",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agentdash-hermes-pairing",
+      "HEAD": "2c4c2fac9caf7e6eacd9e8f9f0273aa9594c459a",
+      "branch": "refs/heads/feat/roma-deepseek-v41-flash",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agentdash-run-highlights",
+      "HEAD": "5962213acafc66548324407560581db870a7b9f2",
+      "branch": "refs/heads/feat/run-highlights",
+      "on_ssd": true
+    },
+    {
+      "worktree_name": "agentdash-stream-json",
+      "HEAD": "660943241d3314c59a74fcc3802c3fa4f2d45bbe",
+      "branch": "refs/heads/fan/hermes-stream-json-ui",
+      "on_ssd": true
+    }
+  ]
+}

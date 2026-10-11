@@ -1,0 +1,18 @@
+{
+  "original_refs_expected": 3829,
+  "original_refs_restored_exactly": 3829,
+  "original_ref_mismatches": {},
+  "original_reflog_commit_objects_expected": 15035,
+  "original_reflog_commit_objects_present": 15035,
+  "original_reflog_commits_reachable": 15035,
+  "recorded_worktrees": 210,
+  "worktree_heads_present_and_reachable": 210,
+  "object_alternates_present": false,
+  "shallow_marker_retained": true,
+  "fsck_exit_code": 0,
+  "fsck_non_dangling_lines": [],
+  "source_git_mutated": false,
+  "network_actions": false,
+  "restore_limitation": "Fresh independent baseline was synthesized from known live GitHub head ancestry only; restoration retains the original shallow boundary file. No object alternates or dependency on original Git objects.",
+  "passed": true
+}

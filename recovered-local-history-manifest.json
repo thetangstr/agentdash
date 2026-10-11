@@ -1,0 +1,9 @@
+{
+  "bundlePath": "history/recovered-local-history.bundle",
+  "bytes": 1651883,
+  "sha256": "4db54939bc2c3d17bb0ab34cf3ac0f9f9e0478ee653a4b4719c85cba64999320",
+  "gitBlobSha": "30419a1dc53c5c5d0f9123cd76b4fe51e3369e09",
+  "exactRecoveryAnchors": 252,
+  "newCommits": 251,
+  "requires": "Original local history bundle restored first"
+}
