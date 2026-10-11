@@ -1,0 +1,17 @@
+{
+  "recordedRefsVerified": 3829,
+  "recordedCommitsVerified": 15035,
+  "worktreeHeadsAndBranchesVerified": 210,
+  "unfinishedCheckoutsVerified": 20,
+  "dirtyFilesVerified": 120,
+  "nonRebuildablePrivateEntriesVerified": 9260,
+  "excludedRebuildableCacheFiles": 1,
+  "ssdGitPointersRemaining": 0,
+  "objectAlternatesPresent": false,
+  "ssdRuntimeSkillLinksRemaining": 42,
+  "runtimeRepairOfflineTestsPassed": true,
+  "runtimeRepairApplied": false,
+  "runtimeRepairBlocker": "Filesystem write permissions",
+  "applicationBehaviorTested": false,
+  "safeToFormatSSD": false
+}

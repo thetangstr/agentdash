@@ -38,6 +38,10 @@ The original checkout was shallow. A normal GitHub clone supplies public baselin
 
 For each snapshot, start from the HEAD recorded in snapshot.json. Apply staged.patch to the index, then unstaged.patch to working files, and restore saved untracked files from files/. Snapshots preserve staged/unstaged distinctions. Run relevant application checks before integration.
 
+## Current internal migration verification
+
+A later read-only audit verified the existing internal project copy: all 3,829 recorded refs, all 15,035 recorded commits, all 210 worktree HEADs/branches, and the exact states/indexes of all 20 unfinished checkouts remain intact. Git metadata contains no SSD pointers or object alternates. All 120 changed/untracked file hashes match. The private internal copy contains all 9,260 non-rebuildable recorded artifact entries with matching hashes; one omitted Python bytecode cache is rebuildable from its verified source.
+
 ## Drive removal boundary
 
-Four internal-disk linked worktrees still depend on the original SSD Git directory. Forty-two private runtime skill-cache links target the SSD (14 were already dangling). Repair those pointers and verify a durable protected private backup before formatting. The emergency archive under /private/tmp is temporary. This branch does not assert the drive is safe to format.
+The Git and private-artifact migration is verified. Forty-two runtime skill-cache links still target the SSD (14 were already dangling). Their replacement plan uses verified internal skill sources; offline repair tests passed. Live repair was denied by filesystem permissions before any link changed. Repair those remaining runtime links before formatting. The temporary preservation package is supplementary to the verified internal project/artifact copy. This branch does not assert that the entire SSD is safe to format.
