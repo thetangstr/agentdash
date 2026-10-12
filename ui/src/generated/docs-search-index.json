@@ -47,6 +47,8 @@
         "Run it",
         "What it does",
         "What it writes, and why there are two credentials",
+        "Claude Desktop",
+        "Installed a client later?",
         "Check it",
         "Undo"
       ],
@@ -1235,7 +1237,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 626 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 30f4923d67e0; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 627 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 68d712816854; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
@@ -1474,6 +1476,8 @@
         "Before you run it",
         "What it actually does",
         "The inbox",
+        "Claude Desktop and Codex",
+        "Checking a machine",
         "Deciding from your own session",
         "Answering your agents",
         "The review skill",
@@ -1486,7 +1490,7 @@
         "If it does not work",
         "Requirements"
       ],
-      "firstParagraph": "Connect the coding agent on your machine — Claude Code or Codex — to your AgentDash agent."
+      "firstParagraph": "Connect the coding agent on your machine — Claude Code or Codex — to your AgentDash agent, and put your own AgentDash inbox in Claude Code, Claude Desktop and Codex."
     },
     {
       "slug": "cli/agentdash-mcp",

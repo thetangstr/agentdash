@@ -131,11 +131,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Textarea } from "@/components/ui/textarea";
 import { AlertTriangle, ArrowDown, ArrowRight, Brain, Check, ChevronDown, Copy, Hammer, Loader2, MoreHorizontal, Paperclip, PauseCircle, Search, Square, ThumbsDown, ThumbsUp } from "lucide-react";
 import { IssueBlockedNotice } from "./IssueBlockedNotice";
+import { ViaBridgeBadge } from "./ViaBridgeBadge";
+import type { BridgeProvenance } from "../lib/bridge-provenance";
 import { useDockedComposerOffset } from "../hooks/useDockedComposerOffset";
 
 interface IssueChatMessageContext {
   feedbackDataSharingPreference: FeedbackDataSharingPreference;
   feedbackTermsUrl: string | null;
+  /** What the person sent from their own Claude or Codex: "via bridge (<label>)". */
+  bridgeProvenance?: BridgeProvenance;
   agentMap?: Map<string, Agent>;
   currentUserId?: string | null;
   userLabelMap?: ReadonlyMap<string, string> | null;
@@ -279,6 +283,8 @@ interface IssueChatComposerProps {
 
 interface IssueChatThreadProps {
   comments: IssueChatComment[];
+  /** Comments and answers a person sent through the bridge (lib/bridge-provenance). */
+  bridgeProvenance?: BridgeProvenance;
   interactions?: IssueThreadInteraction[];
   feedbackVotes?: FeedbackVote[];
   feedbackDataSharingPreference?: FeedbackDataSharingPreference;
@@ -1399,6 +1405,7 @@ function IssueChatUserMessage({
     onCancelQueued,
     currentUserId,
     userProfileMap,
+    bridgeProvenance,
   } = useContext(IssueChatCtx);
   const custom = message.metadata.custom as Record<string, unknown>;
   const anchorId = typeof custom.anchorId === "string" ? custom.anchorId : undefined;
@@ -1432,6 +1439,7 @@ function IssueChatUserMessage({
     <div className={cn("flex min-w-0 max-w-[85%] flex-col", isCurrentUser && "items-end")}>
       <div className={cn("mb-1 flex items-center gap-2 px-1", isCurrentUser ? "justify-end" : "justify-start")}>
         <span className="text-sm font-medium text-foreground">{resolvedAuthorName}</span>
+        <ViaBridgeBadge via={bridgeProvenance?.comments.get(commentId)} />
         {followUpRequested ? (
           <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">
             Follow-up
@@ -2124,6 +2132,7 @@ function IssueChatSystemMessage({ message }: { message: ThreadMessage }) {
     agentMap,
     currentUserId,
     userLabelMap,
+    bridgeProvenance,
     onAcceptInteraction,
     onRejectInteraction,
     onSubmitInteractionAnswers,
@@ -2167,6 +2176,7 @@ function IssueChatSystemMessage({ message }: { message: ThreadMessage }) {
         <div className="py-1.5">
           <IssueThreadInteractionCard
             interaction={interaction}
+            viaBridge={bridgeProvenance?.interactions.get(interaction.id)}
             agentMap={agentMap}
             currentUserId={currentUserId}
             userLabelMap={userLabelMap}
@@ -3304,6 +3314,7 @@ const IssueChatComposer = forwardRef<IssueChatComposerHandle, IssueChatComposerP
 
 export function IssueChatThread({
   comments,
+  bridgeProvenance,
   interactions = [],
   feedbackVotes = [],
   feedbackDataSharingPreference = "prompt",
@@ -3954,6 +3965,7 @@ export function IssueChatThread({
     () => ({
       feedbackDataSharingPreference,
       feedbackTermsUrl,
+      bridgeProvenance,
       agentMap,
       currentUserId,
       userLabelMap,
@@ -3974,6 +3986,7 @@ export function IssueChatThread({
     [
       feedbackDataSharingPreference,
       feedbackTermsUrl,
+      bridgeProvenance,
       agentMap,
       currentUserId,
       userLabelMap,

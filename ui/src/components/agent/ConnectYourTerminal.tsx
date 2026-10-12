@@ -6,6 +6,7 @@ import { agentsApi } from "../../api/agents";
 import { authApi } from "../../api/auth";
 import { bridgeApi } from "../../api/bridge";
 import { AssistantConnections } from "./AssistantConnections";
+import { EndpointCapabilities } from "./EndpointCapabilities";
 import { stewardWebhooksApi } from "../../api/steward-webhooks";
 import { healthApi } from "../../api/health";
 import { timeAgo } from "../../lib/timeAgo";
@@ -242,10 +243,12 @@ export function ConnectYourTerminal({
                 </p>
               ) : null}
               <p className="mt-1.5 text-xs text-muted-foreground">
-                It finds Claude Code and Codex if they are installed, writes their own config, and
-                creates an <code className="font-mono">~/agentdash-inbox</code> folder — open that
-                folder in Claude Code and anything waiting on you appears as the session starts.
-                Undo any time with <code className="font-mono">npx agentdash-connect --remove</code>.
+                It finds Claude Code, Claude Desktop and Codex if they are installed, writes their
+                own config, and creates an <code className="font-mono">~/agentdash-inbox</code>{" "}
+                folder — open that folder in Claude Code and anything waiting on you appears as the
+                session starts. Check it any time with{" "}
+                <code className="font-mono">npx agentdash-connect check</code>; undo with{" "}
+                <code className="font-mono">npx agentdash-connect --remove</code>.
                 Step by step, with what each file is for:{" "}
                 <Link to="/guides/steward/connect-your-terminal" className="underline">
                   Connect your terminal
@@ -294,11 +297,14 @@ export function ConnectYourTerminal({
                 key={machine.id}
                 className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5"
               >
-                <span className="text-sm">
+                <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
                   {machine.label}
-                  <span className="ml-2 font-mono text-xs text-muted-foreground">
-                    {machine.capabilities.includes("bridge:inbox") ? "inbox" : "read-only"}
-                    {machine.lastSeenAt ? ` · seen ${timeAgo(machine.lastSeenAt)}` : " · never seen"}
+                  {/* What the machine may do, and "review not enabled;
+                      reconnect" when the person's own Claude cannot review
+                      their agents' work from it (no bridge:work). */}
+                  <EndpointCapabilities capabilities={machine.capabilities} />
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {machine.lastSeenAt ? `seen ${timeAgo(machine.lastSeenAt)}` : "never seen"}
                   </span>
                 </span>
                 <Button

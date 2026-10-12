@@ -891,6 +891,8 @@ describe("MyAgent", () => {
       expect(text).toContain("Connected machines");
       expect(text).toContain("chris-laptop (win32)");
       expect(text).toContain("inbox");
+      // No bridge:work on this machine: its owner's Claude cannot review from it.
+      expect(text).toContain("review not enabled; reconnect");
       const buttons = Array.from(container.querySelectorAll("button")).map((b) => b.textContent);
       expect(buttons).toContain("Disconnect");
     });
