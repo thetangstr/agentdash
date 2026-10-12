@@ -58,8 +58,8 @@ export const REQUEST_TOOLS = [
       },
       required: ["title", "wanted", "doneMeans", "person"],
     },
-    prepare: (input, ctx) => {
-      const local = readLocalFiles(input.files);
+    prepare: async (input, ctx) => {
+      const local = await readLocalFiles(input.files);
       if (!local.ok) return { result: ctx.textResult(local) };
       return { files: local.files, body: requestBody(input, local.files) };
     },

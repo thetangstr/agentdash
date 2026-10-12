@@ -250,7 +250,7 @@ describeEmbeddedPostgres("bridge work: files over the bridge, with versions", ()
   }
 
   const upload = (server: express.Express, token: string, body: Buffer, filename: string) =>
-    request(server).post("/api/bridge/work/upload").field("token", token).attach("file", body, { filename });
+    request(server).post("/api/bridge/work/upload").set("X-Bridge-Handle", token).attach("file", body, { filename });
 
   /** Agent A's hand-off to Person A, in a restricted project both are on. */
   async function restrictedHandoff(opts: { capBytes?: number } = {}) {
@@ -425,6 +425,54 @@ describeEmbeddedPostgres("bridge work: files over the bridge, with versions", ()
     expect(fetchedCurrent.headers["x-agentdash-current-attachment-id"]).toBeUndefined();
   });
 
+  it("binds the version read back: two files of one name read back as v1 and v2, and a version added before the confirm refuses it", async () => {
+    const { issue, endpoint, agentA, company } = await restrictedHandoff();
+    const { server } = app(endpoint);
+    const second = Buffer.from("site,share\nnorth,0.50\n", "utf8");
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({
+        issueId: issue.id,
+        comment: "Two passes.",
+        files: [
+          { name: "q3.csv", sha256: sha(figures), size: figures.length },
+          { name: "q3 v1 (Agent A).csv", sha256: sha(second), size: second.length },
+        ],
+      });
+    expect(proposed.body.ok).toBe(true);
+    const readback = (proposed.body.readback as string[]).join("\n");
+    expect(readback).toContain('stored as "q3 v1 (Person A).csv"');
+    expect(readback).toContain('stored as "q3 v2 (Person A).csv"');
+    await upload(server, proposed.body.handle, figures, "q3.csv");
+    await upload(server, proposed.body.handle, second, "q3.csv");
+
+    // Agent A adds its own version of the name between the yes and the confirm.
+    const store = storage();
+    const put = await store.putFile({ companyId: company.id, namespace: `issues/${issue.id}`, originalFilename: "q3.csv", contentType: "text/csv", body: Buffer.from("agent pass") });
+    await issueService(db).createAttachment({ issueId: issue.id, ...put, createdByAgentId: agentA.id, versionAuthor: "Agent A" });
+
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: false, code: "version_moved_on" });
+    expect(confirmed.body.reason).toContain("version 2, not version 1");
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issue.id))).toHaveLength(0);
+    const listed = await issueService(db).listAttachments(issue.id);
+    expect(listed.map((row) => row.originalFilename)).toEqual(["q3 v1 (Agent A).csv"]);
+
+    // Proposed again, the read-back names the versions as they are now, and they hold.
+    const again = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, comment: "Two passes.", files: [{ name: "q3.csv", sha256: sha(figures), size: figures.length }] });
+    expect((again.body.readback as string[]).join("\n")).toContain('stored as "q3 v2 (Person A).csv"');
+    await upload(server, again.body.handle, figures, "q3.csv");
+    const ok = await request(server).post("/api/bridge/work/confirm").send({ token: again.body.handle });
+    expect(ok.body.ok).toBe(true);
+    expect((await issueService(db).listAttachments(issue.id)).map((row) => row.originalFilename).sort()).toEqual([
+      "q3 v1 (Agent A).csv",
+      "q3 v2 (Person A).csv",
+    ]);
+  });
+
   it("leaves files out on an issue outside a restricted project and says why; the bundle goes as text", async () => {
     const { company, prefix, personA, agentA } = await seed();
     const issue = await makeIssue(company.id, prefix, { assigneeAgentId: agentA.id });
@@ -444,7 +492,7 @@ describeEmbeddedPostgres("bridge work: files over the bridge, with versions", ()
 
     // An upload against it is refused: the handle names no files.
     const refused = await upload(server, proposed.body.handle, figures, "q3.csv");
-    expect(refused.body).toMatchObject({ ok: false, code: "file_not_in_handle" });
+    expect(refused.body).toMatchObject({ ok: false, code: "no_files_named" });
 
     const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
     expect(confirmed.body.ok).toBe(true);
@@ -472,6 +520,38 @@ describeEmbeddedPostgres("bridge work: files over the bridge, with versions", ()
     expect(over.body).toMatchObject({ ok: false, code: "file_too_large" });
     expect(over.body.reason).toContain("attachment cap of 8 bytes");
     expect(await db.select().from(bridgeStagedFiles)).toHaveLength(0);
+  });
+
+  it("checks the handle before reading an upload, and reads no more than the largest file the handle names", async () => {
+    const { issue, endpoint } = await restrictedHandoff({ capBytes: 1_000 });
+    const { server } = app(endpoint);
+    const oversized = Buffer.alloc(5_000, 0x61);
+
+    const noHeader = await request(server).post("/api/bridge/work/upload").field("token", "x").attach("file", figures, { filename: "q3.csv" });
+    expect(noHeader.status).toBe(400);
+
+    // No live handle: refused as such, even for a body over the cap.
+    const bogus = await upload(server, "not-a-handle", oversized, "big.csv");
+    expect(bogus.body).toMatchObject({ ok: false, code: "handle_not_valid" });
+
+    // A live handle bounds the read by the largest file it names, under the cap.
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, comment: "x", files: [{ name: "q3.csv", sha256: sha(figures), size: figures.length }] });
+    expect(proposed.body.ok).toBe(true);
+    const larger = Buffer.concat([figures, Buffer.from("west,0.10\n", "utf8")]);
+    const tooLarge = await upload(server, proposed.body.handle, larger, "q3.csv");
+    expect(tooLarge.body).toMatchObject({ ok: false, code: "file_not_in_handle" });
+    expect(tooLarge.body.reason).toContain(`${figures.length} bytes at most`);
+    expect(await db.select().from(bridgeStagedFiles)).toHaveLength(0);
+
+    // A handle whose read-back named no files takes no upload.
+    const textOnly = await request(server).post("/api/bridge/work/propose").send({ issueId: issue.id, comment: "text only" });
+    expect(textOnly.body.ok).toBe(true);
+    const none = await upload(server, textOnly.body.handle, figures, "q3.csv");
+    expect(none.body).toMatchObject({ ok: false, code: "no_files_named" });
+
+    expect((await upload(server, proposed.body.handle, figures, "q3.csv")).body).toMatchObject({ ok: true, alreadyStaged: false });
   });
 
   it("refuses the whole bundle when the issue left its restricted project between the yes and the confirm", async () => {

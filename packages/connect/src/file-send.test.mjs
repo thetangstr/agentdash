@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { readLocalFiles, resolveLocalPath } from "./file-send.mjs";
+import { MAX_FILE_BYTES, readLocalFiles, resolveLocalPath } from "./file-send.mjs";
 import { createInboxMcpHandler } from "./inbox-mcp.mjs";
 
 const SERVER = "http://agentdash.example.test:3102";
@@ -69,29 +69,40 @@ describe("local files for a send-back or a request", () => {
     expect(resolveLocalPath("./plan.md")).toBeNull();
   });
 
-  it("hashes plain files and refuses hidden places, links into them, folders, empty files and markup", () => {
+  it("hashes plain files and refuses hidden places, links into them, folders, empty files and markup", async () => {
     const dir = tempDir();
     const plan = path.join(dir, "plan.md");
     fs.writeFileSync(plan, "# Plan\n");
-    const read = readLocalFiles([{ path: plan }]);
+    const read = await readLocalFiles([{ path: plan }]);
     expect(read).toEqual({ ok: true, files: [{ path: plan, name: "plan.md", size: 7, sha256: sha(Buffer.from("# Plan\n")) }] });
 
     fs.mkdirSync(path.join(dir, ".ssh"));
     fs.writeFileSync(path.join(dir, ".ssh", "id_key"), "secret");
     fs.writeFileSync(path.join(dir, ".env"), "TOKEN=1");
-    expect(readLocalFiles([{ path: path.join(dir, ".ssh", "id_key") }])).toMatchObject({ ok: false, code: "hidden_path" });
-    expect(readLocalFiles([{ path: path.join(dir, ".env") }])).toMatchObject({ ok: false, code: "hidden_path" });
+    expect(await readLocalFiles([{ path: path.join(dir, ".ssh", "id_key") }])).toMatchObject({ ok: false, code: "hidden_path" });
+    expect(await readLocalFiles([{ path: path.join(dir, ".env") }])).toMatchObject({ ok: false, code: "hidden_path" });
     fs.symlinkSync(path.join(dir, ".ssh"), path.join(dir, "keys"));
-    expect(readLocalFiles([{ path: path.join(dir, "keys", "id_key") }])).toMatchObject({ ok: false, code: "hidden_path" });
+    expect(await readLocalFiles([{ path: path.join(dir, "keys", "id_key") }])).toMatchObject({ ok: false, code: "hidden_path" });
     fs.symlinkSync(plan, path.join(dir, "plan-link.md"));
-    expect(readLocalFiles([{ path: path.join(dir, "plan-link.md") }])).toMatchObject({ ok: false, code: "not_a_file" });
-    expect(readLocalFiles([{ path: dir }])).toMatchObject({ ok: false, code: "not_a_file" });
+    expect(await readLocalFiles([{ path: path.join(dir, "plan-link.md") }])).toMatchObject({ ok: false, code: "not_a_file" });
+    expect(await readLocalFiles([{ path: dir }])).toMatchObject({ ok: false, code: "not_a_file" });
     fs.writeFileSync(path.join(dir, "empty.csv"), "");
-    expect(readLocalFiles([{ path: path.join(dir, "empty.csv") }])).toMatchObject({ ok: false, code: "empty_file" });
+    expect(await readLocalFiles([{ path: path.join(dir, "empty.csv") }])).toMatchObject({ ok: false, code: "empty_file" });
     fs.writeFileSync(path.join(dir, "page.html"), "<p>hi</p>");
-    expect(readLocalFiles([{ path: path.join(dir, "page.html") }])).toMatchObject({ ok: false, code: "file_refused" });
-    expect(readLocalFiles([{ path: "relative.md" }])).toMatchObject({ ok: false, code: "invalid_path" });
-    expect(readLocalFiles([{ path: path.join(dir, "missing.md") }])).toMatchObject({ ok: false, code: "not_found" });
+    expect(await readLocalFiles([{ path: path.join(dir, "page.html") }])).toMatchObject({ ok: false, code: "file_refused" });
+    expect(await readLocalFiles([{ path: "relative.md" }])).toMatchObject({ ok: false, code: "invalid_path" });
+    expect(await readLocalFiles([{ path: path.join(dir, "missing.md") }])).toMatchObject({ ok: false, code: "not_found" });
+  });
+
+  it("refuses a file over the size bound from its size, without reading it", async () => {
+    const dir = tempDir();
+    const big = path.join(dir, "export.csv");
+    fs.writeFileSync(big, "x".repeat(2048));
+    const refused = await readLocalFiles([{ path: big }], { maxFileBytes: 1024 });
+    expect(refused).toMatchObject({ ok: false, code: "file_too_large" });
+    expect(refused.reason).toContain("are not sent from here");
+    expect(MAX_FILE_BYTES).toBe(100 * 1024 * 1024);
+    expect(await readLocalFiles([{ path: big }], { maxFileBytes: 4096 })).toMatchObject({ ok: true, files: [{ size: 2048 }] });
   });
 
   it("proposes with names and hashes only, uploads after the yes, then confirms", async () => {
@@ -120,9 +131,11 @@ describe("local files for a send-back or a request", () => {
       "/api/bridge/work/upload",
       "/api/bridge/work/confirm",
     ]);
-    expect(calls[1].body).toMatchObject({ form: true, token: "h-1", filename: "q3 figures.csv" });
+    // The handle travels in a header, so the server checks it before reading the bytes.
+    expect(calls[1].body).toMatchObject({ form: true, token: null, filename: "q3 figures.csv" });
     expect(calls[1].body.bytes.equals(bytes)).toBe(true);
     expect(calls[1].init.headers.authorization).toBe("Bearer bridge-token-xyz");
+    expect(calls[1].init.headers["x-bridge-handle"]).toBe("h-1");
     expect(calls[2].body).toEqual({ token: "h-1" });
   });
 

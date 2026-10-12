@@ -15,7 +15,7 @@ import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js"
 import { stewardWorkService } from "../services/steward-work.js";
 import { stewardWorkReplyService } from "../services/steward-work-reply.js";
 import { stewardRequestsService } from "../services/steward-requests.js";
-import { bridgeStagedFilesService } from "../services/bridge-staged-files.js";
+import { BRIDGE_HANDLE_HEADER, bridgeStagedFilesService } from "../services/bridge-staged-files.js";
 import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -478,42 +478,56 @@ export function bridgeRoutes(
 
   /**
    * One file for a send-back or a request, after the person's yes and before
-   * the confirm (co-worker slice 5). Multipart: `token` (the handle from
-   * work/propose or work/request) and `file`. Stored only when the handle
-   * names this file's exact sha256 and size; at most the company attachment
-   * cap. Nothing is attached until the handle is confirmed, and what is never
-   * confirmed is swept after the handle expires. Refusals answer 200
-   * `{ ok: false, code, reason }`.
+   * the confirm (co-worker slice 5). The handle from work/propose or
+   * work/request goes in the `X-Bridge-Handle` header, and the multipart body
+   * carries `file`. The handle is checked before any bytes are read, and the
+   * body may be no larger than the largest file the handle names (never more
+   * than the company attachment cap). Stored only when the handle names this
+   * file's exact sha256 and size. Nothing is attached until the handle is
+   * confirmed, and what is never confirmed is swept after the handle expires.
+   * Refusals answer 200 `{ ok: false, code, reason }`.
    */
   router.post("/bridge/work/upload", async (req, res) => {
-    const { endpointId, companyId } = requireEndpoint(req);
+    const { endpointId } = requireEndpoint(req);
     await bridge.touchEndpoint(endpointId);
-    // The gates first (bridge:work, the flag, membership), before any bytes are read.
+    const token = req.get(BRIDGE_HANDLE_HEADER);
+    if (!token) throw badRequest(`the ${BRIDGE_HANDLE_HEADER} header is required`);
+    // The gates first (bridge:work, the flag, membership, a live handle), before any bytes are read.
     const gate = await work.resolveOwner(endpointId);
     if (work.isRefusal(gate)) {
       res.json(gate);
       return;
     }
-    const cap = await stagedFiles.companyCap(companyId);
+    const limit = await stagedFiles.uploadLimit(endpointId, gate, token);
+    if (!limit.ok) {
+      res.json(limit);
+      return;
+    }
     let file: { buffer: Buffer } | null;
     try {
-      file = await singleFile(req, res, cap);
+      file = await singleFile(req, res, limit.maxBytes);
     } catch (err) {
       if (err instanceof multer.MulterError) {
         res.json(
-          err.code === "LIMIT_FILE_SIZE"
-            ? {
-                ok: false,
-                code: "file_too_large",
-                reason: `The file is over this company's attachment cap of ${cap.toLocaleString("en-US")} bytes. Nothing was stored.`,
-              }
-            : { ok: false, code: "bad_upload", reason: `The upload could not be read (${err.code}). Nothing was stored.` },
+          err.code !== "LIMIT_FILE_SIZE"
+            ? { ok: false, code: "bad_upload", reason: `The upload could not be read (${err.code}). Nothing was stored.` }
+            : limit.maxBytes < limit.cap
+              ? {
+                  ok: false,
+                  code: "file_not_in_handle",
+                  reason: `The file is larger than any file the read-back named (${limit.maxBytes.toLocaleString("en-US")} bytes at most). Only the exact files the person said yes to can be sent; if a file changed, propose again. Nothing was stored.`,
+                }
+              : {
+                  ok: false,
+                  code: "file_too_large",
+                  reason: `The file is over this company's attachment cap of ${limit.cap.toLocaleString("en-US")} bytes. Nothing was stored.`,
+                },
         );
         return;
       }
       throw err;
     }
-    res.json(await stagedFiles.stage(endpointId, { token: req.body?.token, file }));
+    res.json(await stagedFiles.stage(endpointId, { token, file }));
   });
 
   // -------------------------------------------------------------------------

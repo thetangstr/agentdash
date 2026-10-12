@@ -23,6 +23,8 @@ import {
   filesLeftOutReason,
   filesNotUploadedRefusal,
   missingUploads,
+  plannedVersions,
+  StagedFileRefusal,
   storedNameFor,
   validateBridgeFiles,
   type StagedFileSpec,
@@ -547,7 +549,9 @@ export function stewardRequestsService(
     });
 
     // D2: files go with the request only into a restricted project.
-    const files: StagedFileSpec[] = project?.restricted ? checkedFiles.files : [];
+    // A new issue has no files yet, so each name starts at v1 (a second file of
+    // the same name in this request is v2); the handle binds those versions.
+    const files: StagedFileSpec[] = project?.restricted ? plannedVersions(checkedFiles.files, new Map()) : [];
     const filesLeftOut =
       checkedFiles.files.length > 0 && !project?.restricted
         ? filesLeftOutReason(
@@ -599,7 +603,7 @@ export function stewardRequestsService(
         ...(forWhom ? [`For: ${forWhom}`] : []),
         ...(project ? [`Project: ${project.name}`] : []),
         // A new issue: every file is version 1 of its name, credited to the requester.
-        ...files.map((file) => describeStagedFile(file, storedNameFor(file, 1, requesterName ?? "requester"))),
+        ...files.map((file) => describeStagedFile(file, storedNameFor(file, file.version ?? 1, requesterName ?? "requester"))),
         `Goes to: ${goesTo}`,
         `Sent as you. ${visibility}`,
       ],
@@ -945,7 +949,7 @@ export function stewardRequestsService(
         return { issue, attached };
       });
     } catch (err) {
-      if (err instanceof RequestRefused) return workRefusal(err.code, err.message);
+      if (err instanceof RequestRefused || err instanceof StagedFileRefusal) return workRefusal(err.code, err.message);
       throw err;
     }
     for (const publication of publications) publishActivity(publication);

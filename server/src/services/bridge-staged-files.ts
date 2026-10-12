@@ -20,8 +20,11 @@ import { downloadVerdict, effectiveFileName, stewardWorkService, type WorkRefusa
  *      derives the type from the name, refuses markup (D6), types off the
  *      allowlist and anything over the company's attachment cap, and puts
  *      the exact list in the single-use handle the person says yes to.
- *   2. **upload** (`POST /api/bridge/work/upload`, multipart) carries one
- *      file against that live handle. The server hashes the bytes and stores
+ *   2. **upload** (`POST /api/bridge/work/upload`, multipart, the handle in
+ *      the `X-Bridge-Handle` header) carries one file against that live
+ *      handle. The handle is checked before any bytes are read, and the
+ *      upload may be no larger than the largest file it names. The server
+ *      hashes the bytes and stores
  *      them only when the handle names that sha256 and size; the object goes
  *      under the company's `bridge-staged` namespace, and a
  *      `bridge_staged_files` row records it.
@@ -46,6 +49,9 @@ export const BRIDGE_FILE_LIMITS = {
 /** Handle kinds a file may be staged against. */
 export const FILE_HANDLE_KINDS = ["reply", "request_work"] as const;
 
+/** The header an upload carries its handle in, so the handle is checked before the body is read. */
+export const BRIDGE_HANDLE_HEADER = "X-Bridge-Handle";
+
 /** Unattached rows older than their expiry by this much are swept. */
 export const STAGED_SWEEP_GRACE_MS = 5 * 60 * 1000;
 
@@ -55,7 +61,40 @@ export type StagedFileSpec = {
   sha256: string;
   size: number;
   contentType: string;
+  /**
+   * The version the read-back said the file would be stored as. The confirm
+   * refuses (`version_moved_on`) when it would be stored as another.
+   */
+  version?: number;
 };
+
+/**
+ * A refusal raised while attaching staged files, inside the caller's
+ * transaction, which it rolls back. Callers turn it into their own refusal.
+ */
+export class StagedFileRefusal extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The version each file will be stored as, in read-back order: the next
+ * version of its name on the issue, counting files of the same name earlier
+ * in the same list.
+ */
+export function plannedVersions(files: StagedFileSpec[], next: Map<string, number>): StagedFileSpec[] {
+  const taken = new Map<string, number>();
+  return files.map((file) => {
+    const base = splitVersionedName(file.name).baseKey;
+    const version = (taken.get(base) ?? next.get(base) ?? 1);
+    taken.set(base, version + 1);
+    return { ...file, version };
+  });
+}
 
 function refusal(code: string, reason: string): WorkRefusal {
   return { ok: false, code, reason };
@@ -167,6 +206,32 @@ export function bridgeStagedFilesService(db: Db, options: { storage?: StorageSer
       .then((rows) => rows[0] ?? null);
   }
 
+  const HANDLE_NOT_VALID =
+    "That handle was already used, has expired, or belongs to another machine. Nothing was stored; propose again.";
+
+  /**
+   * Before any bytes are read: the handle must be live and this machine's,
+   * and the upload may be no larger than the largest file it names (never
+   * more than the company cap). So a request without a live handle buffers
+   * nothing, and one with a handle buffers no more than the person said yes to.
+   */
+  async function uploadLimit(
+    endpointId: string,
+    owner: { companyId: string; userId: string },
+    rawToken: unknown,
+  ): Promise<WorkRefusal | { ok: true; maxBytes: number; cap: number }> {
+    const token = typeof rawToken === "string" ? rawToken.trim() : "";
+    const handle = token ? await liveHandle(endpointId, owner, token) : null;
+    if (!handle) return refusal("handle_not_valid", HANDLE_NOT_VALID);
+    const files = ((handle.payload as { files?: StagedFileSpec[] }).files ?? []) as StagedFileSpec[];
+    if (files.length === 0) {
+      return refusal("no_files_named", "That handle's read-back named no files, so there is nothing to upload. Nothing was stored.");
+    }
+    const cap = await companyCap(owner.companyId);
+    const largest = Math.max(...files.map((file) => file.size));
+    return { ok: true, maxBytes: Math.min(largest, cap), cap };
+  }
+
   /**
    * Store one uploaded file against a live handle, when the handle names its
    * exact sha256 and size. Uploading the same file twice is not an error.
@@ -179,12 +244,7 @@ export function bridgeStagedFilesService(db: Db, options: { storage?: StorageSer
     if (work.isRefusal(owner)) return owner;
     const token = typeof input.token === "string" ? input.token.trim() : "";
     const handle = token ? await liveHandle(endpointId, owner, token) : null;
-    if (!handle) {
-      return refusal(
-        "handle_not_valid",
-        "That handle was already used, has expired, or belongs to another machine. Nothing was stored; propose again.",
-      );
-    }
+    if (!handle) return refusal("handle_not_valid", HANDLE_NOT_VALID);
     if (!input.file || input.file.buffer.length === 0) return refusal("no_file", "No file arrived. Nothing was stored.");
     const bytes = input.file.buffer;
     const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -244,7 +304,7 @@ export function bridgeStagedFilesService(db: Db, options: { storage?: StorageSer
     return { ok: true, name: spec.name, sha256, bytes: bytes.length, alreadyStaged: false };
   }
 
-  return { stage, companyCap };
+  return { stage, uploadLimit, companyCap };
 }
 
 /** The names of the files a handle names that have not been uploaded yet. */
@@ -309,6 +369,13 @@ export async function attachStagedFiles(
       createdByUserId: input.userId,
       versionAuthor: input.personName,
     });
+    if (spec.version !== undefined && attachment.version !== spec.version) {
+      throw new StagedFileRefusal(
+        "version_moved_on",
+        `"${spec.name}" would now be stored as version ${attachment.version}, not version ${spec.version} as read back: ` +
+          "another file of that name was added since. Nothing was sent; propose again for a fresh read-back.",
+      );
+    }
     await tx
       .update(bridgeStagedFiles)
       .set({ attachedAt: new Date(), attachmentId: attachment.id })

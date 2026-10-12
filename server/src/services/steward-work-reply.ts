@@ -62,6 +62,8 @@ import {
   filesLeftOutReason,
   filesNotUploadedRefusal,
   missingUploads,
+  plannedVersions,
+  StagedFileRefusal,
   storedNameFor,
   validateBridgeFiles,
   type StagedFileSpec,
@@ -443,15 +445,16 @@ export function stewardWorkReplyService(
 
     // -- files -----------------------------------------------------------------
     if (checkedFiles.files.length > 0 && !filesLeftOut) {
-      stored.files = checkedFiles.files;
       const personName = await personDisplayName(db, owner.userId, FILE_AUTHOR_FALLBACK);
       const next = await nextVersionsFor(
         db,
         issue.id,
         checkedFiles.files.map((file) => splitVersionedName(file.name).baseKey),
       );
-      for (const file of checkedFiles.files) {
-        readback.push(describeStagedFile(file, storedNameFor(file, next.get(splitVersionedName(file.name).baseKey) ?? 1, personName)));
+      // The handle binds the version read back; the confirm refuses if it moved on.
+      stored.files = plannedVersions(checkedFiles.files, next);
+      for (const file of stored.files) {
+        readback.push(describeStagedFile(file, storedNameFor(file, file.version ?? 1, personName)));
       }
     }
 
@@ -1031,7 +1034,7 @@ export function stewardWorkReplyService(
         };
       });
     } catch (err) {
-      if (err instanceof ReplyRefused) {
+      if (err instanceof ReplyRefused || err instanceof StagedFileRefusal) {
         logger.info({ endpointId, code: err.code }, "bridge send-back refused");
         return refusal(err.code, err.message);
       }

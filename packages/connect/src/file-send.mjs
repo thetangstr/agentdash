@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { createReadStream, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -29,6 +29,30 @@ import { fetchBodyTimeoutMs, isMarkupFileName } from "./work-tools.mjs";
 
 export const MAX_FILES = 10;
 
+/**
+ * The largest file sent from here, checked from its size before any of it
+ * is read. The server's own cap (the company attachment cap) is usually far
+ * lower and is the one that decides; this only keeps a stray multi-GB path
+ * from being read at all.
+ */
+export const MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+/** The sha256 and length of a file, read as a stream. */
+async function hashFile(filePath) {
+  const hash = createHash("sha256");
+  let size = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+    size += chunk.length;
+  }
+  return { sha256: hash.digest("hex"), size };
+}
+
+function tooLargeReason(name, size) {
+  const mb = (bytes) => `${Math.round(bytes / (1024 * 1024))} MB`;
+  return `${name} is ${mb(size)}; files over ${mb(MAX_FILE_BYTES)} are not sent from here.`;
+}
+
 function refusal(code, reason) {
   return { ok: false, code, reason, note: "Nothing was proposed and nothing was sent." };
 }
@@ -52,8 +76,9 @@ function hasHiddenSegment(absolutePath) {
 /**
  * Read and hash the files a propose call names. Returns
  * `{ ok: true, files: [{ path, name, size, sha256 }] }` or a refusal.
+ * A file over MAX_FILE_BYTES is refused from its size, before it is read.
  */
-export function readLocalFiles(list, deps = {}) {
+export async function readLocalFiles(list, deps = {}) {
   if (list === undefined || list === null) return { ok: true, files: [] };
   if (!Array.isArray(list)) return refusal("invalid_files", "files must be a list of { path }.");
   if (list.length > MAX_FILES) return refusal("too_many_files", `Send at most ${MAX_FILES} files at once.`);
@@ -93,14 +118,22 @@ export function readLocalFiles(list, deps = {}) {
       );
     }
     if (stat.size === 0) return refusal("empty_file", `${resolved} is empty.`);
+    const maxBytes = deps.maxFileBytes ?? MAX_FILE_BYTES;
+    if (stat.size > maxBytes) return refusal("file_too_large", tooLargeReason(resolved, stat.size));
     const name = path.basename(resolved);
     if (isMarkupFileName(name)) {
       return refusal("file_refused", `${name}: HTML, SVG and XML files are not sent over the bridge: they can carry script.`);
     }
     if (seen.has(resolved)) return refusal("duplicate_file", `${resolved} is in the list twice.`);
     seen.add(resolved);
-    const bytes = readFileSync(resolved);
-    files.push({ path: resolved, name, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+    let hashed;
+    try {
+      hashed = await hashFile(resolved);
+    } catch (err) {
+      return refusal("not_found", `${resolved} could not be read (${err?.message ?? String(err)}).`);
+    }
+    if (hashed.size > maxBytes) return refusal("file_too_large", tooLargeReason(resolved, hashed.size));
+    files.push({ path: resolved, name, size: hashed.size, sha256: hashed.sha256 });
   }
   return { ok: true, files };
 }
@@ -137,6 +170,16 @@ export function localFilesNote(response, files) {
   };
 }
 
+class FileChanged extends Error {}
+
+function fileChangedResult(file) {
+  return {
+    ok: false,
+    code: "file_changed",
+    reason: `${file.path} changed since the read-back. Nothing was sent; propose again so the person sees the file as it is now.`,
+  };
+}
+
 /**
  * Upload the files a handle named, after the person's yes and before the
  * confirm. Each is read again and must still be the file that was read
@@ -149,8 +192,12 @@ export async function uploadStaged({ staged, handle, fetchImpl, server, token, t
   for (const file of files) {
     let bytes;
     try {
+      // A file that grew since the read-back is refused from its size, before it is read.
+      if (statSync(file.path).size !== file.size) throw new FileChanged();
       bytes = readFileSync(file.path);
     } catch (err) {
+      if (err instanceof FileChanged) return textResult(fileChangedResult(file));
+
       return textResult({
         ok: false,
         code: "file_gone",
@@ -158,15 +205,8 @@ export async function uploadStaged({ staged, handle, fetchImpl, server, token, t
       });
     }
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    if (sha256 !== file.sha256 || bytes.length !== file.size) {
-      return textResult({
-        ok: false,
-        code: "file_changed",
-        reason: `${file.path} changed since the read-back. Nothing was sent; propose again so the person sees the file as it is now.`,
-      });
-    }
+    if (sha256 !== file.sha256 || bytes.length !== file.size) return textResult(fileChangedResult(file));
     const form = new FormData();
-    form.append("token", handle);
     form.append("file", new Blob([bytes]), file.name);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("upload timed out")), fetchBodyTimeoutMs(bytes.length));
@@ -175,7 +215,8 @@ export async function uploadStaged({ staged, handle, fetchImpl, server, token, t
     try {
       const res = await fetchImpl(`${server}/api/bridge/work/upload`, {
         method: "POST",
-        headers: { authorization: `Bearer ${token}` },
+        // The handle goes in a header, so the server checks it before reading the body.
+        headers: { authorization: `Bearer ${token}`, "x-bridge-handle": handle },
         body: form,
         signal: controller.signal,
       });

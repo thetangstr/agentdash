@@ -101,8 +101,8 @@ export const REPLY_TOOLS = [
       required: ["issueId"],
     },
     // Read and hash the local files; the propose call carries names and hashes only.
-    prepare: (input, ctx) => {
-      const local = readLocalFiles(input.files);
+    prepare: async (input, ctx) => {
+      const local = await readLocalFiles(input.files);
       if (!local.ok) return { result: ctx.textResult(local) };
       return { files: local.files, body: replyBody(input, local.files) };
     },
