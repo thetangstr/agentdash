@@ -64,6 +64,16 @@ import {
   type WorkRefusal,
 } from "./steward-work.js";
 
+/** A refusal raised inside the request confirm's transaction, which rolls it back. */
+class RequestRefused extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /**
  * AgentDash-MK: the person's own Claude asks someone else for work, and closes
  * it out when the result comes back (co-worker slice 4).
@@ -856,36 +866,63 @@ export function stewardRequestsService(
     }
 
     const channel = channelOf(owner);
-    const issue = await issueService(db).create(owner.companyId, {
-      title,
-      description,
-      status: "todo",
-      projectId,
-      assigneeAgentId: routed?.toAgentId ?? null,
-      assigneeUserId: routed ? null : assigneeUserId,
-      createdByUserId: owner.userId,
-      createdByAgentId: null,
-    });
-    await issueReferenceService(db)
-      .syncIssue(issue.id)
-      .catch((err: unknown) => logger.warn({ err, issueId: issue.id }, "bridge request references not synced"));
-    // The files the read-back named, as the requester, before the agent is woken.
-    let attachedFiles: Array<{ attachmentId: string; name: string | null }> = [];
-    if (files.length > 0) {
-      const requesterName = (await userNames([owner.userId])).get(owner.userId) ?? "requester";
-      const publications: ActivityPublication[] = [];
-      const attached = await db.transaction(async (txRaw) => {
+    // The issue and its files commit together: a file that cannot be attached
+    // leaves no issue behind. The cap and the uploads are checked again here,
+    // as the send-back's confirm does, because either may have moved since.
+    const requesterName =
+      files.length > 0 ? (await userNames([owner.userId])).get(owner.userId) ?? "requester" : null;
+    const publications: ActivityPublication[] = [];
+    let created: { issue: Awaited<ReturnType<ReturnType<typeof issueService>["create"]>>; attached: Awaited<ReturnType<typeof attachStagedFiles>> };
+    try {
+      created = await db.transaction(async (txRaw) => {
         const tx = txRaw as unknown as Db;
-        const rows = await attachStagedFiles(tx, {
+        if (files.length > 0) {
+          const cap = await tx
+            .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
+            .from(companies)
+            .where(eq(companies.id, owner.companyId))
+            .then((rows) => normalizeIssueAttachmentMaxBytes(rows[0]?.attachmentMaxBytes));
+          const over = files.find((file) => file.size > cap);
+          if (over) {
+            throw new RequestRefused(
+              "file_too_large",
+              `"${over.name}" is ${over.size.toLocaleString("en-US")} bytes; the cap for this company is now ${cap.toLocaleString("en-US")} bytes. Nothing was sent; propose it again without that file.`,
+            );
+          }
+          const missing = await missingUploads(tx, handleId, files);
+          if (missing.length > 0) {
+            throw new RequestRefused(
+              "files_not_uploaded",
+              `${missing.map((name) => `"${name}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} no longer staged for this request. Nothing was sent; propose it again.`,
+            );
+          }
+        }
+        const issue = await issueService(db).create(
+          owner.companyId,
+          {
+            title,
+            description,
+            status: "todo",
+            projectId,
+            assigneeAgentId: routed?.toAgentId ?? null,
+            assigneeUserId: routed ? null : assigneeUserId,
+            createdByUserId: owner.userId,
+            createdByAgentId: null,
+          },
+          { executor: tx, publications },
+        );
+        if (files.length === 0) return { issue, attached: [] };
+        // The files the read-back named, as the requester, before the agent is woken.
+        const attached = await attachStagedFiles(tx, {
           companyId: owner.companyId,
           issueId: issue.id,
           handleId,
           files,
           userId: owner.userId,
-          personName: requesterName,
+          personName: requesterName ?? "requester",
           issueCommentId: null,
         });
-        for (const attachment of rows) {
+        for (const attachment of attached) {
           publications.push(
             await insertActivity(tx, {
               companyId: owner.companyId,
@@ -900,16 +937,26 @@ export function stewardRequestsService(
                 contentType: attachment.contentType,
                 byteSize: attachment.byteSize,
                 version: attachment.version,
-                ...channelOf(owner),
+                ...channel,
               },
             }),
           );
         }
-        return rows;
+        return { issue, attached };
       });
-      for (const publication of publications) publishActivity(publication);
-      attachedFiles = attached.map((attachment) => ({ attachmentId: attachment.id, name: attachment.originalFilename }));
+    } catch (err) {
+      if (err instanceof RequestRefused) return workRefusal(err.code, err.message);
+      throw err;
     }
+    for (const publication of publications) publishActivity(publication);
+    const { issue } = created;
+    const attachedFiles = created.attached.map((attachment) => ({
+      attachmentId: attachment.id,
+      name: attachment.originalFilename,
+    }));
+    await issueReferenceService(db)
+      .syncIssue(issue.id)
+      .catch((err: unknown) => logger.warn({ err, issueId: issue.id }, "bridge request references not synced"));
     await logActivity(db, {
       companyId: owner.companyId,
       actorType: "user",

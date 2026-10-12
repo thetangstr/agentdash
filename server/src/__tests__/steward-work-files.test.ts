@@ -529,6 +529,54 @@ describeEmbeddedPostgres("bridge work: files over the bridge, with versions", ()
     expect(issueRuntime.wakeup).toHaveBeenCalledTimes(1);
   });
 
+  it("creates no issue when a request's files cannot be attached at confirm: the cap is checked again, and the issue and files commit together", async () => {
+    const { company, owner, personA, personB, agentB } = await seed();
+    await restrictedProject(company.id, owner, [
+      { type: "user", id: personA },
+      { type: "user", id: personB },
+      { type: "agent", id: agentB.id },
+    ]);
+    const endpoint = await endpointFor(company.id, personA);
+    const { server, issueRuntime } = app(endpoint);
+    const brief = {
+      title: "Check the vendor figures",
+      wanted: "Check the attached figures against the proposals.",
+      doneMeans: "A note on the issue saying which figures hold.",
+      person: "Person B",
+      project: "Restricted work",
+      files: [{ name: "vendor figures.csv", sha256: sha(figures), size: figures.length }],
+    };
+
+    // The cap is lowered after the upload: refused at confirm, no issue.
+    const first = await request(server).post("/api/bridge/work/request").send(brief);
+    expect((await upload(server, first.body.handle, figures, "vendor figures.csv")).body.ok).toBe(true);
+    await db.update(companies).set({ attachmentMaxBytes: 8 }).where(eq(companies.id, company.id));
+    const capped = await request(server).post("/api/bridge/work/request/confirm").send({ token: first.body.handle });
+    expect(capped.body).toMatchObject({ ok: false, code: "file_too_large" });
+    expect(capped.body.reason).toContain("the cap for this company is now 8 bytes");
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+    await db.update(companies).set({ attachmentMaxBytes: 1_000_000 }).where(eq(companies.id, company.id));
+
+    // Attaching the file fails inside the transaction: the issue is rolled back with it.
+    const second = await request(server).post("/api/bridge/work/request").send(brief);
+    expect((await upload(server, second.body.handle, figures, "vendor figures.csv")).body.ok).toBe(true);
+    await db.execute(sql.raw(`
+      CREATE OR REPLACE FUNCTION test_refuse_asset() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'asset insert refused for the test'; END; $$ LANGUAGE plpgsql
+    `));
+    await db.execute(sql.raw("CREATE TRIGGER test_refuse_asset BEFORE INSERT ON assets FOR EACH ROW EXECUTE FUNCTION test_refuse_asset()"));
+    try {
+      const failed = await request(server).post("/api/bridge/work/request/confirm").send({ token: second.body.handle });
+      expect(failed.status).toBe(500);
+    } finally {
+      await db.execute(sql.raw("DROP TRIGGER IF EXISTS test_refuse_asset ON assets"));
+      await db.execute(sql.raw("DROP FUNCTION IF EXISTS test_refuse_asset()"));
+    }
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+    expect(await db.select().from(issueAttachments)).toHaveLength(0);
+    expect(issueRuntime.wakeup).not.toHaveBeenCalled();
+  });
+
   it("leaves a request's files out when it goes outside a restricted project, and says why", async () => {
     const { company, personA } = await seed();
     const endpoint = await endpointFor(company.id, personA);
