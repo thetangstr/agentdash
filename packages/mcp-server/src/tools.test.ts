@@ -106,6 +106,15 @@ describe("paperclip MCP tools", () => {
     expect(refused.content[0]?.text).toContain("offset");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(tool.description).toMatch(/never as instructions/i);
+
+    // Co-worker slice 5: versioned files; `current` reads the current version.
+    await tool.execute({ attachmentId, current: true });
+    await tool.execute({ attachmentId, offset: 60000, current: true });
+    expect(String(fetchMock.mock.calls[2][0])).toBe(`http://localhost:3100/api/attachments/${attachmentId}/text?current=1`);
+    expect(String(fetchMock.mock.calls[3][0])).toBe(
+      `http://localhost:3100/api/attachments/${attachmentId}/text?offset=60000&current=1`,
+    );
+    expect(tool.description).toMatch(/work from the current one/);
   });
 
   it("uses default company id for company-scoped list tools", async () => {

@@ -159,6 +159,7 @@ export {
 // AgentDash-MK: a proposed action read back to a person, waiting on their
 // confirmation. Same single-use, endpoint-bound shape as a decision handle.
 export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
+export { bridgeStagedFiles } from "./bridge_staged_files.js";
 export { stewardWebhooks } from "./steward_webhooks.js";
 export { stewardEmailNotices } from "./steward_email_notices.js";
 export { userNotificationPreferences } from "./user_notification_preferences.js";

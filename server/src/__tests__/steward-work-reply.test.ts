@@ -50,7 +50,8 @@ import { truncateWithRetry } from "./helpers/truncate.js";
  *   transaction as the person, every activity row carrying
  *   `channel: "bridge_work"` and the same `replyId`, and wakes the agent once;
  * - a stale document refuses the whole bundle; a spent handle refuses;
- * - files are refused until file send-back exists;
+ * - files are left out of a bundle on an issue outside a restricted project
+ *   (the file send-back itself is in steward-work-files.test.ts);
  * - the gates of the reads hold here too (bridge:work, the company flag,
  *   404 for an issue off the person's page);
  * - the send-back leaves a "what changed" correction, and the agent's next
@@ -331,15 +332,17 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     expect(interaction[0]!.status).toBe("pending");
   });
 
-  it("refuses files, an empty bundle, and a document built on an old revision, minting no handle", async () => {
+  it("refuses a files-only bundle outside a restricted project, an empty bundle, and a document built on an old revision, minting no handle", async () => {
     const { issue, draft, question, endpoint } = await handoff();
     const { server } = app(endpoint);
 
-    const withFiles = await request(server)
+    // D2: the issue is in no restricted project, so the files are left out,
+    // and with nothing else in the bundle there is nothing to send.
+    const onlyFiles = await request(server)
       .post("/api/bridge/work/propose")
-      .send({ issueId: issue.id, comment: "see attached", files: [{ name: "a.csv", sha256: "0".repeat(64), size: 10 }] });
-    expect(withFiles.body).toMatchObject({ ok: false, code: "files_not_supported_yet" });
-    expect(withFiles.body.reason).toContain("restricted access");
+      .send({ issueId: issue.id, files: [{ name: "a.csv", sha256: "0".repeat(64), size: 10 }] });
+    expect(onlyFiles.body).toMatchObject({ ok: false, code: "empty_reply" });
+    expect(onlyFiles.body.reason).toContain("restricted access");
 
     const empty = await request(server).post("/api/bridge/work/propose").send({ issueId: issue.id, lessons: ["Be brief."] });
     expect(empty.body).toMatchObject({ ok: false, code: "empty_reply" });

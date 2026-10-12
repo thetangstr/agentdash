@@ -420,7 +420,7 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
     expect(rt.wakeup).not.toHaveBeenCalled();
   });
 
-  it("asks rather than guesses, and refuses an incomplete brief, a bad date, files, or the requester themself", async () => {
+  it("asks rather than guesses, and refuses an incomplete brief, a bad date, a malformed file list, or the requester themself", async () => {
     const { company, personA } = await seed();
     const endpoint = await endpointFor(company.id, personA);
     const { server } = app(endpoint);
@@ -433,7 +433,7 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
 
     expect((await post({ ...brief, doneMeans: "" })).body).toMatchObject({ ok: false, code: "incomplete_brief" });
     expect((await post({ ...brief, deadline: "next Friday" })).body).toMatchObject({ ok: false, code: "bad_deadline" });
-    expect((await post({ ...brief, files: [{ name: "a.csv" }] })).body).toMatchObject({ ok: false, code: "files_not_supported_yet" });
+    expect((await post({ ...brief, files: [{ name: "a.csv" }] })).body).toMatchObject({ ok: false, code: "invalid_files" });
     expect((await post({ ...brief, person: "Person A" })).body).toMatchObject({ ok: false, code: "that_is_you" });
     expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
   });

@@ -54,6 +54,18 @@ import {
 } from "./steward-inbox.js";
 import { stewardWorkService, type WorkOwner, type WorkRefusal } from "./steward-work.js";
 import type { StorageService } from "../storage/types.js";
+import { normalizeIssueAttachmentMaxBytes } from "../attachment-types.js";
+import { nextVersionsFor, splitVersionedName } from "./attachment-versions.js";
+import {
+  attachStagedFiles,
+  describeStagedFile,
+  filesLeftOutReason,
+  filesNotUploadedRefusal,
+  missingUploads,
+  storedNameFor,
+  validateBridgeFiles,
+  type StagedFileSpec,
+} from "./bridge-staged-files.js";
 
 /**
  * AgentDash-MK: the person's own Claude as co-worker -- the send-back.
@@ -62,7 +74,12 @@ import type { StorageService } from "../storage/types.js";
  * work with them, this sends back what the person approved, as the person, in
  * one bundle: an answer to the agent's question, a decision on an approval, a
  * new revision of a document, a comment, and the lessons the person wants the
- * agent to keep. Files are reserved for a later slice and refused here.
+ * agent to keep, and files (co-worker slice 5: only on issues in projects
+ * with restricted access, D2; elsewhere the read-back leaves them out and
+ * says why). A file's bytes arrive between propose and confirm through
+ * `work/upload` against this handle (bridge-staged-files.ts); confirm
+ * refuses until every named file has arrived, then attaches them as the
+ * person, versioned with their name.
  *
  * The same two steps as every other inbox write, for the same reason: the
  * endpoint credential is never a write credential.
@@ -97,6 +114,8 @@ import type { StorageService } from "../storage/types.js";
  */
 
 export const STEWARD_WORK_REPLY_KIND = "reply";
+/** Who a sent file is credited to when the person has no name on record. */
+const FILE_AUTHOR_FALLBACK = "person";
 export const BRIDGE_WORK_CHANNEL = "bridge_work";
 
 /** Long enough to read a bundle back and decide; short enough to be worthless if it leaks. */
@@ -133,6 +152,8 @@ type StoredReply = {
   };
   comment?: string;
   lessons: string[];
+  /** Named by sha256 and size; the bytes are staged against this handle. */
+  files?: StagedFileSpec[];
 };
 
 export interface ReplyRequest {
@@ -233,15 +254,21 @@ export function stewardWorkReplyService(
     const issue = await work.findWorkIssue(owner, request.issueId);
     const ref = issue.identifier ?? issue.id;
 
-    if (request.files !== undefined && request.files !== null) {
-      if (!Array.isArray(request.files)) return refusal("invalid_files", "files must be a list.");
-      if (request.files.length > 0) {
-        return refusal(
-          "files_not_supported_yet",
-          "Files cannot be sent back through the bridge yet; nothing was proposed. Send the text now and attach the files on the AgentDash page, or wait for file send-back (it will work only on issues in projects with restricted access).",
-        );
-      }
-    }
+    // -- files: checked first, so a bad list proposes nothing ------------------
+    const companyCap = await db
+      .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
+      .from(companies)
+      .where(eq(companies.id, owner.companyId))
+      .then((rows) => normalizeIssueAttachmentMaxBytes(rows[0]?.attachmentMaxBytes));
+    const checkedFiles = validateBridgeFiles(request.files, companyCap);
+    if (!checkedFiles.ok) return checkedFiles;
+    const restricted = await projectIsRestricted(db, issue.projectId);
+    // D2: files travel only on issues in restricted projects; elsewhere they
+    // are left out and the read-back says why.
+    const filesLeftOut =
+      checkedFiles.files.length > 0 && !restricted
+        ? filesLeftOutReason(`${ref} is not in a project with restricted access`, checkedFiles.files)
+        : null;
 
     const stored: StoredReply = { issueId: issue.id, identifier: issue.identifier, lessons: [] };
     const readback: string[] = [];
@@ -414,10 +441,26 @@ export function stewardWorkReplyService(
       stored.lessons = normalizeLessons(given);
     }
 
-    if (!stored.answer && !stored.decision && !stored.document && !stored.comment) {
+    // -- files -----------------------------------------------------------------
+    if (checkedFiles.files.length > 0 && !filesLeftOut) {
+      stored.files = checkedFiles.files;
+      const personName = await personDisplayName(db, owner.userId, FILE_AUTHOR_FALLBACK);
+      const next = await nextVersionsFor(
+        db,
+        issue.id,
+        checkedFiles.files.map((file) => splitVersionedName(file.name).baseKey),
+      );
+      for (const file of checkedFiles.files) {
+        readback.push(describeStagedFile(file, storedNameFor(file, next.get(splitVersionedName(file.name).baseKey) ?? 1, personName)));
+      }
+    }
+
+    if (!stored.answer && !stored.decision && !stored.document && !stored.comment && !stored.files?.length) {
       return refusal(
         "empty_reply",
-        "Nothing to send: give an answer, a decision, a document revision or a comment (lessons go with one of those).",
+        filesLeftOut
+          ? `Nothing to send. ${filesLeftOut}`
+          : "Nothing to send: give an answer, a decision, a document revision, a comment or files (lessons go with one of those).",
       );
     }
 
@@ -430,6 +473,7 @@ export function stewardWorkReplyService(
       Boolean(issue.assigneeAgentId) &&
       (Boolean(stored.document) ||
         Boolean(stored.comment) ||
+        Boolean(stored.files?.length) ||
         answerWakes ||
         (Boolean(stored.decision) && decisionRequesterId === issue.assigneeAgentId));
     if (stored.lessons.length > 0) {
@@ -462,6 +506,15 @@ export function stewardWorkReplyService(
         ...readback.map((line) => (line.startsWith("  ") ? line : `  ${line}`)),
       ],
       audience: await audienceFor(issue),
+      ...(filesLeftOut ? { filesLeftOut } : {}),
+      ...(stored.files?.length
+        ? {
+            upload: {
+              files: stored.files.map((file) => ({ name: file.name, sha256: file.sha256, size: file.size })),
+              note: "After the person's yes, upload each named file with this handle (work/upload), then confirm. Nothing is attached until the confirm.",
+            },
+          }
+        : {}),
       wakes: describeWake({
         agentName,
         assigned: Boolean(issue.assigneeAgentId),
@@ -541,6 +594,12 @@ export function stewardWorkReplyService(
       }
     }
 
+    // Every file the read-back named must have arrived before anything is sent.
+    if (stored.files?.length) {
+      const missing = await missingUploads(db, record.id, stored.files);
+      if (missing.length > 0) return filesNotUploadedRefusal(missing);
+    }
+
     const personName = await personDisplayName(db, owner.userId, "Your steward");
     const endpointLabel = owner.endpoint.label;
     const provenance = {
@@ -569,6 +628,7 @@ export function stewardWorkReplyService(
       document: { id: string; key: string; latestRevisionId: string | null; latestRevisionNumber: number } | null;
       /** The decision as written in the transaction; its outside effects run after. */
       decision: { approval: typeof approvals.$inferSelect } | null;
+      files: Array<{ attachmentId: string; name: string | null; version: number | null }>;
     };
 
     let applied: Applied;
@@ -827,11 +887,69 @@ export function stewardWorkReplyService(
           decided = { approval: result.approval };
         }
 
+        // -- files: still a restricted project, still within the cap ----------
+        let attachedFiles: Applied["files"] = [];
+        if (stored.files?.length) {
+          if (!(await projectIsRestricted(tx, locked.projectId))) {
+            throw new ReplyRefused(
+              "files_not_allowed_now",
+              `${locked.identifier ?? "The issue"} is no longer in a project with restricted access, so its files cannot travel over the bridge. Nothing was sent; propose again without them.`,
+            );
+          }
+          const cap = await tx
+            .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
+            .from(companies)
+            .where(eq(companies.id, owner.companyId))
+            .then((rows) => normalizeIssueAttachmentMaxBytes(rows[0]?.attachmentMaxBytes));
+          const over = stored.files.find((file) => file.size > cap);
+          if (over) {
+            throw new ReplyRefused(
+              "file_too_large",
+              `"${over.name}" is ${over.size.toLocaleString("en-US")} bytes; the cap for this company is now ${cap.toLocaleString("en-US")} bytes. Nothing was sent.`,
+            );
+          }
+          const attached = await attachStagedFiles(tx, {
+            companyId: owner.companyId,
+            issueId: issue.id,
+            handleId: record.id,
+            files: stored.files,
+            userId: owner.userId,
+            // The same name the read-back showed the files stored under.
+            personName: await personDisplayName(tx, owner.userId, FILE_AUTHOR_FALLBACK),
+            issueCommentId: commentId,
+          });
+          for (const attachment of attached) {
+            publications.push(
+              await insertActivity(tx, {
+                companyId: owner.companyId,
+                actorType: "user",
+                actorId: owner.userId,
+                action: "issue.attachment_added",
+                entityType: "issue",
+                entityId: issue.id,
+                details: {
+                  attachmentId: attachment.id,
+                  originalFilename: attachment.originalFilename,
+                  contentType: attachment.contentType,
+                  byteSize: attachment.byteSize,
+                  version: attachment.version,
+                  ...provenance,
+                },
+              }),
+            );
+          }
+          attachedFiles = attached.map((attachment) => ({
+            attachmentId: attachment.id,
+            name: attachment.originalFilename,
+            version: attachment.version,
+          }));
+        }
+
         // -- what changed, for the agent's next wake --------------------------
         // A decision on its own leaves only its own correction (a rejection
         // records approval_rejected); lessons always go with one. Guarded: a
         // fault here is logged and never fails the person's send-back.
-        const onlyDecision = !stored.answer && !stored.document && !stored.comment;
+        const onlyDecision = !stored.answer && !stored.document && !stored.comment && attachedFiles.length === 0;
         if (agentId && !(onlyDecision && stored.lessons.length === 0)) {
           await recordAgentCorrectionGuarded(tx, owner.companyId, async () => ({
             companyId: owner.companyId,
@@ -855,12 +973,14 @@ export function stewardWorkReplyService(
               // by the decision path below; an approval is agreement.
               decision: null,
               comment: stored.comment ?? null,
+              files: attachedFiles.map((file) => ({ name: file.name ?? "file", version: file.version })),
             }),
             details: {
               lessons: stored.lessons,
               replyId: record.id,
               documentKey: stored.document?.key ?? null,
               answerDifferences,
+              attachmentIds: attachedFiles.map((file) => file.attachmentId),
             },
             sourceActorType: "user",
             sourceActorId: owner.userId,
@@ -884,8 +1004,10 @@ export function stewardWorkReplyService(
                 ...(stored.decision ? ["decision"] : []),
                 ...(stored.document ? ["document"] : []),
                 ...(stored.comment ? ["comment"] : []),
+                ...(attachedFiles.length > 0 ? ["files"] : []),
               ],
               lessonCount: stored.lessons.length,
+              attachmentIds: attachedFiles.map((file) => file.attachmentId),
               commentId,
               interactionId,
               documentKey: documentResult?.key ?? null,
@@ -905,6 +1027,7 @@ export function stewardWorkReplyService(
           answerWakes,
           document: documentResult,
           decision: decided,
+          files: attachedFiles,
         };
       });
     } catch (err) {
@@ -941,7 +1064,11 @@ export function stewardWorkReplyService(
     const decisionForAssignee = Boolean(applied.decision) && applied.decision!.approval.requestedByAgentId === assigneeId;
     const wakeAssignee =
       assigneeOpen &&
-      (Boolean(applied.document) || Boolean(applied.commentId) || applied.answerWakes || decisionForAssignee);
+      (Boolean(applied.document) ||
+        Boolean(applied.commentId) ||
+        applied.files.length > 0 ||
+        applied.answerWakes ||
+        decisionForAssignee);
 
     // The decision's effects outside the database, through the inbox's
     // decision path. The decision itself is committed: a fault here is
@@ -1012,6 +1139,7 @@ export function stewardWorkReplyService(
             ...(applied.commentId ? { commentId: applied.commentId, wakeCommentId: applied.commentId } : {}),
             ...(applied.interactionId ? { interactionId: applied.interactionId } : {}),
             ...(applied.document ? { documentKey: applied.document.key } : {}),
+            ...(applied.files.length > 0 ? { attachmentIds: applied.files.map((file) => file.attachmentId) } : {}),
             ...(decisionInWake
               ? {
                   approvalId: decisionInWake.approvalId,
@@ -1067,6 +1195,7 @@ export function stewardWorkReplyService(
           : {}),
         ...(applied.commentId ? { comment: { commentId: applied.commentId } } : {}),
         ...(stored.lessons.length > 0 ? { lessons: stored.lessons.length } : {}),
+        ...(applied.files.length > 0 ? { files: applied.files } : {}),
         ...(applied.decision && stored.decision ? { decision: stored.decision.decision } : {}),
       },
       agentWoken,
@@ -1121,6 +1250,17 @@ function describeAnswer(payload: StoredQuestionPayload, body: RespondIssueThread
   const summary = (body as { summaryMarkdown?: string | null }).summaryMarkdown;
   if (summary?.trim()) lines.push(`answer note "${summary.trim()}"`);
   return lines;
+}
+
+/** Is this project one with restricted access (where files may travel, D2)? */
+async function projectIsRestricted(reader: Pick<Db, "select">, projectId: string | null): Promise<boolean> {
+  if (!projectId) return false;
+  const row = await reader
+    .select({ visibility: projects.visibility })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .then((rows) => rows[0] ?? null);
+  return row?.visibility === "restricted";
 }
 
 /** The latest revision of one document on an issue, or null. */

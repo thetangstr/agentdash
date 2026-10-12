@@ -19,6 +19,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
+import { attachmentVersionMarker } from "../lib/attachment-version";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, buildMarkdownMentionOptions } from "../lib/company-members";
 import { stewardedRoutingNotice } from "../lib/stewarded-routing-notice";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
@@ -1113,6 +1114,24 @@ function IssueDetailActivityTab({
       )}
       <IssueContinuationHandoff document={continuationHandoff} focusSignal={handoffFocusSignal} />
     </>
+  );
+}
+
+/** "current" or "older version" beside a versioned file's name (co-worker slice 5). */
+function AttachmentVersionTag({ attachment }: { attachment: IssueAttachment }) {
+  const marker = attachmentVersionMarker(attachment);
+  if (!marker) return null;
+  return (
+    <span
+      title={marker.title}
+      className={
+        marker.current
+          ? "ml-1.5 rounded border border-border px-1 text-[10px] text-foreground"
+          : "ml-1.5 rounded border border-border px-1 text-[10px] text-muted-foreground"
+      }
+    >
+      {marker.text}
+    </span>
   );
 }
 
@@ -3856,6 +3875,7 @@ export function IssueDetail() {
                     title={attachment.originalFilename ?? attachment.id}
                   >
                     {attachment.originalFilename ?? attachment.id}
+                    <AttachmentVersionTag attachment={attachment} />
                   </a>
                   <button
                     type="button"

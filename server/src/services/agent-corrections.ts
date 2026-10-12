@@ -273,6 +273,8 @@ export function sendBackSummary(input: {
   answeredWithRecommendation?: boolean;
   decision?: { decision: "approved" | "rejected"; title: string | null } | null;
   comment?: string | null;
+  /** Files they sent with it, by the versioned name each was stored under. */
+  files?: Array<{ name: string; version: number | null }>;
 }): string {
   const lines = [
     `${input.personName} reviewed your work${onIssue(input.identifier)} in their own Claude session${
@@ -301,6 +303,13 @@ export function sendBackSummary(input: {
     );
   }
   if (input.comment?.trim()) lines.push(`Their comment: "${quoteLine(input.comment)}"`);
+  for (const file of input.files ?? []) {
+    lines.push(
+      file.version !== null && file.version > 1
+        ? `File: they sent "${quoteLine(file.name, 200)}", now the current version of that file; work from it, not from an earlier version.`
+        : `File: they sent "${quoteLine(file.name, 200)}".`,
+    );
+  }
   return cap(lines.join("\n"));
 }
 

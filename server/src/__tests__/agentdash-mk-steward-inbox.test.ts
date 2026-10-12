@@ -146,6 +146,8 @@ describe("steward inbox caller existence", () => {
         // The send-back: propose reads back and mints a handle; confirm spends it.
         "/api/bridge/work/propose",
         "/api/bridge/work/confirm",
+        // Bytes for a send-back or a request, stored only against a live handle naming them.
+        "/api/bridge/work/upload",
         "/api/bridge/work/request",
         "/api/bridge/work/request/respond",
         "/api/bridge/work/request/confirm",

@@ -1161,6 +1161,14 @@ export async function startServer(): Promise<StartedServer> {
     setInterval(sweepHandles, 60 * 60 * 1000).unref?.();
   }
 
+  // AgentDash (co-worker slice 5): files a person's session uploaded for a
+  // send-back or a request that was never confirmed are deleted after the
+  // handle expires. Every ten minutes; a quiet instance has no rows to read.
+  {
+    const { startBridgeStagedFileSweep } = await import("./services/bridge-staged-files.js");
+    startBridgeStagedFileSweep(db as any, storageService);
+  }
+
   // AgentDash (document access, slice 6b): run events and run-log files of
   // agents in companies with document_access_enabled are purged after
   // AGENTDASH_DOCUMENT_RUN_RETENTION_DAYS (default 30). Hourly, like the

@@ -568,4 +568,48 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
     const short = await readText(asAgent(AGENT), ids.csv!);
     expect(short.body.textLimit).toBeNull();
   });
+
+  // Co-worker slice 5: files an agent attaches are versioned per name, and
+  // the text route says which version is current and reads it on request.
+  it("versions an agent's uploads per name, leaves a person's alone, and points a read of an old version at the current one", async () => {
+    const putFile = storage.putFile as unknown as ReturnType<typeof vi.fn>;
+    putFile.mockImplementation(async (input: { companyId: string; namespace: string; originalFilename: string | null; contentType: string; body: Buffer }) => {
+      const objectKey = `${input.companyId}/${input.namespace}/${randomUUID()}-${input.originalFilename ?? "file"}`;
+      objects.set(objectKey, input.body);
+      return {
+        provider: "local_disk",
+        objectKey,
+        contentType: input.contentType,
+        byteSize: input.body.length,
+        sha256: `sha-${randomUUID()}`,
+        originalFilename: input.originalFilename,
+      };
+    });
+    const uploadAs = (actor: Record<string, unknown>, body: string, filename: string) =>
+      request(appAs(actor))
+        .post(`/api/companies/${COMPANY}/issues/${OPEN_ISSUE}/attachments`)
+        .attach("file", Buffer.from(body, "utf8"), { filename, contentType: "text/plain" });
+
+    const first = await uploadAs(asAgent(AGENT), "First pass of the plan.", "plan.txt");
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({ originalFilename: "plan v1 (Agent A).txt", version: 1 });
+    const second = await uploadAs(asAgent(AGENT), "Second pass of the plan.", "plan v1 (Agent A).txt");
+    expect(second.body).toMatchObject({ originalFilename: "plan v2 (Agent A).txt", version: 2 });
+    const byPerson = await uploadAs(asPerson(), "A person's own copy.", "plan.txt");
+    expect(byPerson.body).toMatchObject({ originalFilename: "plan.txt", version: null });
+
+    const old = await readText(asAgent(AGENT), first.body.id);
+    expect(old.status).toBe(200);
+    expect(old.body).toMatchObject({ attachmentId: first.body.id, version: 1, isCurrent: false, currentAttachmentId: second.body.id });
+    expect(old.body.versionNote).toContain("Read the current one unless you were told to use this version.");
+    expect(old.body.text).toContain("First pass of the plan.");
+
+    const current = await readText(asAgent(AGENT), first.body.id, "?current=1");
+    expect(current.body).toMatchObject({ attachmentId: second.body.id, version: 2, isCurrent: true });
+    expect(current.body.versionNote).toBeUndefined();
+    expect(current.body.text).toContain("Second pass of the plan.");
+
+    const unversioned = await readText(asAgent(AGENT), byPerson.body.id, "?current=1");
+    expect(unversioned.body).toMatchObject({ attachmentId: byPerson.body.id, version: null, isCurrent: true });
+  });
 });

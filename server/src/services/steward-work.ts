@@ -38,6 +38,7 @@ import type { StorageService } from "../storage/types.js";
 import { logActivity } from "./activity-log.js";
 import { AGENT_MATERIAL_FRAMING, STEWARD_WORK_CAPABILITY, frameUntrustedAgentMaterial } from "./bridge.js";
 import { featureFlagsService } from "./feature-flags.js";
+import { currentVersionOf, markCurrentVersions } from "./attachment-versions.js";
 import { redactRunLogText } from "./run-log-redaction.js";
 import { isDeliveredToRequester, isOwnersRequest } from "./steward-request-scope.js";
 import {
@@ -763,11 +764,15 @@ export function stewardWorkService(
         originalFilename: assets.originalFilename,
         createdByAgentId: assets.createdByAgentId,
         createdByUserId: assets.createdByUserId,
+        version: issueAttachments.version,
+        versionBaseName: issueAttachments.versionBaseName,
       })
       .from(issueAttachments)
       .innerJoin(assets, eq(assets.id, issueAttachments.assetId))
       .where(eq(issueAttachments.issueId, issue.id))
-      .orderBy(desc(issueAttachments.createdAt));
+      .orderBy(desc(issueAttachments.createdAt))
+      // All of the issue's files, so the current version of each name is known.
+      .then((rows) => markCurrentVersions(rows));
 
     const childRows = scope === "request" ? [] : await db
       .select({
@@ -926,6 +931,11 @@ export function stewardWorkService(
             contentType: bareMediaType(row.contentType),
             byteSize: row.byteSize,
             sha256: row.sha256,
+            // Versioned files (sent over the bridge or by an agent): the newest
+            // version of a name is the current one.
+            version: row.version,
+            isCurrent: row.isCurrent,
+            ...(row.isCurrent ? {} : { currentAttachmentId: row.currentAttachmentId }),
             createdAt: row.createdAt.toISOString(),
             commentId: row.commentId,
             author: names.author(row.createdByAgentId, row.createdByUserId),
@@ -1128,6 +1138,10 @@ export function stewardWorkService(
         contentType: string;
         byteSize: number;
         sha256: string;
+        /** Null for an unversioned file. */
+        version: number | null;
+        isCurrent: boolean;
+        currentAttachmentId: string;
       }
   > {
     const owner = await resolveOwner(endpointId);
@@ -1144,6 +1158,8 @@ export function stewardWorkService(
         byteSize: assets.byteSize,
         sha256: assets.sha256,
         originalFilename: assets.originalFilename,
+        version: issueAttachments.version,
+        versionBaseName: issueAttachments.versionBaseName,
       })
       .from(issueAttachments)
       .innerJoin(assets, eq(assets.id, issueAttachments.assetId))
@@ -1167,6 +1183,7 @@ export function stewardWorkService(
     if (!verdict.allowed) return refusal("file_refused", verdict.reason);
 
     if (!options.storage) throw new HttpError(503, "File storage is not available");
+    const current = await currentVersionOf(db, attachment);
     const object = await options.storage.getObject(owner.companyId, attachment.objectKey);
 
     await logActivity(db, {
@@ -1196,6 +1213,9 @@ export function stewardWorkService(
       contentType: bareMediaType(attachment.contentType) ?? "application/octet-stream",
       byteSize: attachment.byteSize,
       sha256: attachment.sha256,
+      version: attachment.version,
+      isCurrent: current.attachmentId === attachment.id,
+      currentAttachmentId: current.attachmentId,
     };
   }
 

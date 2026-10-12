@@ -1,5 +1,6 @@
 import { Router } from "express";
-import type { Request } from "express";
+import type { Request, Response } from "express";
+import multer from "multer";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
@@ -14,6 +15,7 @@ import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js"
 import { stewardWorkService } from "../services/steward-work.js";
 import { stewardWorkReplyService } from "../services/steward-work-reply.js";
 import { stewardRequestsService } from "../services/steward-requests.js";
+import { bridgeStagedFilesService } from "../services/bridge-staged-files.js";
 import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -102,6 +104,16 @@ export function bridgeRoutes(
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
   const requests = stewardRequestsService(db, { runtime: options.issueRuntime ?? heartbeat });
+  const stagedFiles = bridgeStagedFilesService(db, { storage: options.storage });
+
+  /** One multipart file into memory, at most `limit` bytes; the existing upload path's shape. */
+  async function singleFile(req: Request, res: Response, limit: number) {
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: limit, files: 1, fields: 4 } });
+    await new Promise<void>((resolve, reject) => {
+      upload.single("file")(req, res, (err: unknown) => (err ? reject(err) : resolve()));
+    });
+    return (req as Request & { file?: { buffer: Buffer } }).file ?? null;
+  }
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -410,6 +422,11 @@ export function bridgeRoutes(
     res.setHeader("x-agentdash-attachment-id", result.attachmentId);
     res.setHeader("x-agentdash-sha256", result.sha256);
     if (result.identifier) res.setHeader("x-agentdash-issue", result.identifier);
+    // Versioned files (co-worker slice 5): which version this is, and whether
+    // it is the issue's current file for its name.
+    if (result.version !== null) res.setHeader("x-agentdash-version", String(result.version));
+    res.setHeader("x-agentdash-current", result.isCurrent ? "true" : "false");
+    if (!result.isCurrent) res.setHeader("x-agentdash-current-attachment-id", result.currentAttachmentId);
     result.stream.on("error", (err) => next(err));
     result.stream.pipe(res);
   });
@@ -457,6 +474,46 @@ export function bridgeRoutes(
     const token = typeof req.body?.token === "string" ? req.body.token : null;
     if (!token) throw badRequest("token is required");
     res.json(await workReply.confirm(endpointId, token));
+  });
+
+  /**
+   * One file for a send-back or a request, after the person's yes and before
+   * the confirm (co-worker slice 5). Multipart: `token` (the handle from
+   * work/propose or work/request) and `file`. Stored only when the handle
+   * names this file's exact sha256 and size; at most the company attachment
+   * cap. Nothing is attached until the handle is confirmed, and what is never
+   * confirmed is swept after the handle expires. Refusals answer 200
+   * `{ ok: false, code, reason }`.
+   */
+  router.post("/bridge/work/upload", async (req, res) => {
+    const { endpointId, companyId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    // The gates first (bridge:work, the flag, membership), before any bytes are read.
+    const gate = await work.resolveOwner(endpointId);
+    if (work.isRefusal(gate)) {
+      res.json(gate);
+      return;
+    }
+    const cap = await stagedFiles.companyCap(companyId);
+    let file: { buffer: Buffer } | null;
+    try {
+      file = await singleFile(req, res, cap);
+    } catch (err) {
+      if (err instanceof multer.MulterError) {
+        res.json(
+          err.code === "LIMIT_FILE_SIZE"
+            ? {
+                ok: false,
+                code: "file_too_large",
+                reason: `The file is over this company's attachment cap of ${cap.toLocaleString("en-US")} bytes. Nothing was stored.`,
+              }
+            : { ok: false, code: "bad_upload", reason: `The upload could not be read (${err.code}). Nothing was stored.` },
+        );
+        return;
+      }
+      throw err;
+    }
+    res.json(await stagedFiles.stage(endpointId, { token: req.body?.token, file }));
   });
 
   // -------------------------------------------------------------------------
