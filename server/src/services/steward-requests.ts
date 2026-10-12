@@ -62,6 +62,7 @@ import {
   isWorkRefusal,
   stewardWorkService,
   workRefusal,
+  WORK_TEXT_CAPS,
   type StewardWorkOwner,
   type WorkRefusal,
 } from "./steward-work.js";
@@ -333,7 +334,9 @@ export function stewardRequestsService(
     const out = new Map<string, string>();
     if (unique.length === 0) return out;
     for (const row of await db.select({ id: agents.id, name: agents.name }).from(agents).where(inArray(agents.id, unique))) {
-      out.set(row.id, frameUntrustedText(row.name, REQUEST_BRIEF_CAPS.person) ?? "an agent");
+      // Agent-authored: one line, capped at the bridge's name cap, so a name
+      // cannot carry a second line into the person's session.
+      out.set(row.id, frameUntrustedText(row.name, WORK_TEXT_CAPS.name) ?? "an agent");
     }
     return out;
   }

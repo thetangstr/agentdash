@@ -14,16 +14,16 @@ describe("normalizeInstanceUrl", () => {
   it("accepts what people actually paste", () => {
     // Every one of these is something a person copies out of a browser bar or
     // a chat message, and all of them mean the same instance.
-    expect(normalizeInstanceUrl("http://mkmini.local:3103")).toBe("http://mkmini.local:3103");
-    expect(normalizeInstanceUrl("http://mkmini.local:3103/")).toBe("http://mkmini.local:3103");
-    expect(normalizeInstanceUrl("  http://mkmini.local:3103//  ")).toBe("http://mkmini.local:3103");
-    expect(normalizeInstanceUrl("mkmini.local:3103")).toBe("http://mkmini.local:3103");
+    expect(normalizeInstanceUrl("http://box.example.com:3103")).toBe("http://box.example.com:3103");
+    expect(normalizeInstanceUrl("http://box.example.com:3103/")).toBe("http://box.example.com:3103");
+    expect(normalizeInstanceUrl("  http://box.example.com:3103//  ")).toBe("http://box.example.com:3103");
+    expect(normalizeInstanceUrl("box.example.com:3103")).toBe("http://box.example.com:3103");
   });
 
   it("tolerates a link that already points at the API or the endpoint", () => {
     // The connect panel shows the MCP endpoint, so people paste the endpoint.
-    expect(normalizeInstanceUrl("http://mkmini.local:3103/api")).toBe("http://mkmini.local:3103");
-    expect(normalizeInstanceUrl("http://mkmini.local:3103/api/mcp")).toBe("http://mkmini.local:3103");
+    expect(normalizeInstanceUrl("http://box.example.com:3103/api")).toBe("http://box.example.com:3103");
+    expect(normalizeInstanceUrl("http://box.example.com:3103/api/mcp")).toBe("http://box.example.com:3103");
   });
 
   it("does not silently invent a URL from nothing", () => {
@@ -32,7 +32,7 @@ describe("normalizeInstanceUrl", () => {
   });
 
   it("builds the endpoint exactly once", () => {
-    expect(mcpEndpointFor("http://mkmini.local:3103/api/mcp")).toBe("http://mkmini.local:3103/api/mcp");
+    expect(mcpEndpointFor("http://box.example.com:3103/api/mcp")).toBe("http://box.example.com:3103/api/mcp");
     expect(mcpEndpointFor("https://agentdash.cloud")).toBe("https://agentdash.cloud/api/mcp");
   });
 });
@@ -93,7 +93,7 @@ describe("codex config.toml", () => {
 
   it("appends without disturbing what is already in the file", () => {
     const next = upsertCodexToml(existing, "agentdash", {
-      url: "http://mkmini.local:3103/api/mcp",
+      url: "http://box.example.com:3103/api/mcp",
       envVar: "AGENTDASH_KEY_AGENTDASH",
     });
     expect(next).toContain('[projects."/Users/x/repo"]');

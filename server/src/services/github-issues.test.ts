@@ -95,18 +95,18 @@ describe("buildIssueTitle", () => {
 describe("buildIssueBody", () => {
   it("keeps the reporter's text and appends provenance", () => {
     const body = buildIssueBody("The board never loads.", {
-      reporterName: "Yang Tang",
-      reporterEmail: "thetangstr@gmail.com",
-      companyName: "MKThink",
-      instanceName: "mkboard",
-      pageUrl: "/MKT/issues",
+      reporterName: "Person A",
+      reporterEmail: "person-a@example.com",
+      companyName: "Acme Co",
+      instanceName: "box",
+      pageUrl: "/ACME/issues",
       appVersion: "1.2.3",
     });
     expect(body).toContain("The board never loads.");
-    expect(body).toContain("- Reported by: Yang Tang <thetangstr@gmail.com>");
-    expect(body).toContain("- Company: MKThink");
-    expect(body).toContain("- Instance: mkboard");
-    expect(body).toContain("- Page: /MKT/issues");
+    expect(body).toContain("- Reported by: Person A <person-a@example.com>");
+    expect(body).toContain("- Company: Acme Co");
+    expect(body).toContain("- Instance: box");
+    expect(body).toContain("- Page: /ACME/issues");
     expect(body).toContain("- Version: 1.2.3");
   });
 
@@ -144,7 +144,7 @@ describe("createIssueReport", () => {
       kind: "bug",
       title: "Cards drop wrong",
       description: "Dragging a card puts it in the wrong column.",
-      context: { reporterName: "Yang Tang" },
+      context: { reporterName: "Person A" },
     });
 
     expect(created).toEqual({

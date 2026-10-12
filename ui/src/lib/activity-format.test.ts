@@ -291,6 +291,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "bridge.task_created",
   "bridge.task_declined",
   "bridge.work_file_downloaded",
+  "bridge.work_file_text_read",
   "bridge.work_request_accepted",
   "bridge.work_requested",
   // budgets
@@ -818,6 +819,11 @@ describe("hosted activity gaps", () => {
     expect(formatActivityVerb("invite.created", { inviteType: "agent" })).toBe("created an agent invite");
   });
 
+  it("keeps bridge file reads in plain words when system events are shown", () => {
+    expect(formatActivityVerb("bridge.work_file_downloaded")).toBe("downloaded a file through a local machine from");
+    expect(formatActivityVerb("bridge.work_file_text_read")).toBe("read a file's text through a local machine from");
+  });
+
   it("keeps preflight check results in plain words, hidden or shown", () => {
     expect(formatActivityVerb("agent.harness_preflight_passed")).toBe("confirmed this agent can run:");
     expect(formatActivityVerb("agent.harness_preflight_failed")).toBe("found a setup problem on");
@@ -832,6 +838,10 @@ describe("plumbing hidden by default", () => {
       "gmail.search",
       "gmail.draft",
       "bridge.task_created",
+      // A person reading their own deliverable through their session is a
+      // read, like gmail.read_thread: shown only under "Show system events".
+      "bridge.work_file_downloaded",
+      "bridge.work_file_text_read",
       "cost.reported",
       "heartbeat.completed",
       "heartbeat.cancel_failed",

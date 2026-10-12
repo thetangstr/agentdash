@@ -215,6 +215,43 @@ describe("Codex: the inbox tools as a stdio server", () => {
     );
     expect(readFileSync(configPath, "utf8")).toBe(text);
   });
+
+  it("keeps the rest of an existing config, backs it up first, and keeps the file's own mode", () => {
+    const dir = tmp();
+    const configPath = path.join(dir, ".codex", "config.toml");
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    const before = 'model = "gpt-x"\n\n[profiles.fast]\nmodel = "gpt-y"\n';
+    writeFileSync(configPath, before, { mode: 0o644 });
+    const now = () => new Date("2026-10-12T08:09:10.123Z");
+    const result = applyCodexInboxMcp({ serverName: "agentdash", instanceUrl: SERVER, configPath, platform: "darwin", now });
+    expect(result).toMatchObject({ status: "written", backup: `${configPath}.agentdash-backup-20261012T080910Z` });
+    expect(readFileSync(result.backup, "utf8")).toBe(before);
+    expect(statSync(result.backup).mode & 0o777).toBe(0o600);
+    const after = readFileSync(configPath, "utf8");
+    expect(after.startsWith(before.trimEnd())).toBe(true);
+    expect(after).toContain("[profiles.fast]");
+    expect(readCodexStdioServer(after, "agentdash-inbox")).not.toBeNull();
+    expect(statSync(configPath).mode & 0o777).toBe(0o644);
+    expect(describeClientEntries([{ client: "codex", ...result }])[0].text).toContain(result.backup);
+  });
+
+  it("refuses, and writes nothing, when the existing config cannot be read", () => {
+    const dir = tmp();
+    // A directory where the file should be: it exists, and reading it fails.
+    const configPath = path.join(dir, ".codex", "config.toml");
+    mkdirSync(configPath, { recursive: true });
+    const result = applyCodexInboxMcp({ serverName: "agentdash", instanceUrl: SERVER, configPath, platform: "darwin" });
+    expect(result.status).toBe("refused");
+    expect(result.reason).toContain(`left ${configPath} unchanged`);
+    expect(result.reason).toMatch(/could not read it \(EISDIR\)/);
+    expect(statSync(configPath).isDirectory()).toBe(true);
+    expect(readdirSync(path.dirname(configPath))).toEqual(["config.toml"]);
+    const [line] = describeClientEntries([{ client: "codex", ...result }]);
+    expect(line).toMatchObject({ problem: true });
+    expect(line.text).toContain("the inbox tools were not added there");
+    // Removing the entry from an unreadable config leaves it alone too.
+    expect(removeInboxClients({ serverName: "agentdash", paths: { codexConfig: configPath, desktopConfig: path.join(dir, "none.json") } })).toEqual([]);
+  });
 });
 
 describe("Claude Desktop project instructions", () => {

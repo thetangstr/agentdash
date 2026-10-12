@@ -325,37 +325,59 @@ export function readCodexStdioServer(text, serverName) {
   return { command, args: Array.isArray(args) ? args : [] };
 }
 
-function readText(file) {
+/**
+ * Read the Codex config. Missing is an empty config; a file that exists but
+ * cannot be read is a refusal, because writing over a file we could not read
+ * would lose the person's models, profiles and other servers.
+ */
+function readCodexConfig(configPath) {
+  if (!existsSync(configPath)) return { ok: true, exists: false, text: "" };
   try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
+    return { ok: true, exists: true, text: readFileSync(configPath, "utf8") };
+  } catch (err) {
+    return { ok: false, reason: `could not read it (${err?.code ?? err?.message ?? err})` };
   }
 }
 
 const DEFAULT_CODEX_CONFIG = path.join(os.homedir(), ".codex", "config.toml");
 
-/** Give Codex the inbox tools, beside (never instead of) its agent server. */
+/**
+ * Give Codex the inbox tools, beside (never instead of) its agent server.
+ * Like the Desktop writer: keeps everything else in the file, backs it up
+ * first, refuses a file it cannot read, and writes nothing when the entry is
+ * already exactly right.
+ */
 export function applyCodexInboxMcp({
   serverName,
   instanceUrl,
   configPath = DEFAULT_CODEX_CONFIG,
   platform = process.platform,
+  now = () => new Date(),
 }) {
   const name = inboxServerNameFor(serverName);
-  const before = readText(configPath);
-  const next = upsertCodexStdioToml(before, name, inboxMcpLaunch({ server: instanceUrl, platform }));
-  if (next === before) return { name, file: configPath, status: "unchanged" };
-  mkdirSync(path.dirname(configPath), { recursive: true });
-  writeFileSync(configPath, next, { mode: 0o600 });
-  return { name, file: configPath, status: "written" };
+  const base = { name, file: configPath, backup: null };
+  const read = readCodexConfig(configPath);
+  if (!read.ok) return { ...base, status: "refused", reason: `left ${configPath} unchanged: ${read.reason}` };
+  const next = upsertCodexStdioToml(read.text, name, inboxMcpLaunch({ server: instanceUrl, platform }));
+  if (next === read.text) return { ...base, status: "unchanged" };
+  try {
+    const backup = read.exists ? backUp(configPath, now) : null;
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    // An existing file keeps its own mode; a new one is the person's alone.
+    writeFileSync(configPath, next, read.exists ? undefined : { mode: 0o600 });
+    return { ...base, status: "written", backup };
+  } catch (err) {
+    return { ...base, status: "refused", reason: `could not write ${configPath} (${err?.code ?? err?.message ?? err})` };
+  }
 }
 
-function removeCodexInboxServer(configPath, name) {
-  const text = readText(configPath);
-  const found = findCodexBlock(text, name);
+function removeCodexInboxServer(configPath, name, now) {
+  const read = readCodexConfig(configPath);
+  if (!read.ok || !read.exists) return false;
+  const found = findCodexBlock(read.text, name);
   if (!found) return false;
   const kept = [...found.lines.slice(0, found.start), ...found.lines.slice(found.end)];
+  backUp(configPath, now);
   writeFileSync(configPath, `${kept.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\s*$/, "")}\n`);
   return true;
 }
@@ -415,6 +437,7 @@ export function setupInboxClients({
       instanceUrl,
       ...(paths.codexConfig ? { configPath: paths.codexConfig } : {}),
       platform,
+      ...(now ? { now } : {}),
     });
     entries.push({ client: "codex", ...result });
   }
@@ -437,8 +460,12 @@ export function removeInboxClients({ serverName, paths = {}, now = () => new Dat
     // A Desktop config we cannot rewrite is left as it was; the rest still goes.
   }
   const codexConfig = paths.codexConfig ?? DEFAULT_CODEX_CONFIG;
-  if (removeCodexInboxServer(codexConfig, name)) {
-    removed.push({ harness: "codex", file: `${codexConfig} (${name})` });
+  try {
+    if (removeCodexInboxServer(codexConfig, name, now)) {
+      removed.push({ harness: "codex", file: `${codexConfig} (${name})` });
+    }
+  } catch {
+    // Likewise a Codex config we cannot rewrite is left as it was.
   }
   return removed;
 }
@@ -478,7 +505,11 @@ export function describeClientEntries(entries) {
         });
         break;
       case "codex":
-        lines.push({ text: `  ${tag} ${entry.file}${same}\n          "${entry.name}" — your own inbox tools in Codex; open ~/agentdash-inbox in Codex for the review rules (AGENTS.md)` });
+        lines.push({
+          text:
+            `  ${tag} ${entry.file}${same}\n          "${entry.name}" — your own inbox tools in Codex; open ~/agentdash-inbox in Codex for the review rules (AGENTS.md)` +
+            (entry.backup ? `\n          the previous file is saved as ${entry.backup}` : ""),
+        });
         break;
       default:
         break;

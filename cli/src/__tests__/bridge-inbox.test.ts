@@ -44,20 +44,20 @@ function digest(overrides: Record<string, unknown> = {}) {
             approvalId: "a1",
             type: "connector_send",
             revision: 2,
-            agentName: "Casper",
+            agentName: "Agent A",
             risk: { level: "high", reason: "Destructive action" },
             waitingSince: "2026-09-03T09:00:00.000Z",
           },
         ],
       },
       blockers: { total: 14, shown: 2, items: [
-        { identifier: "MK-1", title: "Waiting on a rate", agentName: "Casper" },
+        { identifier: "ACME-1", title: "Waiting on a rate", agentName: "Agent A" },
         { identifier: null, title: "Needs a decision", agentName: null },
       ] },
       completions: { total: 3, shown: 3, items: [
-        { identifier: "MK-9", title: "Drafted the note", agentName: "Scout" },
-        { identifier: "MK-8", title: "Filed the summary", agentName: "Scout" },
-        { identifier: "MK-7", title: "Checked the figures", agentName: "Emilia" },
+        { identifier: "ACME-9", title: "Drafted the note", agentName: "Agent B" },
+        { identifier: "ACME-8", title: "Filed the summary", agentName: "Agent B" },
+        { identifier: "ACME-7", title: "Checked the figures", agentName: "Agent C" },
       ] },
       truncated: true,
     },
@@ -122,13 +122,13 @@ describe("bridge inbox rendering", () => {
     // session with no such tool. Delivered text must not promise it.
     expect(text).toContain("Decide on your AgentDash page.");
     expect(text).not.toContain("inbox_decide");
-    expect(text).toContain("Casper");
+    expect(text).toContain("Agent A");
     expect(text).toContain("high: Destructive action");
   });
 
   it("names the owner on every render when the instance reports one", () => {
-    const withOwner = { ...(digest() as object), owner: { name: "Chris Hong", email: null } };
-    expect(renderInbox(withOwner as never, NOW)).toContain("AgentDash inbox — Chris Hong");
+    const withOwner = { ...(digest() as object), owner: { name: "Person A", email: null } };
+    expect(renderInbox(withOwner as never, NOW)).toContain("AgentDash inbox — Person A");
   });
 
   it("says so plainly when nothing is waiting", () => {

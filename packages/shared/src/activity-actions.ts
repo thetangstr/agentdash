@@ -54,6 +54,10 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
   "bridge.task_completed",
   "bridge.task_created",
   "bridge.task_declined",
+  // A person fetching their own deliverable (bytes or text) through their
+  // session is a read, like gmail.read_thread — not company work.
+  "bridge.work_file_downloaded",
+  "bridge.work_file_text_read",
   // Skill scanning machinery
   "company.skills_scanned",
   // Send-reconciliation bookkeeping (refusals and undelivered reports stay)

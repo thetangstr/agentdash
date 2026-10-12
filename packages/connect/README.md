@@ -131,9 +131,13 @@ secret.
 `~/.codex/config.toml`, beside the agent's own `[mcp_servers.agentdash]`. The
 entry has the shape `codex mcp add` writes, with `startup_timeout_sec = 60`
 (the first `npx` download can be slow) and `tool_timeout_sec = 3600` (a large
-file download; each tool keeps its own shorter deadline). Codex has no
-session-start hook here, so `~/agentdash-inbox/AGENTS.md` tells it to start the
-review on the first turn of a session in that folder.
+file download; each tool keeps its own shorter deadline). Connect keeps
+everything else in that file; before changing it, it saves the previous file
+next to it as `config.toml.agentdash-backup-<time>` (mode 600), writes nothing
+when the entry is already right, and leaves a file it cannot read untouched
+and says so. Codex has no session-start hook here, so
+`~/agentdash-inbox/AGENTS.md` tells it to start the review on the first turn of
+a session in that folder.
 
 **Claude Desktop** reads them from its own config file
 (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,

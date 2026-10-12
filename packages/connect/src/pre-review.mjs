@@ -119,7 +119,16 @@ export const OPTIONAL_CLAUDE_FLAGS = Object.freeze(["--restricted", "--no-sessio
  */
 export function claudeFeaturesFromHelp(helpText) {
   const text = String(helpText ?? "");
-  const has = (flag) => new RegExp(`(^|[\\s,])${flag.replace(/[-]/g, "\\-")}(?=[\\s,=<]|$)`, "m").test(text);
+  // Only a flag an option line defines counts ("  -p, --print  ..."), never
+  // one another option's description mentions ("Only use MCP servers from
+  // --mcp-config"): a CLI that dropped a flag but still names it elsewhere
+  // must not pass as having it.
+  const defined = new Set();
+  for (const line of text.split("\n")) {
+    const names = line.match(/^\s*(-[^\s,=<]+(?:,\s*-[^\s,=<]+)*)/)?.[1];
+    if (names) for (const name of names.split(/,\s*/)) defined.add(name);
+  }
+  const has = (flag) => defined.has(flag);
   const missing = REQUIRED_CLAUDE_FLAGS.filter((flag) => !has(flag));
   if (!/["']?dontAsk["']?/.test(text)) missing.push('--permission-mode "dontAsk"');
   const optional = new Set(OPTIONAL_CLAUDE_FLAGS.filter((flag) => has(flag)));

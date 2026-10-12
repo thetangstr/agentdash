@@ -111,7 +111,7 @@ function sbplLiteralPath(label: string, value: string): string {
 /**
  * Refuse a re-opening that would swallow the home deny.
  *
- * Later rules win in SBPL, so `readWritePaths: ["/Users/yang"]` — or a
+ * Later rules win in SBPL, so `readWritePaths: ["/Users/operator"]` — or a
  * synthetic home pointed at the real one — emits a profile that parses,
  * loads, reports no error, and confines nothing. That is the worst failure
  * this file has: the operator believes the sandbox is on. The listed
@@ -185,7 +185,7 @@ export function buildSandboxProfile(opts: {
    * The problem this solves is narrow and was measured, not imagined. Web
    * search runs through `mcporter`, and `mcporter` — like most CLIs — probes
    * `$HOME` for configuration on startup. Confined, it died on
-   * `EPERM open '/Users/yang/.claude/settings.json'`: the sandbox correctly
+   * `EPERM open '/Users/operator/.claude/settings.json'`: the sandbox correctly
    * refusing the OPERATOR's personal Claude Code config to an agent. The
    * tempting fix is to allow `~/.claude`, which hands every agent the
    * operator's config, their MCP server list and whatever credentials sit

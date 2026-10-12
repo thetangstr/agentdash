@@ -38,7 +38,7 @@ function probeAddress(address, port, family, timeoutMs = 5_000) {
  * Probe EVERY address the hostname resolves to, not just the one this process
  * happens to pick.
  *
- * This exists because of a real failure. `mkmini.local` resolves IPv6-first on
+ * This exists because of a real failure. A `.local` host name resolved IPv6-first on
  * macOS; the server was bound IPv4-only; Node's `fetch` quietly fell back to
  * IPv4 and reported a healthy connection, while real Claude Code picked the
  * IPv6 address and hung until it timed out. A checker that only proves "I could

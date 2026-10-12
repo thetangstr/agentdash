@@ -25,7 +25,7 @@ function handler(respond, extra = {}) {
       fetchImpl: fetch.impl,
       readServer: () => SERVER,
       readToken: () => "bridge-token-xyz",
-      owner: { name: "Titus", email: "t@example.test" },
+      owner: { name: "Person A", email: "t@example.test" },
       version: "9.9.9",
       ...extra,
     },
@@ -61,7 +61,7 @@ describe("agentdash-connect mcp", () => {
     const res = await handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26" } });
     expect(res.result.serverInfo).toEqual({ name: "agentdash-inbox", version: "9.9.9" });
     expect(res.result.protocolVersion).toBe("2025-03-26");
-    expect(res.result.instructions).toContain("Titus's own AgentDash inbox");
+    expect(res.result.instructions).toContain("Person A's own AgentDash inbox");
     // Forming a view is Claude's job; sending is the person's.
     expect(res.result.instructions).toMatch(/your own honest take/);
     expect(res.result.instructions).toMatch(/recommend against/);

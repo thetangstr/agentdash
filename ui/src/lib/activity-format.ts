@@ -112,6 +112,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "bridge.task_created": "created a local task",
   "bridge.task_declined": "declined a local task",
   "bridge.work_file_downloaded": "downloaded a file through a local machine from",
+  "bridge.work_file_text_read": "read a file's text through a local machine from",
   "bridge.work_request_accepted": "accepted the result of",
   "bridge.work_requested": "requested through a local machine",
   "budget.hard_threshold_crossed": "hit the hard budget limit",
@@ -586,7 +587,7 @@ function formatWorkProductUpdatePhrase(details: ActivityDetails): string | null 
 
 /**
  * AgentDash (c4 trust): approval rows carried "requested approval" /
- * "rejected" with no object — "Yang rejected" told the owner nothing. The
+ * "rejected" with no object — "Person A rejected" told the owner nothing. The
  * approval's `type` names what was decided.
  */
 const APPROVAL_TYPE_OBJECTS: Record<string, string> = {

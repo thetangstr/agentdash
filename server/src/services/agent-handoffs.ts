@@ -1,8 +1,10 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, costEvents, featureFlags, heartbeatRuns, issues } from "@paperclipai/db";
+import { activityLog, costEvents, heartbeatRuns, issues } from "@paperclipai/db";
+import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import { logActivity } from "./activity-log.js";
 import { handoffReturnedCorrectionInput, recordAgentCorrection } from "./agent-corrections.js";
+import { featureFlagsService } from "./feature-flags.js";
 import { logger } from "../middleware/logger.js";
 
 /**
@@ -38,6 +40,17 @@ import { logger } from "../middleware/logger.js";
  * a parent by an agent running on a request belongs to that request (the run's
  * issue), and its hand-off row records that root, so the issues under it
  * resolve to the same request.
+ *
+ * Because the count follows the parent chain, an agent must not be able to
+ * choose a fresh chain. So, with the flag on, an agent may place a hand-off
+ * (create one with a parent) or move an issue (change its parent) only under
+ * an issue it holds -- is the assignee of -- or under work below one
+ * ({@link isUnderIssueHeldBy}); anything else is refused with
+ * {@link AGENT_HANDOFF_PARENT_CODE}. Its own work is the only place it can put
+ * a hand-off, so a hand-off always counts against a request the agent is
+ * already working on. Likewise an unparented issue an agent created for itself
+ * and later reassigns belongs to its run's request, exactly as if it had been
+ * created as the hand-off ({@link resolveRequestRootForReassign}).
  */
 
 export const AGENT_HANDOFF_ROUND_CAP = 3;
@@ -45,8 +58,7 @@ export const AGENT_HANDOFF_ACTION = "issue.agent_handoff";
 export const AGENT_HANDOFF_RETURNED_ACTION = "issue.agent_handoff_returned";
 export const AGENT_HANDOFF_REFUSED_ACTION = "issue.agent_handoff_refused";
 export const AGENT_HANDOFF_CAP_CODE = "AGENT_HANDOFF_CAP_REACHED";
-/** The co-worker feature's company flag (default off). */
-export const COWORKER_BRIDGE_FLAG = "coworker_bridge_enabled";
+export const AGENT_HANDOFF_PARENT_CODE = "AGENT_HANDOFF_PARENT_NOT_HELD";
 
 /** Parent chains deeper than this are treated as rooted where the walk stopped. */
 const MAX_PARENT_DEPTH = 64;
@@ -62,12 +74,40 @@ export type AgentHandoffReturnKind = "reassigned" | "declined";
 
 /** Is hand-off accounting (recording and the cap) on for this company? */
 export async function agentHandoffsEnabled(db: Reader, companyId: string): Promise<boolean> {
-  const row = await db
-    .select({ enabled: featureFlags.enabled })
-    .from(featureFlags)
-    .where(and(eq(featureFlags.companyId, companyId), eq(featureFlags.flagKey, COWORKER_BRIDGE_FLAG)))
-    .then((rows) => rows[0] ?? null);
-  return row?.enabled === true;
+  return featureFlagsService(db as Db).isEnabled(companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE);
+}
+
+export function agentHandoffParentMessage(kind: "handoff" | "move"): string {
+  const what = kind === "handoff" ? "hand work to another agent" : "move an issue";
+  return (
+    `You can ${what} only under an issue you hold (are assigned to), or under work below one. ` +
+    "Put it under the issue you are working on, or leave the parent out to hand it off as part of the " +
+    "request your current run is on."
+  );
+}
+
+/**
+ * Is this issue held by the agent (it is the assignee), or below an issue the
+ * agent holds? Walks the parent chain from the issue itself.
+ */
+export async function isUnderIssueHeldBy(
+  db: Reader,
+  input: { companyId: string; issueId: string; agentId: string },
+): Promise<boolean> {
+  let current: string | null = input.issueId;
+  const seen = new Set<string>();
+  for (let depth = 0; current && depth <= MAX_PARENT_DEPTH && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const row: { parentId: string | null; assigneeAgentId: string | null } | null = await db
+      .select({ parentId: issues.parentId, assigneeAgentId: issues.assigneeAgentId })
+      .from(issues)
+      .where(and(eq(issues.id, current), eq(issues.companyId, input.companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (!row) return false;
+    if (row.assigneeAgentId === input.agentId) return true;
+    current = row.parentId;
+  }
+  return false;
 }
 
 export function agentHandoffCapMessage(rounds: number): string {
@@ -163,6 +203,27 @@ export async function requestRootForAgentRun(
   return resolveRequestRootIssueId(db, { companyId: input.companyId, issueId });
 }
 
+/**
+ * The request an agent's reassignment counts against: the issue's own root,
+ * except that an unparented issue the agent created for itself, with no
+ * hand-off record, belongs to the request its run is on -- the same request
+ * it would have belonged to had it been created as the hand-off. Without this,
+ * creating work for yourself and then reassigning it would start a fresh count.
+ */
+export async function resolveRequestRootForReassign(
+  db: Reader,
+  input: {
+    companyId: string;
+    issue: { id: string; parentId: string | null; createdByAgentId: string | null };
+    agentId: string;
+    runId: string | null | undefined;
+  },
+): Promise<string> {
+  const root = await resolveRequestRootIssueId(db, { companyId: input.companyId, issueId: input.issue.id });
+  if (root !== input.issue.id || input.issue.parentId || input.issue.createdByAgentId !== input.agentId) return root;
+  return (await requestRootForAgentRun(db, { companyId: input.companyId, agentId: input.agentId, runId: input.runId })) ?? root;
+}
+
 /** Rounds used so far by a request: hand-offs plus hand-offs sent back. */
 export async function countHandoffRounds(
   db: Reader,
@@ -185,23 +246,32 @@ export type HandoffRoundCheck =
   | { allowed: true; rounds: number }
   | { allowed: false; rounds: number; message: string; details: Record<string, unknown> };
 
-/** The cap decision for a request that has used `rounds` rounds. */
-export function handoffRoundCheck(rounds: number, rootIssueId: string): HandoffRoundCheck {
+/**
+ * The cap decision for a request that has used `rounds` rounds. The refusal
+ * names the request's root only when `revealRoot` says the acting agent can
+ * see it; a root in a restricted project it is not on stays unnamed.
+ */
+export function handoffRoundCheck(rounds: number, rootIssueId: string, opts: { revealRoot?: boolean } = {}): HandoffRoundCheck {
   if (rounds < AGENT_HANDOFF_ROUND_CAP) return { allowed: true, rounds };
   return {
     allowed: false,
     rounds,
     message: agentHandoffCapMessage(rounds),
-    details: { code: AGENT_HANDOFF_CAP_CODE, rounds, cap: AGENT_HANDOFF_ROUND_CAP, rootIssueId },
+    details: {
+      code: AGENT_HANDOFF_CAP_CODE,
+      rounds,
+      cap: AGENT_HANDOFF_ROUND_CAP,
+      ...(opts.revealRoot === false ? {} : { rootIssueId }),
+    },
   };
 }
 
 /** May an agent hand an issue in this request to another agent now? */
 export async function checkHandoffRoundAvailable(
   db: Reader,
-  input: { companyId: string; rootIssueId: string },
+  input: { companyId: string; rootIssueId: string; revealRoot?: boolean },
 ): Promise<HandoffRoundCheck> {
-  return handoffRoundCheck(await countHandoffRounds(db, input), input.rootIssueId);
+  return handoffRoundCheck(await countHandoffRounds(db, input), input.rootIssueId, { revealRoot: input.revealRoot });
 }
 
 /** Record one agent-to-agent hand-off. Returns the round it used. */

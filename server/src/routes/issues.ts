@@ -131,16 +131,19 @@ import {
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 import { resolveStewardedAgentRoute, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
 import {
+  AGENT_HANDOFF_PARENT_CODE,
+  agentHandoffParentMessage,
   agentHandoffsEnabled,
-  checkHandoffRoundAvailable,
   countHandoffRounds,
   emitHandoffReturned,
   handoffRoundCheck,
+  isUnderIssueHeldBy,
   latestHandoffForIssue,
   recordAgentHandoff,
   recordAgentHandoffRefused,
   listRequestIssueIds,
   requestRootForAgentRun,
+  resolveRequestRootForReassign,
   resolveRequestRootIssueId,
   summarizeRequestHandoffs,
   type AgentHandoffVia,
@@ -592,11 +595,34 @@ export function issueRoutes(
   }
 
   /**
+   * The cap refusal for a request, naming its root only when the acting agent
+   * can see it (a root in a restricted project it is not on stays unnamed).
+   */
+  async function handoffCapCheck(reader: Db, req: Request, companyId: string, rootIssueId: string, rounds: number) {
+    const check = handoffRoundCheck(rounds, rootIssueId);
+    if (check.allowed) return check;
+    const visible = await listVisibleIssueIds(reader, req, companyId, [rootIssueId]);
+    return handoffRoundCheck(rounds, rootIssueId, { revealRoot: visible.has(rootIssueId) });
+  }
+
+  /**
+   * An agent may put a hand-off, or move an issue, only under an issue it
+   * holds or under work below one (services/agent-handoffs.ts): the cap
+   * counts per request, and a parent of the agent's choosing would otherwise
+   * start a fresh count. 422 with AGENT_HANDOFF_PARENT_NOT_HELD.
+   */
+  async function assertAgentHoldsParent(reader: Db, companyId: string, agentId: string, parentId: string | null, kind: "handoff" | "move") {
+    const held = parentId ? await isUnderIssueHeldBy(reader, { companyId, issueId: parentId, agentId }) : false;
+    if (!held) throw new HttpError(422, agentHandoffParentMessage(kind), { code: AGENT_HANDOFF_PARENT_CODE });
+  }
+
+  /**
    * AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): an agent
    * creating an issue assigned to another agent is a hand-off. The request is
    * the parent's root, or for an unparented issue the issue the agent's run is
-   * working on. The fourth round in a request is refused (422) and recorded;
-   * otherwise the caller records the hand-off once the issue exists.
+   * working on. The parent must be an issue the agent holds or work below one
+   * (422 otherwise). The fourth round in a request is refused (422) and
+   * recorded; otherwise the caller records the hand-off once the issue exists.
    */
   async function planAgentHandoffForCreate(
     req: Request,
@@ -619,11 +645,12 @@ export function issueRoutes(
       .then((rows) => rows[0] ?? null);
     if (!assignee || assignee.status === "pending_approval" || assignee.status === "terminated") return null;
     const parentIssueId = input.parentId ?? null;
+    if (parentIssueId) await assertAgentHoldsParent(db, companyId, fromAgentId, parentIssueId, "handoff");
     const rootIssueId = parentIssueId
       ? await resolveRequestRootIssueId(db, { companyId, issueId: parentIssueId })
       : await requestRootForAgentRun(db, { companyId, agentId: fromAgentId, runId: req.actor.runId });
     if (rootIssueId) {
-      const check = await checkHandoffRoundAvailable(db, { companyId, rootIssueId });
+      const check = await handoffCapCheck(db, req, companyId, rootIssueId, await countHandoffRounds(db, { companyId, rootIssueId }));
       if (!check.allowed) {
         await recordAgentHandoffRefused(db, {
           companyId,
@@ -649,14 +676,16 @@ export function issueRoutes(
    */
   async function precountAgentHandoffRounds(
     req: Request,
-    existing: { id: string; companyId: string; assigneeAgentId: string | null },
+    existing: { id: string; companyId: string; assigneeAgentId: string | null; parentId: string | null; createdByAgentId: string | null },
     requestedAssigneeAgentId: unknown,
   ): Promise<{ rootIssueId: string; rounds: number } | null> {
     if (req.actor.type !== "agent" || !req.actor.agentId) return null;
     if (typeof requestedAssigneeAgentId !== "string") return null;
     if (requestedAssigneeAgentId === req.actor.agentId || requestedAssigneeAgentId === existing.assigneeAgentId) return null;
     if (!(await agentHandoffsEnabled(db, existing.companyId))) return null;
-    const rootIssueId = await resolveRequestRootIssueId(db, { companyId: existing.companyId, issueId: existing.id });
+    const rootIssueId = await resolveRequestRootForReassign(db, {
+      companyId: existing.companyId, issue: existing, agentId: req.actor.agentId, runId: req.actor.runId,
+    });
     return { rootIssueId, rounds: await countHandoffRounds(db, { companyId: existing.companyId, rootIssueId }) };
   }
 
@@ -2714,6 +2743,13 @@ export function issueRoutes(
     const actions = issuePatchActions(db, heartbeat, issuePatchHooks(db, { orchestrator: cosVerdictOrchestratorSvc, agents: agentsSvc }));
     const { input: patchIntent, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, existing.companyId, req.body, existing);
+    // AgentDash (agent-to-agent hand-offs): an agent moving an issue (a new
+    // parent, or none) may move it only under an issue it holds, because the
+    // hand-off cap counts per parent chain.
+    if (req.actor.type === "agent" && req.actor.agentId && Object.prototype.hasOwnProperty.call(patchIntent, "parentId")
+      && (patchIntent.parentId ?? null) !== (existing.parentId ?? null) && (await agentHandoffsEnabled(db, existing.companyId))) {
+      await assertAgentHoldsParent(db, existing.companyId, req.actor.agentId, patchIntent.parentId ?? null, "move");
+    }
     // AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): what
     // this update does between agents, decided inside acceptance. The round
     // count scans activity rows, so it is taken here, before the transaction,
@@ -2759,7 +2795,9 @@ export function issueRoutes(
           if (!actorAgentId || !toAgentId || toAgentId === actorAgentId || toAgentId === current.assigneeAgentId) return;
           const reader = executor as Db;
           if (!(await agentHandoffsEnabled(reader, current.companyId))) return;
-          const rootIssueId = await resolveRequestRootIssueId(reader, { companyId: current.companyId, issueId: current.id });
+          const rootIssueId = await resolveRequestRootForReassign(reader, {
+            companyId: current.companyId, issue: current, agentId: actorAgentId, runId: req.actor.type === "agent" ? req.actor.runId : null,
+          });
           // Sending a hand-off back — to the agent that handed it over, or to
           // the parent's agent — is counted but never refused. Only a real
           // hand-off can come back: the issue's hand-off record must name this
@@ -2779,9 +2817,10 @@ export function issueRoutes(
               return;
             }
           }
-          const check = precountedHandoffRounds?.rootIssueId === rootIssueId
-            ? handoffRoundCheck(precountedHandoffRounds.rounds, rootIssueId)
-            : await checkHandoffRoundAvailable(reader, { companyId: current.companyId, rootIssueId });
+          const rounds = precountedHandoffRounds?.rootIssueId === rootIssueId
+            ? precountedHandoffRounds.rounds
+            : await countHandoffRounds(reader, { companyId: current.companyId, rootIssueId });
+          const check = await handoffCapCheck(reader, req, current.companyId, rootIssueId, rounds);
           if (!check.allowed) {
             refusedAgentHandoff = { rootIssueId, toAgentId, rounds: check.rounds };
             throw new IssueCommentPolicyRefusal(422, { error: check.message, details: check.details });

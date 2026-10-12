@@ -14,7 +14,7 @@ import {
 } from "./agentdash-source-update.mjs";
 
 const BASE = {
-  repoDir: "/Users/yang/agentdash",
+  repoDir: "/Users/operator/agentdash",
   stateDir: "/tmp/agentdash-state",
   currentSha: "aaaaaaa",
   remoteSha: "bbbbbbb",

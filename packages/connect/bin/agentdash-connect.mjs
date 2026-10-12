@@ -342,7 +342,7 @@ async function main() {
   out("");
 
   let instanceUrl = args.url ?? process.env.AGENTDASH_URL ?? "";
-  if (!instanceUrl) instanceUrl = await ask("Instance link (e.g. http://mkmini.local:3103): ");
+  if (!instanceUrl) instanceUrl = await ask("Instance link (e.g. http://box.example.com:3103): ");
   try {
     instanceUrl = normalizeInstanceUrl(instanceUrl);
   } catch (error) {

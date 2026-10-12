@@ -243,6 +243,52 @@ describe("runPreReview", () => {
     expect(calls).toEqual([["--help"]]);
   });
 
+  /**
+   * `--restricted` is optional: without it the run is still read-only because
+   * the tool set, the exact allow and deny lists and the strict read-only MCP
+   * config are required. Losing any ONE of those stops the run before claude
+   * is ever started for a review.
+   */
+  it("refuses when any one of the read-only enforcing flags is missing, but runs without --restricted", () => {
+    const enforcing = {
+      "--tools": "--tools <tools",
+      "--allowedTools": "--allowedTools, --allowed-tools",
+      "--disallowedTools": "--disallowedTools, --disallowed-tools",
+      "--strict-mcp-config": "--strict-mcp-config",
+      "--mcp-config": "--mcp-config <configs",
+    };
+    for (const [flag, lineStart] of Object.entries(enforcing)) {
+      const help = CURRENT_HELP.split("\n").filter((line) => !line.trimStart().startsWith(lineStart)).join("\n");
+      expect(help, flag).not.toBe(CURRENT_HELP);
+      expect(claudeFeaturesFromHelp(help).missing, flag).toEqual([flag]);
+      const calls = [];
+      const run = (_cmd, args) => {
+        calls.push(args);
+        return { status: 0, stdout: help, stderr: "" };
+      };
+      const result = runPreReview(item, ctx(tmp()), { run, now: fixed });
+      expect(result.ok, flag).toBe(false);
+      expect(result.reason, flag).toContain(`missing ${flag}`);
+      expect(calls, flag).toEqual([["--help"]]);
+    }
+
+    const noRestricted = CURRENT_HELP.split("\n").filter((line) => !line.includes("--restricted")).join("\n");
+    const calls = [];
+    const run = (_cmd, args) => {
+      calls.push(args);
+      if (args[0] === "--help") return { status: 0, stdout: noRestricted, stderr: "" };
+      return { status: 0, stdout: "## ACME-41\n\nLooks fine.\n", stderr: "" };
+    };
+    const result = runPreReview(item, ctx(tmp()), { run, now: fixed });
+    expect(result.ok).toBe(true);
+    const review = calls[1];
+    expect(review).not.toContain("--restricted");
+    expect(review).toContain("--strict-mcp-config");
+    expect(valueOf(review, "--tools")).toBe("Read,Grep,Glob");
+    expect(valueOf(review, "--allowedTools")).toBe(preReviewAllowedTools().join(","));
+    expect(valueOf(review, "--disallowedTools")).toBe(preReviewDeniedTools().join(","));
+  });
+
   it("writes nothing when claude fails, returns nothing, or is missing", () => {
     const inboxDir = tmp();
     const features = claudeFeaturesFromHelp(CURRENT_HELP);

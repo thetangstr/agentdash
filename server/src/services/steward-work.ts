@@ -566,7 +566,8 @@ export function stewardWorkService(
       identifier: row.identifier,
       title: frameUntrustedText(row.title, WORK_TEXT_CAPS.title),
       status: row.status,
-      agentName: row.assigneeAgentId ? owner.agentNameById.get(row.assigneeAgentId) ?? null : null,
+      // An agent's name is agent-authored: one line, capped, like every other name here.
+      agentName: row.assigneeAgentId ? frameUntrustedText(owner.agentNameById.get(row.assigneeAgentId), WORK_TEXT_CAPS.name) : null,
       project: row.projectId ? frameUntrustedText(projectNames.get(row.projectId), WORK_TEXT_CAPS.name) : null,
       waitingOn,
       openQuestions: Number(q?.n ?? 0),
@@ -1049,7 +1050,7 @@ export function stewardWorkService(
 
     const runSummary = (run: (typeof runs)[number]) => ({
       runId: run.id,
-      agentName: owner.agentNameById.get(run.agentId) ?? null,
+      agentName: frameUntrustedText(owner.agentNameById.get(run.agentId), WORK_TEXT_CAPS.name),
       status: run.status,
       createdAt: run.createdAt.toISOString(),
       startedAt: run.startedAt?.toISOString() ?? null,

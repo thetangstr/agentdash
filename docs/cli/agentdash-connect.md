@@ -3,7 +3,7 @@ title: "agentdash-connect"
 summary: "Connect Claude Code or Codex on your machine to your AgentDash agent."
 ---
 
-> Generated at commit `23e5ee9ea` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `c51a2cc52` by `scripts/docs/generate-mcp-reference.mjs`.
 > This page is `packages/connect/README.md`, the README published to npm with the package. Edit the README, then run `pnpm docs:mcp-reference`.
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
@@ -137,9 +137,13 @@ secret.
 `~/.codex/config.toml`, beside the agent's own `[mcp_servers.agentdash]`. The
 entry has the shape `codex mcp add` writes, with `startup_timeout_sec = 60`
 (the first `npx` download can be slow) and `tool_timeout_sec = 3600` (a large
-file download; each tool keeps its own shorter deadline). Codex has no
-session-start hook here, so `~/agentdash-inbox/AGENTS.md` tells it to start the
-review on the first turn of a session in that folder.
+file download; each tool keeps its own shorter deadline). Connect keeps
+everything else in that file; before changing it, it saves the previous file
+next to it as `config.toml.agentdash-backup-<time>` (mode 600), writes nothing
+when the entry is already right, and leaves a file it cannot read untouched
+and says so. Codex has no session-start hook here, so
+`~/agentdash-inbox/AGENTS.md` tells it to start the review on the first turn of
+a session in that folder.
 
 **Claude Desktop** reads them from its own config file
 (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
