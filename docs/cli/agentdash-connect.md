@@ -161,15 +161,19 @@ did, the same `agentdash-inbox` entry also serves four read-only tools:
 
 - `work_list` — what your agents have handed you: issues waiting on a decision,
   a question, a blocker or a review, decisions first, oldest first, with counts.
-- `work_read` — one issue in full, as you see it on your page: the issue, its
-  parent and the request it came from, comments, documents (paged), attachment
-  metadata (name, size, type, sha256), and child issues.
+- `work_read` — one issue, as you see it on your page: the issue, its parent
+  and the request it came from, comments, documents, attachment metadata
+  (name, size, type, sha256), and child issues. Each body shows its start
+  inside one size budget, so the answer fits in a session; a body that is cut
+  carries `readMore`, the arguments that read that one document, comment or
+  description to the end, a page at a time.
 - `work_run_log` — the agent's own run log for that issue, paged, with secrets
   redacted on the server.
 - `work_fetch_file` — saves one attachment into
   `~/agentdash-inbox/incoming/<ISSUE>/`, readable only by you, after checking
-  its sha256. Allowlisted types within your company's attachment cap only; HTML
-  and SVG never come down.
+  its sha256 (no hash, no file). Allowlisted types within your company's
+  attachment cap only; HTML, SVG and XML never come down, and the client
+  refuses to save one even if a server sends it.
 
 You see exactly what you could see on the page, narrowed to your own work:
 issues assigned to you or to an agent you answer for. Anything else answers as

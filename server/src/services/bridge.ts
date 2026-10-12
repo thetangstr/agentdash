@@ -157,12 +157,24 @@ export const AGENT_MATERIAL_FRAMING =
  * The body keeps its newlines (a document is unreadable flattened), so the
  * markers themselves are the boundary: any `<untrusted-...>` tag inside the
  * body is defused, so text cannot close its own frame and continue as if it
- * were outside it. Control characters other than tab and newline are dropped.
+ * were outside it. That includes lookalikes a model may still read as the
+ * tag: format characters (zero-width, bidi controls) are dropped first, and
+ * the marker names themselves are replaced whatever brackets surround them
+ * (fullwidth, spaced, none). Control characters other than tab and newline
+ * are dropped.
  */
+const MARKER_NAME_SEPARATOR = "[\\s\\-_\\u2010-\\u2015\\u2212\\ufe58\\ufe63\\uff0d\\uff3f]*";
+const MARKER_NAME_RE = new RegExp(
+  `untrusted${MARKER_NAME_SEPARATOR}(?:agent${MARKER_NAME_SEPARATOR}material|bridge${MARKER_NAME_SEPARATOR}result)`,
+  "giu",
+);
+
 export function frameUntrustedAgentMaterial(value: string, kind: string): string {
   const body = value
     .replace(/\r\n?/g, "\n")
+    .replace(/\p{Cf}/gu, "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
+    .replace(MARKER_NAME_RE, "[marker removed]")
     .replace(/<\s*\/?\s*untrusted-[^>]*>/gi, (tag) => tag.replace(/</g, "‹").replace(/>/g, "›"));
   const safeKind = kind.replace(/[^a-z0-9_-]/gi, "");
   return [

@@ -314,9 +314,11 @@ export function bridgeRoutes(
   });
 
   /**
-   * One hand-off in full: the issue, its parent and the request it came from,
-   * comments, documents (paged by `offset` for the one named by
-   * `documentKey`), attachment metadata, and child issues.
+   * One hand-off: the issue, its parent and the request it came from,
+   * comments, documents, attachment metadata, and child issues, each body
+   * cut to its start inside one size budget. One body in full is a focused
+   * read: `documentKey`, `commentId` or `section: "description"`, paged by
+   * `offset`.
    */
   router.post("/bridge/work/read", async (req, res) => {
     const { endpointId } = requireEndpoint(req);
@@ -327,6 +329,8 @@ export function bridgeRoutes(
       await work.read(endpointId, {
         issueId: body.issueId,
         documentKey: body.documentKey,
+        commentId: body.commentId,
+        section: body.section,
         offset: body.offset,
         commentLimit: body.commentLimit,
       }),

@@ -102,14 +102,25 @@ export const WORK_TEXT_CAPS = {
   /** One-line fields: titles, names. */
   title: 240,
   name: 120,
-  /** Multi-line bodies, in characters. */
-  issueBody: 20_000,
-  contextBody: 4_000,
-  comment: 4_000,
-  documentPage: 20_000,
-  runEventMessage: 1_000,
+  /**
+   * An overview read (no `documentKey`, `commentId` or `section`) shows the
+   * start of each body, in characters, and says where to read on.
+   */
+  issueBody: 8_000,
+  contextBody: 2_000,
+  comment: 2_000,
+  documentPreview: 800,
+  /**
+   * All bodies of one overview read together. With the per-block framing and
+   * the metadata, this keeps a worst-case answer well inside an MCP client's
+   * tool-output limit (Claude Code's default is 25,000 tokens).
+   */
+  readBudget: 30_000,
+  /** One page of a focused read: one document, one comment, or the description. */
+  page: 20_000,
+  runEventMessage: 500,
   /** One page of a run log, in bytes of the stored file. */
-  runLogPageBytes: 64_000,
+  runLogPageBytes: 24_000,
 } as const;
 
 /**
@@ -119,7 +130,44 @@ export const WORK_TEXT_CAPS = {
  * tooling may open as one.
  */
 const MARKUP_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"]);
-const MARKUP_EXTENSIONS = /\.(html?|xhtml|shtml|svg|xml|xht|mht|mhtml)$/i;
+const MARKUP_EXTENSIONS = /\.(html?|xhtml|shtml|svg|svgz|xml|xht|xsl|xslt|mht|mhtml)$/i;
+
+/** RFC 6838 type/subtype, nothing else: no parameters, no spaces, no text. */
+const MEDIA_TYPE_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/;
+
+/**
+ * The stored type as a bare `type/subtype`, or null when what was stored is
+ * not one. Parameters (`; charset=...`) are dropped first, so they cannot
+ * carry `text/html` past an exact match; anything that is not media-type
+ * grammar is uploader-chosen text and is never repeated back.
+ */
+export function bareMediaType(contentType: string | null | undefined): string | null {
+  const base = normalizeContentType(contentType).split(";")[0]!.trim();
+  return MEDIA_TYPE_RE.test(base) ? base : null;
+}
+
+function isMarkupType(type: string): boolean {
+  return MARKUP_TYPES.has(type) || type.endsWith("+xml") || type.endsWith("/xml");
+}
+
+/**
+ * The name as a file system or a client's cleanup would leave it: format
+ * characters (zero-width, bidi controls) and control characters gone,
+ * compatibility forms folded, and trailing spaces of any kind and dots
+ * stripped. `report.html ` and `report.html.` are `report.html` to whatever
+ * saves them, so they are tested as that.
+ */
+export function effectiveFileName(name: string | null | undefined): string {
+  let out = String(name ?? "")
+    .replace(/[\p{Cf}\p{Cc}]/gu, "")
+    .normalize("NFKC");
+  let previous;
+  do {
+    previous = out;
+    out = out.replace(/[\s.]+$/u, "");
+  } while (out !== previous);
+  return out;
+}
 
 const ISSUE_IDENTIFIER_RE = /^[A-Z][A-Z0-9]*-\d+$/i;
 
@@ -167,16 +215,19 @@ export function framedSlice(value: string | null | undefined, kind: string, max:
 export function downloadVerdict(
   attachment: { contentType: string | null; originalFilename: string | null; byteSize: number },
   capBytes: number,
+  isAllowed: (contentType: string) => boolean = isAllowedContentType,
 ): { allowed: true } | { allowed: false; reason: string } {
-  const type = normalizeContentType(attachment.contentType);
-  const name = attachment.originalFilename ?? "";
-  if (MARKUP_TYPES.has(type) || MARKUP_EXTENSIONS.test(name)) {
+  const type = bareMediaType(attachment.contentType);
+  if ((type !== null && isMarkupType(type)) || MARKUP_EXTENSIONS.test(effectiveFileName(attachment.originalFilename))) {
     return {
       allowed: false,
       reason: "HTML, SVG and XML files are not sent over the bridge: they can carry script. Open it on the AgentDash page.",
     };
   }
-  if (!isAllowedContentType(type)) {
+  if (type === null) {
+    return { allowed: false, reason: "This file's stored type is not a plain media type, so it is not sent over the bridge." };
+  }
+  if (!isAllowed(type)) {
     return { allowed: false, reason: `${type} is not on this instance's attachment allowlist.` };
   }
   if (attachment.byteSize > capBytes) {
@@ -491,16 +542,140 @@ export function stewardWorkService(
     return chain;
   }
 
+  /** Said once in an overview read, so the session knows how to read on. */
+  const PAGING_NOTE =
+    "Bodies here are the start of each text, inside one size budget. When a body says truncated, " +
+    "call work_read again with its readMore arguments to read on; parent and request show their start only.";
+
   async function read(
     endpointId: string,
-    input: { issueId?: unknown; documentKey?: unknown; offset?: unknown; commentLimit?: unknown },
+    input: {
+      issueId?: unknown;
+      documentKey?: unknown;
+      commentId?: unknown;
+      section?: unknown;
+      offset?: unknown;
+      commentLimit?: unknown;
+    },
   ) {
     const owner = await resolveOwner(endpointId);
     if (isRefusal(owner)) return owner;
     const issue = await findWorkIssue(owner, input.issueId);
     const documentKey = typeof input.documentKey === "string" && input.documentKey.trim() ? input.documentKey.trim() : null;
+    const commentId = typeof input.commentId === "string" && input.commentId.trim() ? input.commentId.trim() : null;
+    const section = typeof input.section === "string" && input.section.trim() ? input.section.trim() : null;
+    const hasOffset = input.offset !== undefined && input.offset !== null;
     const offset = clampInt(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const commentLimit = clampInt(input.commentLimit, WORK_LIMITS.commentsDefault, 1, WORK_LIMITS.commentsMax);
+
+    const locators = [documentKey, commentId, section].filter((value) => value !== null);
+    if (locators.length > 1) {
+      return refusal("one_part_at_a_time", 'Pass only one of documentKey, commentId or section: "description".');
+    }
+    if (section !== null && section !== "description") {
+      return refusal("no_such_section", 'The only section is "description".');
+    }
+    if (hasOffset && locators.length === 0) {
+      return refusal("offset_needs_a_part", 'offset reads on in one part: pass it with documentKey, commentId or section: "description".');
+    }
+
+    const issueRef = issue.identifier ?? issue.id;
+    /** A slice, plus the exact work_read arguments that read on from where it stopped. */
+    const withReadMore = (slice: ReturnType<typeof framedSlice>, locator: Record<string, string>) => ({
+      ...slice,
+      readMore: slice.nextOffset === null ? null : { issueId: issueRef, ...locator, offset: slice.nextOffset },
+    });
+    const issueHeader = {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      title: frameUntrustedText(issue.title, WORK_TEXT_CAPS.title),
+      status: issue.status,
+    };
+
+    // -- A focused read: one page of one body, and nothing else. ------------
+
+    if (section === "description") {
+      return {
+        ok: true as const,
+        framing: AGENT_MATERIAL_FRAMING,
+        issue: {
+          ...issueHeader,
+          description: withReadMore(framedSlice(issue.description, "issue-description", WORK_TEXT_CAPS.page, offset), {
+            section: "description",
+          }),
+        },
+      };
+    }
+
+    if (commentId !== null) {
+      const row = isCanonicalUuid(commentId)
+        ? await db
+            .select()
+            .from(issueComments)
+            .where(and(eq(issueComments.id, commentId), eq(issueComments.issueId, issue.id)))
+            .then((rows) => rows[0] ?? null)
+        : null;
+      if (!row) return refusal("no_such_comment", "There is no comment with that id on this issue.");
+      const names = await namesFor({ agentIds: [row.authorAgentId], userIds: [row.authorUserId] });
+      return {
+        ok: true as const,
+        framing: AGENT_MATERIAL_FRAMING,
+        issue: issueHeader,
+        comment: {
+          commentId: row.id,
+          createdAt: row.createdAt.toISOString(),
+          author: names.author(row.authorAgentId, row.authorUserId),
+          body: withReadMore(framedSlice(row.body, "comment", WORK_TEXT_CAPS.page, offset), { commentId: row.id }),
+        },
+      };
+    }
+
+    const documentRows = await db
+      .select({
+        key: issueDocuments.key,
+        documentId: documents.id,
+        title: documents.title,
+        format: documents.format,
+        body: documents.latestBody,
+        revisionId: documents.latestRevisionId,
+        revisionNumber: documents.latestRevisionNumber,
+        updatedAt: documents.updatedAt,
+        updatedByAgentId: documents.updatedByAgentId,
+        updatedByUserId: documents.updatedByUserId,
+      })
+      .from(issueDocuments)
+      .innerJoin(documents, eq(documents.id, issueDocuments.documentId))
+      .where(
+        documentKey === null
+          ? eq(issueDocuments.issueId, issue.id)
+          : and(eq(issueDocuments.issueId, issue.id), eq(issueDocuments.key, documentKey)),
+      )
+      .orderBy(asc(issueDocuments.key));
+
+    if (documentKey !== null) {
+      const row = documentRows[0];
+      if (!row) {
+        return refusal("no_such_document", `There is no document with the key "${frameUntrustedText(documentKey, 80)}" on this issue.`);
+      }
+      const names = await namesFor({ agentIds: [row.updatedByAgentId], userIds: [row.updatedByUserId] });
+      return {
+        ok: true as const,
+        framing: AGENT_MATERIAL_FRAMING,
+        issue: issueHeader,
+        document: {
+          key: row.key,
+          title: frameUntrustedText(row.title, WORK_TEXT_CAPS.title),
+          format: row.format,
+          revisionId: row.revisionId,
+          revisionNumber: row.revisionNumber,
+          updatedAt: row.updatedAt.toISOString(),
+          updatedBy: names.author(row.updatedByAgentId, row.updatedByUserId),
+          body: withReadMore(framedSlice(row.body, "document", WORK_TEXT_CAPS.page, offset), { documentKey: row.key }),
+        },
+      };
+    }
+
+    // -- The overview: everything, each body's start, inside one budget. ----
 
     const company = await db
       .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
@@ -532,27 +707,6 @@ export function stewardWorkService(
         .orderBy(desc(issueComments.createdAt), desc(issueComments.id))
         .limit(commentLimit)
     ).reverse();
-
-    const documentRows = await db
-      .select({
-        key: issueDocuments.key,
-        documentId: documents.id,
-        title: documents.title,
-        format: documents.format,
-        body: documents.latestBody,
-        revisionId: documents.latestRevisionId,
-        revisionNumber: documents.latestRevisionNumber,
-        updatedAt: documents.updatedAt,
-        updatedByAgentId: documents.updatedByAgentId,
-        updatedByUserId: documents.updatedByUserId,
-      })
-      .from(issueDocuments)
-      .innerJoin(documents, eq(documents.id, issueDocuments.documentId))
-      .where(eq(issueDocuments.issueId, issue.id))
-      .orderBy(asc(issueDocuments.key));
-    if (documentKey && !documentRows.some((row) => row.key === documentKey)) {
-      return refusal("no_such_document", `There is no document with the key "${frameUntrustedText(documentKey, 80)}" on this issue.`);
-    }
 
     const attachmentRows = await db
       .select({
@@ -612,32 +766,53 @@ export function stewardWorkService(
       ],
     });
 
+    // One budget for every body, spent in order of what a review needs
+    // first: the issue, the newest comment (usually the hand-off itself),
+    // the context, a preview of each document, then older comments, newest
+    // first. A body the budget does not reach still says truncated, with
+    // readMore.
+    let budget: number = WORK_TEXT_CAPS.readBudget;
+    const preview = (value: string | null | undefined, kind: string, cap: number) => {
+      const slice = framedSlice(value, kind, Math.min(cap, budget));
+      budget -= (slice.nextOffset ?? slice.totalChars) - slice.offset;
+      return slice;
+    };
+
+    const parent = chain[0] ?? null;
+    const root = chain.length > 1 ? chain[chain.length - 1]! : null;
+    const shownDocuments = documentRows.slice(0, WORK_LIMITS.documents);
+    const shownAttachments = attachmentRows.slice(0, WORK_LIMITS.attachments);
+    const shownChildren = childRows.slice(0, WORK_LIMITS.children);
+
+    const description = withReadMore(preview(issue.description, "issue-description", WORK_TEXT_CAPS.issueBody), {
+      section: "description",
+    });
+    const commentBodies = new Map<string, ReturnType<typeof withReadMore>>();
+    const commentBody = (row: (typeof commentRows)[number]) =>
+      commentBodies.set(row.id, withReadMore(preview(row.body, "comment", WORK_TEXT_CAPS.comment), { commentId: row.id }));
+    const newestComment = commentRows[commentRows.length - 1];
+    if (newestComment) commentBody(newestComment);
     const contextIssue = (row: IssueRow) => ({
       issueId: row.id,
       identifier: row.identifier,
       title: frameUntrustedText(row.title, WORK_TEXT_CAPS.title),
       status: row.status,
       createdBy: names.author(row.createdByAgentId, row.createdByUserId),
-      description: framedSlice(row.description, "issue-description", WORK_TEXT_CAPS.contextBody),
+      description: preview(row.description, "issue-description", WORK_TEXT_CAPS.contextBody),
     });
-    const parent = chain[0] ?? null;
-    const root = chain.length > 1 ? chain[chain.length - 1]! : null;
-
-    const shownDocuments = (documentKey ? documentRows.filter((row) => row.key === documentKey) : documentRows).slice(
-      0,
-      WORK_LIMITS.documents,
+    const parentBlock = parent ? contextIssue(parent) : null;
+    const requestBlock = root ? contextIssue(root) : null;
+    const documentBodies = shownDocuments.map((row) =>
+      withReadMore(preview(row.body, "document", WORK_TEXT_CAPS.documentPreview), { documentKey: row.key }),
     );
-    const shownAttachments = attachmentRows.slice(0, WORK_LIMITS.attachments);
-    const shownChildren = childRows.slice(0, WORK_LIMITS.children);
+    for (const row of commentRows.slice(0, -1).reverse()) commentBody(row);
 
     return {
       ok: true as const,
       framing: AGENT_MATERIAL_FRAMING,
+      paging: PAGING_NOTE,
       issue: {
-        issueId: issue.id,
-        identifier: issue.identifier,
-        title: frameUntrustedText(issue.title, WORK_TEXT_CAPS.title),
-        status: issue.status,
+        ...issueHeader,
         priority: issue.priority,
         assignee: issue.assigneeAgentId
           ? names.author(issue.assigneeAgentId, null)
@@ -645,7 +820,7 @@ export function stewardWorkService(
         createdBy: names.author(issue.createdByAgentId, issue.createdByUserId),
         createdAt: issue.createdAt.toISOString(),
         updatedAt: issue.updatedAt.toISOString(),
-        description: framedSlice(issue.description, "issue-description", WORK_TEXT_CAPS.issueBody),
+        description,
       },
       project: project
         ? {
@@ -654,9 +829,9 @@ export function stewardWorkService(
             restricted: project.visibility === "restricted",
           }
         : null,
-      parent: parent ? contextIssue(parent) : null,
+      parent: parentBlock,
       // The request this work started from, when it is further up than the parent.
-      request: root ? contextIssue(root) : null,
+      request: requestBlock,
       comments: {
         total: commentTotal,
         shown: commentRows.length,
@@ -666,14 +841,14 @@ export function stewardWorkService(
           commentId: row.id,
           createdAt: row.createdAt.toISOString(),
           author: names.author(row.authorAgentId, row.authorUserId),
-          body: framedSlice(row.body, "comment", WORK_TEXT_CAPS.comment),
+          body: commentBodies.get(row.id)!,
         })),
       },
       documents: {
         total: documentRows.length,
         shown: shownDocuments.length,
         truncated: documentRows.length > shownDocuments.length,
-        items: shownDocuments.map((row) => ({
+        items: shownDocuments.map((row, index) => ({
           key: row.key,
           title: frameUntrustedText(row.title, WORK_TEXT_CAPS.title),
           format: row.format,
@@ -681,8 +856,7 @@ export function stewardWorkService(
           revisionNumber: row.revisionNumber,
           updatedAt: row.updatedAt.toISOString(),
           updatedBy: names.author(row.updatedByAgentId, row.updatedByUserId),
-          // `offset` applies to the document named by `documentKey` only.
-          body: framedSlice(row.body, "document", WORK_TEXT_CAPS.documentPage, documentKey ? offset : 0),
+          body: documentBodies[index]!,
         })),
       },
       attachments: {
@@ -695,7 +869,8 @@ export function stewardWorkService(
           return {
             attachmentId: row.id,
             name: frameUntrustedText(row.originalFilename, WORK_TEXT_CAPS.title),
-            contentType: normalizeContentType(row.contentType),
+            // A bare media type or null: never the uploader's string as stored.
+            contentType: bareMediaType(row.contentType),
             byteSize: row.byteSize,
             sha256: row.sha256,
             createdAt: row.createdAt.toISOString(),
@@ -963,7 +1138,8 @@ export function stewardWorkService(
       issueId: issue.id,
       identifier: issue.identifier,
       filename: attachment.originalFilename ?? "attachment",
-      contentType: normalizeContentType(attachment.contentType),
+      // downloadVerdict passed, so this is a bare, allowlisted media type.
+      contentType: bareMediaType(attachment.contentType) ?? "application/octet-stream",
       byteSize: attachment.byteSize,
       sha256: attachment.sha256,
     };

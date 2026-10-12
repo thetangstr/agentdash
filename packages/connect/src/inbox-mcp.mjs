@@ -218,35 +218,59 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
       return textResult(err?.message ?? String(err), true);
     }
 
-    let res;
+    // One controller for the request: the answer gets DEFAULT_TIMEOUT_MS from
+    // the start. A tool that streams a file (`bodyTimeoutMs`) gets a fresh,
+    // size-aware deadline once its headers are in.
+    const controller = new AbortController();
+    const abortAfter = (ms) =>
+      setTimeout(() => controller.abort(new Error(`timed out after ${Math.round(ms / 1000)} s`)), ms);
+    let timer = abortAfter(DEFAULT_TIMEOUT_MS);
     try {
-      res = await fetchImpl(`${server}/api/bridge/${tool.path ?? `inbox/${tool.route}`}`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify(tool.body(input ?? {})),
-        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-      });
-    } catch (err) {
-      return textResult(`AgentDash unreachable at ${server}: ${err?.message ?? String(err)}`, true);
-    }
+      let res;
+      try {
+        res = await fetchImpl(`${server}/api/bridge/${tool.path ?? `inbox/${tool.route}`}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify(tool.body(input ?? {})),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        return textResult(`AgentDash unreachable at ${server}: ${err?.message ?? String(err)}`, true);
+      }
 
-    if (tool.handleResponse && res.ok) {
-      return tool.handleResponse(res, input ?? {}, { inboxDir, textResult });
+      if (tool.handleResponse && res.ok) {
+        if (tool.bodyTimeoutMs) {
+          clearTimeout(timer);
+          timer = abortAfter(tool.bodyTimeoutMs(res));
+        }
+        // Every failure answers the call: an exception here would otherwise
+        // reach the stdio loop, which can only log it, and the session would
+        // wait on a reply that never comes.
+        try {
+          return await tool.handleResponse(res, input ?? {}, { inboxDir, textResult });
+        } catch (err) {
+          return textResult(`Could not finish ${tool.name}: ${err?.message ?? String(err)}`, true);
+        }
+      }
+      const raw = await res.text().catch(() => "");
+      if (!res.ok) {
+        return textResult(`AgentDash answered ${res.status}: ${raw.slice(0, 300)}`, true);
+      }
+      let parsed;
+      try {
+        parsed = raw ? JSON.parse(raw) : {};
+      } catch {
+        return textResult(raw);
+      }
+      if (tool.refusalNote && parsed && parsed.ok === false) {
+        return textResult({ ...parsed, note: tool.refusalNote });
+      }
+      return textResult(parsed);
+    } finally {
+      clearTimeout(timer);
+      // Releases a body a handler chose not to read (a refused file).
+      controller.abort();
     }
-    const raw = await res.text().catch(() => "");
-    if (!res.ok) {
-      return textResult(`AgentDash answered ${res.status}: ${raw.slice(0, 300)}`, true);
-    }
-    let parsed;
-    try {
-      parsed = raw ? JSON.parse(raw) : {};
-    } catch {
-      return textResult(raw);
-    }
-    if (tool.refusalNote && parsed && parsed.ok === false) {
-      return textResult({ ...parsed, note: tool.refusalNote });
-    }
-    return textResult(parsed);
   }
 
   return async function handle(message) {
