@@ -5,6 +5,7 @@ import { defaultInboxDir, readBridgeOwner, resolveBridgeToken, resolveInboxServe
 import { REQUEST_INSTRUCTIONS, REQUEST_TOOLS } from "./request-tools.mjs";
 import { WORK_INSTRUCTIONS, WORK_TOOLS } from "./work-tools.mjs";
 import { REPLY_INSTRUCTIONS, REPLY_TOOLS } from "./reply-tools.mjs";
+import { READ_ONLY_INBOX_TOOLS } from "./pre-review.mjs";
 
 /**
  * `agentdash-connect mcp` — the person's own inbox, as MCP tools, over stdio.
@@ -201,6 +202,13 @@ function instructionsFor(owner) {
   ].join("\n");
 }
 
+/** Said instead of the send-back and request instructions when only the read tools are served. */
+const READ_ONLY_INSTRUCTIONS = [
+  "This server is read-only: it serves only the tools that read (inbox_sync, inbox_agents, work_list,",
+  "work_read, work_run_log, work_fetch_file). Nothing can be sent, decided, answered, acknowledged,",
+  "proposed or confirmed through it.",
+].join("\n");
+
 const textResult = (value, isError = false) => ({
   content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
   ...(isError ? { isError: true } : {}),
@@ -222,7 +230,14 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
   // (`tool.path`), and the file tool writes its own response
   // (`tool.handleResponse`). The send-back (reply-tools.mjs) is the work
   // surface's write half.
-  const allTools = [...TOOLS, ...WORK_TOOLS, ...REPLY_TOOLS, ...REQUEST_TOOLS];
+  //
+  // `readOnly` (`mcp --read-only`, used by the scheduled pre-review) serves
+  // the read tools only: a tool that sends, decides, answers, acknowledges,
+  // proposes or confirms is neither listed nor callable.
+  const readOnly = opts.readOnly === true;
+  const allTools = [...TOOLS, ...WORK_TOOLS, ...REPLY_TOOLS, ...REQUEST_TOOLS].filter(
+    (tool) => !readOnly || READ_ONLY_INBOX_TOOLS.includes(tool.name),
+  );
   const toolsByName = new Map(allTools.map((tool) => [tool.name, tool]));
   // Local files a propose call named, by the handle it returned, until the
   // confirm uploads them (file-send.mjs). In memory only: a restart forgets
@@ -335,7 +350,9 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
           protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: "agentdash-inbox", version },
-          instructions: [instructionsFor(owner), WORK_INSTRUCTIONS, REPLY_INSTRUCTIONS, REQUEST_INSTRUCTIONS].join("\n"),
+          instructions: readOnly
+            ? [instructionsFor(owner), WORK_INSTRUCTIONS, READ_ONLY_INSTRUCTIONS].join("\n")
+            : [instructionsFor(owner), WORK_INSTRUCTIONS, REPLY_INSTRUCTIONS, REQUEST_INSTRUCTIONS].join("\n"),
         });
       case "ping":
         return isRequest ? reply({}) : null;

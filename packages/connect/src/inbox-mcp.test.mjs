@@ -324,3 +324,49 @@ describe("registering the inbox tools with Claude Code", () => {
     expect(JSON.stringify(after.mcpServers["agentdash-inbox"])).not.toMatch(/pcp_|Bearer|token/i);
   });
 });
+
+describe("agentdash-connect mcp --read-only (the scheduled pre-review)", () => {
+  const READ_ONLY = ["inbox_sync", "inbox_agents", "work_list", "work_read", "work_run_log", "work_fetch_file"];
+
+  it("lists only the tools that read", async () => {
+    const fetch = fakeFetch(() => ({ json: { ok: true } }));
+    const handle = createInboxMcpHandler(
+      { readOnly: true },
+      { fetchImpl: fetch.impl, readServer: () => SERVER, readToken: () => "bridge-token-xyz", owner: null },
+    );
+    const list = await handle({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(list.result.tools.map((tool) => tool.name).sort()).toEqual([...READ_ONLY].sort());
+    const init = await handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} });
+    expect(init.result.instructions).toMatch(/This server is read-only/);
+  });
+
+  it("refuses every tool that sends, decides, answers, acknowledges, proposes or confirms, without calling AgentDash", async () => {
+    const fetch = fakeFetch(() => ({ json: { ok: true } }));
+    const handle = createInboxMcpHandler(
+      { readOnly: true },
+      { fetchImpl: fetch.impl, readServer: () => SERVER, readToken: () => "bridge-token-xyz", owner: null },
+    );
+    for (const name of [
+      "inbox_decide",
+      "inbox_answer",
+      "inbox_ack",
+      "inbox_propose",
+      "inbox_confirm",
+      "work_propose_reply",
+      "work_confirm_reply",
+      "work_request_propose",
+      "work_request_respond",
+      "work_request_confirm",
+    ]) {
+      const res = await handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name, arguments: { token: "h" } } });
+      expect(res.result.isError).toBe(true);
+      expect(res.result.content[0].text).toBe(`Unknown tool: ${name}`);
+    }
+    expect(fetch.calls).toEqual([]);
+
+    // A read still works.
+    const read = await handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "work_list", arguments: {} } });
+    expect(read.result.isError).toBeUndefined();
+    expect(fetch.calls.map((call) => call.url)).toEqual([`${SERVER}/api/bridge/work/list`]);
+  });
+});

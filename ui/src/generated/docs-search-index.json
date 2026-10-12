@@ -197,6 +197,7 @@
         "Reviewing what your agent did",
         "Sending your reply back",
         "Asking a colleague for work",
+        "A notification when work is handed to you (macOS)",
         "Email",
         "Optional: have your agent keep watch"
       ],
@@ -1480,6 +1481,8 @@
         "Reviewing your agents' work",
         "Sending your reply back",
         "Asking someone else for work",
+        "Notifications and pre-review (macOS, opt-in)",
+        "Scheduled pre-review",
         "Nothing left running",
         "Where the key goes",
         "Commands",

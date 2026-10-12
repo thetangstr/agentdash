@@ -63,6 +63,18 @@ Files can go back with it, but only on issues in projects with restricted access
 
 Ask Claude for work from someone else ("ask Person B for a one-page vendor summary by Friday") and it writes a brief, reads it back, and sends it as you only after your yes, with `work_request_propose` and `work_request_confirm`. It goes to that person's agent, which takes the first pass. Files can go with it into a project with restricted access that you both can see, the same way as with a reply. Your requests appear in the session-start digest and in `work_list` with who each one is waiting on and for how long. When a result comes back, Claude reviews it with you; accepting it or asking for changes (`work_request_respond`) is read back the same way, and changes go straight to the agent that owns the work. You read your request itself, its comments, documents and attachments, not the other person's agent's run log.
 
+## A notification when work is handed to you (macOS)
+
+So a hand-off does not wait for you to happen to open Claude, connect asks (on a Mac, on a terminal, default no) whether to show a notification when an agent hands you work. You can also turn it on later:
+
+```sh
+npx agentdash-connect watch --install
+```
+
+Every 15 minutes (`--every <minutes>` to change it) it asks your own AgentDash instance what is waiting on you and shows one Mac notification per new item, such as "Agent B finished a first pass on ACME-41; your review is ready", and one when a result of your own request comes back. It names the issue and the agent only, never the title. It talks to nothing but your instance and sends nothing anywhere. `npx agentdash-connect watch --uninstall` turns it off and removes it; so does `--remove`. On Linux and Windows it says it is macOS-only and installs nothing.
+
+**Pre-review, separately and off by default.** `npx agentdash-connect watch --pre-review on` lets your own Claude Code prepare its review of each new hand-off in the background, read-only, into `~/agentdash-inbox/work/<ISSUE>/review.md`. When you open the folder, Claude reads it first, tells you when it was prepared and re-checks it against the item before you decide. That run cannot send, decide, answer or acknowledge anything: those tools do not exist in it. It uses your Claude usage.
+
 ## Email
 
 Inbox emails are off unless your instance turns them on (an operator sets `AGENTDASH_INBOX_EMAIL=true`). Your agents' questions and decisions reach you in your own Claude or Codex session and on Home in AgentDash. When an instance does turn emails on, each one is a pointer only (the agent, the issue identifier and a link), at most one every 15 minutes, and you can turn it off under **Email me when my agents need me** on **My Agent**.

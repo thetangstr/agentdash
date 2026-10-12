@@ -845,3 +845,31 @@ describe("runInbox", () => {
     expect(logs).toHaveLength(0);
   });
 });
+
+describe("runInbox inside a scheduled pre-review", () => {
+  /**
+   * The pre-review starts Claude Code headless in the inbox folder with hooks
+   * off. If the folder's SessionStart hook ran there anyway, `--ack` would
+   * bury the person's events before they saw them; it stands down instead.
+   */
+  it("stands down: no sync, no acknowledgement, nothing written", async () => {
+    const dir = tmp();
+    mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    const tokenFile = path.join(dir, "token");
+    writeFileSync(tokenFile, "bt_x");
+    const calls = [];
+    const code = await runInbox(
+      { server: "https://agentdash.example.test", tokenFile, ack: true, quietWhenEmpty: true },
+      {
+        env: { AGENTDASH_PRE_REVIEW: "1" },
+        inboxDir: dir,
+        fetchImpl: async (url) => (calls.push(url), { ok: true, json: async () => ({ events: [] }) }),
+        log: () => {},
+        errorLog: () => {},
+      },
+    );
+    expect(code).toBe(0);
+    expect(calls).toEqual([]);
+    expect(existsSync(path.join(dir, ".claude", "skills"))).toBe(false);
+  });
+});
