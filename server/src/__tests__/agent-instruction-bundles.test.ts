@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -330,6 +330,27 @@ describe("agent-to-agent hand-offs in the mandate", () => {
       expect(flat(surface.content), `${surface.name} omits the direct hand-off`).toMatch(/hand the work to their agent directly/i);
       expect(flat(surface.content), `${surface.name} omits the child issue and brief`).toMatch(/child issue[^.]*assigned to that agent[^.]*brief/i);
     }
+  });
+
+  /**
+   * Skills in the repo skills/ directory are served to agents too
+   * (routes/access.ts), so a skill that still says "ask your steward to relay"
+   * contradicts the mandate for any agent that loads it.
+   */
+  it("never tells an agent to ask for a relay in any repo skill", () => {
+    const skillsDir = path.resolve(serverSrc, "../../skills");
+    const skillFiles = (readdirSync(skillsDir, { recursive: true }) as string[])
+      .filter((entry) => path.basename(entry) === "SKILL.md")
+      .map((entry) => path.join(skillsDir, entry));
+    expect(skillFiles.length).toBeGreaterThan(0);
+    for (const file of skillFiles) {
+      const content = flat(readFileSync(file, "utf8"));
+      expect(content, `${path.relative(skillsDir, file)} still asks the steward to relay`).not.toMatch(
+        /steward to relay/i,
+      );
+    }
+    const connectors = flat(readFileSync(path.join(skillsDir, "agentdash-connectors/SKILL.md"), "utf8"));
+    expect(connectors).toMatch(/hand the work to their agent directly/i);
   });
 
   it("gives work from another agent the same first pass and mandate test, and says whether the person was consulted", () => {

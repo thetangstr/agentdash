@@ -16,6 +16,7 @@ import {
   featureFlags,
   heartbeatRuns,
   issues,
+  projects,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -31,6 +32,7 @@ import {
   AGENT_HANDOFF_ROUND_CAP,
   COWORKER_BRIDGE_FLAG,
   emitHandoffReturned,
+  recordAgentHandoff,
 } from "../services/agent-handoffs.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -331,6 +333,61 @@ describeEmbeddedPostgres("agent-to-agent hand-offs", () => {
     expect(await rows(child.body.id, AGENT_HANDOFF_ACTION)).toHaveLength(1);
   });
 
+  /**
+   * A person assigned the piece to Agent B; no agent handed it over. Agent B
+   * passing it to the parent's agent is a hand-off of its own, not work sent
+   * back: it is capped, and the activity never says "sent back".
+   */
+  it("treats passing on work a person assigned as a hand-off, not a return", async () => {
+    const root = await rootRequest();
+    const [assignedByPerson] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "Assigned by a person", status: "todo", parentId: root.id, assigneeAgentId: agentB.agentId })
+      .returning();
+    const passed = await request(app(agentB.actor))
+      .patch(`/api/issues/${assignedByPerson!.id}`)
+      .send({ assigneeAgentId: agentA.agentId, comment: "This is Agent A's area." });
+    expect(passed.status, JSON.stringify(passed.body)).toBe(200);
+    expect(await rows(assignedByPerson!.id, AGENT_HANDOFF_RETURNED_ACTION)).toHaveLength(0);
+    const [handoff] = await rows(assignedByPerson!.id, AGENT_HANDOFF_ACTION);
+    expect(handoff?.details).toMatchObject({ fromAgentId: agentB.agentId, toAgentId: agentA.agentId, via: "reassign", round: 1 });
+
+    // At the cap the same move is refused, because nothing is being sent back.
+    const capped = await rootRequest("Capped request");
+    for (let round = 1; round <= AGENT_HANDOFF_ROUND_CAP; round += 1) {
+      expect((await handOffChild(agentA, capped.id, { assigneeAgentId: agentC.agentId }, `Round ${round}`)).status).toBe(201);
+    }
+    const [cappedPiece] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "Assigned by a person, capped", status: "todo", parentId: capped.id, assigneeAgentId: agentB.agentId })
+      .returning();
+    const refused = await request(app(agentB.actor))
+      .patch(`/api/issues/${cappedPiece!.id}`)
+      .send({ assigneeAgentId: agentA.agentId });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE });
+    expect(await rows(cappedPiece!.id, AGENT_HANDOFF_RETURNED_ACTION)).toHaveLength(0);
+  });
+
+  it("answers a create for an agent that does not exist with the create's own 404, not the cap, even at the cap", async () => {
+    const root = await rootRequest();
+    for (let round = 1; round <= AGENT_HANDOFF_ROUND_CAP; round += 1) {
+      expect((await handOffChild(agentA, root.id, { assigneeAgentId: agentB.agentId }, `Round ${round}`)).status).toBe(201);
+    }
+    const ghost = randomUUID();
+    const child = await handOffChild(agentA, root.id, { assigneeAgentId: ghost }, "To nobody");
+    expect(child.status, JSON.stringify(child.body)).toBe(404);
+    const companyLevel = await request(app(agentA.actor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "To nobody either", status: "todo", parentId: root.id, assigneeAgentId: ghost });
+    expect(companyLevel.status, JSON.stringify(companyLevel.body)).toBe(404);
+    const refusals = await db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.action, AGENT_HANDOFF_REFUSED_ACTION), eq(activityLog.entityId, root.id)));
+    expect(refusals).toHaveLength(0);
+  });
+
   it("records a declined hand-off (cancelled by the receiving agent) as returned, and wakes the parent's agent", async () => {
     const root = await rootRequest();
     const child = await handOffChild(agentA, root.id, { assigneeAgentId: agentB.agentId });
@@ -448,6 +505,59 @@ describeEmbeddedPostgres("agent-to-agent hand-offs", () => {
     it("answers 404 for an issue that does not exist", async () => {
       const res = await request(app(agentA.actor)).get(`/api/issues/${randomUUID()}/agent-handoffs`);
       expect(res.status).toBe(404);
+    });
+
+    /**
+     * The root sits in a restricted project the reader is not on; one piece
+     * of the request is in the open. The reader gets 404 for the root, and
+     * from the open piece neither the request nor its owner nor the restricted
+     * piece's hand-off. The round count is the request's whole count, the one
+     * the cap enforces (services/agent-handoffs.ts, summarizeRequestHandoffs).
+     */
+    it("keeps a restricted request's root, owner and restricted hand-offs from a reader who is not on the project", async () => {
+      const [restricted] = await db
+        .insert(projects)
+        .values({ companyId: COMPANY, name: "Restricted work", visibility: "restricted" })
+        .returning();
+      const [root] = await db
+        .insert(issues)
+        .values({ companyId: COMPANY, title: "Restricted request", status: "in_progress", assigneeAgentId: agentA.agentId, projectId: restricted!.id })
+        .returning();
+      const [openPiece] = await db
+        .insert(issues)
+        .values({ companyId: COMPANY, title: "Open piece", status: "todo", parentId: root!.id, assigneeAgentId: agentB.agentId })
+        .returning();
+      const [hiddenPiece] = await db
+        .insert(issues)
+        .values({ companyId: COMPANY, title: "Restricted piece", status: "todo", parentId: root!.id, assigneeAgentId: agentC.agentId, projectId: restricted!.id })
+        .returning();
+      for (const [piece, toAgentId] of [[openPiece!, agentB.agentId], [hiddenPiece!, agentC.agentId]] as const) {
+        await recordAgentHandoff(db, {
+          companyId: COMPANY, issueId: piece.id, parentIssueId: root!.id, rootIssueId: root!.id,
+          fromAgentId: agentA.agentId, toAgentId, runId: null, via: "child_create",
+        });
+      }
+
+      const reader = memberActor(agentB.userId);
+      const rootRes = await request(app(reader)).get(`/api/issues/${root!.id}/agent-handoffs`);
+      expect(rootRes.status).toBe(404);
+      const hiddenRes = await request(app(reader)).get(`/api/issues/${hiddenPiece!.id}/agent-handoffs`);
+      expect(hiddenRes.status).toBe(404);
+
+      const res = await request(app(reader)).get(`/api/issues/${openPiece!.id}/agent-handoffs`);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.request).toBeNull();
+      expect(res.body.deliverableOwnerAgentId).toBeNull();
+      expect(res.body.handoffs).toEqual([expect.objectContaining({ issueId: openPiece!.id, toAgentId: agentB.agentId })]);
+      expect(JSON.stringify(res.body)).not.toContain(hiddenPiece!.id);
+      expect(JSON.stringify(res.body)).not.toContain(agentC.agentId);
+      expect(res.body).toMatchObject({ rounds: 2, remaining: AGENT_HANDOFF_ROUND_CAP - 2 });
+
+      // The owner reads the whole request.
+      const full = await request(app(ownerActor)).get(`/api/issues/${openPiece!.id}/agent-handoffs`);
+      expect(full.status, JSON.stringify(full.body)).toBe(200);
+      expect(full.body).toMatchObject({ request: { issueId: root!.id }, deliverableOwnerAgentId: agentA.agentId, rounds: 2 });
+      expect(full.body.handoffs).toHaveLength(2);
     });
   });
 });

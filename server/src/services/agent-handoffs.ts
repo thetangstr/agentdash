@@ -24,6 +24,8 @@ import { logActivity } from "./activity-log.js";
  * new table and no new budget system. Known limitation: two hand-offs racing at
  * the last round can both pass, because the count and the issue write are not
  * one transaction; the cap is a guard against runaway delegation, not a quota.
+ * The count filters activity rows on a JSON field with no index of its own, so
+ * routes take it before an update's transaction opens rather than inside it.
  *
  * Like the rest of the co-worker feature, this is server behavior behind the
  * company flag `coworker_bridge_enabled` (default off): with the flag off,
@@ -181,19 +183,23 @@ export type HandoffRoundCheck =
   | { allowed: true; rounds: number }
   | { allowed: false; rounds: number; message: string; details: Record<string, unknown> };
 
-/** May an agent hand an issue in this request to another agent now? */
-export async function checkHandoffRoundAvailable(
-  db: Reader,
-  input: { companyId: string; rootIssueId: string },
-): Promise<HandoffRoundCheck> {
-  const rounds = await countHandoffRounds(db, input);
+/** The cap decision for a request that has used `rounds` rounds. */
+export function handoffRoundCheck(rounds: number, rootIssueId: string): HandoffRoundCheck {
   if (rounds < AGENT_HANDOFF_ROUND_CAP) return { allowed: true, rounds };
   return {
     allowed: false,
     rounds,
     message: agentHandoffCapMessage(rounds),
-    details: { code: AGENT_HANDOFF_CAP_CODE, rounds, cap: AGENT_HANDOFF_ROUND_CAP, rootIssueId: input.rootIssueId },
+    details: { code: AGENT_HANDOFF_CAP_CODE, rounds, cap: AGENT_HANDOFF_ROUND_CAP, rootIssueId },
   };
+}
+
+/** May an agent hand an issue in this request to another agent now? */
+export async function checkHandoffRoundAvailable(
+  db: Reader,
+  input: { companyId: string; rootIssueId: string },
+): Promise<HandoffRoundCheck> {
+  return handoffRoundCheck(await countHandoffRounds(db, input), input.rootIssueId);
 }
 
 /** Record one agent-to-agent hand-off. Returns the round it used. */
@@ -370,6 +376,14 @@ export interface RequestHandoffEntry {
  * the deliverable owner (the agent the request itself is assigned to, O7), the
  * hand-offs it can see, and — only for readers allowed to see spend — the cost
  * recorded against the request's issues it can see.
+ *
+ * Visibility: the deliverable owner is reported only to a reader who can see
+ * the root issue, and the hand-off list and cost cover visible issues only.
+ * `rounds` and `remaining` deliberately count every issue in the request,
+ * restricted ones included: that is what the cap counts, and a refused
+ * hand-off already reports the same count (`details.rounds`) to the agent.
+ * A per-reader count would tell an agent it has rounds left that the server
+ * then refuses.
  */
 export async function summarizeRequestHandoffs(
   db: Reader,
@@ -389,11 +403,13 @@ export async function summarizeRequestHandoffs(
   costCents: number | null;
 }> {
   const rounds = await countHandoffRounds(db, input);
-  const root = await db
-    .select({ assigneeAgentId: issues.assigneeAgentId })
-    .from(issues)
-    .where(and(eq(issues.id, input.rootIssueId), eq(issues.companyId, input.companyId)))
-    .then((rows) => rows[0] ?? null);
+  const root = input.visibleIssueIds.has(input.rootIssueId)
+    ? await db
+      .select({ assigneeAgentId: issues.assigneeAgentId })
+      .from(issues)
+      .where(and(eq(issues.id, input.rootIssueId), eq(issues.companyId, input.companyId)))
+      .then((rows) => rows[0] ?? null)
+    : null;
   const events = await db
     .select({ action: activityLog.action, entityId: activityLog.entityId, details: activityLog.details, createdAt: activityLog.createdAt })
     .from(activityLog)
