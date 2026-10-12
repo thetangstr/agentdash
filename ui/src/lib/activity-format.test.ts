@@ -284,11 +284,13 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "board_api_key.created",
   "board_api_key.revoked",
   // local-harness bridge
+  "bridge.endpoint_capability_added",
   "bridge.endpoint_enrolled",
   "bridge.endpoint_revoked",
   "bridge.task_completed",
   "bridge.task_created",
   "bridge.task_declined",
+  "bridge.work_file_downloaded",
   // budgets
   "budget.hard_threshold_crossed",
   "budget.incident_resolved",
