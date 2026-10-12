@@ -255,10 +255,10 @@ your agent as you, in one bundle:
 - `work_confirm_reply` — sends that exact bundle, after your explicit yes.
 
 Everything lands as you, marked as sent via the bridge from this machine, in
-one transaction: if the document moved on since Claude read it, or the issue
-is no longer yours, nothing is sent and you are told why. A decision is applied
-right after the rest; if someone decided it in between, you are told that part
-did not land. Your agent is woken once, and its next run carries a short
+one transaction: if the document moved on since Claude read it, the approval
+was decided or changed, or the issue is no longer yours, nothing is sent and
+you are told why. Your agent is woken at most once (an answer wakes it only
+when its question asked for that), and its next run carries a short
 "what changed" summary (its draft against your revision, your answer against
 its recommendation, your lessons), which it saves to its own memory. Files
 cannot be sent back this way yet; attach them on the issue page.

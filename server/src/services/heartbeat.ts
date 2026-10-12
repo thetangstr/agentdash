@@ -6642,14 +6642,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // next run repeats it only if this one ends without succeeding. Read
     // before the wake payload, which carries it. A failure here is logged and
     // the run goes ahead without it: a missing note must not stop the work.
-    const corrections = await claimCorrectionsForRun(db, {
-      companyId: agent.companyId,
-      agentId: agent.id,
-      runId: run.id,
-    }).catch((err) => {
-      logger.warn({ err, runId: run.id, agentId: agent.id }, "agent corrections not delivered with this run");
-      return { items: [], remaining: 0 };
-    });
+    // Only an adapter that puts them in its prompt claims them; any other
+    // (process, http, an external adapter) leaves them waiting, so a run that
+    // could never show them does not use them up.
+    const corrections = getServerAdapter(agent.adapterType).rendersAgentCorrections === true
+      ? await claimCorrectionsForRun(db, {
+          companyId: agent.companyId,
+          agentId: agent.id,
+          runId: run.id,
+        }).catch((err) => {
+          logger.warn({ err, runId: run.id, agentId: agent.id }, "agent corrections not delivered with this run");
+          return { items: [], remaining: 0 };
+        })
+      : { items: [], remaining: 0 };
     if (corrections.items.length > 0) {
       context[AGENT_CORRECTIONS_CONTEXT_KEY] = corrections.items;
       context[AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY] = corrections.remaining;

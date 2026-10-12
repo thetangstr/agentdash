@@ -24,6 +24,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
+import { registerServerAdapter, unregisterServerAdapter } from "../adapters/registry.js";
 import {
   AGENT_CORRECTION_LIMITS,
   answerCorrectionInput,
@@ -33,6 +34,7 @@ import {
   normalizeLessons,
   recommendedOption,
   recordAgentCorrection,
+  recordAgentCorrectionGuarded,
   requesterChangeRequestCorrectionInput,
   sendBackSummary,
   summarizeLineDiff,
@@ -54,6 +56,13 @@ import { truncateWithRetry } from "./helpers/truncate.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+
+/**
+ * An adapter that renders the wake payload, as the first-party ones do, and
+ * succeeds without spawning anything. Corrections are handed only to such an
+ * adapter; a plain `process` agent leaves them waiting.
+ */
+const RENDERING_ADAPTER = "corrections_rendering_test";
 
 const framingQuestion = {
   id: "framing",
@@ -128,6 +137,12 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-agent-corrections-");
     db = createDb(tempDb.connectionString);
+    registerServerAdapter({
+      type: RENDERING_ADAPTER,
+      rendersAgentCorrections: true,
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({ adapterType: RENDERING_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
+    } as never);
   }, 30_000);
 
   afterEach(async () => {
@@ -135,6 +150,7 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
   });
 
   afterAll(async () => {
+    unregisterServerAdapter(RENDERING_ADAPTER);
     await tempDb?.cleanup();
   });
 
@@ -158,7 +174,7 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
       await db.insert(authUsers).values({ id, name, email: `${id}@example.test`, createdAt: now, updatedAt: now });
       await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: id, status: "active", membershipRole: role });
     }
-    const makeAgent = async (name: string) =>
+    const makeAgent = async (name: string, adapterType = RENDERING_ADAPTER) =>
       db
         .insert(agents)
         .values({
@@ -166,8 +182,8 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
           name,
           role: "general",
           status: "idle",
-          adapterType: "process",
-          adapterConfig: { command: process.execPath, args: ["-e", "process.exit(0)"] },
+          adapterType,
+          adapterConfig: adapterType === "process" ? { command: process.execPath, args: ["-e", "process.exit(0)"] } : {},
           runtimeConfig: quietRuntime,
           permissions: {},
         })
@@ -175,9 +191,10 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
         .then((rows) => rows[0]!);
     const agentA = await makeAgent("Agent A");
     const agentB = await makeAgent("Agent B");
+    const agentP = await makeAgent("Agent P", "process");
     await agentStewardshipService(db).assign(company.id, { agentId: agentA.id, userId: steward, assignedByUserId: owner });
     if (opts.flag !== false) await featureFlagsService(db).set(company.id, FEATURE_FLAG_KEYS.COWORKER_BRIDGE, true);
-    return { company, prefix, steward, owner, agentA, agentB };
+    return { company, prefix, steward, owner, agentA, agentB, agentP };
   }
 
   let counter = 0;
@@ -405,6 +422,64 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
       sourceActorId: agentA.id,
     });
     expect(self).toBeNull();
+  });
+
+  it("leaves corrections waiting for an adapter that cannot show them", async () => {
+    const { company, agentP, steward } = await seed();
+    await recordAgentCorrection(db, {
+      companyId: company.id,
+      agentId: agentP.id,
+      issueId: null,
+      kind: "task_reopened",
+      summary: "Reopened.",
+      sourceActorType: "user",
+      sourceActorId: steward,
+    });
+    const { run, context } = await runAgent(agentP.id);
+    expect(run?.status).toBe("succeeded");
+    expect(context).not.toHaveProperty("paperclipAgentCorrections");
+    const [row] = await db.select().from(agentCorrections).where(eq(agentCorrections.agentId, agentP.id));
+    expect(row).toMatchObject({ deliveredRunId: null, deliveredAt: null, deliveryAttempts: 0 });
+  }, 60_000);
+
+  it("records an answer given on the web page against the recommendation", async () => {
+    const { company, prefix, steward, agentA } = await seed();
+    const issue = await makeIssue(company.id, prefix, { assigneeAgentId: agentA.id, status: "blocked" });
+    const question = await issueThreadInteractionService(db).create(
+      issue,
+      { kind: "ask_user_questions", continuationPolicy: "wake_assignee", payload: { version: 1, questions: [framingQuestion] } } as never,
+      { agentId: agentA.id },
+    );
+    const res = await request(boardApp(company.id, steward))
+      .post(`/api/issues/${issue.id}/interactions/${question.id}/respond`)
+      .send({ answers: [{ questionId: "framing", optionIds: ["table"] }], summaryMarkdown: "The ops lead wants the numbers." });
+    expect(res.status).toBe(200);
+    const rows = await db.select().from(agentCorrections).where(eq(agentCorrections.agentId, agentA.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "steward_answer", issueId: issue.id, sourceActorType: "user", sourceActorId: steward });
+    expect(rows[0]!.summary).toContain('Question "Which framing?": they chose "Full table"; you recommended "Headline and two drivers".');
+  });
+
+  it("never poisons the caller's transaction, even when the flag read itself fails", async () => {
+    const { company, prefix, agentA, steward } = await seed();
+    const issue = await makeIssue(company.id, prefix, { assigneeAgentId: agentA.id });
+    const title = await db.transaction(async (tx) => {
+      // Not a uuid: the flag read fails inside Postgres.
+      const recorded = await recordAgentCorrectionGuarded(tx as never, "not-a-company-id", async () => ({
+        companyId: company.id,
+        agentId: agentA.id,
+        issueId: issue.id,
+        kind: "task_reopened",
+        summary: "x",
+        sourceActorType: "user",
+        sourceActorId: steward,
+      }));
+      expect(recorded).toBeNull();
+      // The caller's next statement still runs.
+      await tx.update(issues).set({ title: "Still writable" }).where(eq(issues.id, issue.id));
+      return tx.select({ title: issues.title }).from(issues).where(eq(issues.id, issue.id)).then((rows) => rows[0]!.title);
+    });
+    expect(title).toBe("Still writable");
   });
 
   it("builds the requester change request the close-out path emits", async () => {

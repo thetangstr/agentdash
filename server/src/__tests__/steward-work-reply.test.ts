@@ -6,7 +6,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   activityLog,
   agentCorrections,
+  agentRuns,
   agents,
+  agentWakeupRequests,
   approvals,
   authUsers,
   bridgeEndpoints,
@@ -27,11 +29,13 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+import { registerServerAdapter, unregisterServerAdapter } from "../adapters/registry.js";
 import { errorHandler } from "../middleware/index.js";
 import { bridgeRoutes } from "../routes/bridge.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { documentService } from "../services/documents.js";
 import { featureFlagsService } from "../services/feature-flags.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
 
@@ -49,14 +53,21 @@ import { truncateWithRetry } from "./helpers/truncate.js";
  * - files are refused until file send-back exists;
  * - the gates of the reads hold here too (bridge:work, the company flag,
  *   404 for an issue off the person's page);
- * - the send-back leaves a "what changed" correction for the agent's next wake;
- * - a decision in the bundle goes through the decision path after the rest.
+ * - the send-back leaves a "what changed" correction, and the agent's next
+ *   real wake carries it with the lessons;
+ * - a decision is written in the same transaction, its effects after; when
+ *   the requester is the assignee it rides in the bundle's one wake;
+ * - an answer wakes the agent only when its question says so;
+ * - an agent's name cannot add lines to the read-back.
  */
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
 type TestDb = ReturnType<typeof createDb>;
+
+/** Renders the wake payload like the first-party adapters, and spawns nothing. */
+const RENDERING_ADAPTER = "send_back_rendering_test";
 
 describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
   let db!: TestDb;
@@ -65,6 +76,12 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-bridge-reply-");
     db = createDb(tempDb.connectionString);
+    registerServerAdapter({
+      type: RENDERING_ADAPTER,
+      rendersAgentCorrections: true,
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({ adapterType: RENDERING_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
+    } as never);
   }, 30_000);
 
   afterEach(async () => {
@@ -72,8 +89,33 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
   });
 
   afterAll(async () => {
+    unregisterServerAdapter(RENDERING_ADAPTER);
     await tempDb?.cleanup();
   });
+
+  const quietRuntime = { heartbeat: { enabled: false, wakeOnDemand: false } };
+
+  /** Run the agent once through the real heartbeat and return its run context. */
+  async function runAgent(agentId: string) {
+    await db.update(agents).set({ runtimeConfig: {} }).where(eq(agents.id, agentId));
+    const heartbeat = heartbeatService(db);
+    const queued = await heartbeat.invoke(agentId, "on_demand", {}, "manual");
+    expect(queued).not.toBeNull();
+    const deadline = Date.now() + 20_000;
+    let finished = await heartbeat.getRun(queued!.id);
+    while (Date.now() < deadline && finished && ["queued", "running"].includes(finished.status)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      finished = await heartbeat.getRun(queued!.id);
+    }
+    const meterDeadline = Date.now() + 10_000;
+    while (Date.now() < meterDeadline) {
+      const metered = await db.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.heartbeatRunId, queued!.id));
+      if (metered.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await db.update(agents).set({ runtimeConfig: quietRuntime }).where(eq(agents.id, agentId));
+    return { run: finished, context: (finished?.contextSnapshot ?? {}) as Record<string, any> };
+  }
 
   async function person(companyId: string, role: string, name: string) {
     const userId = randomUUID();
@@ -86,7 +128,15 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
   async function stewardedAgent(companyId: string, name: string, stewardUserId: string, ownerUserId: string) {
     const agent = await db
       .insert(agents)
-      .values({ companyId, name, role: "general", status: "idle", adapterType: "process" })
+      .values({
+        companyId,
+        name,
+        role: "general",
+        status: "idle",
+        adapterType: RENDERING_ADAPTER,
+        // No timer or on-demand runs of their own; runAgent runs one when a test needs it.
+        runtimeConfig: quietRuntime,
+      })
       .returning()
       .then((rows) => rows[0]!);
     await agentStewardshipService(db).assign(companyId, { agentId: agent.id, userId: stewardUserId, assignedByUserId: ownerUserId });
@@ -152,12 +202,12 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     return result.document;
   }
 
-  async function askQuestion(issue: typeof issues.$inferSelect, agentId: string) {
+  async function askQuestion(issue: typeof issues.$inferSelect, agentId: string, continuationPolicy = "wake_assignee") {
     return issueThreadInteractionService(db).create(
       issue,
       {
         kind: "ask_user_questions",
-        continuationPolicy: "wake_assignee",
+        continuationPolicy,
         payload: {
           version: 1,
           questions: [
@@ -385,7 +435,18 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     expect(correction!.summary).toContain('+ Method: modeled, not measured.');
     expect(correction!.summary).toContain('they chose "Full table"; you recommended "Headline and two drivers (recommended)"');
     expect(correction!.details).toMatchObject({ lessons: ["Lead with the recommendation.", "Label every figure as measured or modeled."] });
-  });
+
+    // The agent's next real wake carries it, lessons included.
+    const { run, context } = await runAgent(agentA.id);
+    expect(run?.status).toBe("succeeded");
+    const delivered = context.paperclipWake?.corrections as Array<{ kind: string; summary: string; lessons: string[] }>;
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({
+      kind: "steward_send_back",
+      summary: correction!.summary,
+      lessons: ["Lead with the recommendation.", "Label every figure as measured or modeled."],
+    });
+  }, 60_000);
 
   it("refuses a spent handle, and writes nothing the second time", async () => {
     const { issue, endpoint } = await handoff();
@@ -440,7 +501,7 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issue.id))).toHaveLength(0);
   });
 
-  it("applies a decision in the bundle after the rest, and the rejection is the agent's correction", async () => {
+  it("writes a decision with the rest, wakes its requester once with everything, and the rejection is the agent's correction", async () => {
     const { issue, endpoint, company, agentA, personA } = await handoff();
     const approval = await db
       .insert(approvals)
@@ -455,7 +516,7 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
       .then((rows) => rows[0]!);
     await db.insert(issueApprovals).values({ companyId: company.id, issueId: issue.id, approvalId: approval.id });
 
-    const { server } = app(endpoint);
+    const { server, wakeup } = app(endpoint);
     const proposed = await request(server)
       .post("/api/bridge/work/propose")
       .send({
@@ -468,15 +529,114 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
       'decision reject "Send the note to the ops lead" (revision 1), note: "Not until the figures are checked."',
     );
 
+    expect(proposed.body.wakes).toBe("Agent A is woken once with all of this.");
+
     const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
-    expect(confirmed.body).toMatchObject({ ok: true, sent: { decision: "rejected" } });
+    expect(confirmed.body).toMatchObject({ ok: true, sent: { decision: "rejected" }, agentWoken: true });
+    expect(confirmed.body).not.toHaveProperty("notSent");
     const [decided] = await db.select().from(approvals).where(eq(approvals.id, approval.id));
     expect(decided).toMatchObject({ status: "rejected", decidedByUserId: personA, decisionChannel: "bridge_work" });
+
+    // One wake, the bundle's, carrying the decision; the decision path did not wake it again.
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(wakeup).toHaveBeenCalledWith(
+      agentA.id,
+      expect.objectContaining({
+        reason: "approval_rejected",
+        payload: expect.objectContaining({ approvalId: approval.id, approvalStatus: "rejected" }),
+        contextSnapshot: expect.objectContaining({ approvalId: approval.id, wakeCommentId: expect.any(String) }),
+      }),
+    );
+    expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentA.id))).toHaveLength(0);
 
     const corrections = await db.select().from(agentCorrections).where(eq(agentCorrections.agentId, agentA.id));
     expect(corrections.map((row) => row.kind).sort()).toEqual(["approval_rejected", "steward_send_back"]);
     expect(corrections.find((row) => row.kind === "approval_rejected")!.summary).toContain(
       'Their reason: "Not until the figures are checked."',
     );
+  });
+
+  async function pendingApproval(companyId: string, issueId: string, requestedByAgentId: string, title: string) {
+    const approval = await db
+      .insert(approvals)
+      .values({ companyId, type: "request_board_approval", status: "pending", requestedByAgentId, payload: { title } })
+      .returning()
+      .then((rows) => rows[0]!);
+    await db.insert(issueApprovals).values({ companyId, issueId, approvalId: approval.id });
+    return approval;
+  }
+
+  it("refuses the whole bundle when the approval was decided after the read-back", async () => {
+    const { issue, endpoint, company, agentA, owner } = await handoff();
+    const approval = await pendingApproval(company.id, issue.id, agentA.id, "Send the note");
+    const { server, wakeup } = app(endpoint);
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, decision: { approvalId: approval.id, decision: "approve" }, comment: "Approved; send it." });
+    expect(proposed.body.ok).toBe(true);
+
+    await db
+      .update(approvals)
+      .set({ status: "rejected", decidedByUserId: owner, decidedAt: new Date() })
+      .where(eq(approvals.id, approval.id));
+
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: false, code: "approval_settled" });
+    expect(confirmed.body.reason).toContain("Nothing was sent");
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issue.id))).toHaveLength(0);
+    expect(await db.select().from(agentCorrections)).toHaveLength(0);
+    expect(wakeup).not.toHaveBeenCalled();
+  });
+
+  it("records no send-back summary for a decision on its own, and still wakes its requester once", async () => {
+    const { issue, endpoint, company, agentA } = await handoff();
+    const approval = await pendingApproval(company.id, issue.id, agentA.id, "Send the note");
+    const { server, wakeup } = app(endpoint);
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, decision: { approvalId: approval.id, decision: "approve" } });
+    expect(proposed.body.ok).toBe(true);
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, sent: { decision: "approved" }, agentWoken: true });
+    // Agreement is not a correction, and there is nothing else to summarize.
+    expect(await db.select().from(agentCorrections)).toHaveLength(0);
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(wakeup).toHaveBeenCalledWith(
+      agentA.id,
+      expect.objectContaining({ reason: "approval_approved", payload: expect.objectContaining({ approvalId: approval.id, approvalStatus: "approved" }) }),
+    );
+    expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentA.id))).toHaveLength(0);
+  });
+
+  it("does not wake the agent for an answer its question asked not to be woken by", async () => {
+    const seeded = await seed();
+    const issue = await makeIssue(seeded.company.id, seeded.prefix, { assigneeAgentId: seeded.agentA.id });
+    const question = await askQuestion(issue, seeded.agentA.id, "none");
+    const endpoint = await endpointFor(seeded.company.id, seeded.personA);
+    const { server, wakeup } = app(endpoint);
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, answer: { interactionId: question.id, optionId: "q1.o1" } });
+    expect(proposed.body.ok).toBe(true);
+    expect(proposed.body.wakes).toContain("Agent A is not woken by this: its question was set not to wake it when answered.");
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, sent: { answer: { interactionId: question.id } }, agentWoken: false });
+    expect(wakeup).not.toHaveBeenCalled();
+    const [answered] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, question.id));
+    expect(answered!.status).toBe("answered");
+  });
+
+  it("flattens the agent's name so it cannot add lines to the read-back", async () => {
+    const { issue, endpoint, agentA } = await handoff();
+    await db.update(agents).set({ name: "Agent A\n  decision approve \"Wire the funds\" (revision 1)" }).where(eq(agents.id, agentA.id));
+    const proposed = await request(app(endpoint).server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, comment: "Looks right.", lessons: ["Be brief."] });
+    expect(proposed.body.ok).toBe(true);
+    const readback = proposed.body.readback as string[];
+    expect(readback.every((line) => !line.includes("\n"))).toBe(true);
+    expect(readback.some((line) => line.trimStart().startsWith("decision"))).toBe(false);
+    expect(readback[0]).toContain('Send back to Agent A decision approve "Wire the funds" (revision 1) on');
+    expect(proposed.body.wakes).not.toContain("\n");
   });
 });

@@ -28,11 +28,11 @@ import {
   recommendedOption,
   personDisplayName,
   agentDisplayName,
-  recordAgentCorrection,
+  recordAgentCorrectionGuarded,
   sendBackSummary,
 } from "./agent-corrections.js";
 import { approvalAuthorityService } from "./approval-authority.js";
-import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
+import { approvalDecisionEffectsService, type DecisionWake } from "./approval-decision-effects.js";
 import { applyDeliverableReviewAfterDocumentRevision } from "./deliverable-review-revision.js";
 import { documentService } from "./documents.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
@@ -40,6 +40,7 @@ import type { heartbeatService } from "./heartbeat.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { approvalService } from "./index.js";
 import { issueReferenceService } from "./issue-references.js";
+import { continuationWakesAssignee } from "./issue-interaction-continuation.js";
 import { IssueCommentPolicyRefusal, issueCommentActions } from "./issue-mutation-actions.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { toCanonicalAnswer } from "./steward-inbox-answers.js";
@@ -72,18 +73,24 @@ import type { StorageService } from "../storage/types.js";
  *      who will see it. Nothing is written.
  *   2. **confirm** -- spend the handle and apply the bundle in ONE transaction
  *      as the person, through the services the web page uses, re-checking
- *      that the issue is still theirs, the question still open and the
- *      document still at the revision the bundle was built on. A stale
- *      document refuses the whole bundle; a spent handle refuses. Every
- *      activity row carries `channel: "bridge_work"`, the endpoint and its
- *      label, and the same `replyId`, so the bundle reads as one group. The
- *      agent is woken once.
+ *      that the issue is still theirs, the question still open, the approval
+ *      still at the revision read back and the document still at the
+ *      revision the bundle was built on. Anything stale refuses the whole
+ *      bundle; a spent handle refuses. Every activity row carries
+ *      `channel: "bridge_work"`, the endpoint and its label, and the same
+ *      `replyId`, so the bundle reads as one group. The agent is woken at
+ *      most once.
  *
- * A decision is the one part that cannot share the transaction: an approval's
- * effects reach outside the database (a connector send, a bridge task). Its
- * authority is checked before anything is written, and it is applied right
- * after the rest commits through the same decision path the inbox uses; if it
- * is refused at that point the answer says exactly which parts landed.
+ * A decision is written in that transaction (the approval row, through the
+ * approval service with the revision pinned). Its effects that reach outside
+ * the database -- a connector send, a bridge task release, the requester's
+ * wake -- run after the commit through the same decision path the inbox
+ * uses. When the requester is the agent the bundle wakes, the decision rides
+ * in the bundle's one wake instead of a second one.
+ *
+ * Who is woken follows the web page's rules: a comment or a document revision
+ * wakes the assignee; an answer wakes it only when the question's
+ * continuation policy says so; a decision wakes its requester.
  *
  * Refusals a person can hit answer `{ ok: false, code, reason }` and write
  * nothing.
@@ -171,7 +178,6 @@ export function stewardWorkReplyService(
 ) {
   const work = stewardWorkService(db, { storage: options.storage });
   const authority = approvalAuthorityService(db);
-  const approvalsSvc = approvalService(db);
   const effects = approvalDecisionEffectsService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
@@ -239,6 +245,9 @@ export function stewardWorkReplyService(
 
     const stored: StoredReply = { issueId: issue.id, identifier: issue.identifier, lessons: [] };
     const readback: string[] = [];
+    // For the wake line: the same rules confirm applies.
+    let answerWakes = false;
+    let decisionRequesterId: string | null = null;
 
     // -- answer ---------------------------------------------------------------
     if (request.answer !== undefined && request.answer !== null) {
@@ -274,6 +283,7 @@ export function stewardWorkReplyService(
       });
       if (!mapped.ok) return refusal("invalid_answer", mapped.reason);
       stored.answer = { interactionId, body: mapped.body };
+      answerWakes = continuationWakesAssignee({ continuationPolicy: addressed.interaction.continuationPolicy, status: "answered" });
       readback.push(...describeAnswer(addressed.payload, mapped.body));
     }
 
@@ -311,6 +321,7 @@ export function stewardWorkReplyService(
         note,
         title,
       };
+      decisionRequesterId = approval.requestedByAgentId ?? null;
       readback.push(
         `decision ${verb === "approve" ? "approve" : "reject"} ${title ? `"${title}"` : `the ${approval.type} approval`} (revision ${approval.revision})${note ? `, note: "${note}"` : ""}`,
       );
@@ -410,7 +421,17 @@ export function stewardWorkReplyService(
       );
     }
 
-    const agentName = issue.assigneeAgentId ? owner.agentNameById.get(issue.assigneeAgentId) ?? null : null;
+    // Agent names are free text: flattened to one line, so a name cannot add
+    // lines to the read-back the person says yes to.
+    const agentName = issue.assigneeAgentId
+      ? frameUntrustedText(owner.agentNameById.get(issue.assigneeAgentId), 80)
+      : null;
+    const assigneeWoken =
+      Boolean(issue.assigneeAgentId) &&
+      (Boolean(stored.document) ||
+        Boolean(stored.comment) ||
+        answerWakes ||
+        (Boolean(stored.decision) && decisionRequesterId === issue.assigneeAgentId));
     if (stored.lessons.length > 0) {
       readback.push(
         `lessons for ${agentName ?? "the agent"} (it saves them to its own memory, which you and your company's members can read):`,
@@ -441,7 +462,13 @@ export function stewardWorkReplyService(
         ...readback.map((line) => (line.startsWith("  ") ? line : `  ${line}`)),
       ],
       audience: await audienceFor(issue),
-      wakes: agentName ? `${agentName} is woken once with all of this.` : "No agent is assigned; nobody is woken.",
+      wakes: describeWake({
+        agentName,
+        assigned: Boolean(issue.assigneeAgentId),
+        assigneeWoken,
+        quietAnswer: Boolean(stored.answer) && !answerWakes,
+        decisionWakesAnother: Boolean(stored.decision) && decisionRequesterId !== null && decisionRequesterId !== issue.assigneeAgentId,
+      }),
       confirmWith: "work_confirm_reply with this handle, only after the person's explicit yes to this exact read-back.",
     };
   }
@@ -537,7 +564,11 @@ export function stewardWorkReplyService(
       commentId: string | null;
       mentionedIds: string[];
       interactionId: string | null;
+      /** The answered question's continuation policy wakes the assignee. */
+      answerWakes: boolean;
       document: { id: string; key: string; latestRevisionId: string | null; latestRevisionNumber: number } | null;
+      /** The decision as written in the transaction; its outside effects run after. */
+      decision: { approval: typeof approvals.$inferSelect } | null;
     };
 
     let applied: Applied;
@@ -688,6 +719,7 @@ export function stewardWorkReplyService(
         let interactionId: string | null = null;
         let answerDifferences: ReturnType<typeof answersThatDifferFromRecommendation> = [];
         let answeredWithRecommendation = false;
+        let answerWakes = false;
         if (stored.answer) {
           const addressed = await resolveAddressedQuestion(tx, { companyId: owner.companyId, userId: owner.userId }, stored.answer.interactionId);
           if (!addressed.ok || addressed.issue.id !== issue.id) {
@@ -718,6 +750,7 @@ export function stewardWorkReplyService(
             }),
           );
           interactionId = updated.id;
+          answerWakes = continuationWakesAssignee(updated);
           const questions = addressed.payload.questions ?? [];
           const answers = updated.kind === "ask_user_questions" ? updated.result?.answers ?? [] : [];
           answerDifferences = answersThatDifferFromRecommendation(questions, answers);
@@ -761,9 +794,46 @@ export function stewardWorkReplyService(
           }
         }
 
+        // -- decision: the approval row, in this transaction -------------------
+        // Pinned to the revision read back, so an approval that changed or
+        // was decided since refuses the whole bundle. Its effects outside the
+        // database run after the commit.
+        let decided: Applied["decision"] = null;
+        if (stored.decision && approvalRow && decisionMeta) {
+          const decisionSvc = approvalService(tx);
+          const result = await (
+            stored.decision.decision === "approved"
+              ? decisionSvc.approve(approvalRow.id, owner.userId, stored.decision.note, decisionMeta as never)
+              : decisionSvc.reject(approvalRow.id, owner.userId, stored.decision.note, decisionMeta as never)
+          ).catch((err: unknown) => {
+            const status = (err as { status?: number }).status;
+            if (status === 409) {
+              throw new ReplyRefused(
+                "approval_changed",
+                "That approval changed or was decided since the read-back. Nothing was sent; read it again and propose again.",
+              );
+            }
+            if (status === 422) {
+              throw new ReplyRefused("decision_refused", `${String((err as Error).message).replace(/\.$/, "")}. Nothing was sent.`);
+            }
+            throw err;
+          });
+          if (!result.applied) {
+            throw new ReplyRefused(
+              "approval_settled",
+              `That approval was already ${result.approval.status} by the time this was sent. Nothing was sent; propose again without it.`,
+            );
+          }
+          decided = { approval: result.approval };
+        }
+
         // -- what changed, for the agent's next wake --------------------------
-        if (agentId) {
-          await recordAgentCorrection(tx, {
+        // A decision on its own leaves only its own correction (a rejection
+        // records approval_rejected); lessons always go with one. Guarded: a
+        // fault here is logged and never fails the person's send-back.
+        const onlyDecision = !stored.answer && !stored.document && !stored.comment;
+        if (agentId && !(onlyDecision && stored.lessons.length === 0)) {
+          await recordAgentCorrectionGuarded(tx, owner.companyId, async () => ({
             companyId: owner.companyId,
             agentId,
             issueId: issue.id,
@@ -794,7 +864,7 @@ export function stewardWorkReplyService(
             },
             sourceActorType: "user",
             sourceActorId: owner.userId,
-          });
+          }));
         }
 
         // -- the group's own row ---------------------------------------------
@@ -832,7 +902,9 @@ export function stewardWorkReplyService(
           commentId,
           mentionedIds,
           interactionId,
+          answerWakes,
           document: documentResult,
+          decision: decided,
         };
       });
     } catch (err) {
@@ -860,33 +932,60 @@ export function stewardWorkReplyService(
       }).catch((err) => logger.warn({ err, issueId: issue.id }, "send-back document review step failed"));
     }
 
-    // The decision, through the inbox's decision path, after the rest landed.
-    let decisionOutcome: { ok: true; decision: "approved" | "rejected" } | { ok: false; reason: string } | null = null;
-    if (stored.decision && approvalRow && decisionMeta) {
+    // Who the bundle wakes, by the web page's rules: a comment or a document
+    // revision wakes the assignee; an answer only when its question's
+    // continuation policy says so; a decision wakes its requester, and when
+    // that is the assignee the decision rides in this one wake.
+    const assigneeId = applied.assigneeAgentId;
+    const assigneeOpen = Boolean(assigneeId) && applied.status !== "done" && applied.status !== "cancelled";
+    const decisionForAssignee = Boolean(applied.decision) && applied.decision!.approval.requestedByAgentId === assigneeId;
+    const wakeAssignee =
+      assigneeOpen &&
+      (Boolean(applied.document) || Boolean(applied.commentId) || applied.answerWakes || decisionForAssignee);
+
+    // The decision's effects outside the database, through the inbox's
+    // decision path. The decision itself is committed: a fault here is
+    // logged, never reported as a decision that did not happen.
+    let decisionWake: DecisionWake | null = null;
+    if (applied.decision && stored.decision) {
+      const context = {
+        actorUserId: owner.userId,
+        decisionNote: stored.decision.note,
+        via: `bridge (${endpointLabel})`,
+        wakeRequester: !(wakeAssignee && decisionForAssignee),
+      };
       try {
-        const result =
-          stored.decision.decision === "approved"
-            ? await approvalsSvc.approve(approvalRow.id, owner.userId, stored.decision.note, decisionMeta as never)
-            : await approvalsSvc.reject(approvalRow.id, owner.userId, stored.decision.note, decisionMeta as never);
-        const context = { actorUserId: owner.userId, decisionNote: stored.decision.note, via: `bridge (${endpointLabel})` };
-        if (stored.decision.decision === "approved") await effects.afterApprove(result.approval, result.applied, context);
-        else await effects.afterReject(result.approval, result.applied, context);
-        decisionOutcome = { ok: true, decision: stored.decision.decision };
+        decisionWake =
+          (stored.decision.decision === "approved"
+            ? await effects.afterApprove(applied.decision.approval, true, context)
+            : await effects.afterReject(applied.decision.approval, true, context)) ?? null;
       } catch (err) {
-        logger.warn({ err, approvalId: approvalRow.id, endpointId }, "send-back decision refused after the rest landed");
-        decisionOutcome = {
-          ok: false,
-          reason: "The decision was not applied: the approval changed or was decided between the read-back and the send. Everything else in the bundle was sent.",
-        };
+        logger.error({ err, approvalId: applied.decision.approval.id, endpointId }, "send-back decision effects failed after the decision committed");
       }
     }
 
-    // One wake for the agent, carrying the whole bundle.
+    // At most one wake for the assignee, carrying the whole bundle.
     let agentWoken = false;
-    if (applied.assigneeAgentId && applied.status !== "done" && applied.status !== "cancelled") {
-      const wakeReason = applied.reopened ? "issue_reopened_via_comment" : "issue_commented";
+    if (assigneeId && wakeAssignee) {
+      const decisionInWake = decisionForAssignee && applied.decision
+        ? {
+            approvalId: applied.decision.approval.id,
+            approvalStatus: applied.decision.approval.status,
+            reason: decisionWake?.reason ?? (stored.decision?.decision === "approved" ? "approval_approved" : "approval_rejected"),
+            connectorSend: decisionWake?.connectorSend ?? null,
+          }
+        : null;
+      // A decision riding in the wake names it: it is the news, and the
+      // approval_* and connector_send_* reasons get a follow-up even while the
+      // issue is running. The wake is the person's own, so a reopen of
+      // closed work still happens without the reopen reason.
+      const wakeReason = decisionInWake
+        ? decisionInWake.reason
+        : applied.reopened
+          ? "issue_reopened_via_comment"
+          : "issue_commented";
       try {
-        const run = await options.heartbeat.wakeup(applied.assigneeAgentId, {
+        const run = await options.heartbeat.wakeup(assigneeId, {
           source: "automation",
           triggerDetail: "system",
           reason: wakeReason,
@@ -895,7 +994,15 @@ export function stewardWorkReplyService(
             mutation: "bridge_reply",
             ...(applied.commentId ? { commentId: applied.commentId } : {}),
             ...(applied.interactionId ? { interactionId: applied.interactionId } : {}),
-            ...(stored.decision ? { approvalId: stored.decision.approvalId } : {}),
+            ...(decisionInWake
+              ? {
+                  approvalId: decisionInWake.approvalId,
+                  approvalStatus: decisionInWake.approvalStatus,
+                  ...(decisionInWake.connectorSend ? { connectorSend: decisionInWake.connectorSend } : {}),
+                }
+              : stored.decision
+                ? { approvalId: stored.decision.approvalId }
+                : {}),
           },
           requestedByActorType: "user",
           requestedByActorId: owner.userId,
@@ -905,6 +1012,18 @@ export function stewardWorkReplyService(
             ...(applied.commentId ? { commentId: applied.commentId, wakeCommentId: applied.commentId } : {}),
             ...(applied.interactionId ? { interactionId: applied.interactionId } : {}),
             ...(applied.document ? { documentKey: applied.document.key } : {}),
+            ...(decisionInWake
+              ? {
+                  approvalId: decisionInWake.approvalId,
+                  approvalStatus: decisionInWake.approvalStatus,
+                  ...(decisionInWake.connectorSend
+                    ? {
+                        connectorSendOutcome: decisionInWake.connectorSend.outcome,
+                        connectorSendReason: decisionInWake.connectorSend.reason,
+                      }
+                    : {}),
+                }
+              : {}),
             source: "bridge.work.reply",
             wakeReason,
           },
@@ -948,14 +1067,32 @@ export function stewardWorkReplyService(
           : {}),
         ...(applied.commentId ? { comment: { commentId: applied.commentId } } : {}),
         ...(stored.lessons.length > 0 ? { lessons: stored.lessons.length } : {}),
-        ...(decisionOutcome?.ok ? { decision: decisionOutcome.decision } : {}),
+        ...(applied.decision && stored.decision ? { decision: stored.decision.decision } : {}),
       },
-      ...(decisionOutcome && !decisionOutcome.ok ? { notSent: { decision: decisionOutcome.reason } } : {}),
       agentWoken,
     };
   }
 
   return { propose, confirm };
+}
+
+/** The read-back's wake line: who is woken, and once. */
+function describeWake(input: {
+  agentName: string | null;
+  assigned: boolean;
+  assigneeWoken: boolean;
+  /** An answer is in the bundle and its question does not wake the agent. */
+  quietAnswer: boolean;
+  decisionWakesAnother: boolean;
+}): string {
+  const another = input.decisionWakesAnother ? " The agent that asked for the approval is woken with your decision." : "";
+  if (!input.assigned) return `No agent is assigned to this issue.${another || " Nobody is woken."}`;
+  const name = input.agentName ?? "The agent";
+  if (input.assigneeWoken) return `${name} is woken once with all of this.${another}`;
+  const why = input.quietAnswer
+    ? "its question was set not to wake it when answered"
+    : "a decision on its own wakes only the agent that asked for the approval";
+  return `${name} is not woken by this: ${why}. It sees all of this on its next run.${another}`;
 }
 
 /** The read-back lines for an answer: which question, which option, as labelled by the agent. */

@@ -168,10 +168,9 @@ Options: <the agent's options, and yours: send as is, change, rewrite, reject>
    in projects with restricted access), tell the person why.
 10. After sending, relay the result as it came back and record it in
     `notes.md`. If the send was refused (answered elsewhere, the document moved
-    on, no longer theirs to act on), nothing was sent: report it and stop.
-    If a part is listed under `notSent` (a decision someone else made in
-    between), say exactly which parts landed and which did not. Never retry on
-    your own or route around a refusal.
+    on, the approval was decided in between, no longer theirs to act on),
+    nothing was sent: report it and stop. Never retry on your own or route
+    around a refusal.
 
 The same rule covers `inbox_decide`, `inbox_answer`, `inbox_confirm` and
 `work_request_confirm`: only what the person chose, only after their explicit

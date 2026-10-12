@@ -728,9 +728,10 @@ export async function requesterChangeRequestCorrectionInput(
 /**
  * Record a correction inside someone else's transaction without ever failing
  * it. The correction is a note about the write, so a fault here is logged and
- * the write goes on: the flag is read first (nothing else is read while the
- * loop is off), and the rest runs in a savepoint, so a failed statement rolls
- * back only the note and never poisons the caller's transaction.
+ * the write goes on: every statement, the flag read included, runs in a
+ * savepoint, so a failed one rolls back only the note and never poisons the
+ * caller's transaction. The flag is read first, so nothing else is read while
+ * the loop is off.
  */
 export async function recordAgentCorrectionGuarded(
   executor: Executor,
@@ -738,8 +739,8 @@ export async function recordAgentCorrectionGuarded(
   build: (reader: Executor) => Promise<RecordAgentCorrectionInput | null>,
 ) {
   try {
-    if (!(await correctionsEnabled(executor, companyId))) return null;
     const work = async (inner: Executor) => {
+      if (!(await correctionsEnabled(inner, companyId))) return null;
       const input = await build(inner);
       return input ? recordAgentCorrection(inner, input) : null;
     };
