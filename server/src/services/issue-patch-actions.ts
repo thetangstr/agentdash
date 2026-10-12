@@ -42,6 +42,14 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   validate(executor: IssueCommentExecutor, issue: Issue, intent: Intent): Promise<void>;
   validateResume(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
   validateAssignment(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
+  // AgentDash (agent-to-agent hand-offs): an agent changing the assignee, with
+  // the resolved next assignee. The route bounds hand-offs between agents
+  // (services/agent-handoffs.ts) and refuses here, inside acceptance.
+  validateAgentHandoff?(
+    executor: IssueCommentExecutor,
+    issue: Issue,
+    next: { assigneeAgentId: string | null; assigneeUserId: string | null },
+  ): Promise<void>;
   // AgentDash (GH #830 A5 follow-up): blockedByIssueIds replaces the whole
   // set, but an off-list actor never sees blockers in a restricted project.
   // Returns the current blocker ids the actor cannot see; they are kept.
@@ -499,6 +507,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     if (assigneeWillChange && !transition.workflowControlledAssignment) {
       if (!isAgentReturningIssueToCreator && !isAgentHandingIssueToItsSteward) {
         await context.validateAssignment(executor, existing);
+      }
+      if (context.actorKind === "agent" && context.validateAgentHandoff) {
+        await context.validateAgentHandoff(executor, existing, { assigneeAgentId: nextAssigneeAgentId, assigneeUserId: nextAssigneeUserId });
       }
     }
 

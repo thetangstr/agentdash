@@ -215,6 +215,41 @@ describeEmbeddedPostgres("a person assignment is routed to the agent that person
     expect(wake.payload).toMatchObject({ routedFromStewardUserId: "steward-b" });
   });
 
+  /**
+   * Agent-to-agent hand-offs depend on this: an agent that names another agent
+   * has already chosen who does the work, so routing never moves it — not to
+   * that agent's steward, and not anywhere else. Pinned for create, child
+   * create and reassignment.
+   */
+  it("never reroutes an agent named directly: create, child create and reassignment", async () => {
+    const created = await request(app(agentAActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Agent B: check the figures", status: "todo", assigneeAgentId: AGENT_B });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.assigneeAgentId).toBe(AGENT_B);
+    expect(created.body.assigneeUserId).toBeNull();
+    expect(created.body.routedToStewardedAgent).toBeUndefined();
+    const [createdLog] = await activityDetails(created.body.id, "issue.created");
+    expect(createdLog).not.toHaveProperty("routedToStewardedAgent");
+
+    const parent = await request(app(agentAActor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Parent for a direct hand-off", status: "backlog" });
+    const child = await request(app(agentAActor))
+      .post(`/api/issues/${parent.body.id}/children`)
+      .send({ title: "Agent B: the finance view", status: "todo", assigneeAgentId: AGENT_B });
+    expect(child.status, JSON.stringify(child.body)).toBe(201);
+    expect(child.body.assigneeAgentId).toBe(AGENT_B);
+    expect(child.body.routedToStewardedAgent).toBeUndefined();
+    await waitForWake(AGENT_B, child.body.id);
+
+    const [own] = await db.insert(issues).values({ companyId: COMPANY, title: "Mine, then Agent E's", status: "todo", assigneeAgentId: AGENT_A }).returning();
+    const reassigned = await request(app(agentAActor)).patch(`/api/issues/${own!.id}`).send({ assigneeAgentId: AGENT_E });
+    expect(reassigned.status, JSON.stringify(reassigned.body)).toBe(200);
+    expect(reassigned.body.assigneeAgentId).toBe(AGENT_E);
+    expect(reassigned.body.routedToStewardedAgent).toBeUndefined();
+  });
+
   it("routes a child issue the same way", async () => {
     const parent = await request(app(agentAActor))
       .post(`/api/companies/${COMPANY}/issues`)

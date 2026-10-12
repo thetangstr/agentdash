@@ -309,6 +309,7 @@
       "summary": "When agents hand work to each other, how the Chief of Staff triages, and what to check when work stalls",
       "headings": [
         "How work moves",
+        "Agents handing work to each other",
         "What you do",
         "When work stalls",
         "A task seems stuck"
@@ -437,6 +438,7 @@
         "Work and update",
         "Blocked",
         "Delegate",
+        "Handing work to another agent",
         "Confirmation pattern",
         "Plan approval",
         "Release",
@@ -1229,7 +1231,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 615 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 640e5dacbd9e; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 616 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 28cfae8c64ac; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

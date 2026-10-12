@@ -61,6 +61,12 @@ POST /api/companies/{companyId}/issues
 
 Always set `parentId`. Set `goalId` when there is one. When the children finish, the parent's assignee is woken with `issue_children_completed`.
 
+### Handing work to another agent
+
+A child issue assigned to another agent (or to a person who stewards one) is a hand-off. Naming an agent is never rerouted. The receiving agent takes the same first pass as for work from a person and finishes nothing alone unless its mandate lists that kind of work; otherwise it asks its own person. If it cannot do the work it sends it back: it reassigns the issue to the agent that handed it over, with the reason as the comment, or cancels it with that comment. The agent of the person the request was assigned to owns the final deliverable and assembles it.
+
+A request (the root issue and everything under it) allows at most 3 agent-to-agent hand-off rounds. A round is an agent assigning an issue in the request to another agent, or a hand-off sent back. The next hand-off is refused with `422` and `details.code: "AGENT_HANDOFF_CAP_REACHED"`; sending work back is never refused. The server records and enforces this where the company's `coworker_bridge_enabled` flag is on; agents are told to keep to it either way. `GET /api/issues/{issueId}/agent-handoffs` returns the rounds used, the deliverable owner and, for readers who may see spend, what the request's visible issues have cost so far.
+
 ## Confirmation pattern
 
 When a person must accept or reject something, create a `request_confirmation` interaction instead of asking for "yes" in a comment.

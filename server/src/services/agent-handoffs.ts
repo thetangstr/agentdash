@@ -1,0 +1,453 @@
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import { activityLog, costEvents, featureFlags, heartbeatRuns, issues } from "@paperclipai/db";
+import { logActivity } from "./activity-log.js";
+
+/**
+ * AgentDash: agent-to-agent hand-offs (O5, O7).
+ *
+ * Agents hand work to each other directly: a child issue assigned to the other
+ * agent (or to its person, which routes to the agent). The receiving agent
+ * takes the same first pass as for work from a person and decides from its own
+ * mandate when to involve its person.
+ *
+ * What this module adds is a bound. A request — the root issue a hand-off
+ * belongs to — may go through at most {@link AGENT_HANDOFF_ROUND_CAP}
+ * agent-to-agent rounds. A round is an agent assigning an issue in the request
+ * to another agent (create, child create, or reassignment), or a hand-off sent
+ * back. The next hand-off is refused and the agent is told to ask its person.
+ * Sending work back is counted but never refused: refusing it would strand the
+ * work with an agent that already said it cannot do it.
+ *
+ * Every round is an activity row on the handed-off issue, carrying the root
+ * request. That row is both the audit record and the counter, so there is no
+ * new table and no new budget system. Known limitation: two hand-offs racing at
+ * the last round can both pass, because the count and the issue write are not
+ * one transaction; the cap is a guard against runaway delegation, not a quota.
+ *
+ * Like the rest of the co-worker feature, this is server behavior behind the
+ * company flag `coworker_bridge_enabled` (default off): with the flag off,
+ * hand-offs are neither recorded nor capped, exactly as before. The mandate
+ * text describing hand-offs is not flagged.
+ *
+ * The root of an issue is the top of its parent chain. An issue created without
+ * a parent by an agent running on a request belongs to that request (the run's
+ * issue), and its hand-off row records that root, so the issues under it
+ * resolve to the same request.
+ */
+
+export const AGENT_HANDOFF_ROUND_CAP = 3;
+export const AGENT_HANDOFF_ACTION = "issue.agent_handoff";
+export const AGENT_HANDOFF_RETURNED_ACTION = "issue.agent_handoff_returned";
+export const AGENT_HANDOFF_REFUSED_ACTION = "issue.agent_handoff_refused";
+export const AGENT_HANDOFF_CAP_CODE = "AGENT_HANDOFF_CAP_REACHED";
+/** The co-worker feature's company flag (default off). */
+export const COWORKER_BRIDGE_FLAG = "coworker_bridge_enabled";
+
+/** Parent chains deeper than this are treated as rooted where the walk stopped. */
+const MAX_PARENT_DEPTH = 64;
+/** Rows returned by the per-request summary. */
+const MAX_SUMMARY_HANDOFFS = 50;
+
+const ROUND_ACTIONS = [AGENT_HANDOFF_ACTION, AGENT_HANDOFF_RETURNED_ACTION];
+
+type Reader = Pick<Db, "select">;
+
+export type AgentHandoffVia = "create" | "child_create" | "reassign";
+export type AgentHandoffReturnKind = "reassigned" | "declined";
+
+/** Is hand-off accounting (recording and the cap) on for this company? */
+export async function agentHandoffsEnabled(db: Reader, companyId: string): Promise<boolean> {
+  const row = await db
+    .select({ enabled: featureFlags.enabled })
+    .from(featureFlags)
+    .where(and(eq(featureFlags.companyId, companyId), eq(featureFlags.flagKey, COWORKER_BRIDGE_FLAG)))
+    .then((rows) => rows[0] ?? null);
+  return row?.enabled === true;
+}
+
+export function agentHandoffCapMessage(rounds: number): string {
+  return (
+    `This request has already been handed between agents ${rounds} times, which is the limit ` +
+    `(${AGENT_HANDOFF_ROUND_CAP} hand-off rounds per request). Do not hand it to another agent again. ` +
+    "Ask your person how to proceed: ask_user_questions on the issue you are working on, " +
+    "with what you need and from whom, then set it to blocked."
+  );
+}
+
+/** The hand-off record for one issue, if an agent handed it to another agent. */
+export async function latestHandoffForIssue(
+  db: Reader,
+  input: { companyId: string; issueId: string },
+): Promise<{ rootIssueId: string; fromAgentId: string | null; toAgentId: string | null } | null> {
+  const row = await db
+    .select({ details: activityLog.details })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, input.companyId),
+        eq(activityLog.entityType, "issue"),
+        eq(activityLog.entityId, input.issueId),
+        eq(activityLog.action, AGENT_HANDOFF_ACTION),
+      ),
+    )
+    .orderBy(desc(activityLog.createdAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  const details = row?.details as Record<string, unknown> | null | undefined;
+  if (!details || typeof details.rootIssueId !== "string") return null;
+  return {
+    rootIssueId: details.rootIssueId,
+    fromAgentId: typeof details.fromAgentId === "string" ? details.fromAgentId : null,
+    toAgentId: typeof details.toAgentId === "string" ? details.toAgentId : null,
+  };
+}
+
+/**
+ * The request an issue belongs to: the top of its parent chain, or, when that
+ * top was itself handed off without a parent from a run on another request,
+ * that request.
+ */
+export async function resolveRequestRootIssueId(
+  db: Reader,
+  input: { companyId: string; issueId: string },
+): Promise<string> {
+  let current = input.issueId;
+  const seen = new Set<string>([current]);
+  for (let depth = 0; depth < MAX_PARENT_DEPTH; depth += 1) {
+    const row = await db
+      .select({ parentId: issues.parentId })
+      .from(issues)
+      .where(and(eq(issues.id, current), eq(issues.companyId, input.companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (!row?.parentId || seen.has(row.parentId)) break;
+    seen.add(row.parentId);
+    current = row.parentId;
+  }
+  const handoff = await latestHandoffForIssue(db, { companyId: input.companyId, issueId: current });
+  return handoff?.rootIssueId ?? current;
+}
+
+/**
+ * The request an agent's new, unparented issue belongs to: the issue its run
+ * is working on, if the run says so and that issue is in the same company.
+ */
+export async function requestRootForAgentRun(
+  db: Reader,
+  input: { companyId: string; agentId: string; runId: string | null | undefined },
+): Promise<string | null> {
+  if (!input.runId) return null;
+  const run = await db
+    .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+    .from(heartbeatRuns)
+    .where(
+      and(
+        eq(heartbeatRuns.id, input.runId),
+        eq(heartbeatRuns.companyId, input.companyId),
+        eq(heartbeatRuns.agentId, input.agentId),
+      ),
+    )
+    .then((rows) => rows[0] ?? null);
+  const issueId = run?.contextSnapshot?.issueId;
+  if (typeof issueId !== "string" || !issueId) return null;
+  const exists = await db
+    .select({ id: issues.id })
+    .from(issues)
+    .where(and(eq(issues.id, issueId), eq(issues.companyId, input.companyId)))
+    .then((rows) => rows[0] ?? null);
+  if (!exists) return null;
+  return resolveRequestRootIssueId(db, { companyId: input.companyId, issueId });
+}
+
+/** Rounds used so far by a request: hand-offs plus hand-offs sent back. */
+export async function countHandoffRounds(
+  db: Reader,
+  input: { companyId: string; rootIssueId: string },
+): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, input.companyId),
+        inArray(activityLog.action, ROUND_ACTIONS),
+        sql`${activityLog.details} ->> 'rootIssueId' = ${input.rootIssueId}`,
+      ),
+    );
+  return Number(row?.count ?? 0);
+}
+
+export type HandoffRoundCheck =
+  | { allowed: true; rounds: number }
+  | { allowed: false; rounds: number; message: string; details: Record<string, unknown> };
+
+/** May an agent hand an issue in this request to another agent now? */
+export async function checkHandoffRoundAvailable(
+  db: Reader,
+  input: { companyId: string; rootIssueId: string },
+): Promise<HandoffRoundCheck> {
+  const rounds = await countHandoffRounds(db, input);
+  if (rounds < AGENT_HANDOFF_ROUND_CAP) return { allowed: true, rounds };
+  return {
+    allowed: false,
+    rounds,
+    message: agentHandoffCapMessage(rounds),
+    details: { code: AGENT_HANDOFF_CAP_CODE, rounds, cap: AGENT_HANDOFF_ROUND_CAP, rootIssueId: input.rootIssueId },
+  };
+}
+
+/** Record one agent-to-agent hand-off. Returns the round it used. */
+export async function recordAgentHandoff(
+  db: Db,
+  input: {
+    companyId: string;
+    issueId: string;
+    parentIssueId: string | null;
+    rootIssueId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    runId: string | null;
+    via: AgentHandoffVia;
+    routedFromUserId?: string | null;
+  },
+): Promise<number> {
+  const round = (await countHandoffRounds(db, input)) + 1;
+  await logActivity(db, {
+    companyId: input.companyId,
+    actorType: "agent",
+    actorId: input.fromAgentId,
+    agentId: input.fromAgentId,
+    runId: input.runId,
+    action: AGENT_HANDOFF_ACTION,
+    entityType: "issue",
+    entityId: input.issueId,
+    details: {
+      rootIssueId: input.rootIssueId,
+      parentIssueId: input.parentIssueId,
+      fromAgentId: input.fromAgentId,
+      toAgentId: input.toAgentId,
+      via: input.via,
+      round,
+      cap: AGENT_HANDOFF_ROUND_CAP,
+      ...(input.routedFromUserId ? { routedFromUserId: input.routedFromUserId } : {}),
+    },
+  });
+  return round;
+}
+
+/** Record a refused hand-off on the issue the agent was working from. */
+export async function recordAgentHandoffRefused(
+  db: Db,
+  input: {
+    companyId: string;
+    entityIssueId: string;
+    rootIssueId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    runId: string | null;
+    rounds: number;
+  },
+): Promise<void> {
+  await logActivity(db, {
+    companyId: input.companyId,
+    actorType: "agent",
+    actorId: input.fromAgentId,
+    agentId: input.fromAgentId,
+    runId: input.runId,
+    action: AGENT_HANDOFF_REFUSED_ACTION,
+    entityType: "issue",
+    entityId: input.entityIssueId,
+    details: {
+      code: AGENT_HANDOFF_CAP_CODE,
+      rootIssueId: input.rootIssueId,
+      fromAgentId: input.fromAgentId,
+      toAgentId: input.toAgentId,
+      rounds: input.rounds,
+      cap: AGENT_HANDOFF_ROUND_CAP,
+    },
+  });
+}
+
+/**
+ * A hand-off came back: the receiving agent reassigned the issue to the agent
+ * that handed it over (or the parent's agent), or cancelled it, with a reason.
+ *
+ * This is the returned-hand-off correction signal. It records the return and
+ * its reason on the issue activity, counted as a round of the request. The
+ * agent-correction summary ("what changed", delivered on the agent's next
+ * wake) is wired to this function by the learning-loop slice; this is the one
+ * call site for it.
+ */
+export async function emitHandoffReturned(
+  db: Db,
+  input: {
+    companyId: string;
+    issueId: string;
+    parentIssueId: string | null;
+    rootIssueId: string;
+    /** The agent sending the work back. */
+    fromAgentId: string;
+    /** The agent receiving it back, when there is one. */
+    toAgentId: string | null;
+    kind: AgentHandoffReturnKind;
+    /** Why, in the returning agent's words (its comment); null when it gave none. */
+    reason: string | null;
+    runId: string | null;
+  },
+): Promise<number> {
+  const round = (await countHandoffRounds(db, input)) + 1;
+  await logActivity(db, {
+    companyId: input.companyId,
+    actorType: "agent",
+    actorId: input.fromAgentId,
+    agentId: input.fromAgentId,
+    runId: input.runId,
+    action: AGENT_HANDOFF_RETURNED_ACTION,
+    entityType: "issue",
+    entityId: input.issueId,
+    details: {
+      rootIssueId: input.rootIssueId,
+      parentIssueId: input.parentIssueId,
+      fromAgentId: input.fromAgentId,
+      toAgentId: input.toAgentId,
+      kind: input.kind,
+      reason: input.reason,
+      round,
+      cap: AGENT_HANDOFF_ROUND_CAP,
+    },
+  });
+  return round;
+}
+
+/**
+ * Every issue in a request: the root, everything under it, and everything
+ * under an unparented issue handed off from a run on it.
+ */
+export async function listRequestIssueIds(
+  db: Reader,
+  input: { companyId: string; rootIssueId: string },
+): Promise<string[]> {
+  const linked = await db
+    .select({ entityId: activityLog.entityId })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, input.companyId),
+        eq(activityLog.action, AGENT_HANDOFF_ACTION),
+        sql`${activityLog.details} ->> 'rootIssueId' = ${input.rootIssueId}`,
+      ),
+    );
+  const seeds = new Set<string>([input.rootIssueId, ...linked.map((row) => row.entityId)]);
+  const ids = new Set<string>();
+  let frontier = [...seeds];
+  for (let depth = 0; depth <= MAX_PARENT_DEPTH && frontier.length > 0; depth += 1) {
+    const present = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(eq(issues.companyId, input.companyId), inArray(issues.id, frontier)));
+    for (const row of present) ids.add(row.id);
+    const children = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(eq(issues.companyId, input.companyId), inArray(issues.parentId, frontier)));
+    frontier = children.map((row) => row.id).filter((id) => !ids.has(id));
+  }
+  return [...ids];
+}
+
+export interface RequestHandoffEntry {
+  issueId: string;
+  identifier: string | null;
+  kind: "handoff" | AgentHandoffReturnKind;
+  fromAgentId: string | null;
+  toAgentId: string | null;
+  round: number | null;
+  at: string;
+}
+
+/**
+ * The per-request tally an agent (or a person) reads: rounds used, the cap,
+ * the deliverable owner (the agent the request itself is assigned to, O7), the
+ * hand-offs it can see, and — only for readers allowed to see spend — the cost
+ * recorded against the request's issues it can see.
+ */
+export async function summarizeRequestHandoffs(
+  db: Reader,
+  input: {
+    companyId: string;
+    rootIssueId: string;
+    /** Issues in the request the reader can see. */
+    visibleIssueIds: Set<string>;
+    canReadSpend: boolean;
+  },
+): Promise<{
+  rounds: number;
+  cap: number;
+  remaining: number;
+  deliverableOwnerAgentId: string | null;
+  handoffs: RequestHandoffEntry[];
+  costCents: number | null;
+}> {
+  const rounds = await countHandoffRounds(db, input);
+  const root = await db
+    .select({ assigneeAgentId: issues.assigneeAgentId })
+    .from(issues)
+    .where(and(eq(issues.id, input.rootIssueId), eq(issues.companyId, input.companyId)))
+    .then((rows) => rows[0] ?? null);
+  const events = await db
+    .select({ action: activityLog.action, entityId: activityLog.entityId, details: activityLog.details, createdAt: activityLog.createdAt })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, input.companyId),
+        inArray(activityLog.action, ROUND_ACTIONS),
+        sql`${activityLog.details} ->> 'rootIssueId' = ${input.rootIssueId}`,
+      ),
+    )
+    .orderBy(activityLog.createdAt)
+    .limit(MAX_SUMMARY_HANDOFFS);
+  const visibleEvents = events.filter((event) => input.visibleIssueIds.has(event.entityId));
+  const identifiers = visibleEvents.length
+    ? await db
+      .select({ id: issues.id, identifier: issues.identifier })
+      .from(issues)
+      .where(and(eq(issues.companyId, input.companyId), inArray(issues.id, visibleEvents.map((event) => event.entityId))))
+    : [];
+  const identifierById = new Map(identifiers.map((row) => [row.id, row.identifier]));
+  const handoffs = visibleEvents.map((event): RequestHandoffEntry => {
+    const details = (event.details ?? {}) as Record<string, unknown>;
+    const returnKind = details.kind === "declined" ? "declined" : "reassigned";
+    return {
+      issueId: event.entityId,
+      identifier: identifierById.get(event.entityId) ?? null,
+      kind: event.action === AGENT_HANDOFF_ACTION ? "handoff" : returnKind,
+      fromAgentId: typeof details.fromAgentId === "string" ? details.fromAgentId : null,
+      toAgentId: typeof details.toAgentId === "string" ? details.toAgentId : null,
+      round: typeof details.round === "number" ? details.round : null,
+      at: event.createdAt.toISOString(),
+    };
+  });
+
+  let costCents: number | null = null;
+  if (input.canReadSpend) {
+    const ids = [...input.visibleIssueIds];
+    if (ids.length === 0) {
+      costCents = 0;
+    } else {
+      const [row] = await db
+        .select({ total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int` })
+        .from(costEvents)
+        .where(and(eq(costEvents.companyId, input.companyId), inArray(costEvents.issueId, ids)));
+      costCents = Number(row?.total ?? 0);
+    }
+  }
+
+  return {
+    rounds,
+    cap: AGENT_HANDOFF_ROUND_CAP,
+    remaining: Math.max(0, AGENT_HANDOFF_ROUND_CAP - rounds),
+    deliverableOwnerAgentId: root?.assigneeAgentId ?? null,
+    handoffs,
+    costCents,
+  };
+}
