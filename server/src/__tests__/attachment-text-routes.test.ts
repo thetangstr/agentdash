@@ -20,6 +20,9 @@
 import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +60,7 @@ import {
   __resetAttachmentTextCacheForTests,
 } from "../services/attachment-text.ts";
 import { issueRoutes } from "../routes/issues.js";
+import { resolveDefaultAgentWorkspaceDir } from "../home-paths.js";
 import { errorHandler } from "../middleware/index.js";
 import type { StorageService } from "../storage/types.js";
 
@@ -303,6 +307,23 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
     companyIds: [COMPANY],
     memberships: [{ companyId: COMPANY, membershipRole: "member", status: "active" }],
   });
+
+  // Uploads land in the same in-memory map the reads come from.
+  function storeUploadsInMemory() {
+    const putFile = storage.putFile as unknown as ReturnType<typeof vi.fn>;
+    putFile.mockImplementation(async (input: { companyId: string; namespace: string; originalFilename: string | null; contentType: string; body: Buffer }) => {
+      const objectKey = `${input.companyId}/${input.namespace}/${randomUUID()}-${input.originalFilename ?? "file"}`;
+      objects.set(objectKey, input.body);
+      return {
+        provider: "local_disk",
+        objectKey,
+        contentType: input.contentType,
+        byteSize: input.body.length,
+        sha256: `sha-${randomUUID()}`,
+        originalFilename: input.originalFilename,
+      };
+    });
+  }
 
   const readText = (actor: Record<string, unknown>, attachmentId: string, query = "") =>
     request(appAs(actor)).get(`/api/attachments/${attachmentId}/text${query}`);
@@ -572,19 +593,7 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
   // Co-worker slice 5: files an agent attaches are versioned per name, and
   // the text route says which version is current and reads it on request.
   it("versions an agent's uploads per name, leaves a person's alone, and points a read of an old version at the current one", async () => {
-    const putFile = storage.putFile as unknown as ReturnType<typeof vi.fn>;
-    putFile.mockImplementation(async (input: { companyId: string; namespace: string; originalFilename: string | null; contentType: string; body: Buffer }) => {
-      const objectKey = `${input.companyId}/${input.namespace}/${randomUUID()}-${input.originalFilename ?? "file"}`;
-      objects.set(objectKey, input.body);
-      return {
-        provider: "local_disk",
-        objectKey,
-        contentType: input.contentType,
-        byteSize: input.body.length,
-        sha256: `sha-${randomUUID()}`,
-        originalFilename: input.originalFilename,
-      };
-    });
+    storeUploadsInMemory();
     const uploadAs = (actor: Record<string, unknown>, body: string, filename: string) =>
       request(appAs(actor))
         .post(`/api/companies/${COMPANY}/issues/${OPEN_ISSUE}/attachments`)
@@ -611,5 +620,50 @@ describeEmbeddedPostgres("attachment text for agents (co-worker slice 5a)", () =
 
     const unversioned = await readText(asAgent(AGENT), byPerson.body.id, "?current=1");
     expect(unversioned.body).toMatchObject({ attachmentId: byPerson.body.id, version: null, isCurrent: true });
+  });
+
+  it("leaves an agent's upload unversioned in a company without the co-worker bridge flag", async () => {
+    storeUploadsInMemory();
+    const res = await request(appAs(asAgent(UNFLAGGED_AGENT, UNFLAGGED_COMPANY)))
+      .post(`/api/companies/${UNFLAGGED_COMPANY}/issues/${UNFLAGGED_ISSUE}/attachments`)
+      .attach("file", Buffer.from("A screenshot stand-in.", "utf8"), { filename: "screenshot.txt", contentType: "text/plain" });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ originalFilename: "screenshot.txt", version: null });
+    const again = await request(appAs(asAgent(UNFLAGGED_AGENT, UNFLAGGED_COMPANY)))
+      .post(`/api/companies/${UNFLAGGED_COMPANY}/issues/${UNFLAGGED_ISSUE}/attachments`)
+      .attach("file", Buffer.from("A second stand-in.", "utf8"), { filename: "screenshot.txt", contentType: "text/plain" });
+    expect(again.body).toMatchObject({ originalFilename: "screenshot.txt", version: null });
+  });
+
+  it("versions a file an agent attaches from its workspace only when the co-worker bridge flag is on", async () => {
+    storeUploadsInMemory();
+    const previousHome = process.env.PAPERCLIP_HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "attachment-workspace-"));
+    process.env.PAPERCLIP_HOME = home;
+    try {
+      for (const agentId of [AGENT, UNFLAGGED_AGENT]) {
+        const dir = resolveDefaultAgentWorkspaceDir(agentId);
+        await mkdir(dir, { recursive: true });
+        await writeFile(path.join(dir, "report.txt"), "Findings from the workspace.", "utf8");
+      }
+      const attachFromWorkspace = (agentId: string, companyId: string, issueId: string) =>
+        request(appAs(asAgent(agentId, companyId)))
+          .post(`/api/companies/${companyId}/issues/${issueId}/attachments/from-workspace`)
+          .send({ path: "report.txt" });
+
+      const flagged = await attachFromWorkspace(AGENT, COMPANY, OPEN_ISSUE);
+      expect(flagged.status).toBe(201);
+      expect(flagged.body).toMatchObject({ originalFilename: "report v1 (Agent A).txt", version: 1 });
+      const flaggedAgain = await attachFromWorkspace(AGENT, COMPANY, OPEN_ISSUE);
+      expect(flaggedAgain.body).toMatchObject({ originalFilename: "report v2 (Agent A).txt", version: 2 });
+
+      const unflagged = await attachFromWorkspace(UNFLAGGED_AGENT, UNFLAGGED_COMPANY, UNFLAGGED_ISSUE);
+      expect(unflagged.status).toBe(201);
+      expect(unflagged.body).toMatchObject({ originalFilename: "report.txt", version: null });
+    } finally {
+      if (previousHome === undefined) delete process.env.PAPERCLIP_HOME;
+      else process.env.PAPERCLIP_HOME = previousHome;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

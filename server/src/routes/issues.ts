@@ -348,9 +348,17 @@ export function issueRoutes(
   };
   const feedbackExportService = opts?.feedbackExportService;
   const environmentsSvc = environmentService(db);
-  /** The agent a file is credited to when an agent attaches it; null for a person. */
-  async function agentVersionAuthor(actor: { actorType: string; agentId: string | null }) {
+  /**
+   * The agent a file is credited to when an agent attaches it (co-worker slice 5).
+   * Null for a person, and null in a company without `coworker_bridge_enabled`,
+   * where an agent's upload keeps its name and gets no version, as before.
+   */
+  async function agentVersionAuthor(
+    companyId: string,
+    actor: { actorType: string; agentId: string | null },
+  ) {
     if (actor.actorType !== "agent" || !actor.agentId) return null;
+    if (!(await featureFlagsSvc.isEnabled(companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE))) return null;
     const agent = await agentsSvc.getById(actor.agentId);
     return agent?.name ?? "agent";
   }
@@ -4109,9 +4117,9 @@ export function issueRoutes(
       originalFilename: stored.originalFilename,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-      // An agent's file is the next version of its name, credited to the agent
-      // (co-worker slice 5). A person's upload on the page keeps its name.
-      versionAuthor: await agentVersionAuthor(actor),
+      // With the co-worker bridge on, an agent's file is the next version of its
+      // name, credited to the agent (slice 5). A person's upload keeps its name.
+      versionAuthor: await agentVersionAuthor(companyId, actor),
     });
 
     await logActivity(db, {
@@ -4243,7 +4251,7 @@ export function issueRoutes(
         originalFilename: stored.originalFilename,
         createdByAgentId: actor.agentId,
         createdByUserId: null,
-        versionAuthor: await agentVersionAuthor(actor),
+        versionAuthor: await agentVersionAuthor(companyId, actor),
       });
 
       await logActivity(db, {
