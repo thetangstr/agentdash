@@ -94,7 +94,7 @@ import {
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
 import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
 import { HERMES_HUMAN_QUESTION_PROMPT, createHermesHumanQuestionGuard } from "./hermes-human-question.js";
-import { renderWorkforcePrompt } from "@paperclipai/adapter-utils/server-utils";
+import { renderAgentCorrectionsPrompt, renderWorkforcePrompt } from "@paperclipai/adapter-utils/server-utils";
 import { escapeHermesTemplate, renderHermesDirectivesSection } from "./hermes-directives.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
@@ -1160,7 +1160,18 @@ const hermesLocalAdapter: ServerAdapterModule = {
     );
     // AgentDash (AGE-13): the human-question rule sits between the mandate and
     // the task so it reads as part of how this agent works, not as task text.
-    patchedConfig.promptTemplate = [roleContract, directivesNote, workforceNote, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
+    // AgentDash (learning loop): what changed after this agent's work was
+    // corrected. First-party adapters render it from the wake payload; the
+    // Hermes package renders only promptTemplate, so it goes in here, right
+    // before the task it belongs to.
+    const runContext = readRecord(taskPatchedCtx.context);
+    const correctionsNote = escapeHermesTemplate(
+      renderAgentCorrectionsPrompt(
+        runContext?.paperclipAgentCorrections,
+        typeof runContext?.paperclipAgentCorrectionsRemaining === "number" ? runContext.paperclipAgentCorrectionsRemaining : 0,
+      ),
+    );
+    patchedConfig.promptTemplate = [roleContract, directivesNote, workforceNote, HERMES_HUMAN_QUESTION_PROMPT, correctionsNote, taskTemplate]
       .filter((section): section is string => typeof section === "string" && section.trim().length > 0)
       .join("\n\n");
 

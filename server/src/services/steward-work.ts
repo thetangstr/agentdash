@@ -171,10 +171,12 @@ export function effectiveFileName(name: string | null | undefined): string {
 
 const ISSUE_IDENTIFIER_RE = /^[A-Z][A-Z0-9]*-\d+$/i;
 
-type WorkRefusal = { ok: false; code: string; reason: string };
+export type WorkRefusal = { ok: false; code: string; reason: string };
 type EndpointRow = typeof bridgeEndpoints.$inferSelect;
 type IssueRow = typeof issues.$inferSelect;
 
+/** Who a work call acts for, resolved from the endpoint. Exported for the send-back (steward-work-reply.ts). */
+export type WorkOwner = Owner;
 type Owner = {
   endpoint: EndpointRow;
   companyId: string;
@@ -1145,5 +1147,16 @@ export function stewardWorkService(
     };
   }
 
-  return { requireWorkEndpoint, list, read, runLog, file };
+  return {
+    requireWorkEndpoint,
+    list,
+    read,
+    runLog,
+    file,
+    // The send-back (steward-work-reply.ts) resolves the person and the issue
+    // exactly as the reads do.
+    resolveOwner,
+    findWorkIssue,
+    isRefusal,
+  };
 }

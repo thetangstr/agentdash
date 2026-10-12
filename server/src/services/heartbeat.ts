@@ -88,6 +88,7 @@ import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { agentDirectivesService } from "./agent-directives.js";
 import { agentMemoryService } from "./agent-memory.js";
+import { claimCorrectionsForRun } from "./agent-corrections.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 // AgentDash (GH #782): connected GitHub repos
@@ -275,6 +276,9 @@ const LIVENESS_BOOKKEEPING_ACTIVITY_ACTIONS = [
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
 const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
+/** AgentDash (learning loop): corrections this run carries; see agent-corrections.ts. */
+const AGENT_CORRECTIONS_CONTEXT_KEY = "paperclipAgentCorrections";
+const AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY = "paperclipAgentCorrectionsRemaining";
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 /** The liveness reaper's verdict when it can no longer see a run's child process. */
@@ -2133,7 +2137,10 @@ async function buildPaperclipWakePayload(input: {
           .where(and(eq(issues.id, issueId), eq(issues.companyId, input.companyId)))
           .then((rows) => rows[0] ?? null)
       : null);
-  if (commentIds.length === 0 && Object.keys(executionStage).length === 0 && !issueSummary) return null;
+  const corrections = Array.isArray(input.contextSnapshot[AGENT_CORRECTIONS_CONTEXT_KEY])
+    ? (input.contextSnapshot[AGENT_CORRECTIONS_CONTEXT_KEY] as unknown[])
+    : [];
+  if (commentIds.length === 0 && Object.keys(executionStage).length === 0 && !issueSummary && corrections.length === 0) return null;
 
   const commentRows =
     commentIds.length === 0
@@ -2263,6 +2270,12 @@ async function buildPaperclipWakePayload(input: {
     },
     truncated,
     fallbackFetchNeeded: truncated || missingCommentCount > 0,
+    // AgentDash (learning loop): rendered as the "What changed" section.
+    corrections,
+    correctionsRemaining:
+      typeof input.contextSnapshot[AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY] === "number"
+        ? input.contextSnapshot[AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY]
+        : 0,
   };
 }
 
@@ -6623,6 +6636,26 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
     } else {
       delete context.paperclipContinuationSummary;
+    }
+    // AgentDash (learning loop): what changed after this agent's work was
+    // corrected (services/agent-corrections.ts). Claimed by this run, so the
+    // next run repeats it only if this one ends without succeeding. Read
+    // before the wake payload, which carries it. A failure here is logged and
+    // the run goes ahead without it: a missing note must not stop the work.
+    const corrections = await claimCorrectionsForRun(db, {
+      companyId: agent.companyId,
+      agentId: agent.id,
+      runId: run.id,
+    }).catch((err) => {
+      logger.warn({ err, runId: run.id, agentId: agent.id }, "agent corrections not delivered with this run");
+      return { items: [], remaining: 0 };
+    });
+    if (corrections.items.length > 0) {
+      context[AGENT_CORRECTIONS_CONTEXT_KEY] = corrections.items;
+      context[AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY] = corrections.remaining;
+    } else {
+      delete context[AGENT_CORRECTIONS_CONTEXT_KEY];
+      delete context[AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY];
     }
     const paperclipWakePayload = await buildPaperclipWakePayload({
       db,

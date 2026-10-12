@@ -16,6 +16,7 @@ import { featureFlagsService } from "./feature-flags.js";
 import { resolveAgentClosingStatus } from "./issue-blocked-declaration.js";
 import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
 import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
+import { recordAgentCorrectionGuarded, taskReopenedCorrectionInput } from "./agent-corrections.js";
 import { issueDocumentKey, listIssueDocumentsByKey, resubmitSentBackDeliverables, workProductDocumentKey } from "./work-products.js";
 import {
   digestIssueIntentFacts, IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
@@ -759,6 +760,21 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ),
           },
         });
+
+        // AgentDash (learning loop): a person moving an issue the agent closed
+        // back open is a correction for the agent's next wake, with the
+        // update's comment as the reason.
+        const previousStatus = typeof previous.status === "string" ? previous.status : null;
+        if (actor.actorType === "user" && (previousStatus === "done" || previousStatus === "cancelled")) {
+          await recordAgentCorrectionGuarded(tx, issue.companyId, (reader) =>
+            taskReopenedCorrectionInput(reader, {
+              issue,
+              fromStatus: previousStatus,
+              reopenedByUserId: actor.actorId,
+              reason: commentBody ?? null,
+            }),
+          );
+        }
 
         // AgentDash (MVP launch lane B, item 6): a human board user moving
         // the issue to done is the acceptance of what the agent shipped. Its

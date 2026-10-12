@@ -95,6 +95,12 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   "/api/bridge/work/read",
   "/api/bridge/work/run-log",
   "/api/bridge/work/file",
+  // The send-back: `propose` reads the bundle back and mints a single-use
+  // `reply` handle over it, writing nothing; `confirm` spends that handle and
+  // applies the bundle as the endpoint's owner after re-checking their
+  // authority -- see steward-work-reply.ts.
+  "/api/bridge/work/propose",
+  "/api/bridge/work/confirm",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

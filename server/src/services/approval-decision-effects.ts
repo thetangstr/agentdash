@@ -26,6 +26,7 @@ import {
 } from "./index.js";
 import { stewardInboxService } from "./steward-inbox.js";
 import { workflowRecommendationService } from "./workflow-recommendations.js";
+import { approvalRejectedCorrectionInput, recordAgentCorrectionAfterCommit } from "./agent-corrections.js";
 
 type ApprovalRow = typeof approvals.$inferSelect;
 
@@ -462,6 +463,20 @@ export function approvalDecisionEffectsService(
         logger.warn({ err, approvalId: approval.id }, "linked issues unavailable for rejection wake");
       }
       const primaryIssueId = linkedIssueIds[0] ?? null;
+      // AgentDash (learning loop): the rejection and its reason are a
+      // correction, delivered with the wake below. Recorded first so that
+      // wake carries it; a failure is logged and the wake still goes.
+      try {
+        const correction = await approvalRejectedCorrectionInput(db, {
+          approval,
+          issueId: primaryIssueId,
+          rejectedByUserId: actorUserId,
+          note: decisionNote ?? null,
+        });
+        if (correction) await recordAgentCorrectionAfterCommit(db, correction);
+      } catch (err) {
+        logger.warn({ err, approvalId: approval.id }, "rejection correction not recorded");
+      }
       try {
         const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
           source: "automation",

@@ -144,6 +144,8 @@ export function checkConnectorSendPayload(payload: unknown): ConnectorSendPayloa
 // should not claim a laptop decision came from the board. `assistant` is the
 // same distinction for the assistant MCP surface (GH #679): a decision taken
 // through a person's assistant records itself as one, never as "web".
+// `bridge_work` is a decision sent as part of a send-back bundle from the
+// person's own Claude session (POST /api/bridge/work/confirm).
 export const APPROVAL_DECISION_CHANNELS = [
   "web",
   "telegram",
@@ -151,6 +153,7 @@ export const APPROVAL_DECISION_CHANNELS = [
   "whatsapp",
   "bridge_inbox",
   "assistant",
+  "bridge_work",
 ] as const;
 export type ApprovalDecisionChannel = (typeof APPROVAL_DECISION_CHANNELS)[number];
 

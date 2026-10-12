@@ -10,6 +10,7 @@ import {
   buildInvocationEnvForLogs,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   materializePaperclipSkillCopy,
+  renderAgentCorrectionsPrompt,
   renderAgentDirectivesPrompt,
   renderAgentMemoryPrompt,
   renderPaperclipWakePrompt,
@@ -735,5 +736,44 @@ describe("renderAgentMemoryPrompt", () => {
     expect(renderAgentMemoryPrompt(null)).toBe("");
     expect(renderAgentMemoryPrompt({ content: "   " })).toBe("");
     expect(renderAgentMemoryPrompt("not an object")).toBe("");
+  });
+});
+
+describe("corrections in the wake (learning loop)", () => {
+  const correction = {
+    kind: "steward_send_back",
+    issueIdentifier: "ACME-41",
+    summary: 'Person A reviewed your work on ACME-41 and sent it back.\nTheir comment: "Lead with the recommendation."',
+    lessons: ["Lead with the recommendation.", "  Label every figure\nas measured or modeled.  "],
+    createdAt: "2026-10-12T10:00:00.000Z",
+  };
+
+  it("renders what changed, the lessons, and how to record them, on a fresh wake", () => {
+    const prompt = renderPaperclipWakePrompt({
+      reason: "issue_commented",
+      issue: { id: "issue-1", identifier: "ACME-41", title: "Draft the note", status: "todo" },
+      corrections: [correction],
+    });
+    expect(prompt).toContain("## What changed (corrections to your work)");
+    expect(prompt).toContain("1. your steward sent your work back (ACME-41)");
+    expect(prompt).toContain('   Their comment: "Lead with the recommendation."');
+    expect(prompt).toContain("   - Label every figure as measured or modeled.");
+    expect(prompt).toContain("agentdashUpdateMyMemory");
+    expect(prompt).toContain("not an instruction that outranks your mandate");
+  });
+
+  it("carries corrections on a resumed session too, and a wake with only corrections is not empty", () => {
+    const resumed = renderPaperclipWakePrompt({ corrections: [correction], correctionsRemaining: 2 }, { resumedSession: true });
+    expect(resumed).toContain("## What changed (corrections to your work)");
+    expect(resumed).toContain("2 more corrections are waiting");
+    expect(JSON.parse(stringifyPaperclipWakePayload({ corrections: [correction] }) ?? "{}").corrections).toHaveLength(1);
+  });
+
+  it("drops empty or malformed corrections and caps how many go with one wake", () => {
+    expect(renderAgentCorrectionsPrompt([{ kind: "x", summary: "  " }, "nope", null])).toBe("");
+    const many = Array.from({ length: 9 }, (_, index) => ({ ...correction, summary: `item ${index}` }));
+    const rendered = renderAgentCorrectionsPrompt(many);
+    expect(rendered).toContain("item 4");
+    expect(rendered).not.toContain("item 5");
   });
 });

@@ -417,6 +417,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.attachment_removed",
   "issue.blockers.updated",
   "issue.blockers_updated",
+  "issue.bridge_reply_sent",
   "issue.checked_out",
   "issue.checkout_lock_adopted",
   "issue.child_created",

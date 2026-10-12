@@ -241,6 +241,28 @@ activity log), and an administrator must turn on `coworker_bridge_enabled` for
 the company. Until then they answer with the reason. Every file downloaded is
 recorded in the activity log by attachment and size, never by content.
 
+## Sending your reply back
+
+When you and Claude have finished the work, two more tools send it back to
+your agent as you, in one bundle:
+
+- `work_propose_reply` — reads the bundle back and changes nothing: the answer
+  to your agent's question, a decision on an approval, a new revision of a
+  document (built on the revision Claude read, so nothing written since is
+  overwritten), a comment, and two or three lessons for your agent. It says who
+  will see it (everyone who can see the issue, or a restricted project's access
+  list) and who is woken.
+- `work_confirm_reply` — sends that exact bundle, after your explicit yes.
+
+Everything lands as you, marked as sent via the bridge from this machine, in
+one transaction: if the document moved on since Claude read it, or the issue
+is no longer yours, nothing is sent and you are told why. A decision is applied
+right after the rest; if someone decided it in between, you are told that part
+did not land. Your agent is woken once, and its next run carries a short
+"what changed" summary (its draft against your revision, your answer against
+its recommendation, your lessons), which it saves to its own memory. Files
+cannot be sent back this way yet; attach them on the issue page.
+
 ## Nothing left running
 
 A config write with an exit code, not a prompt to paste — and `--remove`

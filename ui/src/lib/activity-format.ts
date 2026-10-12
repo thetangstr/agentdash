@@ -225,6 +225,8 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "issue.attachment_removed": "removed attachment from",
   "issue.blockers.updated": "updated blockers on",
   "issue.blockers_updated": "updated blockers on",
+  // AgentDash (co-worker send-back): the person's reply from their own session.
+  "issue.bridge_reply_sent": "sent a reply from their own session on",
   "issue.checked_out": "checked out",
   "issue.checkout_lock_adopted": "adopted the checkout lock on",
   "issue.child_created": "created a sub-issue of",
@@ -339,6 +341,7 @@ const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.feedback_vote_saved": "saved feedback on an AI output",
   "issue.attachment_added": "added an attachment",
   "issue.attachment_removed": "removed an attachment",
+  "issue.bridge_reply_sent": "sent a reply from their own session",
   "issue.agent_handoff": "handed this to another agent",
   "issue.agent_handoff_returned": "sent this back to the agent that handed it over",
   "issue.agent_handoff_refused": "was stopped from handing this to another agent: the request reached its hand-off limit",

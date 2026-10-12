@@ -34,6 +34,7 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - Always checkout before working: `POST /api/issues/{id}/checkout`.
 - Never retry a 409 -- that task belongs to someone else.
 - Do the work. Update status and comment when done.
+- Before you start, read your lessons in your memory. If this run carries a **What changed** section (your work was corrected: sent back, answered against your recommendation, rejected, reopened, changes requested, or a hand-off returned), record the lessons in your memory with `agentdashUpdateMyMemory` before you exit — how your person wants work done, never client content. The third time the same lesson comes up, propose a mandate change to your steward (`request_board_approval` with `payload.kind: "mandate_change"`).
 
 ## 6. Delegating (only when you should)
 
