@@ -237,11 +237,31 @@ export function framedSlice(value: string | null | undefined, kind: string, max:
   };
 }
 
+/**
+ * The office document types the co-worker bridge is built to carry: a brief
+ * or a deliverable sent with a request or a send-back, and fetched into the
+ * quarantine folder. The instance allowlist (`PAPERCLIP_ALLOWED_ATTACHMENT_TYPES`)
+ * is the inline-asset list, and its default names images, PDF and text only,
+ * so on a default install every .docx was refused in both directions. These
+ * are the plain OOXML types; the macro-enabled variants (`.docm`, `.pptm`,
+ * `.xlsm`) have their own types and stay refused unless the instance lists them.
+ */
+export const BRIDGE_OFFICE_TYPES: ReadonlySet<string> = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+
+/** May a file of this bare type travel over the bridge? The instance allowlist, plus the office types. */
+export function isBridgeFileType(type: string): boolean {
+  return isAllowedContentType(type) || BRIDGE_OFFICE_TYPES.has(type);
+}
+
 /** Why this attachment may or may not come down the bridge. */
 export function downloadVerdict(
   attachment: { contentType: string | null; originalFilename: string | null; byteSize: number },
   capBytes: number,
-  isAllowed: (contentType: string) => boolean = isAllowedContentType,
+  isAllowed: (contentType: string) => boolean = isBridgeFileType,
 ): { allowed: true } | { allowed: false; reason: string } {
   const type = bareMediaType(attachment.contentType);
   if ((type !== null && isMarkupType(type)) || MARKUP_EXTENSIONS.test(effectiveFileName(attachment.originalFilename))) {
@@ -279,7 +299,7 @@ export function textVerdict(
   return downloadVerdict(
     attachment,
     capBytes,
-    (type) => isAllowedContentType(type) || classifyDocument(attachment.originalFilename, type) !== "unsupported",
+    (type) => isBridgeFileType(type) || classifyDocument(attachment.originalFilename, type) !== "unsupported",
   );
 }
 

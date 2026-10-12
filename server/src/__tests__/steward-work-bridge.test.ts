@@ -54,6 +54,7 @@ import {
 } from "../services/steward-work.js";
 import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
 import { createStorageService } from "../storage/service.js";
+import { validateBridgeFiles } from "../services/bridge-staged-files.js";
 import { truncateWithRetry } from "./helpers/truncate.js";
 
 /**
@@ -182,6 +183,23 @@ describe("work framing helpers", () => {
     expect(textVerdict({ contentType: "text/plain", originalFilename: "page.svg", byteSize: 10 }, 100)).toMatchObject({ allowed: false });
     expect(textVerdict({ contentType: "application/zip", originalFilename: "b.zip", byteSize: 10 }, 100)).toMatchObject({ allowed: false });
     expect(textVerdict({ contentType: docxType, originalFilename: "note.docx", byteSize: 500 }, 100)).toMatchObject({ allowed: false });
+  });
+
+  it("carries the plain office types on a default allowlist, but not their macro-enabled variants", () => {
+    // The default instance allowlist names images, PDF and text; a .docx brief
+    // or deliverable must still travel, in both directions.
+    for (const [contentType, originalFilename] of [
+      ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "brief.docx"],
+      ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "deck.pptx"],
+      ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "model.xlsx"],
+    ] as const) {
+      expect(downloadVerdict({ contentType, originalFilename, byteSize: 10 }, 100), originalFilename).toEqual({ allowed: true });
+      expect(downloadVerdict({ contentType, originalFilename, byteSize: 500 }, 100), originalFilename).toMatchObject({ allowed: false });
+    }
+    expect(
+      downloadVerdict({ contentType: "application/vnd.ms-word.document.macroEnabled.12", originalFilename: "m.docm", byteSize: 10 }, 100),
+    ).toMatchObject({ allowed: false });
+    expect(validateBridgeFiles([{ name: "brief.docx", sha256: "a".repeat(64), size: 10 }], 100)).toMatchObject({ ok: true });
   });
 
   it("never repeats an uploader's type string that is not a bare media type", () => {

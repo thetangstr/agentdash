@@ -314,9 +314,12 @@ did, the same `agentdash-inbox` entry also serves five read-only tools:
   without its text.
 - `work_fetch_file` — saves one attachment into
   `~/agentdash-inbox/incoming/<ISSUE>/`, readable only by you, after checking
-  its sha256 (no hash, no file). Allowlisted types within your company's
-  attachment cap only; HTML, SVG and XML never come down, and the client
-  refuses to save one even if a server sends it.
+  its sha256 (no hash, no file). The instance's attachment types plus Word,
+  PowerPoint and Excel documents (.docx, .pptx, .xlsx; not their
+  macro-enabled variants), within your company's attachment cap only; HTML,
+  SVG and XML never come down, and the client refuses to save one even if a
+  server sends it. Files sent with a send-back or a request follow the same
+  rule.
 
 You see exactly what you could see on the page, narrowed to your own work:
 issues assigned to you or to an agent you answer for. Anything else answers as
