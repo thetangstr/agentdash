@@ -67,6 +67,10 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   "/api/bridge/poll",
   "/api/bridge/result",
   "/api/bridge/decline",
+  // The machine describing itself to itself (owner, label, capabilities, the
+  // company's co-worker flag) for `agentdash-connect check`. Reads nothing
+  // about anyone else and changes nothing.
+  "/api/bridge/whoami",
   // The steward inbox: read a position, move a position. Both are scoped to
   // the endpoint's own owner by the endpoint identity, and neither decides
   // anything -- resolving an approval from the inbox is the separate route

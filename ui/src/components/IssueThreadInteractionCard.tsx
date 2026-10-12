@@ -25,9 +25,13 @@ import { Checkbox } from "./ui/checkbox";
 import { PriorityIcon } from "./PriorityIcon";
 import { Textarea } from "./ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { ViaBridgeBadge } from "./ViaBridgeBadge";
+import type { BridgeVia } from "../lib/bridge-provenance";
 
 interface IssueThreadInteractionCardProps {
   interaction: IssueThreadInteraction;
+  /** Set when the person answered from their own Claude or Codex through the bridge. */
+  viaBridge?: BridgeVia | null;
   agentMap?: Map<string, Agent>;
   currentUserId?: string | null;
   userLabelMap?: ReadonlyMap<string, string> | null;
@@ -1217,6 +1221,7 @@ function RequestConfirmationCard({
 
 export function IssueThreadInteractionCard({
   interaction,
+  viaBridge = null,
   agentMap,
   currentUserId,
   userLabelMap,
@@ -1324,6 +1329,7 @@ export function IssueThreadInteractionCard({
         <div className="mt-4 border-t border-border/60 pt-3 text-xs text-muted-foreground">
           Resolved by <span className="font-medium text-foreground">{resolvedByLabel}</span>
           {interaction.resolvedAt ? ` on ${formatShortDate(interaction.resolvedAt)}` : ""}
+          <ViaBridgeBadge via={viaBridge} className="ml-2 align-middle" />
         </div>
       ) : null}
     </div>

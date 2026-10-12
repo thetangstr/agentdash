@@ -6,6 +6,7 @@ import { REQUEST_INSTRUCTIONS, REQUEST_TOOLS } from "./request-tools.mjs";
 import { WORK_INSTRUCTIONS, WORK_TOOLS } from "./work-tools.mjs";
 import { REPLY_INSTRUCTIONS, REPLY_TOOLS } from "./reply-tools.mjs";
 import { READ_ONLY_INBOX_TOOLS } from "./pre-review.mjs";
+import { DESKTOP_CLIENT, DESKTOP_SERVER_INSTRUCTIONS } from "./clients.mjs";
 
 /**
  * `agentdash-connect mcp` — the person's own inbox, as MCP tools, over stdio.
@@ -350,9 +351,14 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
           protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: "agentdash-inbox", version },
-          instructions: readOnly
-            ? [instructionsFor(owner), WORK_INSTRUCTIONS, READ_ONLY_INSTRUCTIONS].join("\n")
-            : [instructionsFor(owner), WORK_INSTRUCTIONS, REPLY_INSTRUCTIONS, REQUEST_INSTRUCTIONS].join("\n"),
+          instructions: [
+            instructionsFor(owner),
+            // Claude Desktop launches with `--client claude-desktop` (clients.mjs):
+            // no inbox folder, no hook, the tools in every chat.
+            ...(opts.client === DESKTOP_CLIENT ? [DESKTOP_SERVER_INSTRUCTIONS] : []),
+            WORK_INSTRUCTIONS,
+            ...(readOnly ? [READ_ONLY_INSTRUCTIONS] : [REPLY_INSTRUCTIONS, REQUEST_INSTRUCTIONS]),
+          ].join("\n"),
         });
       case "ping":
         return isRequest ? reply({}) : null;

@@ -16,6 +16,7 @@ import { stewardWorkService } from "../services/steward-work.js";
 import { stewardWorkReplyService } from "../services/steward-work-reply.js";
 import { stewardRequestsService } from "../services/steward-requests.js";
 import { BRIDGE_HANDLE_HEADER, bridgeStagedFilesService } from "../services/bridge-staged-files.js";
+import { bridgeEndpointSelfService } from "../services/bridge-endpoint-self.js";
 import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -105,6 +106,7 @@ export function bridgeRoutes(
   });
   const requests = stewardRequestsService(db, { runtime: options.issueRuntime ?? heartbeat });
   const stagedFiles = bridgeStagedFilesService(db, { storage: options.storage });
+  const endpointSelf = bridgeEndpointSelfService(db);
 
   /** One multipart file into memory, at most `limit` bytes; the existing upload path's shape. */
   async function singleFile(req: Request, res: Response, limit: number) {
@@ -173,6 +175,17 @@ export function bridgeRoutes(
       },
       resultToken: claimed.resultToken,
     });
+  });
+
+  /**
+   * This machine, described to itself: whose inbox it reads, its label and
+   * capabilities, and whether the company has co-worker review on. What
+   * `agentdash-connect check` asks. Moves no cursor and mints no handle,
+   * unlike a sync, so a check never changes anything.
+   */
+  router.post("/bridge/whoami", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    res.json(await endpointSelf.describe(endpointId));
   });
 
   /**

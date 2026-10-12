@@ -279,6 +279,8 @@ export function stewardInboxAnswerService(
                 updated.kind === "ask_user_questions" ? updated.result?.answers?.length ?? 0 : 0,
               channel: STEWARD_INBOX_TOKEN_PROVIDER,
               bridgeEndpointId: endpointId,
+              // For the page's "via bridge (<label>)" badge.
+              bridgeEndpointLabel: endpoint.label,
             },
           }),
         );

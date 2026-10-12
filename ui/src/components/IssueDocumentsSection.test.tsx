@@ -28,6 +28,14 @@ vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
 }));
 
+const mockActivityApi = vi.hoisted(() => ({
+  forIssue: vi.fn(),
+}));
+
+vi.mock("../api/activity", () => ({
+  activityApi: mockActivityApi,
+}));
+
 vi.mock("../hooks/useAutosaveIndicator", () => ({
   useAutosaveIndicator: () => ({
     state: "idle",
@@ -257,10 +265,57 @@ describe("IssueDocumentsSection", () => {
     vi.clearAllMocks();
     markdownEditorMockState.emitMountEmptyChange = false;
     mockIssuesApi.listShipped.mockResolvedValue({ items: [], total: 0, nextCursor: null, monthTotal: null });
+    mockActivityApi.forIssue.mockResolvedValue([]);
   });
 
   afterEach(() => {
     container.remove();
+  });
+
+  it("badges a revision the person sent from their own session through the bridge", async () => {
+    const issue = createIssue();
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+    mockIssuesApi.listDocuments.mockResolvedValue([
+      createIssueDocument({ key: "plan", body: "# Plan", latestRevisionNumber: 4 }),
+      createIssueDocument({ id: "document-2", key: "notes", body: "# Notes", latestRevisionNumber: 2, latestRevisionId: "rev-n2" }),
+    ]);
+    mockActivityApi.forIssue.mockResolvedValue([
+      {
+        id: "evt-1",
+        companyId: "company-1",
+        actorType: "user",
+        actorId: "user-1",
+        action: "issue.document_updated",
+        entityType: "issue",
+        entityId: "issue-1",
+        agentId: null,
+        runId: null,
+        details: { key: "plan", revisionNumber: 4, channel: "bridge_work", bridgeEndpointLabel: "person-a-laptop" },
+        origin: "server",
+        createdAt: new Date("2026-03-31T12:05:00.000Z"),
+      },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDocumentsSection issue={issue} canDeleteDocuments={false} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await flush();
+
+    expect(mockActivityApi.forIssue).toHaveBeenCalledWith("issue-1");
+    expect(container.querySelector("#document-plan")?.textContent).toContain("via bridge (person-a-laptop)");
+    expect(container.querySelector("#document-notes")?.textContent).not.toContain("via bridge");
+
+    await act(async () => {
+      root.unmount();
+    });
+    queryClient.clear();
   });
 
   it("keeps system handoff documents out of the normal document surface", async () => {

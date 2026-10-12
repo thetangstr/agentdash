@@ -12,6 +12,9 @@ import { isSystemIssueDocumentKey } from "@paperclipai/shared";
 import { useLocation } from "@/lib/router";
 import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
+import { activityApi } from "../api/activity";
+import { collectBridgeProvenance, documentRevisionKey } from "../lib/bridge-provenance";
+import { ViaBridgeBadge } from "./ViaBridgeBadge";
 import { useAutosaveIndicator } from "../hooks/useAutosaveIndicator";
 import { deriveDocumentRevisionState } from "../lib/document-revisions";
 import { queryKeys } from "../lib/queryKeys";
@@ -196,6 +199,17 @@ export function IssueDocumentsSection({
     queryKey: queryKeys.issues.documents(issue.id),
     queryFn: () => issuesApi.listDocuments(issue.id),
   });
+
+  // Which revisions a person sent from their own Claude or Codex: "via bridge
+  // (<label>)". The issue feed the chat tab already loads (same key).
+  const { data: issueActivity } = useQuery({
+    queryKey: queryKeys.issues.activity(issue.id),
+    queryFn: () => activityApi.forIssue(issue.id),
+  });
+  const revisionProvenance = useMemo(
+    () => collectBridgeProvenance(issueActivity).documentRevisions,
+    [issueActivity],
+  );
 
   // AgentDash (c4-polish): the thumbs hide on the document ANY review-
   // lifecycle deliverable binds to (metadata.documentKey + reviewState !=
@@ -943,6 +957,10 @@ export function IssueDocumentsSection({
                                     <span className="text-xs text-muted-foreground">
                                       {relativeTime(revision.createdAt)} • {getRevisionActorLabel(revision)}
                                     </span>
+                                    <ViaBridgeBadge
+                                      via={revisionProvenance.get(documentRevisionKey(doc.key, revision.revisionNumber))}
+                                      className="mt-0.5"
+                                    />
                                   </div>
                                 </DropdownMenuRadioItem>
                               );
@@ -959,6 +977,7 @@ export function IssueDocumentsSection({
                     >
                       updated {relativeTime(displayedUpdatedAt)}
                     </a>
+                    <ViaBridgeBadge via={revisionProvenance.get(documentRevisionKey(doc.key, displayedRevisionNumber))} />
                   </div>
                   {showTitle && <p className="mt-2 text-sm font-medium">{displayedTitle}</p>}
                 </div>

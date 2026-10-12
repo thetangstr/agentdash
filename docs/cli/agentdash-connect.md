@@ -7,7 +7,8 @@ summary: "Connect Claude Code or Codex on your machine to your AgentDash agent."
 > This page is `packages/connect/README.md`, the README published to npm with the package. Edit the README, then run `pnpm docs:mcp-reference`.
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
-AgentDash agent.
+AgentDash agent, and put your own AgentDash inbox in Claude Code, Claude
+Desktop and Codex.
 
 ```sh
 npx -y agentdash-connect@latest --url https://your-instance KVTX-8F02
@@ -37,18 +38,19 @@ It works the same in a macOS/Linux terminal and in PowerShell on Windows.
 
 ## What it actually does
 
-1. Finds which harnesses are installed (`claude`, `codex`).
+1. Finds which harnesses are installed (`claude`, `codex`, and the Claude
+   Desktop app).
 2. **Checks the link and credential work before touching anything.** A wrong
    code, a typo'd host and an instance that is down are three different
    messages, and you get them before any file is written.
 3. Writes each harness's own native MCP config.
 4. When the instance supports it (v2026.914.0 and later), sets up your inbox —
-   see below.
+   see below — and adds your own inbox tools to every client it found.
 5. Prints every file it changed.
 
 ```
 Connecting this machine to an AgentDash agent.
-Found: Claude Code, Codex
+Found: Claude Code, Claude Desktop, Codex
 
 Redeeming code KVTX-8F02 …
 Paired as Quill at Halden & Co., for this machine (laptop (darwin)).
@@ -71,8 +73,18 @@ Inbox connected for Jonah Lee (jonah@example.com):
   inbox   ~/agentdash-inbox/AGENTS.md
   claude  ~/.claude.json
           "agentdash-inbox" — your own inbox tools: Claude reviews with you and sends only what you approve
+  desktop ~/Library/Application Support/Claude/claude_desktop_config.json
+          "agentdash-inbox" — your inbox tools in Claude Desktop; the previous file is saved as claude_desktop_config.json.agentdash-backup-20261012T080910Z
+          quit and reopen Claude Desktop to load them
+  desktop ~/agentdash-inbox/claude-desktop-project.md
+          Claude Desktop has no session-start hook: paste this file into the instructions of a
+          Claude Desktop project (for example "AgentDash inbox") and start inbox chats there
+  codex   ~/.codex/config.toml
+          "agentdash-inbox" — your own inbox tools in Codex; open ~/agentdash-inbox in Codex for the review rules (AGENTS.md)
 
 Open ~/agentdash-inbox in Claude Code: anything waiting on you appears as the session starts, and Claude reviews it with you.
+In Codex, start sessions in ~/agentdash-inbox: its AGENTS.md tells Codex to review what is waiting first.
+Check the connection any time with:  npx agentdash-connect check
 ```
 
 ## The inbox
@@ -91,6 +103,9 @@ its steward's inbox.
 | `~/agentdash-inbox/.claude/skills/agentdash-coworker/SKILL.md` | the review skill: how Claude reviews your agents' work with you (below) |
 | `~/agentdash-inbox/AGENTS.md` | the same rules, for Codex |
 | `~/.claude.json` | a second entry, `agentdash-inbox` — your own inbox tools, holding no secret |
+| `~/.codex/config.toml` | `[mcp_servers.agentdash-inbox]` — the same tools for Codex, holding no secret |
+| Claude Desktop's `claude_desktop_config.json` | an `agentdash-inbox` entry, merged in (the file is backed up first, never replaced), holding no secret |
+| `~/agentdash-inbox/claude-desktop-project.md` | the review rules as Claude Desktop project instructions |
 
 Start or resume a Claude Code session **in `~/agentdash-inbox`** and the hook puts what is
 waiting on you into the session: approvals needing your decision first, then
@@ -111,6 +126,66 @@ credential — see below.
 If this machine's inbox already belongs to someone else, pairing asks before
 replacing it and defaults to keeping what is there. The agent pairing goes
 ahead either way.
+
+## Claude Desktop and Codex
+
+Both get your own inbox tools, the same `agentdash-connect@latest mcp` server
+Claude Code runs, on the same inbox credential. Neither config file holds a
+secret.
+
+**Codex** reads them from `[mcp_servers.agentdash-inbox]` in
+`~/.codex/config.toml`, beside the agent's own `[mcp_servers.agentdash]`. The
+entry has the shape `codex mcp add` writes, with `startup_timeout_sec = 60`
+(the first `npx` download can be slow) and `tool_timeout_sec = 3600` (a large
+file download; each tool keeps its own shorter deadline). Codex has no
+session-start hook here, so `~/agentdash-inbox/AGENTS.md` tells it to start the
+review on the first turn of a session in that folder.
+
+**Claude Desktop** reads them from its own config file
+(`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows; Claude Desktop does
+not run on Linux). Connect merges one `agentdash-inbox` entry into that file
+and keeps everything else. Before changing it, it saves the previous file next
+to it as `claude_desktop_config.json.agentdash-backup-<time>` (mode 600). It
+writes nothing when the entry is already right, and leaves a file it cannot
+parse untouched and says so. On macOS the entry carries a `PATH`, because a Mac
+app does not inherit your shell's, and `npx` would not be found. Quit and
+reopen Claude Desktop to load the tools.
+
+Claude Desktop has no folder and no session-start hook, so it cannot start the
+review by itself, and the tools are in every chat. The server knows it is
+running in Desktop (`mcp --client claude-desktop`) and tells Claude to review
+first only in your inbox project, or when you ask. Make that project once:
+create a Claude Desktop project (for example "AgentDash inbox") and paste
+`~/agentdash-inbox/claude-desktop-project.md` into its instructions. Claude
+Desktop may not be able to open files saved to `~/agentdash-inbox/incoming/`;
+when it cannot, it says so rather than guessing.
+
+Installed Claude Desktop or Codex after you connected? `npx agentdash-connect
+clients` adds your inbox tools to every client now on the machine, using the
+inbox connection you already have.
+
+## Checking a machine
+
+```sh
+npx agentdash-connect check
+```
+
+Read-only. It reports your agent's tools in Claude Code and Codex; your inbox
+tools in Claude Code, Claude Desktop and Codex (`connected`, `not connected`,
+`not installed`); whether the review rules are in `~/agentdash-inbox`; and,
+from the instance (`POST /api/bridge/whoami`, which changes nothing), whose
+inbox this machine holds, its name and capabilities, and whether review works:
+
+```
+  bridge:work     missing — review not enabled; reconnect with a new connect code
+```
+
+Without `bridge:work` your own Claude cannot review your agents' work or send
+anything back from this machine. When it is present but your company has not
+turned co-worker review on, `Review` says so instead. `check` exits 0 only
+when everything the machine has works and review is enabled for it; `--check`
+is the same command.
 
 ## Deciding from your own session
 
@@ -396,9 +471,10 @@ is a small file you can read, listed on screen as it is written — a change
 your IT department can review in a minute.
 
 `--remove` takes out both Claude Code entries — the agent's and
-`agentdash-inbox` — along with the Codex config entry, the shell-profile line,
-the stored key, and the notification agent with its files. It leaves your
-inbox credential and folder alone. To remove
+`agentdash-inbox` — along with both Codex config entries, the Claude Desktop
+entry (backing that file up first), the shell-profile line, the stored key,
+and the notification agent with its files. It leaves your inbox credential and
+folder alone. To remove
 those too, delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json`
 and the `~/agentdash-inbox` folder.
 
@@ -425,16 +501,18 @@ of your shell history and out of the process list. If no keychain is available
 npx -y agentdash-connect@latest --url <url> <code>   # redeem a connect code
 npx agentdash-connect                  # interactive: asks for the link and a code or key
 npx agentdash-connect --url <url>      # skip the URL question
-npx agentdash-connect --check          # is the connection still good?
+npx agentdash-connect check            # which clients are connected, and is review (bridge:work) enabled?
+npx agentdash-connect clients          # add your inbox tools to Claude Code, Claude Desktop and Codex
 npx agentdash-connect --remove         # undo the agent connection
 npx agentdash-connect --name <name>    # use a different MCP server name
 npx agentdash-connect inbox            # read your inbox (what the SessionStart hook runs)
-npx agentdash-connect mcp              # serve your own inbox tools to Claude Code over stdio
+npx agentdash-connect mcp              # serve your own inbox tools over stdio
 npx agentdash-connect watch            # macOS notifications and pre-review (see above)
 ```
 
-`mcp` is what the `agentdash-inbox` config entry launches; you do not run it by
-hand. It takes `--server <url>` and `--token-file <path>`, speaks MCP on stdout
+`mcp` is what the `agentdash-inbox` config entries launch; you do not run it by
+hand. It takes `--server <url>`, `--token-file <path>` and `--client
+claude-desktop` (set by the Claude Desktop entry), speaks MCP on stdout
 and nothing else, and reports a missing credential as an answer rather than a
 crash. With `--read-only` it serves only the tools that read; the scheduled
 pre-review uses that.
@@ -445,8 +523,8 @@ nothing waiting; `--server <url>` and `--token-file <path>` override the
 defaults. It never exits 2, so an unreachable instance cannot stop a session
 from starting.
 
-`--check` exits non-zero when the connection is broken, so it works in a
-monitoring script. Piping the key on stdin works too, for scripted installs:
+`check` exits non-zero when anything on the machine is not working, so it works
+in a monitoring script. Piping the key on stdin works too, for scripted installs:
 
 ```sh
 printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
@@ -462,10 +540,14 @@ printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
 | the host cannot be reached | a `.local` name over a VPN, usually; use the address you are browsing from |
 | `403 Board access required` when you ask Claude to approve | it used the agent's key, which cannot decide approvals by design; the `agentdash-inbox` tools decide as you, and need 0.3.0 or later |
 | no `agentdash-inbox` entry in `~/.claude.json` | connected before 0.3.0; re-run connect with a fresh code |
+| `check` says `bridge:work missing — review not enabled; reconnect` | this machine connected before review existed and did not have the inbox; reconnect with a fresh code |
+| `check` says Claude Desktop or Codex `not connected` | installed after you connected; run `npx agentdash-connect clients` |
+| Claude Desktop shows no inbox tools | quit and reopen it; then run `check` |
 
 ## Requirements
 
-Node 18 or newer, and at least one of Claude Code or Codex already installed.
+Node 18 or newer, and at least one of Claude Code, Claude Desktop or Codex
+already installed.
 This wires up what is already on the machine; it does not install a harness for
 you.
 

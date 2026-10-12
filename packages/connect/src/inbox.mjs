@@ -176,7 +176,7 @@ export function codexInboxAgentsMd(skillText) {
  * own file, or one that could not be read or written — is also listed in
  * `notInstalled` with the reason, so the caller can say so.
  */
-function writeManaged(file, text, { created, updated, skipped, notInstalled }) {
+export function writeManaged(file, text, { created, updated, skipped, notInstalled }) {
   try {
     if (!existsSync(file)) {
       mkdirSync(path.dirname(file), { recursive: true });

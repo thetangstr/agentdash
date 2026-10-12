@@ -1241,6 +1241,51 @@ describe("IssueChatThread", () => {
     });
   });
 
+  it("badges a comment the person sent from their own session through the bridge", () => {
+    const root = createRoot(container);
+    const comment = (id: string, body: string) => ({
+      id,
+      companyId: "company-1",
+      issueId: "issue-1",
+      authorAgentId: null,
+      authorUserId: "user-1",
+      body,
+      createdAt: new Date("2026-03-11T10:00:00.000Z"),
+      updatedAt: new Date("2026-03-11T10:00:00.000Z"),
+    });
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[comment("comment-bridge", "Revised the draft."), comment("comment-page", "Typed on the page.")]}
+            bridgeProvenance={{
+              comments: new Map([["comment-bridge", { channel: "bridge_work", endpointLabel: "person-a-laptop" }]]),
+              documentRevisions: new Map(),
+              interactions: new Map(),
+              attachments: new Map(),
+            }}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const badges = [...container.querySelectorAll('[data-testid="via-bridge-badge"]')];
+    expect(badges.map((badge) => badge.textContent)).toEqual(["via bridge (person-a-laptop)"]);
+    expect(container.querySelector("#comment-comment-bridge")?.textContent).toContain("via bridge (person-a-laptop)");
+    expect(container.querySelector("#comment-comment-page")?.textContent).not.toContain("via bridge");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("shows unresolved blocker context above the composer", () => {
     const root = createRoot(container);
 
