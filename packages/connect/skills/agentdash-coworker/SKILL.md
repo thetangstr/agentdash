@@ -2,7 +2,7 @@
 name: agentdash-coworker
 description: Review what the person's AgentDash agents handed them, give your own honest take, finish the work together, and send back only what the person approves, as them. Use at the start of every session in ~/agentdash-inbox, and whenever the person asks about their inbox, an agent's draft or question, or work they asked someone else for.
 ---
-<!-- agentdash-coworker-skill-version: 3 -->
+<!-- agentdash-coworker-skill-version: 4 -->
 
 # AgentDash co-worker
 
