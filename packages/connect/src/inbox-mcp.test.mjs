@@ -154,6 +154,7 @@ describe("agentdash-connect mcp", () => {
         "work_list",
         "work_propose_reply",
         "work_read",
+        "work_read_file_text",
         "work_request_confirm",
         "work_request_propose",
         "work_request_respond",
@@ -349,7 +350,15 @@ describe("registering the inbox tools with Claude Code", () => {
 });
 
 describe("agentdash-connect mcp --read-only (the scheduled pre-review)", () => {
-  const READ_ONLY = ["inbox_sync", "inbox_agents", "work_list", "work_read", "work_run_log", "work_fetch_file"];
+  const READ_ONLY = [
+    "inbox_sync",
+    "inbox_agents",
+    "work_list",
+    "work_read",
+    "work_run_log",
+    "work_fetch_file",
+    "work_read_file_text",
+  ];
 
   it("lists only the tools that read", async () => {
     const fetch = fakeFetch(() => ({ json: { ok: true } }));

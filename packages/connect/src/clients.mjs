@@ -51,8 +51,9 @@ export const DESKTOP_SERVER_INSTRUCTIONS = [
   "in the person's AgentDash inbox project, whose instructions say so, or when the person asks you to.",
   "In every other chat, use these tools only when the person asks about their inbox, an approval or",
   "an agent's question; never sync on your own.",
-  "Claude Desktop may not be able to open a file that work_fetch_file saved on this machine. If you",
-  "cannot read one, say so plainly and never guess what it says.",
+  "Claude Desktop may not be able to open a file that work_fetch_file saved on this machine. For a",
+  ".docx, .pptx, .txt, .md or .csv attachment, read its text with work_read_file_text instead. If you",
+  "cannot read a file, say so plainly and never guess what it says.",
 ].join("\n");
 
 // ------------------------------------------------------------ Claude Desktop

@@ -268,7 +268,7 @@ with you:
   it is reported to you as a finding.
 
 The skill names tools that newer instances add (`work_list`, `work_read`,
-`work_run_log`, `work_fetch_file`, `work_propose_reply`, `work_confirm_reply`,
+`work_run_log`, `work_read_file_text`, `work_fetch_file`, `work_propose_reply`, `work_confirm_reply`,
 `work_request_propose`, `work_request_respond`, `work_request_confirm`). When this session does not
 have one, Claude says so and falls back to the inbox tools and your AgentDash
 page.
@@ -283,7 +283,7 @@ kept one. A rules file installed by the hook loads fully from the next session.
 ## Reviewing your agents' work
 
 The inbox carries the ask and a pointer. To review what your agent actually
-did, the same `agentdash-inbox` entry also serves four read-only tools:
+did, the same `agentdash-inbox` entry also serves five read-only tools:
 
 - `work_list` — what your agents have handed you: issues waiting on a decision,
   a question, a blocker or a review, decisions first, oldest first, with counts.
@@ -295,6 +295,13 @@ did, the same `agentdash-inbox` entry also serves four read-only tools:
   description to the end, a page at a time.
 - `work_run_log` — the agent's own run log for that issue, paged, with secrets
   redacted on the server.
+- `work_read_file_text` — the text of one .docx, .pptx, .txt, .md or .csv
+  attachment, extracted on your AgentDash server (nothing to install here) and
+  returned a page at a time inside the same markers, so Claude can review a
+  deliverable that is a file rather than a document. A spreadsheet is not
+  read this way; Claude says so and asks you for a .csv export. Same scope
+  and the same HTML refusal as `work_fetch_file`; each page read is logged
+  without its text.
 - `work_fetch_file` — saves one attachment into
   `~/agentdash-inbox/incoming/<ISSUE>/`, readable only by you, after checking
   its sha256 (no hash, no file). Allowlisted types within your company's
@@ -442,7 +449,7 @@ The run cannot change anything:
 
 - Its inbox tools are served by `agentdash-connect mcp --read-only`, which has
   only the read tools: `inbox_sync`, `inbox_agents`, `work_list`, `work_read`,
-  `work_run_log` and `work_fetch_file`. No tool that sends, decides, answers,
+  `work_run_log`, `work_fetch_file` and `work_read_file_text`. No tool that sends, decides, answers,
   acknowledges, proposes or confirms exists in that session.
 - Claude Code is started with `--strict-mcp-config` (that server only),
   `--tools Read,Grep,Glob`, an `--allowedTools` list of exactly those tools,

@@ -39,6 +39,8 @@ import { logActivity } from "./activity-log.js";
 import { AGENT_MATERIAL_FRAMING, STEWARD_WORK_CAPABILITY, frameUntrustedAgentMaterial } from "./bridge.js";
 import { featureFlagsService } from "./feature-flags.js";
 import { currentVersionOf, markCurrentVersions } from "./attachment-versions.js";
+import { attachmentTextService } from "./attachment-text.js";
+import { classifyDocument } from "./document-extraction.js";
 import { redactRunLogText } from "./run-log-redaction.js";
 import { isDeliveredToRequester, isOwnersRequest } from "./steward-request-scope.js";
 import {
@@ -56,7 +58,8 @@ import {
  * something on ISSUE-41". This service delivers the evidence behind them, so
  * the person's own session can review the agent's work before the person
  * decides anything: the issue and the request it came from, the comments, the
- * documents, the attachments (metadata here, bytes through `file`), and the
+ * documents, the attachments (metadata here, bytes through `file`, extracted
+ * text through `fileText`), and the
  * agent's run log.
  *
  * Four rules hold on every call, and each is the reason this is its own
@@ -78,7 +81,8 @@ import {
  * 4. **Capped, with totals.** Every list says how many there are and how many
  *    it shows; every long body says whether it was cut and where to resume.
  *
- * Nothing here writes, except the activity row each file download leaves.
+ * Nothing here writes, except the activity row each file download, and each
+ * page of file text, leaves.
  */
 
 /** How the person refers to this surface in refusals. */
@@ -259,6 +263,33 @@ export function downloadVerdict(
     };
   }
   return { allowed: true };
+}
+
+/**
+ * Why this attachment's text may or may not be read over the bridge
+ * (`work/file-text`): the download rules for markup and the company cap, but
+ * not the allowlist, because no bytes leave the server; a type the extractor
+ * reads (or explains, like a spreadsheet) passes, the rest must be
+ * allowlisted and then come back as `content_unsupported`.
+ */
+export function textVerdict(
+  attachment: { contentType: string | null; originalFilename: string | null; byteSize: number },
+  capBytes: number,
+): { allowed: true } | { allowed: false; reason: string } {
+  return downloadVerdict(
+    attachment,
+    capBytes,
+    (type) => isAllowedContentType(type) || classifyDocument(attachment.originalFilename, type) !== "unsupported",
+  );
+}
+
+/** Can `work/file-text` return this attachment's text? */
+export function isTextReadable(
+  attachment: { contentType: string | null; originalFilename: string | null; byteSize: number },
+  capBytes: number,
+): boolean {
+  const kind = classifyDocument(attachment.originalFilename, attachment.contentType);
+  return (kind === "docx" || kind === "pptx" || kind === "text") && textVerdict(attachment, capBytes).allowed;
 }
 
 /** Stored run-log NDJSON, as the readable transcript it records. */
@@ -940,6 +971,8 @@ export function stewardWorkService(
             commentId: row.commentId,
             author: names.author(row.createdByAgentId, row.createdByUserId),
             download: verdict.allowed ? { allowed: true } : { allowed: false, reason: verdict.reason },
+            // A .docx, .pptx or text file whose text work/file-text returns.
+            textReadable: isTextReadable(row, capBytes),
           };
         }),
       },
@@ -1119,6 +1152,48 @@ export function stewardWorkService(
   // -------------------------------------------------------------------------
 
   /**
+   * One attachment the owner may read through the bridge, with its issue and
+   * the company's attachment cap, or 404. The scope `file` and `fileText`
+   * share: the owner's own work, or a request of theirs (a requester may read
+   * the deliverable files on their request). Unknown, hidden and someone
+   * else's answer the same.
+   */
+  async function ownersAttachment(owner: Owner, rawAttachmentId: unknown) {
+    const attachmentId = typeof rawAttachmentId === "string" ? rawAttachmentId.trim() : "";
+    if (!isCanonicalUuid(attachmentId)) throw notFound("Attachment not found");
+    const attachment = await db
+      .select({
+        id: issueAttachments.id,
+        issueId: issueAttachments.issueId,
+        companyId: issueAttachments.companyId,
+        objectKey: assets.objectKey,
+        contentType: assets.contentType,
+        byteSize: assets.byteSize,
+        sha256: assets.sha256,
+        originalFilename: assets.originalFilename,
+        version: issueAttachments.version,
+        versionBaseName: issueAttachments.versionBaseName,
+      })
+      .from(issueAttachments)
+      .innerJoin(assets, eq(assets.id, issueAttachments.assetId))
+      .where(and(eq(issueAttachments.id, attachmentId), eq(issueAttachments.companyId, owner.companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (!attachment) throw notFound("Attachment not found");
+    let issue: IssueRow;
+    try {
+      issue = (await workIssueAccess(owner, attachment.issueId, { allowRequests: true })).issue;
+    } catch {
+      throw notFound("Attachment not found");
+    }
+    const company = await db
+      .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
+      .from(companies)
+      .where(eq(companies.id, owner.companyId))
+      .then((rows) => rows[0] ?? null);
+    return { attachment, issue, capBytes: normalizeIssueAttachmentMaxBytes(company?.attachmentMaxBytes) };
+  }
+
+  /**
    * One attachment's bytes, or the reason it will not come down the bridge.
    * Every download writes an activity row naming the attachment and its size,
    * never its content.
@@ -1146,40 +1221,8 @@ export function stewardWorkService(
   > {
     const owner = await resolveOwner(endpointId);
     if (isRefusal(owner)) return owner;
-    const attachmentId = typeof input.attachmentId === "string" ? input.attachmentId.trim() : "";
-    if (!isCanonicalUuid(attachmentId)) throw notFound("Attachment not found");
-    const attachment = await db
-      .select({
-        id: issueAttachments.id,
-        issueId: issueAttachments.issueId,
-        companyId: issueAttachments.companyId,
-        objectKey: assets.objectKey,
-        contentType: assets.contentType,
-        byteSize: assets.byteSize,
-        sha256: assets.sha256,
-        originalFilename: assets.originalFilename,
-        version: issueAttachments.version,
-        versionBaseName: issueAttachments.versionBaseName,
-      })
-      .from(issueAttachments)
-      .innerJoin(assets, eq(assets.id, issueAttachments.assetId))
-      .where(and(eq(issueAttachments.id, attachmentId), eq(issueAttachments.companyId, owner.companyId)))
-      .then((rows) => rows[0] ?? null);
-    if (!attachment) throw notFound("Attachment not found");
-    let issue: IssueRow;
-    try {
-      // A requester may fetch the deliverable files on their request.
-      issue = (await workIssueAccess(owner, attachment.issueId, { allowRequests: true })).issue;
-    } catch {
-      throw notFound("Attachment not found");
-    }
-
-    const company = await db
-      .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
-      .from(companies)
-      .where(eq(companies.id, owner.companyId))
-      .then((rows) => rows[0] ?? null);
-    const verdict = downloadVerdict(attachment, normalizeIssueAttachmentMaxBytes(company?.attachmentMaxBytes));
+    const { attachment, issue, capBytes } = await ownersAttachment(owner, input.attachmentId);
+    const verdict = downloadVerdict(attachment, capBytes);
     if (!verdict.allowed) return refusal("file_refused", verdict.reason);
 
     if (!options.storage) throw new HttpError(503, "File storage is not available");
@@ -1219,12 +1262,107 @@ export function stewardWorkService(
     };
   }
 
+  // -------------------------------------------------------------------------
+  // work/file-text
+  // -------------------------------------------------------------------------
+
+  /**
+   * One page of an attachment's text, extracted on the server (D7: connect
+   * stays zero-dependency), so the person's own session can review a .docx,
+   * .pptx or text deliverable it cannot read as bytes. Same scope as `file`,
+   * and the same refusals for markup and the company cap; the allowlist is
+   * not the gate here because no bytes leave: what is read is decided by the
+   * extractor (attachment-text.ts), which says why for a spreadsheet or any
+   * other type. The text is framed as untrusted agent material (the person's
+   * session is not an agent run, so the run-bound frame does not apply) and
+   * paged at the bridge's page size. Every page served writes an activity row
+   * naming the attachment, the offset and the characters served, never the
+   * text.
+   */
+  async function fileText(endpointId: string, input: { attachmentId?: unknown; offset?: unknown }) {
+    const owner = await resolveOwner(endpointId);
+    if (isRefusal(owner)) return owner;
+    const { attachment, issue, capBytes } = await ownersAttachment(owner, input.attachmentId);
+    const offset = clampInt(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+
+    const current = await currentVersionOf(db, attachment);
+    const isCurrent = current.attachmentId === attachment.id;
+    const file = {
+      attachmentId: attachment.id,
+      issueId: issue.id,
+      identifier: issue.identifier,
+      name: frameUntrustedText(attachment.originalFilename, WORK_TEXT_CAPS.title),
+      contentType: bareMediaType(attachment.contentType),
+      byteSize: attachment.byteSize,
+      sha256: attachment.sha256,
+      kind: classifyDocument(attachment.originalFilename, attachment.contentType),
+      version: attachment.version,
+      isCurrent,
+      ...(isCurrent
+        ? {}
+        : {
+            currentAttachmentId: current.attachmentId,
+            versionNote:
+              `This is version ${attachment.version} of this file; the current one is version ${current.version} ` +
+              `(attachmentId ${current.attachmentId}). Read the current one unless the person wants this version.`,
+          }),
+    };
+
+    const verdict = textVerdict(attachment, capBytes);
+    if (!verdict.allowed) return { ...refusal("file_refused", verdict.reason), file };
+
+    if (!options.storage) throw new HttpError(503, "File storage is not available");
+    const read = await attachmentTextService(options.storage).read(
+      { ...attachment, contentType: attachment.contentType ?? "" },
+      {
+        offset,
+        pageChars: WORK_TEXT_CAPS.page,
+        frame: (pageText) => frameUntrustedAgentMaterial(pageText, "attachment-text"),
+      },
+    );
+    if (read.format !== "text" || read.unreadable) {
+      const unreadable = read.unreadable ?? { reason: "content_unreadable", message: "This file's text could not be read." };
+      return { ...refusal(unreadable.reason, unreadable.message), file };
+    }
+
+    await logActivity(db, {
+      companyId: owner.companyId,
+      actorType: "user",
+      actorId: owner.userId,
+      action: "bridge.work_file_text_read",
+      entityType: "issue",
+      entityId: issue.id,
+      details: {
+        attachmentId: attachment.id,
+        offset: read.offset,
+        chars: read.nextOffset === null ? read.totalChars! - read.offset : read.nextOffset - read.offset,
+        channel: "bridge_work",
+        bridgeEndpointId: owner.endpoint.id,
+        endpointLabel: owner.endpoint.label,
+      },
+    });
+
+    return {
+      ok: true as const,
+      file,
+      format: "text" as const,
+      text: read.text,
+      offset: read.offset,
+      nextOffset: read.nextOffset,
+      truncated: read.truncated,
+      totalChars: read.totalChars,
+      slideCount: read.slideCount,
+      ...(read.textLimit ? { textLimit: read.textLimit } : {}),
+    };
+  }
+
   return {
     requireWorkEndpoint,
     list,
     read,
     runLog,
     file,
+    fileText,
     // The send-back (steward-work-reply.ts) and the requests
     // (steward-requests.ts) resolve the person and the issue exactly as the
     // reads do. The send-back takes only the owner's own work (findWorkIssue);

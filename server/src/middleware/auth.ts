@@ -94,11 +94,13 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // The person's own Claude reviewing their agents' work: read-only, scoped by
   // the endpoint's owner, and refused without `bridge:work` and the company's
   // coworker_bridge_enabled flag -- see steward-work.ts. `file` returns one
-  // attachment's bytes and logs the download.
+  // attachment's bytes and logs the download; `file-text` returns one page of
+  // its extracted text, framed, and logs the read.
   "/api/bridge/work/list",
   "/api/bridge/work/read",
   "/api/bridge/work/run-log",
   "/api/bridge/work/file",
+  "/api/bridge/work/file-text",
   // The send-back: `propose` reads the bundle back and mints a single-use
   // `reply` handle over it, writing nothing; `confirm` spends that handle and
   // applies the bundle as the endpoint's owner after re-checking their

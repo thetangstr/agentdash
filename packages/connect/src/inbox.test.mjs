@@ -550,6 +550,15 @@ describe("the packaged co-worker skill", () => {
     expect(coworkerSkillVersion(raw)).toBeGreaterThanOrEqual(1);
   });
 
+  it("reads a .docx, .pptx or text file's text through the bridge, and keeps metadata-only for what it cannot read", () => {
+    // Version 5 is the release that added work_read_file_text; an installed
+    // copy at 4 must be replaced so the session learns the tool.
+    expect(coworkerSkillVersion(raw)).toBeGreaterThanOrEqual(5);
+    expect(skill).toMatch(/work_read_file_text[^.]*\.docx/);
+    expect(skill).toMatch(/spreadsheet/i);
+    expect(skill).toMatch(/name, size, type and sha256/);
+  });
+
   it("reviews every waiting item first, in digest order, with counts", () => {
     // Every section renderInbox emits has a place, so nothing falls between.
     expect(skill).toMatch(/decisions, then questions, then approved but not delivered .*then blockers/);
@@ -605,6 +614,7 @@ describe("the packaged co-worker skill", () => {
       "work_read",
       "work_run_log",
       "work_fetch_file",
+      "work_read_file_text",
       "work_propose_reply",
       "work_confirm_reply",
       "work_request_propose",

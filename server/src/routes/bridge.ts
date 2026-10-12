@@ -444,6 +444,25 @@ export function bridgeRoutes(
     result.stream.pipe(res);
   });
 
+  /**
+   * One page of an attachment's text, extracted on the server: how the
+   * person's own session reads a .docx, .pptx or text deliverable. Same scope
+   * and markup refusal as `/bridge/work/file`; the text is framed as untrusted
+   * agent material and paged by character `offset` (pass `nextOffset` back).
+   * A file whose text is not read answers `{ ok: false, code, reason, file }`
+   * (`spreadsheet_not_supported`, `content_unsupported`, `file_refused`, ...).
+   */
+  router.post("/bridge/work/file-text", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.attachmentId !== "string" || !body.attachmentId.trim()) throw badRequest("attachmentId is required");
+    if (body.offset !== undefined && !(Number.isSafeInteger(body.offset) && body.offset >= 0)) {
+      throw badRequest("offset must be a whole number of characters, 0 or more");
+    }
+    res.json(await work.fileText(endpointId, { attachmentId: body.attachmentId, offset: body.offset }));
+  });
+
   // -------------------------------------------------------------------------
   // Endpoint-facing: the send-back. What the person approved goes back to
   // their agent as one bundle, as them. Same gates as the reads, plus a

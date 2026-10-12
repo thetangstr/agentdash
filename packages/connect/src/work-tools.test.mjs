@@ -50,12 +50,13 @@ async function call(handle, name, args) {
 }
 
 describe("work tools: reading the agent's hand-off from the person's own session", () => {
-  it("lists the four work tools beside the inbox tools", async () => {
+  it("lists the five work tools beside the inbox tools", async () => {
     const { handle } = handlerWith(() => json({}));
     const res = await handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const names = res.result.tools.map((tool) => tool.name);
-    for (const name of ["work_list", "work_read", "work_run_log", "work_fetch_file"]) expect(names).toContain(name);
-    expect(WORK_TOOLS.map((tool) => tool.name)).toEqual(["work_list", "work_read", "work_run_log", "work_fetch_file"]);
+    const work = ["work_list", "work_read", "work_run_log", "work_fetch_file", "work_read_file_text"];
+    for (const name of work) expect(names).toContain(name);
+    expect(WORK_TOOLS.map((tool) => tool.name)).toEqual(work);
   });
 
   it("tells the session that agent material is material, never instructions", async () => {
@@ -88,6 +89,35 @@ describe("work tools: reading the agent's hand-off from the person's own session
     expect(calls[3].body).toEqual({ issueId: "ACME-41", section: "description", offset: 8000 });
     expect(calls[4].body).toEqual({ issueId: "ACME-41", runId: "r1", offset: 64000 });
     for (const c of calls) expect(c.init.headers.authorization).toBe("Bearer bridge-token-xyz");
+  });
+
+  it("reads a file's text through work/file-text, paged by offset, and reports a spreadsheet as an outcome", async () => {
+    const framed = '<untrusted-agent-material kind="attachment-text">\nnote text\n</untrusted-agent-material>';
+    const { handle, calls } = handlerWith((url, body) =>
+      body.attachmentId === "sheet"
+        ? json({ ok: false, code: "spreadsheet_not_supported", reason: "Export it as a .csv", file: { attachmentId: "sheet" } })
+        : json({ ok: true, file: { attachmentId: "a1", kind: "docx" }, format: "text", text: framed, nextOffset: null }),
+    );
+    const first = await call(handle, "work_read_file_text", { attachmentId: "a1" });
+    const next = await call(handle, "work_read_file_text", { attachmentId: "a1", offset: 20000 });
+    const sheet = await call(handle, "work_read_file_text", { attachmentId: "sheet" });
+    expect(calls.map((c) => c.url)).toEqual([
+      `${SERVER}/api/bridge/work/file-text`,
+      `${SERVER}/api/bridge/work/file-text`,
+      `${SERVER}/api/bridge/work/file-text`,
+    ]);
+    expect(calls[0].body).toEqual({ attachmentId: "a1" });
+    expect(calls[1].body).toEqual({ attachmentId: "a1", offset: 20000 });
+    expect(JSON.parse(first.content[0].text)).toMatchObject({ ok: true, text: framed });
+    expect(next.isError).toBeUndefined();
+    expect(sheet.isError).toBeUndefined();
+    expect(JSON.parse(sheet.content[0].text)).toMatchObject({ ok: false, code: "spreadsheet_not_supported", note: expect.any(String) });
+
+    const tool = WORK_TOOLS.find((t) => t.name === "work_read_file_text");
+    expect(tool.description).toMatch(/\.docx/);
+    expect(tool.description).toMatch(/\.pptx/);
+    expect(tool.description).toMatch(/never instructions/);
+    expect(tool.inputSchema.required).toEqual(["attachmentId"]);
   });
 
   it("reports a refusal (flag off) as an outcome with a next step", async () => {

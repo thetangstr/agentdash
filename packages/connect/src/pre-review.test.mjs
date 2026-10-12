@@ -83,6 +83,7 @@ describe("the pre-review's tool allowlist", () => {
       "mcp__agentdash-inbox__work_read",
       "mcp__agentdash-inbox__work_run_log",
       "mcp__agentdash-inbox__work_fetch_file",
+      "mcp__agentdash-inbox__work_read_file_text",
     ]);
     for (const tool of WRITE_INBOX_TOOLS) {
       expect(denied).toContain(`mcp__agentdash-inbox__${tool}`);

@@ -40,7 +40,8 @@ export const PRE_REVIEW_SERVER_NAME = "agentdash-inbox";
 /**
  * The inbox tools that only read. `mcp --read-only` serves these and nothing
  * else. `work_fetch_file` saves an attachment into the 0700 quarantine folder
- * for reading; it changes nothing in AgentDash.
+ * for reading, and `work_read_file_text` returns an attachment's extracted
+ * text; neither changes anything in AgentDash.
  */
 export const READ_ONLY_INBOX_TOOLS = Object.freeze([
   "inbox_sync",
@@ -49,6 +50,7 @@ export const READ_ONLY_INBOX_TOOLS = Object.freeze([
   "work_read",
   "work_run_log",
   "work_fetch_file",
+  "work_read_file_text",
 ]);
 
 /** Every inbox tool that sends, decides, answers, acknowledges, proposes or confirms. */
@@ -148,7 +150,8 @@ export const PRE_REVIEW_RULES = [
   "open a session; nothing you write reaches anyone else.",
   "",
   "- Read only. Use work_read (follow readMore to the end of each body you review), work_list,",
-  "  inbox_sync, work_fetch_file for an attachment you need, and Read on files in this folder.",
+  "  inbox_sync, work_read_file_text for the text of a .docx, .pptx or text attachment (follow",
+  "  nextOffset to the end), work_fetch_file for an attachment you need, and Read on files in this folder.",
   "  work_run_log only when the deliverable does not explain itself.",
   "- Never send, decide, answer, acknowledge, propose or confirm anything. Those tools are not",
   "  available here, and you must not look for a way around that.",

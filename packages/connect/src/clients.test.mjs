@@ -245,6 +245,7 @@ describe("Claude Desktop project instructions", () => {
     expect(DESKTOP_SERVER_INSTRUCTIONS).toMatch(/no session-start hook/i);
     expect(DESKTOP_SERVER_INSTRUCTIONS).toMatch(/when the person asks/i);
     expect(DESKTOP_SERVER_INSTRUCTIONS).toMatch(/never guess/i);
+    expect(DESKTOP_SERVER_INSTRUCTIONS).toMatch(/work_read_file_text/);
   });
 });
 

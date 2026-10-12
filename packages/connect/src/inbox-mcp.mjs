@@ -206,7 +206,7 @@ function instructionsFor(owner) {
 /** Said instead of the send-back and request instructions when only the read tools are served. */
 const READ_ONLY_INSTRUCTIONS = [
   "This server is read-only: it serves only the tools that read (inbox_sync, inbox_agents, work_list,",
-  "work_read, work_run_log, work_fetch_file). Nothing can be sent, decided, answered, acknowledged,",
+  "work_read, work_run_log, work_fetch_file, work_read_file_text). Nothing can be sent, decided, answered, acknowledged,",
   "proposed or confirmed through it.",
 ].join("\n");
 

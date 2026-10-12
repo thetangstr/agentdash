@@ -73,6 +73,7 @@ POST /api/bridge/decline     POST /api/bridge/inbox/decide   POST /api/bridge/in
 POST /api/bridge/whoami      POST /api/bridge/inbox/answer
 POST /api/bridge/work/list   POST /api/bridge/work/read      POST /api/bridge/work/run-log
 POST /api/bridge/work/file   POST /api/bridge/work/propose   POST /api/bridge/work/confirm
+POST /api/bridge/work/file-text
 POST /api/bridge/work/request
 POST /api/bridge/work/request/respond
 POST /api/bridge/work/request/confirm

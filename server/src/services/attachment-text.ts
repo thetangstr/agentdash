@@ -22,8 +22,10 @@
 //   `DOCUMENT_MAX_BYTES` (`too_large`, refused before the file is read), a
 //   damaged or hostile file (`content_unreadable`).
 //
-// Who may read is decided by the route (company access plus the issue's
-// project visibility, the same as downloading the file); this module trusts
+// Who may read is decided by the caller (for an agent, the route: company
+// access plus the issue's project visibility, the same as downloading the
+// file; for the person's own session, the bridge's work scope in
+// steward-work.ts, which frames the text its own way); this module trusts
 // that decision.
 //
 // Memory is bounded three ways:
@@ -297,9 +299,16 @@ export function attachmentTextService(storage: StorageService) {
 
     /**
      * One page of the attachment's text from `offset`, framed for `runId`
-     * (the requesting run, or a stand-in when there is none).
+     * (the requesting run, or a stand-in when there is none) -- or, for a
+     * reader that is not an agent run, by the caller's own `frame`: the
+     * person's own session reads through the bridge (steward-work.ts), whose
+     * material is framed as untrusted agent material, not bound to a run.
+     * `pageChars` narrows the page for a caller with a smaller output budget.
      */
-    async read(attachment: AttachmentForText, input: { offset: number; runId: string }): Promise<AttachmentTextResult> {
+    async read(
+      attachment: AttachmentForText,
+      input: { offset: number; pageChars?: number } & ({ runId: string } | { frame: (pageText: string) => string }),
+    ): Promise<AttachmentTextResult> {
       const kind = classifyDocument(attachment.originalFilename, attachment.contentType);
       if (kind === "xlsx" || kind === "unsupported") {
         const refusal = unreadableFor(kind);
@@ -318,15 +327,18 @@ export function attachmentTextService(storage: StorageService) {
           extracted.reason === "too_large" ? TOO_LARGE_MESSAGE : extracted.message,
         );
       }
-      const page = pageDocumentText(extracted.text, input.offset);
+      const page = pageDocumentText(extracted.text, input.offset, input.pageChars);
       return {
         ...details(attachment, kind),
         format: "text",
-        text: frameUntrustedDocumentText(ATTACHMENT_FRAME_PROVIDER, page.text, {
-          runId: input.runId,
-          docId: attachment.id,
-          title: attachment.originalFilename,
-        }),
+        text:
+          "frame" in input
+            ? input.frame(page.text)
+            : frameUntrustedDocumentText(ATTACHMENT_FRAME_PROVIDER, page.text, {
+                runId: input.runId,
+                docId: attachment.id,
+                title: attachment.originalFilename,
+              }),
         offset: page.offset,
         nextOffset: page.nextOffset,
         truncated: page.truncated,
