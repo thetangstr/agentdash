@@ -52,6 +52,10 @@ When your company has turned on reviewing from your own session, Claude can read
 
 You see exactly what you see on the issue page, and only your own work: issues assigned to you or to an agent you answer for. Everything written in AgentDash arrives marked as material, so Claude gives you its own view on it and never takes it as instructions. HTML and SVG files are never downloaded, and every download is recorded. If the tools answer that this is not switched on, an administrator turns on `coworker_bridge_enabled` for the company; if they answer 403 about `bridge:work`, [reconnect](./connect-your-terminal) this machine with a fresh code.
 
+## Asking a colleague for work
+
+Ask Claude for work from someone else ("ask Person B for a one-page vendor summary by Friday") and it writes a brief, reads it back, and sends it as you only after your yes, with `work_request_propose` and `work_request_confirm`. It goes to that person's agent, which takes the first pass. Your requests appear in the session-start digest and in `work_list` with who each one is waiting on and for how long. When a result comes back, Claude reviews it with you; accepting it or asking for changes (`work_request_respond`) is read back the same way, and changes go straight to the agent that owns the work. You read your request itself, its comments, documents and attachments, not the other person's agent's run log.
+
 ## Email
 
 Inbox emails are off unless your instance turns them on (an operator sets `AGENTDASH_INBOX_EMAIL=true`). Your agents' questions and decisions reach you in your own Claude or Codex session and on Home in AgentDash. When an instance does turn emails on, each one is a pointer only (the agent, the issue identifier and a link), at most one every 15 minutes, and you can turn it off under **Email me when my agents need me** on **My Agent**.

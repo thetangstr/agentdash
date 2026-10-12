@@ -200,7 +200,7 @@ with you:
 
 The skill names tools that newer instances add (`work_list`, `work_read`,
 `work_run_log`, `work_fetch_file`, `work_propose_reply`, `work_confirm_reply`,
-`work_request_propose`, `work_request_confirm`). When this session does not
+`work_request_propose`, `work_request_respond`, `work_request_confirm`). When this session does not
 have one, Claude says so and falls back to the inbox tools and your AgentDash
 page.
 
@@ -246,6 +246,39 @@ inbox-enabled machines were upgraded on deploy, each upgrade recorded in the
 activity log), and an administrator must turn on `coworker_bridge_enabled` for
 the company. Until then they answer with the reason. Every file downloaded is
 recorded in the activity log by attachment and size, never by content.
+
+## Asking someone else for work
+
+Three more tools, on the same credential and behind the same two switches, let
+you ask a colleague for work and close it out when the result comes back:
+
+- `work_request_propose` — Claude turns your ask into a brief (title, what is
+  wanted, what done means, deadline, who it is for, the person it goes to, and
+  optionally a project you can both see) and reads it back: as it will be
+  sent, who takes it, and who will see it. It changes nothing. A name that
+  does not match exactly one colleague comes back as a question.
+- `work_request_respond` — once a result is delivered (done, in review, or
+  handed back to you), reads back accepting it (marked done, as you) or asking
+  for changes (your note as a comment, reopened, and handed straight to the
+  agent that owns the deliverable: the agent of the person you asked).
+- `work_request_confirm` — sends what you said yes to, as you. The handle is
+  single-use, and your permission is checked again when it is spent; if the
+  request moved on in between, nothing is sent and Claude tells you why.
+
+A request is created as you and assigned to that person; the usual rule then
+gives it to their agent, which takes the first pass and asks them what it
+needs. It needs the same permission as assigning work on the page. Files
+cannot travel with a request yet.
+
+`work_list` shows your requests under `requests`: delivered results first, then
+what is still waiting, each with who it waits on and for how long ("waiting on
+Person B for 2 days"), worked out on the server. A delivered result stays there
+until you accept it, ask for changes or act on it on the page, for at most 14
+days. `work_read` reads a request as the issue itself, its comments, documents
+and attachments; the other person's agent's run log and their other work are
+not yours to read and answer as if they did not exist. The session-start
+digest adds a "Your requests" section with counts and pointers, never the
+brief.
 
 ## Nothing left running
 
