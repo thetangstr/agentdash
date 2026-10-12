@@ -722,7 +722,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "create_issue",
-      "Create a new issue. Assigning a person (assigneeUserId) who stewards an agent gives the issue to that agent, whoever assigns it (list_agents → steward.userId); assignToPerson: true keeps it with the person.",
+      "Create a new issue. Assigning a person (assigneeUserId) who stewards an agent gives the issue to that agent, whoever assigns it (list_agents → steward.userId); assignToPerson: true keeps it with the person. Naming an agent (assigneeAgentId) is never rerouted. An agent handing work to another agent does it as a child issue (parentId) with a brief; a request allows at most 3 agent-to-agent hand-off rounds, and the next is refused with AGENT_HANDOFF_CAP_REACHED — then ask your steward.",
       createIssueToolSchema,
       async ({ companyId, ...input }) => {
         // AgentDash: enforce the refined create contract (see createIssueToolSchema).
@@ -732,7 +732,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "update_issue",
-      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. Assigning a person who stewards an agent gives the issue to that agent unless assignToPerson is true. Work assigned to your steward comes to you: take the first pass, ask before completing unless your mandate lets you finish it (ask_user_questions with your recommendation as the first option, then set blocked), and assign it to your steward (assigneeAgentId null, assigneeUserId = steward) only when they must do the work themselves. That hand-back stays with them, as does returning your issue to the person who created it.",
+      "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work. Assigning a person who stewards an agent gives the issue to that agent unless assignToPerson is true. Work assigned to your steward comes to you: take the first pass, ask before completing unless your mandate lets you finish it (ask_user_questions with your recommendation as the first option, then set blocked), and assign it to your steward (assigneeAgentId null, assigneeUserId = steward) only when they must do the work themselves. That hand-back stays with them, as does returning your issue to the person who created it. Reassigning to another agent is a hand-off and counts toward the request's 3-round cap (AGENT_HANDOFF_CAP_REACHED); sending a hand-off back to the agent that gave it to you, with the reason as the comment, is always allowed.",
       updateIssueToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("PATCH", `/issues/${encodeURIComponent(issueId)}`, { body }),

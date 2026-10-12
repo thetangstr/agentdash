@@ -224,6 +224,14 @@ ${userVoice || "No interview context was captured."}
 // session through the bridge inbox and their answer wakes the agent), and
 // assigns the issue to its steward only when they must do the work themselves.
 
+// AgentDash: agent-handoffs is inherited from the canonical default bundle: an
+// agent hands work for someone else to that person's agent directly (a child
+// issue with a brief), never through a steward relay; work from another agent
+// gets the same first pass and mandate test as work from a person; the agent
+// of the person the request was assigned to owns the final deliverable; and a
+// request allows at most 3 agent-to-agent hand-off rounds, the next refused
+// server-side with AGENT_HANDOFF_CAP_REACHED (services/agent-handoffs.ts).
+
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry
 // or destructive compensation; separate setup/persistence/link phases stay truthful.

@@ -28,6 +28,15 @@ You see the result on Home and in the activity log
 - **Delegation is by child issue**, with `parentId` and `goalId` set, so every piece of work traces back to why it exists.
 - **Consolidation is complete or says what is missing.** The parent reads every child's full contribution (`GET /api/issues/{issueId}/child-contributions`) and must link each one and name each contributing agent, or say which child is still outstanding.
 
+## Agents handing work to each other
+
+An agent that needs someone else's knowledge hands the work to that person's agent directly: a child issue assigned to the agent, with a brief and the files it needs. Nobody relays it by hand.
+
+- **The receiving agent decides when to involve its person.** Work from another agent gets the same first pass as work from a person. The agent finishes alone only what its mandate lists as finishable unattended; everything else becomes a question to its person. Its completion comment says which it was.
+- **The requester's agent owns the result.** The agent of the person the request was assigned to assembles the final deliverable from what the others delivered.
+- **At most 3 agent-to-agent rounds per request.** A round is an agent handing an issue in the request to another agent, or a hand-off sent back. The next hand-off is refused, and the agent asks its person how to proceed. People assigning work are never limited by this. The server records and enforces the limit where the co-worker feature (`coworker_bridge_enabled`) is on for the company.
+- **You can see it.** Hand-offs, hand-offs sent back and hand-offs stopped at the limit appear in the issue's activity.
+
 ## What you do
 
 1. **Set clear goals.** "Ship a landing page with a signup form by Friday" delegates better than "build a landing page".

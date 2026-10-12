@@ -106,6 +106,20 @@ describe("bookkeeping activity", () => {
   });
 });
 
+// Agent-to-agent hand-offs are recorded as their own activity rows; a person
+// reading the feed sees what happened between the agents, not action names.
+describe("agent hand-off activity", () => {
+  it("says hand-offs, returns and the hand-off limit in plain language", () => {
+    for (const action of ["issue.agent_handoff", "issue.agent_handoff_returned", "issue.agent_handoff_refused"]) {
+      expect(formatActivityVerb(action)).not.toMatch(/agent_handoff|issue\./);
+      expect(formatIssueActivityAction(action)).not.toMatch(/agent_handoff|issue\./);
+    }
+    expect(formatIssueActivityAction("issue.agent_handoff")).toBe("handed this to another agent");
+    expect(formatIssueActivityAction("issue.agent_handoff_returned")).toBe("sent this back to the agent that handed it over");
+    expect(formatIssueActivityAction("issue.agent_handoff_refused")).toMatch(/hand-off limit/);
+  });
+});
+
 // AgentDash (c3 copy): "cancelled heartbeat" hid who and why — the row names
 // the agent's run and the reason it stopped.
 describe("heartbeat cancellations", () => {
@@ -390,6 +404,9 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "invite.revoked",
   // issues
   "issue.admin_force_release",
+  "issue.agent_handoff",
+  "issue.agent_handoff_refused",
+  "issue.agent_handoff_returned",
   "issue.approval_linked",
   "issue.approval_unlinked",
   "issue.approvers_updated",
@@ -529,6 +546,9 @@ const NON_ACTIVITY_ACTION_FIELDS = new Set([
 const CONSTANT_ACTION_WRITES = new Map<string, string | null>([
   ["AUTHZ_REFUSED_ACTION", "authz.refused"], // services/activity-log.ts
   ["ISSUE_RECOVERY_BUDGET_CLEARED_ACTION", "issue.recovery_budget_cleared"], // services/issue-recovery-budget.ts
+  ["AGENT_HANDOFF_ACTION", "issue.agent_handoff"], // services/agent-handoffs.ts
+  ["AGENT_HANDOFF_RETURNED_ACTION", "issue.agent_handoff_returned"], // services/agent-handoffs.ts
+  ["AGENT_HANDOFF_REFUSED_ACTION", "issue.agent_handoff_refused"], // services/agent-handoffs.ts
   ["DEMO_SCOPE", null], // services/handshake-demo.ts — attestation scope, not an activity action
 ]);
 

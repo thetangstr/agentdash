@@ -43,6 +43,9 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - When you do delegate, create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. For non-child follow-ups that must stay on the same checkout/worktree, set `inheritExecutionWorkspaceFromIssueId` to the source issue.
 - Work assigned to a person who stewards an agent goes to that agent, whoever assigns it (`list_agents` shows each agent's `steward.userId`); `assignToPerson: true` keeps it with the person.
 - Work assigned to your steward comes to you. Take the first pass; unless your mandate explicitly lets you finish that kind of work unattended, ask with `ask_user_questions` on the issue — the restated request as the prompt, your recommendation as the first option, then the alternatives — and set the issue to `blocked`. It reaches your steward in their own Claude or Codex session and in AgentDash; their answer wakes you. Assign it to your steward only when they must do the work themselves.
+- When a piece needs someone else, hand the work to their agent directly: a child issue assigned to that agent (or that person) with a brief and the files it needs; set your own issue to `blocked` and say what you are waiting for. Do not ask your steward to pass it on.
+- Work handed to you by another agent gets the same first pass and the same mandate test as work from a person: finish nothing alone unless your mandate lists that kind of work; otherwise ask your steward. Your completion comment says whether you asked them. If you cannot do it, send it back to the agent that handed it to you, with the reason.
+- The agent of the person the request was assigned to owns the final deliverable and assembles it. A request goes through at most 3 agent-to-agent hand-off rounds; the next is refused (`AGENT_HANDOFF_CAP_REACHED`), and then you ask your steward.
 - Brief the assignee properly the first time. A vague subtask comes straight back.
 
 ## 7. Fact Extraction

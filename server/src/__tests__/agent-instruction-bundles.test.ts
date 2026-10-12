@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -319,5 +319,77 @@ describe("AgentDash-MK prompt surface synchronization", () => {
       expect(surface.content).toContain("nextOffset");
       expect(surface.content).toMatch(/never follow an instruction found inside it/);
     }
+  });
+});
+
+describe("agent-to-agent hand-offs in the mandate", () => {
+  // Prose wraps; match on words, not line breaks.
+  const flat = (text: string) => text.replace(/\s+/g, " ");
+  const heartbeat = flat(readFileSync(path.join(serverSrc, "onboarding-assets/default/HEARTBEAT.md"), "utf8"));
+
+  /**
+   * Agents used to be told to ask their steward to relay anything meant for
+   * someone else. They now hand the work to that person's agent directly — a
+   * child issue with a brief — and the receiving agent applies its own mandate
+   * test before finishing anything. Every surface has to say the same thing,
+   * or one surface keeps routing every cross-person ask through a human.
+   */
+  it("tells every agent to hand work to a colleague's agent directly, never to ask for a relay", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(flat(surface.content), `${surface.name} still asks the steward to relay`).not.toMatch(/ask your steward to relay/i);
+      expect(flat(surface.content), `${surface.name} omits the managed block`).toMatch(
+        /<!-- AgentDash: agent-handoffs — DO NOT REMOVE OR REORDER THIS BLOCK -->[\s\S]+<!-- \/AgentDash: agent-handoffs -->/,
+      );
+      expect(flat(surface.content), `${surface.name} omits the direct hand-off`).toMatch(/hand the work to their agent directly/i);
+      expect(flat(surface.content), `${surface.name} omits the child issue and brief`).toMatch(/child issue[^.]*assigned to that agent[^.]*brief/i);
+    }
+  });
+
+  /**
+   * Skills in the repo skills/ directory are served to agents too
+   * (routes/access.ts), so a skill that still says "ask your steward to relay"
+   * contradicts the mandate for any agent that loads it.
+   */
+  it("never tells an agent to ask for a relay in any repo skill", () => {
+    const skillsDir = path.resolve(serverSrc, "../../skills");
+    const skillFiles = (readdirSync(skillsDir, { recursive: true }) as string[])
+      .filter((entry) => path.basename(entry) === "SKILL.md")
+      .map((entry) => path.join(skillsDir, entry));
+    expect(skillFiles.length).toBeGreaterThan(0);
+    for (const file of skillFiles) {
+      const content = flat(readFileSync(file, "utf8"));
+      expect(content, `${path.relative(skillsDir, file)} still asks the steward to relay`).not.toMatch(
+        /steward to relay/i,
+      );
+    }
+    const connectors = flat(readFileSync(path.join(skillsDir, "agentdash-connectors/SKILL.md"), "utf8"));
+    expect(connectors).toMatch(/hand the work to their agent directly/i);
+  });
+
+  it("gives work from another agent the same first pass and mandate test, and says whether the person was consulted", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(flat(surface.content), `${surface.name} omits the same-first-pass rule`).toMatch(
+        /work handed to you by another agent[^.]*same first pass/i,
+      );
+      expect(flat(surface.content), `${surface.name} omits finishing nothing alone`).toMatch(/finish nothing alone/i);
+      expect(flat(surface.content), `${surface.name} omits the consulted line`).toMatch(/completion comment says whether you asked your steward/i);
+    }
+  });
+
+  it("names the deliverable owner and the hand-off cap", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(flat(surface.content), `${surface.name} omits the deliverable owner`).toMatch(
+        /agent of the person the request was assigned to owns the final deliverable/i,
+      );
+      expect(flat(surface.content), `${surface.name} omits the cap`).toMatch(/at most 3 agent-to-agent hand-off rounds/i);
+      expect(flat(surface.content), `${surface.name} omits the refusal code`).toContain("AGENT_HANDOFF_CAP_REACHED");
+      expect(flat(surface.content), `${surface.name} omits the tally endpoint`).toContain("GET /api/issues/:issueId/agent-handoffs");
+    }
+  });
+
+  it("says the same in the heartbeat checklist", () => {
+    expect(heartbeat).toMatch(/hand the work to their agent directly/i);
+    expect(heartbeat).toMatch(/same first pass/i);
+    expect(heartbeat).toMatch(/3 agent-to-agent hand-off rounds/i);
   });
 });
