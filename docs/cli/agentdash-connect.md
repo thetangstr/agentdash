@@ -3,7 +3,7 @@ title: "agentdash-connect"
 summary: "Connect Claude Code or Codex on your machine to your AgentDash agent."
 ---
 
-> Generated at commit `c51a2cc52` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `e68823397` by `scripts/docs/generate-mcp-reference.mjs`.
 > This page is `packages/connect/README.md`, the README published to npm with the package. Edit the README, then run `pnpm docs:mcp-reference`.
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
@@ -318,8 +318,7 @@ did, the same `agentdash-inbox` entry also serves five read-only tools:
   PowerPoint and Excel documents (.docx, .pptx, .xlsx; not their
   macro-enabled variants), within your company's attachment cap only; HTML,
   SVG and XML never come down, and the client refuses to save one even if a
-  server sends it. Files sent with a send-back or a request follow the same
-  rule.
+  server sends it.
 
 You see exactly what you could see on the page, narrowed to your own work:
 issues assigned to you or to an agent you answer for. Anything else answers as
