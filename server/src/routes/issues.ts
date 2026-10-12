@@ -79,6 +79,7 @@ import { validate } from "../middleware/validate.js";
 import { verdictsService } from "../services/verdicts.js";
 import { featureFlagsService } from "../services/feature-flags.js";
 import { attachmentTextService } from "../services/attachment-text.js";
+import { currentVersionOf } from "../services/attachment-versions.js";
 import { frameRunForAgent, standInFrameRunId } from "../services/frame-run.js";
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.js";
 import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
@@ -347,6 +348,21 @@ export function issueRoutes(
   };
   const feedbackExportService = opts?.feedbackExportService;
   const environmentsSvc = environmentService(db);
+  /**
+   * The agent a file is credited to when an agent attaches it (co-worker slice 5).
+   * Null for a person, and null in a company without `coworker_bridge_enabled`,
+   * where an agent's upload keeps its name and gets no version, as before.
+   */
+  async function agentVersionAuthor(
+    companyId: string,
+    actor: { actorType: string; agentId: string | null },
+  ) {
+    if (actor.actorType !== "agent" || !actor.agentId) return null;
+    if (!(await featureFlagsSvc.isEnabled(companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE))) return null;
+    const agent = await agentsSvc.getById(actor.agentId);
+    return agent?.name ?? "agent";
+  }
+
   function withContentPath<T extends { id: string }>(attachment: T) {
     return {
       ...attachment,
@@ -1478,6 +1494,10 @@ export function issueRoutes(
         byteSize: a.byteSize,
         contentPath: withContentPath(a).contentPath,
         createdAt: a.createdAt,
+        // Versioned files: read the current one unless told to use another.
+        version: a.version,
+        isCurrent: a.isCurrent,
+        ...(a.isCurrent ? {} : { currentAttachmentId: a.currentAttachmentId }),
       })),
       continuationSummary: continuationSummary
         ? {
@@ -4097,6 +4117,9 @@ export function issueRoutes(
       originalFilename: stored.originalFilename,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      // With the co-worker bridge on, an agent's file is the next version of its
+      // name, credited to the agent (slice 5). A person's upload keeps its name.
+      versionAuthor: await agentVersionAuthor(companyId, actor),
     });
 
     await logActivity(db, {
@@ -4228,6 +4251,7 @@ export function issueRoutes(
         originalFilename: stored.originalFilename,
         createdByAgentId: actor.agentId,
         createdByUserId: null,
+        versionAuthor: await agentVersionAuthor(companyId, actor),
       });
 
       await logActivity(db, {
@@ -4317,16 +4341,39 @@ export function issueRoutes(
       }
       offset = parsed;
     }
-    const attachment = await svc.getAttachmentById(attachmentId);
-    if (!attachment) {
+    const requested = await svc.getAttachmentById(attachmentId);
+    if (!requested) {
       res.status(404).json({ error: "Attachment not found" });
       return;
     }
-    assertCompanyAccess(req, attachment.companyId);
-    await assertIssueIdVisible(db, req, attachment.issueId, "Attachment");
+    assertCompanyAccess(req, requested.companyId);
+    await assertIssueIdVisible(db, req, requested.issueId, "Attachment");
+
+    // Versioned files (co-worker slice 5): `current=1` reads the current
+    // version of this file's name, whichever version's id was given. Same
+    // issue, so the visibility check above holds for it.
+    const current = await currentVersionOf(db, requested);
+    const wantCurrent = parseBooleanQuery(req.query.current);
+    const attachment =
+      wantCurrent && current.attachmentId !== requested.id
+        ? (await svc.getAttachmentById(current.attachmentId)) ?? requested
+        : requested;
+    const isCurrent = attachment.id === current.attachmentId;
+    const versionInfo = {
+      version: attachment.version ?? null,
+      isCurrent,
+      currentAttachmentId: current.attachmentId,
+      ...(isCurrent
+        ? {}
+        : {
+            versionNote:
+              `This is version ${attachment.version} of this file; the current one is version ${current.version} ` +
+              `(attachmentId ${current.attachmentId}). Read the current one unless you were told to use this version.`,
+          }),
+    };
 
     if (!(await featureFlagsSvc.isEnabled(attachment.companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE))) {
-      res.json(attachmentTextSvc.notEnabled(attachment));
+      res.json({ ...attachmentTextSvc.notEnabled(attachment), ...versionInfo });
       return;
     }
     const actor = getActorInfo(req);
@@ -4346,7 +4393,7 @@ export function issueRoutes(
     } else {
       runId = standInFrameRunId("user", actor.actorId);
     }
-    res.json(await attachmentTextSvc.read(attachment, { offset, runId }));
+    res.json({ ...(await attachmentTextSvc.read(attachment, { offset, runId })), ...versionInfo });
   });
 
   router.delete("/attachments/:attachmentId", async (req, res) => {

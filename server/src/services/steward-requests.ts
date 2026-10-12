@@ -7,6 +7,7 @@ import {
   agents,
   approvals,
   authUsers,
+  companies,
   companyMemberships,
   issueApprovals,
   issueThreadInteractions,
@@ -15,6 +16,19 @@ import {
   stewardInboxActionHandles,
 } from "@paperclipai/db";
 import { HttpError } from "../errors.js";
+import { normalizeIssueAttachmentMaxBytes } from "../attachment-types.js";
+import {
+  attachStagedFiles,
+  describeStagedFile,
+  filesLeftOutReason,
+  filesNotUploadedRefusal,
+  missingUploads,
+  plannedVersions,
+  StagedFileRefusal,
+  storedNameFor,
+  validateBridgeFiles,
+  type StagedFileSpec,
+} from "./bridge-staged-files.js";
 import { logger } from "../middleware/logger.js";
 import {
   isProjectIdVisible,
@@ -23,7 +37,7 @@ import {
   visibleAgentIdsFor,
 } from "../routes/visibility.js";
 import { accessService } from "./access.js";
-import { logActivity } from "./activity-log.js";
+import { insertActivity, logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import { recordAgentCorrectionAfterCommit, requesterChangeRequestCorrectionInput } from "./agent-corrections.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
@@ -52,6 +66,16 @@ import {
   type WorkRefusal,
 } from "./steward-work.js";
 
+/** A refusal raised inside the request confirm's transaction, which rolls it back. */
+class RequestRefused extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /**
  * AgentDash-MK: the person's own Claude asks someone else for work, and closes
  * it out when the result comes back (co-worker slice 4).
@@ -77,6 +101,11 @@ import {
  * target and the exact payload read back, with authority re-checked when it
  * is spent. Refusals answer `{ ok: false, code, reason }`. Gated, like every
  * work route, by `bridge:work` and `coworker_bridge_enabled`.
+ *
+ * A request may carry files (co-worker slice 5) when it goes into a project
+ * with restricted access (D2): they are named in the read-back, uploaded
+ * against the handle after the person's yes (bridge-staged-files.ts), and
+ * attached to the new issue as the requester.
  */
 
 /** The handle kinds this service mints and spends. No other route spends them. */
@@ -253,6 +282,12 @@ export async function recordRequesterChangeRequest(
   });
 }
 
+/** The files a request handle names (co-worker slice 5). */
+function stagedFilesOf(payload: unknown): StagedFileSpec[] {
+  const files = (payload as { files?: unknown } | null)?.files;
+  return Array.isArray(files) ? (files as StagedFileSpec[]) : [];
+}
+
 /** The requester's own note in a change-request comment, without the fixed prefix. */
 export function changeRequestNote(commentBody: string): string | null {
   const note = commentBody.startsWith(CHANGE_REQUEST_COMMENT_PREFIX)
@@ -387,13 +422,15 @@ export function stewardRequestsService(
     const owner = await work.resolveOwner(endpointId);
     if (isWorkRefusal(owner)) return owner;
 
-    // Files with a request arrive with file transport (co-worker slice 5).
-    if (Array.isArray(input.files) && input.files.length > 0) {
-      return workRefusal(
-        "files_not_supported_yet",
-        "Files cannot travel with a request from here yet. Describe them in the brief, or attach them on the issue page once it exists. Nothing was proposed.",
-      );
-    }
+    // Files are checked up front, so a bad list proposes nothing. Whether
+    // they may travel depends on the project (D2), resolved below.
+    const companyCap = await db
+      .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
+      .from(companies)
+      .where(eq(companies.id, owner.companyId))
+      .then((rows) => normalizeIssueAttachmentMaxBytes(rows[0]?.attachmentMaxBytes));
+    const checkedFiles = validateBridgeFiles(input.files, companyCap);
+    if (!checkedFiles.ok) return checkedFiles;
 
     const title = str(input.title).replace(/\s+/g, " ");
     const wanted = str(input.wanted);
@@ -511,6 +548,18 @@ export function stewardRequestsService(
       deadline: deadline.date,
     });
 
+    // D2: files go with the request only into a restricted project.
+    // A new issue has no files yet, so each name starts at v1 (a second file of
+    // the same name in this request is v2); the handle binds those versions.
+    const files: StagedFileSpec[] = project?.restricted ? plannedVersions(checkedFiles.files, new Map()) : [];
+    const filesLeftOut =
+      checkedFiles.files.length > 0 && !project?.restricted
+        ? filesLeftOutReason(
+            project ? `the project ${project.name} does not have restricted access` : "this request is not in a project",
+            checkedFiles.files,
+          )
+        : null;
+
     const handle = await mintHandle(owner, "request_work", {
       title,
       description,
@@ -520,6 +569,7 @@ export function stewardRequestsService(
       projectId: project?.id ?? null,
       // What the read-back promised; confirm refuses if it would now differ.
       routedToAgentId: routed?.toAgentId ?? null,
+      ...(files.length > 0 ? { files } : {}),
     });
 
     const goesTo = routed
@@ -552,9 +602,20 @@ export function stewardRequestsService(
         ...(deadline.date ? [`Deadline: ${deadline.date}`] : []),
         ...(forWhom ? [`For: ${forWhom}`] : []),
         ...(project ? [`Project: ${project.name}`] : []),
+        // A new issue: every file is version 1 of its name, credited to the requester.
+        ...files.map((file) => describeStagedFile(file, storedNameFor(file, file.version ?? 1, requesterName ?? "requester"))),
         `Goes to: ${goesTo}`,
         `Sent as you. ${visibility}`,
       ],
+      ...(filesLeftOut ? { filesLeftOut } : {}),
+      ...(files.length > 0
+        ? {
+            upload: {
+              files: files.map((file) => ({ name: file.name, sha256: file.sha256, size: file.size })),
+              note: "After the person's yes, upload each named file with this handle (work/upload), then confirm. Nothing is created until the confirm.",
+            },
+          }
+        : {}),
       note: "Nothing is sent yet. Show this read-back and send it with work_request_confirm only after the person's explicit yes to it.",
     };
   }
@@ -720,6 +781,25 @@ export function stewardRequestsService(
   async function confirm(endpointId: string, token: string) {
     const owner = await work.resolveOwner(endpointId);
     if (isWorkRefusal(owner)) return owner;
+    // A request with files: every named file must have arrived before the
+    // handle is spent, so a refusal here leaves it usable once they have.
+    const pending = await db
+      .select({ id: stewardInboxActionHandles.id, kind: stewardInboxActionHandles.kind, payload: stewardInboxActionHandles.payload })
+      .from(stewardInboxActionHandles)
+      .where(
+        and(
+          eq(stewardInboxActionHandles.token, token),
+          eq(stewardInboxActionHandles.bridgeEndpointId, owner.endpoint.id),
+          eq(stewardInboxActionHandles.actorUserId, owner.userId),
+          isNull(stewardInboxActionHandles.consumedAt),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    const pendingFiles = pending?.kind === "request_work" ? stagedFilesOf(pending.payload) : [];
+    if (pending && pendingFiles.length > 0) {
+      const missing = await missingUploads(db, pending.id, pendingFiles);
+      if (missing.length > 0) return filesNotUploadedRefusal(missing);
+    }
     const record = await consume(token, owner);
     if (!record) {
       return workRefusal(
@@ -729,7 +809,7 @@ export function stewardRequestsService(
     }
     const payload = (record.payload ?? {}) as Record<string, unknown>;
     try {
-      if (record.kind === "request_work") return await confirmRequest(owner, payload);
+      if (record.kind === "request_work") return await confirmRequest(owner, payload, record.id);
       return await confirmCloseOut(owner, record.kind as "request_accept" | "request_changes", payload);
     } catch (err) {
       if (err instanceof IssueCommentPolicyRefusal) {
@@ -742,7 +822,7 @@ export function stewardRequestsService(
     }
   }
 
-  async function confirmRequest(owner: Owner, payload: Record<string, unknown>) {
+  async function confirmRequest(owner: Owner, payload: Record<string, unknown>, handleId: string) {
     const assigneeUserId = typeof payload.assigneeUserId === "string" ? payload.assigneeUserId : "";
     const title = typeof payload.title === "string" ? payload.title : "";
     const description = typeof payload.description === "string" ? payload.description : "";
@@ -764,6 +844,23 @@ export function stewardRequestsService(
         return workRefusal("project_moved_on", "The project's access changed since the read-back. Nothing was sent; propose it again.");
       }
     }
+    const files = stagedFilesOf(payload);
+    if (files.length > 0) {
+      // D2 again, now: the files go only into a project that is still restricted.
+      const visibility = projectId
+        ? await db
+            .select({ visibility: projects.visibility })
+            .from(projects)
+            .where(eq(projects.id, projectId))
+            .then((rows) => rows[0]?.visibility ?? null)
+        : null;
+      if (visibility !== "restricted") {
+        return workRefusal(
+          "files_not_allowed_now",
+          "The project no longer has restricted access, so the files cannot travel over the bridge. Nothing was sent; propose it again without them.",
+        );
+      }
+    }
     const routed = await routeFor(owner, assigneeUserId);
     if ((routed?.toAgentId ?? null) !== (payload.routedToAgentId ?? null)) {
       return workRefusal(
@@ -773,16 +870,94 @@ export function stewardRequestsService(
     }
 
     const channel = channelOf(owner);
-    const issue = await issueService(db).create(owner.companyId, {
-      title,
-      description,
-      status: "todo",
-      projectId,
-      assigneeAgentId: routed?.toAgentId ?? null,
-      assigneeUserId: routed ? null : assigneeUserId,
-      createdByUserId: owner.userId,
-      createdByAgentId: null,
-    });
+    // The issue and its files commit together: a file that cannot be attached
+    // leaves no issue behind. The cap and the uploads are checked again here,
+    // as the send-back's confirm does, because either may have moved since.
+    const requesterName =
+      files.length > 0 ? (await userNames([owner.userId])).get(owner.userId) ?? "requester" : null;
+    const publications: ActivityPublication[] = [];
+    let created: { issue: Awaited<ReturnType<ReturnType<typeof issueService>["create"]>>; attached: Awaited<ReturnType<typeof attachStagedFiles>> };
+    try {
+      created = await db.transaction(async (txRaw) => {
+        const tx = txRaw as unknown as Db;
+        if (files.length > 0) {
+          const cap = await tx
+            .select({ attachmentMaxBytes: companies.attachmentMaxBytes })
+            .from(companies)
+            .where(eq(companies.id, owner.companyId))
+            .then((rows) => normalizeIssueAttachmentMaxBytes(rows[0]?.attachmentMaxBytes));
+          const over = files.find((file) => file.size > cap);
+          if (over) {
+            throw new RequestRefused(
+              "file_too_large",
+              `"${over.name}" is ${over.size.toLocaleString("en-US")} bytes; the cap for this company is now ${cap.toLocaleString("en-US")} bytes. Nothing was sent; propose it again without that file.`,
+            );
+          }
+          const missing = await missingUploads(tx, handleId, files);
+          if (missing.length > 0) {
+            throw new RequestRefused(
+              "files_not_uploaded",
+              `${missing.map((name) => `"${name}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} no longer staged for this request. Nothing was sent; propose it again.`,
+            );
+          }
+        }
+        const issue = await issueService(db).create(
+          owner.companyId,
+          {
+            title,
+            description,
+            status: "todo",
+            projectId,
+            assigneeAgentId: routed?.toAgentId ?? null,
+            assigneeUserId: routed ? null : assigneeUserId,
+            createdByUserId: owner.userId,
+            createdByAgentId: null,
+          },
+          { executor: tx, publications },
+        );
+        if (files.length === 0) return { issue, attached: [] };
+        // The files the read-back named, as the requester, before the agent is woken.
+        const attached = await attachStagedFiles(tx, {
+          companyId: owner.companyId,
+          issueId: issue.id,
+          handleId,
+          files,
+          userId: owner.userId,
+          personName: requesterName ?? "requester",
+          issueCommentId: null,
+        });
+        for (const attachment of attached) {
+          publications.push(
+            await insertActivity(tx, {
+              companyId: owner.companyId,
+              actorType: "user",
+              actorId: owner.userId,
+              action: "issue.attachment_added",
+              entityType: "issue",
+              entityId: issue.id,
+              details: {
+                attachmentId: attachment.id,
+                originalFilename: attachment.originalFilename,
+                contentType: attachment.contentType,
+                byteSize: attachment.byteSize,
+                version: attachment.version,
+                ...channel,
+              },
+            }),
+          );
+        }
+        return { issue, attached };
+      });
+    } catch (err) {
+      if (err instanceof RequestRefused || err instanceof StagedFileRefusal) return workRefusal(err.code, err.message);
+      throw err;
+    }
+    for (const publication of publications) publishActivity(publication);
+    const { issue } = created;
+    const attachedFiles = created.attached.map((attachment) => ({
+      attachmentId: attachment.id,
+      name: attachment.originalFilename,
+    }));
     await issueReferenceService(db)
       .syncIssue(issue.id)
       .catch((err: unknown) => logger.warn({ err, issueId: issue.id }, "bridge request references not synced"));
@@ -836,6 +1011,7 @@ export function stewardRequestsService(
       assignedTo: routed
         ? { kind: "agent" as const, name: names.get(routed.toAgentId) ?? null, forPerson: people.get(assigneeUserId) ?? null }
         : { kind: "person" as const, name: people.get(assigneeUserId) ?? null, forPerson: null },
+      ...(attachedFiles.length > 0 ? { files: attachedFiles } : {}),
       note: "Sent as you. It appears under your requests in work_list until you accept the result.",
     };
   }

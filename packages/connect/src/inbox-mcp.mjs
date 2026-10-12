@@ -224,6 +224,10 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
   // surface's write half.
   const allTools = [...TOOLS, ...WORK_TOOLS, ...REPLY_TOOLS, ...REQUEST_TOOLS];
   const toolsByName = new Map(allTools.map((tool) => [tool.name, tool]));
+  // Local files a propose call named, by the handle it returned, until the
+  // confirm uploads them (file-send.mjs). In memory only: a restart forgets
+  // them, and the server then refuses the confirm.
+  const staged = deps.staged ?? new Map();
 
   async function callTool(name, input) {
     const tool = toolsByName.get(name);
@@ -240,6 +244,29 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
       return textResult(err?.message ?? String(err), true);
     }
 
+    // Hooks a tool may set: `prepare` builds the body (reading local files)
+    // or answers without a request; `beforeSend` runs after the person's go
+    // and before the request (uploading those files); `afterResponse` adds to
+    // what the server answered.
+    const ctx = { inboxDir, textResult, staged, fetchImpl, server, token };
+    let prepared = null;
+    if (tool.prepare) {
+      try {
+        prepared = await tool.prepare(input ?? {}, ctx);
+      } catch (err) {
+        return textResult(`Could not prepare ${tool.name}: ${err?.message ?? String(err)}`, true);
+      }
+      if (prepared?.result) return prepared.result;
+    }
+    if (tool.beforeSend) {
+      try {
+        const blocked = await tool.beforeSend(input ?? {}, ctx);
+        if (blocked) return blocked;
+      } catch (err) {
+        return textResult(`Could not finish ${tool.name}: ${err?.message ?? String(err)}. Nothing was sent.`, true);
+      }
+    }
+
     // One controller for the request: the answer gets DEFAULT_TIMEOUT_MS from
     // the start. A tool that streams a file (`bodyTimeoutMs`) gets a fresh,
     // size-aware deadline once its headers are in.
@@ -253,7 +280,7 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
         res = await fetchImpl(`${server}/api/bridge/${tool.path ?? `inbox/${tool.route}`}`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify(tool.body(input ?? {})),
+          body: JSON.stringify(prepared?.body ?? tool.body(input ?? {})),
           signal: controller.signal,
         });
       } catch (err) {
@@ -284,6 +311,7 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
       } catch {
         return textResult(raw);
       }
+      if (tool.afterResponse) parsed = tool.afterResponse(parsed, input ?? {}, ctx, prepared) ?? parsed;
       if (tool.refusalNote && parsed && parsed.ok === false) {
         return textResult({ ...parsed, note: tool.refusalNote });
       }

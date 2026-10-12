@@ -101,6 +101,10 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // authority -- see steward-work-reply.ts.
   "/api/bridge/work/propose",
   "/api/bridge/work/confirm",
+  // Bytes for a send-back or a request (bridge-staged-files.ts): stored only
+  // against a live handle that names the file's exact sha256 and size, and
+  // attached only when that handle is confirmed.
+  "/api/bridge/work/upload",
   // Asking someone else for work, and closing it out (steward-requests.ts).
   // `request` and `request/respond` mint a single-use handle over a resolved
   // brief or close-out and change nothing; `request/confirm` spends it and

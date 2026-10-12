@@ -74,6 +74,7 @@ import { parseIssueGraphLivenessIncidentKey } from "./recovery/origins.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { authUsers } from "@paperclipai/db";
 import { defaultStatusForNewIssue, triageOwnerForNewIssue } from "./issue-start-policy.js";
+import { insertAttachmentRows, markCurrentVersions } from "./attachment-versions.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -4265,6 +4266,8 @@ export function issueService(db: Db) {
       originalFilename?: string | null;
       createdByAgentId?: string | null;
       createdByUserId?: string | null;
+      /** Credit the file to this person or agent as the next version of its name. */
+      versionAuthor?: string | null;
     }) => {
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })
@@ -4285,50 +4288,23 @@ export function issueService(db: Db) {
         }
       }
 
-      return db.transaction(async (tx) => {
-        const [asset] = await tx
-          .insert(assets)
-          .values({
-            companyId: issue.companyId,
-            provider: input.provider,
-            objectKey: input.objectKey,
-            contentType: input.contentType,
-            byteSize: input.byteSize,
-            sha256: input.sha256,
-            originalFilename: input.originalFilename ?? null,
-            createdByAgentId: input.createdByAgentId ?? null,
-            createdByUserId: input.createdByUserId ?? null,
-          })
-          .returning();
-
-        const [attachment] = await tx
-          .insert(issueAttachments)
-          .values({
-            companyId: issue.companyId,
-            issueId: issue.id,
-            assetId: asset.id,
-            issueCommentId: input.issueCommentId ?? null,
-          })
-          .returning();
-
-        return {
-          id: attachment.id,
-          companyId: attachment.companyId,
-          issueId: attachment.issueId,
-          issueCommentId: attachment.issueCommentId,
-          assetId: attachment.assetId,
-          provider: asset.provider,
-          objectKey: asset.objectKey,
-          contentType: asset.contentType,
-          byteSize: asset.byteSize,
-          sha256: asset.sha256,
-          originalFilename: asset.originalFilename,
-          createdByAgentId: asset.createdByAgentId,
-          createdByUserId: asset.createdByUserId,
-          createdAt: attachment.createdAt,
-          updatedAt: attachment.updatedAt,
-        };
-      });
+      // Versioned when `versionAuthor` is given (attachment-versions.ts).
+      return db.transaction(async (tx) =>
+        insertAttachmentRows(tx as unknown as Db, {
+          companyId: issue.companyId,
+          issueId: issue.id,
+          issueCommentId: input.issueCommentId ?? null,
+          provider: input.provider,
+          objectKey: input.objectKey,
+          contentType: input.contentType,
+          byteSize: input.byteSize,
+          sha256: input.sha256,
+          originalFilename: input.originalFilename ?? null,
+          createdByAgentId: input.createdByAgentId ?? null,
+          createdByUserId: input.createdByUserId ?? null,
+          versionAuthor: input.versionAuthor ?? null,
+        }),
+      );
     },
 
     listAttachments: async (issueId: string) =>
@@ -4349,11 +4325,15 @@ export function issueService(db: Db) {
           createdByUserId: assets.createdByUserId,
           createdAt: issueAttachments.createdAt,
           updatedAt: issueAttachments.updatedAt,
+          version: issueAttachments.version,
+          versionBaseName: issueAttachments.versionBaseName,
         })
         .from(issueAttachments)
         .innerJoin(assets, eq(issueAttachments.assetId, assets.id))
         .where(eq(issueAttachments.issueId, issueId))
-        .orderBy(desc(issueAttachments.createdAt)),
+        .orderBy(desc(issueAttachments.createdAt))
+        // Every attachment of the issue is here, so the current one per name is too.
+        .then((rows) => markCurrentVersions(rows)),
 
     getAttachmentById: async (id: string) =>
       db
@@ -4373,6 +4353,8 @@ export function issueService(db: Db) {
           createdByUserId: assets.createdByUserId,
           createdAt: issueAttachments.createdAt,
           updatedAt: issueAttachments.updatedAt,
+          version: issueAttachments.version,
+          versionBaseName: issueAttachments.versionBaseName,
         })
         .from(issueAttachments)
         .innerJoin(assets, eq(issueAttachments.assetId, assets.id))

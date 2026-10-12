@@ -1235,7 +1235,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 626 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 30f4923d67e0; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 627 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 07a7178a9740; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

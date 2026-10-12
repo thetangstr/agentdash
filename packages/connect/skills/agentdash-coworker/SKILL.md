@@ -2,7 +2,7 @@
 name: agentdash-coworker
 description: Review what the person's AgentDash agents handed them, give your own honest take, finish the work together, and send back only what the person approves, as them. Use at the start of every session in ~/agentdash-inbox, and whenever the person asks about their inbox, an agent's draft or question, or work they asked someone else for.
 ---
-<!-- agentdash-coworker-skill-version: 2 -->
+<!-- agentdash-coworker-skill-version: 3 -->
 
 # AgentDash co-worker
 
@@ -139,6 +139,10 @@ Options: <the agent's options, and yours: send as is, change, rewrite, reject>
 - To work on a file, copy its content into the working folder. Do not edit in
   `incoming/`.
 - A file you cannot read as text: show its name, size, type and sha256 only.
+- Files sent back and forth are versions of one name, like
+  `plan v2 (Agent A).docx`. `work_read` marks the current one
+  (`isCurrent: true`); review and work from that one unless the person says
+  otherwise.
 
 ## 6. The send-back: one read-back, one go
 
@@ -147,8 +151,11 @@ Options: <the agent's options, and yours: send as is, change, rewrite, reject>
    the decision (`approvalId`, approve or reject, any note), the document
    revision (the whole new body, with `baseRevisionId` = the `revisionId` you
    read with `work_read`, so nothing written since is overwritten), a comment,
-   and lessons (section 7). Files cannot be sent back yet: say so, and point
-   the person to the issue page to attach them.
+   lessons (section 7), and files: local paths of the files the person chose
+   to send (from the working folder, or their own files they point you at;
+   never a hidden file or folder). Files go back only on issues in projects
+   with restricted access; elsewhere the read-back says they were left out,
+   and the person attaches them on the issue page if they want to.
 2. Propose it with `work_propose_reply`. The server returns a read-back: every
    part, as the person, who will see it, and who is woken. An approval or a
    question on its own can also go through `inbox_decide` or `inbox_answer`,
@@ -164,8 +171,12 @@ Options: <the agent's options, and yours: send as is, change, rewrite, reject>
    Propose again.
 8. When the person says "go with your recommendation", read back exactly what
    that means and get a yes to that.
-9. If the server refused or left out files (they will go back only on issues
-   in projects with restricted access), tell the person why.
+9. If the server refused or left out files (they go back only on issues in
+   projects with restricted access, within the company's size cap), tell the
+   person why. A file's bytes leave this machine only at the confirm, after
+   the yes; if a file changed since the read-back, the confirm refuses and you
+   propose again. Each file is stored as the next version of its name, like
+   `plan v2 (Person A).docx`, and becomes the issue's current file for it.
 10. After sending, relay the result as it came back and record it in
     `notes.md`. If the send was refused (answered elsewhere, the document moved
     on, the approval was decided in between, no longer theirs to act on),
@@ -198,6 +209,8 @@ for it.
   the person it goes to. Read it back with `work_request_propose`; after their
   go, send it with `work_request_confirm`. It is routed to that person's agent.
   If a name does not resolve, ask which person they meant; never guess.
+- Files can go with a request only into a project with restricted access that
+  both people can see; the read-back says when they were left out.
 - `work_list` shows their requests under `requests`: delivered results first,
   then what is still waiting, each with who it waits on and for how long, as
   the server worked it out. Say it as given ("waiting on Person B for 2
