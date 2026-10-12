@@ -260,8 +260,20 @@ was decided or changed, or the issue is no longer yours, nothing is sent and
 you are told why. Your agent is woken at most once (an answer wakes it only
 when its question asked for that), and its next run carries a short
 "what changed" summary (its draft against your revision, your answer against
-its recommendation, your lessons), which it saves to its own memory. Files
-cannot be sent back this way yet; attach them on the issue page.
+its recommendation, your lessons), which it saves to its own memory.
+
+Files go back too, but only on issues in projects with restricted access (on
+any other issue the read-back says they were left out, and you attach them on
+the issue page if everyone who can see it may have them). Claude names each
+file by its path on your machine; only its name, size and sha256 go with the
+read-back. After your yes, `work_confirm_reply` reads each file again, refuses
+if it changed, uploads it, and then sends the bundle; the server stores a file
+only if the read-back named its exact sha256 and size, refuses anything over
+the company's attachment cap (and says the cap), and never accepts HTML, SVG or
+XML. A file is stored as the next version of its name on the issue, like
+`plan v2 (Person A).docx`, and becomes the current one; files from hidden
+folders (`~/.ssh`, `.env`) are never sent. Uploaded files that are never
+confirmed are deleted after the handle expires.
 ## Asking someone else for work
 
 Three more tools, on the same credential and behind the same two switches, let
@@ -282,8 +294,10 @@ you ask a colleague for work and close it out when the result comes back:
 
 A request is created as you and assigned to that person; the usual rule then
 gives it to their agent, which takes the first pass and asks them what it
-needs. It needs the same permission as assigning work on the page. Files
-cannot travel with a request yet.
+needs. It needs the same permission as assigning work on the page. Files can
+go with a request into a project with restricted access that both of you can
+see, the same way as with a reply: named in the read-back, uploaded after your
+yes, and attached to the new issue as you.
 
 `work_list` shows your requests under `requests`: delivered results first, then
 what is still waiting, each with who it waits on and for how long ("waiting on
