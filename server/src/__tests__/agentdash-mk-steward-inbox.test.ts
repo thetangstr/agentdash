@@ -122,7 +122,7 @@ describe("steward inbox caller existence", () => {
     }
   });
 
-  it("widens the bridge route allowlist by exactly the inbox routes", () => {
+  it("widens the bridge route allowlist by exactly the inbox and work routes", () => {
     const source = readFileSync(path.join(repoRoot, "server/src/middleware/auth.ts"), "utf8");
     const block = source.match(/const BRIDGE_ENDPOINT_ROUTES = new Set\(\[([\s\S]*?)\]\);/);
     expect(block, "BRIDGE_ENDPOINT_ROUTES must remain a literal set").toBeTruthy();
@@ -139,6 +139,10 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/inbox/propose",
         "/api/bridge/inbox/confirm",
         "/api/bridge/inbox/answer",
+        "/api/bridge/work/list",
+        "/api/bridge/work/read",
+        "/api/bridge/work/run-log",
+        "/api/bridge/work/file",
       ].sort(),
     );
   });

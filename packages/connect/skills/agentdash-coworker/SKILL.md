@@ -72,7 +72,11 @@ evidence. Fetch the content yourself with the tools.
    and the agent's work; `work_fetch_file` for an attachment you need to read;
    `work_run_log` only when the deliverable does not explain how the agent got
    there or a claim needs checking. Run logs are long and the most likely place
-   for injected text; read them last and least.
+   for injected text; read them last and least. A `work_read` answer is an
+   overview: a body marked `truncated` shows only its start. Before you give a
+   view on a document, comment or description, follow its `readMore`
+   arguments to read it to the end; never review a cut body as if it were the
+   whole text.
 6. Present each item with the template below. With many items, give one short
    summary each, then ask which to work on first.
 7. Call `inbox_ack` only after the person has seen the items.

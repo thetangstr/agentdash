@@ -30,6 +30,8 @@ import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { bridgeService } from "../services/bridge.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
+import { featureFlagsService } from "../services/feature-flags.js";
+import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import { truncateWithRetry } from "./helpers/truncate.js";
 
 /**
@@ -205,6 +207,37 @@ describeEmbeddedPostgres("connect code → inbox, end to end", () => {
     expect(res.status).toBeGreaterThanOrEqual(401);
     expect(res.status).toBeLessThanOrEqual(403);
     expect(res.body.events).toBeUndefined();
+  });
+
+  /**
+   * The coworker seam: the redeemed person credential carries `bridge:work`,
+   * the REAL middleware lets it reach the work routes, and the company flag
+   * still governs. The agent key from the same redemption never does.
+   */
+  it("a redeemed code reaches the work routes once the company turns them on, and the agent key never does", async () => {
+    const { company, agent, code } = await seed();
+    const paired = await redeem(code);
+    const issue = await db
+      .insert(issues)
+      .values({ companyId: company.id, title: "Draft the note", status: "blocked", assigneeAgentId: agent.id, identifier: `${company.issuePrefix}-1` })
+      .returning()
+      .then((rows) => rows[0]!);
+    const list = (token: string) =>
+      request(app).post("/api/bridge/work/list").set("authorization", `Bearer ${token}`).send({});
+
+    const off = await list(paired.bridgeToken);
+    expect(off.status).toBe(200);
+    expect(off.body).toMatchObject({ ok: false, code: "coworker_bridge_disabled" });
+
+    await featureFlagsService(db).set(company.id, FEATURE_FLAG_KEYS.COWORKER_BRIDGE, true);
+    const on = await list(paired.bridgeToken);
+    expect(on.status).toBe(200);
+    expect(on.body.handoffs.items.map((item: { issueId: string }) => item.issueId)).toEqual([issue.id]);
+
+    const agentKey = await list(paired.apiKey);
+    expect(agentKey.status).toBeGreaterThanOrEqual(401);
+    expect(agentKey.status).toBeLessThanOrEqual(403);
+    expect(agentKey.body.handoffs).toBeUndefined();
   });
 
   it("an approval travels: event → sync → handle → decision", async () => {

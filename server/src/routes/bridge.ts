@@ -11,6 +11,8 @@ import { stewardInboxService } from "../services/steward-inbox.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
 import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js";
+import { stewardWorkService } from "../services/steward-work.js";
+import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { BRIDGE_TASK_CLASSES, bridgeService } from "../services/bridge.js";
@@ -66,6 +68,8 @@ export function bridgeRoutes(
     autoDispatchQueuedRuns?: boolean;
     /** Substituted in tests to observe the wake an answer queues. */
     heartbeat?: Pick<ReturnType<typeof heartbeatService>, "wakeup">;
+    /** Where attachment bytes live; `/bridge/work/file` reads through it. */
+    storage?: StorageService;
   } = {},
 ) {
   const router = Router();
@@ -80,6 +84,10 @@ export function bridgeRoutes(
   });
   const inboxActions = stewardInboxActionsService(db, { heartbeat });
   const inboxAnswers = stewardInboxAnswerService(db, { heartbeat: options.heartbeat ?? heartbeat });
+  const work = stewardWorkService(db, {
+    storage: options.storage,
+    readRunLog: (run, opts) => heartbeat.readLog(run, opts),
+  });
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -289,6 +297,88 @@ export function bridgeRoutes(
         ...(answers ? { answers } : {}),
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Endpoint-facing: the person's own Claude reviews their agents' work.
+  // Needs `bridge:work` and the company's coworker_bridge_enabled flag; reads
+  // exactly what the owner sees on the page, narrowed to their own work, with
+  // every agent-written field framed. See services/steward-work.ts.
+  // -------------------------------------------------------------------------
+
+  /** What the owner's agents handed them: decisions, questions, blockers, reviews. */
+  router.post("/bridge/work/list", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    res.json(await work.list(endpointId, { limit: req.body?.limit }));
+  });
+
+  /**
+   * One hand-off: the issue, its parent and the request it came from,
+   * comments, documents, attachment metadata, and child issues, each body
+   * cut to its start inside one size budget. One body in full is a focused
+   * read: `documentKey`, `commentId` or `section: "description"`, paged by
+   * `offset`.
+   */
+  router.post("/bridge/work/read", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(
+      await work.read(endpointId, {
+        issueId: body.issueId,
+        documentKey: body.documentKey,
+        commentId: body.commentId,
+        section: body.section,
+        offset: body.offset,
+        commentLimit: body.commentLimit,
+      }),
+    );
+  });
+
+  /**
+   * The agent's run log for runs on that issue, newest run unless `runId` is
+   * given, paged by byte `offset`. Redacted for secrets and framed: the
+   * highest-volume injection surface the bridge carries.
+   */
+  router.post("/bridge/work/run-log", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(await work.runLog(endpointId, { issueId: body.issueId, runId: body.runId, offset: body.offset }));
+  });
+
+  /**
+   * One attachment's bytes. Allowlisted types only, never HTML or SVG, at
+   * most the company attachment cap, `nosniff`, and always as a download.
+   * A refusal is JSON `{ ok: false, reason }`; the bytes carry
+   * `x-agentdash-file: attachment`, which is how a client tells them apart.
+   */
+  router.post("/bridge/work/file", async (req, res, next) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const attachmentId = req.body?.attachmentId;
+    if (typeof attachmentId !== "string" || !attachmentId.trim()) throw badRequest("attachmentId is required");
+    const result = await work.file(endpointId, { attachmentId });
+    if (!result.ok) {
+      res.json(result);
+      return;
+    }
+    const filename = result.filename.replace(/[\u0000-\u001f\u007f"\\/]/g, "_") || "attachment";
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Content-Length", String(result.byteSize));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader("x-agentdash-file", "attachment");
+    res.setHeader("x-agentdash-attachment-id", result.attachmentId);
+    res.setHeader("x-agentdash-sha256", result.sha256);
+    if (result.identifier) res.setHeader("x-agentdash-issue", result.identifier);
+    result.stream.on("error", (err) => next(err));
+    result.stream.pipe(res);
   });
 
   router.post("/bridge/result", async (req, res) => {

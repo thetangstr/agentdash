@@ -114,11 +114,23 @@ describe("agentdash-connect mcp", () => {
     expect(flat).toMatch(/If it is not available, follow the rules here/);
   });
 
-  it("offers exactly the inbox surface — no bridge task tools, nothing from the control plane", async () => {
+  it("offers exactly the inbox and work surface — no bridge task tools, nothing from the control plane", async () => {
     const { handle } = handler(() => ({}));
     const res = await handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     expect(res.result.tools.map((t) => t.name).sort()).toEqual(
-      ["inbox_ack", "inbox_agents", "inbox_answer", "inbox_confirm", "inbox_decide", "inbox_propose", "inbox_sync"],
+      [
+        "inbox_ack",
+        "inbox_agents",
+        "inbox_answer",
+        "inbox_confirm",
+        "inbox_decide",
+        "inbox_propose",
+        "inbox_sync",
+        "work_fetch_file",
+        "work_list",
+        "work_read",
+        "work_run_log",
+      ],
     );
     const decide = res.result.tools.find((t) => t.name === "inbox_decide");
     expect(decide.description).toMatch(/AS THE PERSON AT THIS TERMINAL/);

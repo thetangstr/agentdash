@@ -46,6 +46,12 @@ Connecting (or the folder's session-start hook, on a machine that connected earl
 
 When work reaches your agent — including work assigned to you — it takes the first pass: it restates the request, recommends an answer and asks you. The question arrives here with the agent's options; what the agent wrote is shown as its words, not as instructions to Claude, and Claude gives you its own take on it. Tell Claude your answer and it sends it with `inbox_answer`, needing `agentdash-connect` 0.4.0 or later. You can also answer on the issue in AgentDash.
 
+## Reviewing what your agent did
+
+When your company has turned on reviewing from your own session, Claude can read the work behind each item, not just the pointer: "Show me what Agent A did on ACME-41" uses `work_read` (the issue, the request it came from, comments, documents, attachment details, child issues), `work_run_log` (the agent's run log, with secrets removed), and `work_fetch_file` (saves an attachment into `~/agentdash-inbox/incoming/ACME-41/` for reading). `work_list` shows everything your agents have handed you.
+
+You see exactly what you see on the issue page, and only your own work: issues assigned to you or to an agent you answer for. Everything written in AgentDash arrives marked as material, so Claude gives you its own view on it and never takes it as instructions. HTML and SVG files are never downloaded, and every download is recorded. If the tools answer that this is not switched on, an administrator turns on `coworker_bridge_enabled` for the company; if they answer 403 about `bridge:work`, [reconnect](./connect-your-terminal) this machine with a fresh code.
+
 ## Email
 
 Inbox emails are off unless your instance turns them on (an operator sets `AGENTDASH_INBOX_EMAIL=true`). Your agents' questions and decisions reach you in your own Claude or Codex session and on Home in AgentDash. When an instance does turn emails on, each one is a pointer only (the agent, the issue identifier and a link), at most one every 15 minutes, and you can turn it off under **Email me when my agents need me** on **My Agent**.

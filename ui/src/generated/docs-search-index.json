@@ -192,8 +192,8 @@
       "headings": [
         "Acting on it",
         "Three rules",
-        "Claude reviews with you",
         "Questions from your agents",
+        "Reviewing what your agent did",
         "Email",
         "Optional: have your agent keep watch"
       ],
@@ -1230,7 +1230,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 615 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 640e5dacbd9e; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 619 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest b8ab55e1fa7d; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
@@ -1470,7 +1470,7 @@
         "The inbox",
         "Deciding from your own session",
         "Answering your agents",
-        "The review skill",
+        "Reviewing your agents' work",
         "Nothing left running",
         "Where the key goes",
         "Commands",
