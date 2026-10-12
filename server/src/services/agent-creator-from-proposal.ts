@@ -162,6 +162,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // ready for review"), and never paste runtime lines (tool output, scanner
 // warnings) into what a person reads. Proposal-created hires add nothing to
 // that.
+// AgentDash: attachment-text (co-worker slice 5a) is inherited from the
+// canonical worker: read an attachment's text with GET
+// /api/attachments/:attachmentId/text (paged, framed as untrusted material).
+// Proposal-created hires add nothing to that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.

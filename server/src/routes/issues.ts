@@ -71,7 +71,7 @@ import {
   preserveIssueRecoveryBudget,
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
-import { definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
+import { FEATURE_FLAG_KEYS, definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
 import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
@@ -79,6 +79,8 @@ import { validate } from "../middleware/validate.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { featureFlagsService } from "../services/feature-flags.js";
+import { attachmentTextService } from "../services/attachment-text.js";
+import { frameRunForAgent, standInFrameRunId } from "../services/frame-run.js";
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.js";
 import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
 import * as serviceIndex from "../services/index.js";
@@ -497,6 +499,7 @@ export function issueRoutes(
   // AgentDash: goals-eval-hitl
   const verdictsSvc = verdictsService(db);
   const featureFlagsSvc = featureFlagsService(db);
+  const attachmentTextSvc = attachmentTextService(storage);
   const reviewerAutoHireSvc = cosReviewerAutoHire(db);
   const cosVerdictOrchestratorSvc = cosVerdictOrchestrator(db, {
     verdicts: verdictsSvc,
@@ -4208,6 +4211,64 @@ export function issueRoutes(
       next(err);
     });
     object.stream.pipe(res);
+  });
+
+  // AgentDash (co-worker slice 5a): one page of an attachment's text, for an
+  // agent that cannot read the file's bytes itself. Same readers as /content
+  // (company access plus the issue's project visibility; invisible is 404).
+  // The text is framed as untrusted material and bound to the requesting run
+  // so that run's stored log withholds it (services/attachment-text.ts). The
+  // run is verified, never taken from the header as given
+  // (services/frame-run.ts): a person's frame never verifies, and an agent's
+  // only in one of its own live runs.
+  // Gated by the company's coworker_bridge_enabled flag: off, the file's
+  // details come back with reason "not_enabled" and nothing is read.
+  router.get("/attachments/:attachmentId/text", async (req, res) => {
+    const attachmentId = req.params.attachmentId as string;
+    if (!isUuidLike(attachmentId)) {
+      res.status(404).json({ error: "Attachment not found" });
+      return;
+    }
+    const rawOffset = req.query.offset;
+    let offset = 0;
+    if (rawOffset !== undefined) {
+      const parsed = typeof rawOffset === "string" && /^\d{1,10}$/.test(rawOffset) ? Number(rawOffset) : Number.NaN;
+      if (!Number.isSafeInteger(parsed)) {
+        res.status(400).json({ error: "offset must be a whole number of characters, 0 or more" });
+        return;
+      }
+      offset = parsed;
+    }
+    const attachment = await svc.getAttachmentById(attachmentId);
+    if (!attachment) {
+      res.status(404).json({ error: "Attachment not found" });
+      return;
+    }
+    assertCompanyAccess(req, attachment.companyId);
+    await assertIssueIdVisible(db, req, attachment.issueId, "Attachment");
+
+    if (!(await featureFlagsSvc.isEnabled(attachment.companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE))) {
+      res.json(attachmentTextSvc.notEnabled(attachment));
+      return;
+    }
+    const actor = getActorInfo(req);
+    let runId: string;
+    if (req.actor.type === "agent" && actor.agentId) {
+      const run = await frameRunForAgent(db, {
+        companyId: attachment.companyId,
+        agentId: actor.agentId,
+        requestRunId: actor.runId,
+        jwtRunId: req.actor.jwtRunId ?? null,
+      });
+      if (!run.ok) {
+        res.status(run.status).json({ error: run.message, details: { reason: run.reason } });
+        return;
+      }
+      runId = run.runId;
+    } else {
+      runId = standInFrameRunId("user", actor.actorId);
+    }
+    res.json(await attachmentTextSvc.read(attachment, { offset, runId }));
   });
 
   router.delete("/attachments/:attachmentId", async (req, res) => {
