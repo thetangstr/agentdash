@@ -56,10 +56,12 @@ import { logger } from "../middleware/logger.js";
  *   refused when any of them is at the cap ({@link resolveRequestRoots},
  *   {@link requestRootsForAgentRun}, {@link checkHandoffRounds}).
  *
- * Known limitation: the run is the one the request names (the run header or
- * the run's token). An agent call that names no run on an issue is counted by
- * the parent chain and root records alone, so an unparented issue it creates
- * that way starts a new request -- the same rule as before.
+ * The run is chosen by the server ({@link countedAgentRunIds}): a run token's
+ * own run, or for an agent key a header run only while it is running, else
+ * every run of the agent running now. When none of them is on an issue (a
+ * timer wake, or no run at all), an unparented hand-off or a new issue is a
+ * request of its own, and the hand-off is still counted as its first round.
+ * Rows written by hand (origin "manual") or as a person are never counted.
  */
 
 export const AGENT_HANDOFF_ROUND_CAP = 3;
@@ -113,6 +115,14 @@ function rootsOfDetails(details: unknown): string[] {
 
 const unique = (ids: Array<string | null | undefined>) => [...new Set(ids.filter((id): id is string => Boolean(id)))];
 
+/**
+ * Rows the count may trust: written by the server for an agent or the system.
+ * A row a board user posted by hand (origin "manual"), or one written as a
+ * person, neither adds a request nor spends a round.
+ */
+const trustedRootRow = () =>
+  sql`(coalesce(${activityLog.origin}, 'server') <> 'manual' and ${activityLog.actorType} in ('agent', 'system'))`;
+
 /** Does this activity row name `rootIssueId` among its requests? */
 function rowNamesRoot(rootIssueId: string) {
   return sql`(${activityLog.details} ->> 'rootIssueId' = ${rootIssueId}
@@ -133,6 +143,7 @@ export async function latestHandoffForIssue(
         eq(activityLog.entityType, "issue"),
         eq(activityLog.entityId, input.issueId),
         eq(activityLog.action, AGENT_HANDOFF_ACTION),
+        trustedRootRow(),
       ),
     )
     .orderBy(desc(activityLog.createdAt))
@@ -185,6 +196,7 @@ export async function resolveRequestRoots(
         eq(activityLog.entityType, "issue"),
         inArray(activityLog.entityId, chain),
         inArray(activityLog.action, ROOT_RECORD_ACTIONS),
+        trustedRootRow(),
       ),
     )
     .orderBy(desc(activityLog.createdAt));
@@ -202,43 +214,76 @@ export async function resolveRequestRootIssueId(
 }
 
 /**
- * The requests an agent's run is working on: those of the issue the run is
- * on, if the run is this agent's and says so. Null when the call names no run
- * or the run is on no issue.
+ * The runs an agent's call is counted against, chosen by the server, never by
+ * the caller alone:
+ *
+ * - a run token (`agent_jwt`): the run it was signed for, whatever header was
+ *   sent (the frame-run rule, services/frame-run.ts);
+ * - an agent key: the run the header names only when it is this agent's and
+ *   running now; otherwise -- no header, an ended run, someone else's run --
+ *   every run of this agent that is running now.
+ *
+ * Empty when the agent is in no run at all.
+ */
+export async function countedAgentRunIds(
+  db: Reader,
+  input: { companyId: string; agentId: string; runId?: string | null; jwtRunId?: string | null },
+): Promise<string[]> {
+  if (input.jwtRunId) return [input.jwtRunId];
+  const running = await db
+    .select({ id: heartbeatRuns.id })
+    .from(heartbeatRuns)
+    .where(
+      and(
+        eq(heartbeatRuns.companyId, input.companyId),
+        eq(heartbeatRuns.agentId, input.agentId),
+        eq(heartbeatRuns.status, "running"),
+      ),
+    );
+  const ids = running.map((row) => row.id);
+  if (input.runId && ids.includes(input.runId)) return [input.runId];
+  return ids;
+}
+
+/**
+ * The requests an agent's call is working on: those of the issues its counted
+ * runs ({@link countedAgentRunIds}) are on. Null when none of them is on an
+ * issue (no run, or a timer wake), in which case a new unparented issue is a
+ * request of its own.
  */
 export async function requestRootsForAgentRun(
   db: Reader,
-  input: { companyId: string; agentId: string; runId: string | null | undefined },
+  input: { companyId: string; agentId: string; runId?: string | null; jwtRunId?: string | null },
 ): Promise<{ primary: string; roots: string[] } | null> {
-  if (!input.runId) return null;
-  const run = await db
+  const runIds = await countedAgentRunIds(db, input);
+  if (runIds.length === 0) return null;
+  const runs = await db
     .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
     .from(heartbeatRuns)
     .where(
       and(
-        eq(heartbeatRuns.id, input.runId),
+        inArray(heartbeatRuns.id, runIds),
         eq(heartbeatRuns.companyId, input.companyId),
         eq(heartbeatRuns.agentId, input.agentId),
       ),
-    )
-    .then((rows) => rows[0] ?? null);
-  const issueId = run?.contextSnapshot?.issueId;
-  if (typeof issueId !== "string" || !issueId) return null;
-  const exists = await db
+    );
+  const issueIds = unique(
+    runs.map((run) => {
+      const issueId = run.contextSnapshot?.issueId;
+      return typeof issueId === "string" ? issueId : null;
+    }),
+  );
+  if (issueIds.length === 0) return null;
+  const present = await db
     .select({ id: issues.id })
     .from(issues)
-    .where(and(eq(issues.id, issueId), eq(issues.companyId, input.companyId)))
-    .then((rows) => rows[0] ?? null);
-  if (!exists) return null;
-  return resolveRequestRoots(db, { companyId: input.companyId, issueId });
-}
-
-/** The request an agent's new, unparented issue belongs to: its run's primary root. */
-export async function requestRootForAgentRun(
-  db: Reader,
-  input: { companyId: string; agentId: string; runId: string | null | undefined },
-): Promise<string | null> {
-  return (await requestRootsForAgentRun(db, input))?.primary ?? null;
+    .where(and(inArray(issues.id, issueIds), eq(issues.companyId, input.companyId)));
+  let result: { primary: string; roots: string[] } | null = null;
+  for (const issueId of issueIds.filter((id) => present.some((row) => row.id === id))) {
+    const resolved = await resolveRequestRoots(db, { companyId: input.companyId, issueId });
+    result = result ? { primary: result.primary, roots: unique([...result.roots, ...resolved.roots]) } : resolved;
+  }
+  return result;
 }
 
 /** Rounds used so far by a request: hand-offs plus hand-offs sent back. */
@@ -254,6 +299,7 @@ export async function countHandoffRounds(
         eq(activityLog.companyId, input.companyId),
         inArray(activityLog.action, ROUND_ACTIONS),
         rowNamesRoot(input.rootIssueId),
+        trustedRootRow(),
       ),
     );
   return Number(row?.count ?? 0);
@@ -278,7 +324,7 @@ export async function checkHandoffRounds(
 /** The requests of an issue placed under `parentId` (or none) by an agent's run, together. */
 export async function requestRootsForPlacement(
   db: Reader,
-  input: { companyId: string; agentId: string; runId: string | null | undefined; parentId: string | null },
+  input: { companyId: string; agentId: string; runId?: string | null; jwtRunId?: string | null; parentId: string | null },
 ): Promise<{ primary: string | null; roots: string[] }> {
   const parent = input.parentId ? await resolveRequestRoots(db, { companyId: input.companyId, issueId: input.parentId }) : null;
   const run = await requestRootsForAgentRun(db, input);
@@ -491,6 +537,7 @@ export async function listRequestIssueIds(
         eq(activityLog.companyId, input.companyId),
         inArray(activityLog.action, ROOT_RECORD_ACTIONS),
         rowNamesRoot(input.rootIssueId),
+        trustedRootRow(),
       ),
     );
   const seeds = new Set<string>([input.rootIssueId, ...linked.map((row) => row.entityId)]);
@@ -568,6 +615,7 @@ export async function summarizeRequestHandoffs(
         eq(activityLog.companyId, input.companyId),
         inArray(activityLog.action, ROUND_ACTIONS),
         rowNamesRoot(input.rootIssueId),
+        trustedRootRow(),
       ),
     )
     .orderBy(activityLog.createdAt)

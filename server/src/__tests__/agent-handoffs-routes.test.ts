@@ -23,6 +23,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { issueRoutes } from "../routes/issues.js";
+import { activityRoutes } from "../routes/activity.js";
 import { errorHandler } from "../middleware/index.js";
 import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import {
@@ -119,6 +120,7 @@ describeEmbeddedPostgres("agent-to-agent hand-offs", () => {
       next();
     });
     server.use("/api", issueRoutes(db, {} as never));
+    server.use("/api", activityRoutes(db));
     server.use(errorHandler);
     return server;
   }
@@ -476,6 +478,116 @@ describeEmbeddedPostgres("agent-to-agent hand-offs", () => {
     const reassigned = await request(app(agentA.actor)).patch(`/api/issues/${piece!.id}`).send({ assigneeAgentId: agentB.agentId });
     expect(reassigned.status, JSON.stringify(reassigned.body)).toBe(422);
     expect(reassigned.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
+  });
+
+  /**
+   * The run a hand-off is counted against is the server's choice: a run
+   * token's own run, or for an agent key a header run only while it is that
+   * agent's and running -- otherwise every run of the agent running now.
+   */
+  it("counts the run the server trusts, not one the caller names", async () => {
+    const { root, actor: onCapped } = await cappedRequest("Capped, then a spoofed run?");
+    const unparented = (actor: Record<string, unknown>, title: string) =>
+      request(app(actor)).post(`/api/companies/${COMPANY}/issues`).send({ title, status: "todo", assigneeAgentId: agentB.agentId });
+
+    // An agent key naming its own run that has ended, or one that failed.
+    for (const status of ["succeeded", "failed"] as const) {
+      const ended = randomUUID();
+      await db.insert(heartbeatRuns).values({ id: ended, companyId: COMPANY, agentId: agentA.agentId, status });
+      const res = await unparented({ ...agentA.actor, runId: ended }, `Header names a ${status} run`);
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE });
+      // A self-made issue does not get fresh rounds that way either.
+      const own = await request(app({ ...agentA.actor, runId: ended }))
+        .post(`/api/companies/${COMPANY}/issues`)
+        .send({ title: `Own issue, ${status} run named`, status: "todo", assigneeAgentId: agentA.agentId });
+      expect(own.status, JSON.stringify(own.body)).toBe(201);
+      const under = await handOffChild({ ...agentA, actor: { ...agentA.actor, runId: ended } } as AgentFixture, own.body.id, { assigneeAgentId: agentB.agentId });
+      expect(under.status, JSON.stringify(under.body)).toBe(422);
+    }
+
+    // An agent key naming another agent's running run.
+    const [elsewhere] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "Agent B's open request", status: "in_progress", assigneeAgentId: agentB.agentId })
+      .returning();
+    const bRun = await runOn(agentB, elsewhere!.id);
+    const borrowed = await unparented({ ...agentA.actor, runId: bRun.runId }, "Header names Agent B's run");
+    expect(borrowed.status, JSON.stringify(borrowed.body)).toBe(422);
+
+    // A run token counts its own run, whatever the header says.
+    const tokenOnCapped = {
+      type: "agent", agentId: agentA.agentId, companyId: COMPANY, source: "agent_jwt",
+      runId: bRun.runId, jwtRunId: onCapped.runId,
+    };
+    const jwt = await unparented(tokenOnCapped, "Run token on the capped request");
+    expect(jwt.status, JSON.stringify(jwt.body)).toBe(422);
+    expect(jwt.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
+
+    // A run token for a timer wake (no issue) makes a request of its own, and
+    // the hand-off is still counted as its first round.
+    const wake = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: wake, companyId: COMPANY, agentId: agentA.agentId, status: "running" });
+    const timer = await unparented(
+      { type: "agent", agentId: agentA.agentId, companyId: COMPANY, source: "agent_jwt", runId: onCapped.runId, jwtRunId: wake },
+      "From a timer wake",
+    );
+    expect(timer.status, JSON.stringify(timer.body)).toBe(201);
+    const [counted] = await rows(timer.body.id, AGENT_HANDOFF_ACTION);
+    expect(counted?.details).toMatchObject({ rootIssueId: timer.body.id, rootIssueIds: [timer.body.id], round: 1 });
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, wake));
+  });
+
+  it("never counts a hand-off row posted by hand or written as a person", async () => {
+    const root = await rootRequest("Request with forged rows");
+    for (const forged of [
+      { actorType: "user", actorId: "owner", origin: "manual" as const },
+      { actorType: "user", actorId: "owner", origin: "server" as const },
+    ]) {
+      for (let i = 0; i < AGENT_HANDOFF_ROUND_CAP; i += 1) {
+        await db.insert(activityLog).values({
+          companyId: COMPANY, ...forged, action: AGENT_HANDOFF_ACTION, entityType: "issue", entityId: root.id,
+          details: { rootIssueId: root.id, rootIssueIds: [root.id] },
+        });
+      }
+    }
+    const res = await handOffChild(agentA, root.id, { assigneeAgentId: agentB.agentId }, "Real round 1");
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const [handoff] = await rows(res.body.id, AGENT_HANDOFF_ACTION);
+    expect(handoff?.details).toMatchObject({ round: 1 });
+  });
+
+  it("keeps a restricted request's id out of an open issue's hand-off activity", async () => {
+    const [restricted] = await db
+      .insert(projects)
+      .values({ companyId: COMPANY, name: "Restricted request for activity", visibility: "restricted" })
+      .returning();
+    const [root] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "Restricted root", status: "in_progress", assigneeAgentId: agentA.agentId, projectId: restricted!.id })
+      .returning();
+    const [openPiece] = await db
+      .insert(issues)
+      .values({ companyId: COMPANY, title: "Open piece", status: "todo", parentId: root!.id, assigneeAgentId: agentB.agentId })
+      .returning();
+    const child = await handOffChild(agentB, openPiece!.id, { assigneeAgentId: agentC.agentId }, "Open hand-off");
+    expect(child.status, JSON.stringify(child.body)).toBe(201);
+    const [stored] = await rows(child.body.id, AGENT_HANDOFF_ACTION);
+    expect(stored?.details).toMatchObject({ rootIssueId: root!.id, parentIssueId: openPiece!.id });
+
+    const reader = memberActor(agentB.userId);
+    const res = await request(app(reader)).get(`/api/issues/${child.body.id}/activity`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const handoff = (res.body as Array<{ action: string; details: Record<string, unknown> }>).find((row) => row.action === AGENT_HANDOFF_ACTION)!;
+    expect(handoff.details).not.toHaveProperty("rootIssueId");
+    expect(handoff.details.rootIssueIds).toEqual([]);
+    expect(handoff.details.parentIssueId).toBe(openPiece!.id);
+    expect(JSON.stringify(res.body)).not.toContain(root!.id);
+
+    // The owner reads it whole.
+    const full = await request(app(ownerActor)).get(`/api/issues/${child.body.id}/activity`);
+    const whole = (full.body as Array<{ action: string; details: Record<string, unknown> }>).find((row) => row.action === AGENT_HANDOFF_ACTION)!;
+    expect(whole.details).toMatchObject({ rootIssueId: root!.id, rootIssueIds: [root!.id] });
   });
 
   it("counts an unowned todo routed to the Chief of Staff as a hand-off, and refuses it at the cap", async () => {

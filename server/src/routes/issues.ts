@@ -640,7 +640,7 @@ export function issueRoutes(
     const runId = req.actor.runId ?? null;
     const parentIssueId = input.parentId ?? null;
     const parentRoots = parentIssueId ? await resolveRequestRoots(db, { companyId, issueId: parentIssueId }) : null;
-    const run = await requestRootsForAgentRun(db, { companyId, agentId: fromAgentId, runId });
+    const run = await requestRootsForAgentRun(db, { companyId, agentId: fromAgentId, runId, jwtRunId: req.actor.jwtRunId });
     const runRoots = run && !(parentRoots && run.roots.every((root) => parentRoots.roots.includes(root))) ? run : null;
     const plan: AgentCreatePlan = { fromAgentId, runId, parentIssueId, runRoots, handoff: null };
 
@@ -696,7 +696,9 @@ export function issueRoutes(
   ): Promise<{ primary: string; roots: string[] }> {
     const own = await resolveRequestRoots(reader, { companyId: issue.companyId, issueId: issue.id });
     const run = req.actor.type === "agent" && req.actor.agentId
-      ? await requestRootsForAgentRun(reader, { companyId: issue.companyId, agentId: req.actor.agentId, runId: req.actor.runId })
+      ? await requestRootsForAgentRun(reader, {
+        companyId: issue.companyId, agentId: req.actor.agentId, runId: req.actor.runId, jwtRunId: req.actor.jwtRunId,
+      })
       : null;
     return { primary: own.primary, roots: uniqueIds([...own.roots, ...(run?.roots ?? [])]) };
   }
