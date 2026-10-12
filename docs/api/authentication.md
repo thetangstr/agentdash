@@ -70,7 +70,7 @@ A request whose grant lacks the scope a route needs answers 403 `insufficient_sc
 POST /api/bridge/poll        POST /api/bridge/inbox/sync     POST /api/bridge/inbox/agents
 POST /api/bridge/result      POST /api/bridge/inbox/ack      POST /api/bridge/inbox/propose
 POST /api/bridge/decline     POST /api/bridge/inbox/decide   POST /api/bridge/inbox/confirm
-                             POST /api/bridge/inbox/answer
+POST /api/bridge/whoami      POST /api/bridge/inbox/answer
 POST /api/bridge/work/list   POST /api/bridge/work/read      POST /api/bridge/work/run-log
 POST /api/bridge/work/file   POST /api/bridge/work/propose   POST /api/bridge/work/confirm
 POST /api/bridge/work/request

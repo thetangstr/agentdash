@@ -398,7 +398,13 @@ describeEmbeddedPostgres("steward inbox: agent questions", () => {
       .where(and(eq(activityLog.entityId, issue.id), eq(activityLog.action, "issue.thread_interaction_answered")));
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.actorId).toBe(stewardA.principalId);
-    expect(receipts[0]!.details).toMatchObject({ interactionId: question.id, channel: "bridge_inbox" });
+    // The endpoint's label rides along, so the page can say "via bridge (<label>)".
+    expect(receipts[0]!.details).toMatchObject({
+      interactionId: question.id,
+      channel: "bridge_inbox",
+      bridgeEndpointId: endpoint.id,
+      bridgeEndpointLabel: endpoint.label,
+    });
 
     // The canonical continuation: the asking agent, woken with the answer.
     expect(wakes).toHaveLength(1);

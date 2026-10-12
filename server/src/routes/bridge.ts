@@ -14,6 +14,7 @@ import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js"
 import { stewardWorkService } from "../services/steward-work.js";
 import { stewardWorkReplyService } from "../services/steward-work-reply.js";
 import { stewardRequestsService } from "../services/steward-requests.js";
+import { bridgeEndpointSelfService } from "../services/bridge-endpoint-self.js";
 import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -102,6 +103,7 @@ export function bridgeRoutes(
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
   const requests = stewardRequestsService(db, { runtime: options.issueRuntime ?? heartbeat });
+  const endpointSelf = bridgeEndpointSelfService(db);
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -161,6 +163,17 @@ export function bridgeRoutes(
       },
       resultToken: claimed.resultToken,
     });
+  });
+
+  /**
+   * This machine, described to itself: whose inbox it reads, its label and
+   * capabilities, and whether the company has co-worker review on. What
+   * `agentdash-connect check` asks. Moves no cursor and mints no handle,
+   * unlike a sync, so a check never changes anything.
+   */
+  router.post("/bridge/whoami", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    res.json(await endpointSelf.describe(endpointId));
   });
 
   /**
