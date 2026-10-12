@@ -27,7 +27,8 @@ Keep the command exactly as printed. `agentdash-connect` is the full package nam
 2. Redeems the code — once — and checks the connection works before writing anything. A wrong code, a mistyped address and an instance that is down are three different messages.
 3. Writes each harness's own config.
 4. Sets up your inbox.
-5. Prints every file it changed.
+5. On a Mac, at a terminal, asks whether to show a notification when an agent hands you work (default no; see [Your inbox](./your-inbox)).
+6. Prints every file it changed.
 
 ## What it writes, and why there are two credentials
 
@@ -37,6 +38,7 @@ Keep the command exactly as printed. `agentdash-connect` is the full package nam
 | `~/.agentdash/bridge-token` (mode 600) | **Your** inbox credential. Bound to you, not the agent |
 | `~/.claude.json` → entry `agentdash-inbox` | Your own inbox tools, launched with `npx -y agentdash-connect@latest mcp`. No secret in the file; it reads the token above |
 | `~/agentdash-inbox/` | A folder with a `SessionStart` hook. Sessions started there show what is waiting on you |
+| `~/Library/LaunchAgents/com.agentdash.connect.watch.plist`, `~/.agentdash/watch.json`, `~/.agentdash/connect-runtime/` | Only if you said yes to notifications: the launchd agent that checks every 15 minutes, its settings, and the copy of `agentdash-connect` it runs |
 
 The agent and you are different actors with different credentials on purpose: an agent must never hold authority over the approvals that constrain it. That is why asking Claude to approve something used to answer `403 Board access required` — it only had the agent's key. Since `agentdash-connect` 0.3.0 you have your own; see [Your inbox](./your-inbox).
 
@@ -54,4 +56,4 @@ Expect `Claude configured` and `Status working — <n> tools available`. Then, i
 npx agentdash-connect --remove
 ```
 
-Removes both Claude Code entries, the Codex entry, the shell-profile line and the stored key. It leaves your inbox credential and folder; delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json` and `~/agentdash-inbox/` to finish. To cut a machine off without touching it — a lost laptop — use **My Agent → Connected machines → Disconnect**; its key stops working at once.
+Removes both Claude Code entries, the Codex entry, the shell-profile line, the stored key and the notification agent, if you turned it on. It leaves your inbox credential and folder; delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json` and `~/agentdash-inbox/` to finish. To cut a machine off without touching it — a lost laptop — use **My Agent → Connected machines → Disconnect**; its key stops working at once.

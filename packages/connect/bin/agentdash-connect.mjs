@@ -36,6 +36,7 @@ import {
   storeBridgeToken,
 } from "../src/inbox.mjs";
 import { runInboxMcp } from "../src/inbox-mcp.mjs";
+import { installWatch, runWatchCommand, uninstallWatch } from "../src/watch.mjs";
 
 // Read the real version rather than restating it. A CLI that misreports which
 // version it is turns "did the fix reach me?" into guesswork -- which is
@@ -65,6 +66,7 @@ function parseArgs(argv) {
     else if (token === "--token-file") args.tokenFile = argv[++i];
     else if (token === "--ack") args.ack = true;
     else if (token === "--quiet-when-empty") args.quietWhenEmpty = true;
+    else if (token === "--read-only") args.readOnly = true;
     else if (token.startsWith("--server=")) args.server = token.slice(9);
     else if (token.startsWith("--token-file=")) args.tokenFile = token.slice(13);
     else if (token.startsWith("--url=")) args.url = token.slice(6);
@@ -89,6 +91,9 @@ function usage() {
                                          up to date)
   npx agentdash-connect mcp              serve your own inbox tools (sync, decide,
                                          assign) to Claude Code over stdio
+  npx agentdash-connect watch            macOS: a notification when an agent hands
+                                         you work, and an optional read-only
+                                         pre-review (watch --help for more)
 
 Options
   --name <name>   MCP server name to write (default: ${DEFAULT_SERVER_NAME})
@@ -149,16 +154,59 @@ function ask(question, { silent = false } = {}) {
   });
 }
 
+/**
+ * The watcher is opt-in: asked on a terminal only, default no, and never
+ * installed by a scripted run (which has nobody to answer). The pre-review is
+ * a second, separate question.
+ */
+async function offerWatch(instanceUrl) {
+  if (process.platform !== "darwin") return;
+  if (!process.stdin.isTTY) {
+    out("Mac notifications for new hand-offs are off. Turn them on any time: npx agentdash-connect watch --install");
+    return;
+  }
+  out("");
+  const watch = await ask(
+    "Show a Mac notification when an agent hands you work? It checks your AgentDash every 15 minutes and talks to nothing else. [y/N]: ",
+  );
+  if (!/^y(es)?$/i.test(watch.trim())) {
+    out("No notifications. Turn them on any time: npx agentdash-connect watch --install");
+    return;
+  }
+  const pre = await ask(
+    "Also let Claude Code prepare a first review of each hand-off in the background? Read-only, nothing is sent, and it uses your Claude usage. [y/N]: ",
+  );
+  try {
+    const result = installWatch({ server: instanceUrl, preReview: /^y(es)?$/i.test(pre.trim()) });
+    if (!result.config) {
+      bad(`Notifications were not turned on: ${result.message}`);
+      return;
+    }
+    out(`  watch   every ${result.config.intervalMinutes} minutes; pre-review ${result.config.preReview ? "on" : "off"}`);
+    for (const file of result.written) out(`          ${file}`);
+    if (result.message) bad(`  ${result.message}`);
+    out("          turn it off with: npx agentdash-connect watch --uninstall");
+  } catch (error) {
+    bad(`Notifications were not turned on (${error?.message ?? error}). The connection above still works.`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const serverName = args.name ?? DEFAULT_SERVER_NAME;
   const account = serverName;
+
+  // `watch` has its own options (watch.mjs); hand it everything after the word.
+  const argv = process.argv.slice(2);
+  if (argv[0] === "watch") return runWatchCommand(argv.slice(1).filter((token) => token !== "--help" && token !== "-h"));
 
   if (args.help) return usage(), 0;
   if (args.version) return out(pkg.version), 0;
 
   if (args.remove) {
     const { removed } = removeConnection({ serverName, account });
+    // The watcher is part of what connect set up, so it goes too.
+    for (const file of uninstallWatch().removed) removed.push({ harness: "watch", file });
     if (removed.length === 0) {
       out(`Nothing to remove — no "${serverName}" connection was configured.`);
       return 0;
@@ -185,7 +233,10 @@ async function main() {
   // Launched by Claude Code, not by a person: stdout is the protocol channel,
   // so nothing else may print to it.
   if (args._[0] === "mcp") {
-    return runInboxMcp({ server: args.server, tokenFile: args.tokenFile }, { version: pkg.version });
+    return runInboxMcp(
+      { server: args.server, tokenFile: args.tokenFile, readOnly: Boolean(args.readOnly) },
+      { version: pkg.version },
+    );
   }
 
   if (args.check) {
@@ -361,6 +412,7 @@ async function main() {
       }
       out("");
       out(`Open ${inboxDir} in Claude Code: anything waiting on you appears as the session starts, and Claude reviews it with you.`);
+      await offerWatch(instanceUrl);
     } catch (error) {
       if (!error?.skipped) {
         // The agent pairing above already succeeded; say what did not, precisely.

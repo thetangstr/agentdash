@@ -662,6 +662,12 @@ export async function runInbox(opts = {}, deps = {}) {
   const now = deps.now ? deps.now() : Date.now();
   const session = opts.session ?? Boolean(opts.ack && opts.quietWhenEmpty);
 
+  // A scheduled pre-review (pre-review.mjs) starts Claude Code headless in the
+  // inbox folder with hooks off. Should this hook run there anyway (an older
+  // Claude Code), it stands down: acknowledging would bury the person's
+  // events before they ever saw them.
+  if ((deps.env ?? process.env).AGENTDASH_PRE_REVIEW === "1") return 0;
+
   let rulesNote = null;
   if (session) {
     const rules = installCoworkerRules(deps.inboxDir ?? defaultInboxDir(), { skillText: deps.skillText });

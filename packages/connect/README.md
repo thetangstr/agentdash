@@ -300,19 +300,85 @@ counts your 100 most recently updated requests and says "at least" when there
 are more.
 `paperclipai bridge inbox` shows the same section.
 
+## Notifications and pre-review (macOS, opt-in)
+
+A hand-off can wait a day because nobody opened Claude. On a Mac you can turn
+on a nudge: connect asks once, on a terminal, and the answer defaults to no.
+Turn it on or off any time:
+
+```sh
+npx agentdash-connect watch --install            # a notification per new hand-off, checked every 15 minutes
+npx agentdash-connect watch --install --every 30 # check every 30 minutes instead (5 to 1440)
+npx agentdash-connect watch --uninstall          # turn it off and remove what it wrote
+npx agentdash-connect watch --status             # what is on, and when it last notified
+```
+
+It is a per-user launchd agent
+(`~/Library/LaunchAgents/com.agentdash.connect.watch.plist`). On launchd's
+schedule it runs one check: it asks your own AgentDash instance for
+`work/list` with your inbox credential and shows a macOS notification for each
+new item, such as "Agent B finished a first pass on ACME-41; your review is
+ready." A delivered result of one of your own requests notifies too. Each item
+notifies once; it notifies again only when it waits on something new (a
+question after a review), or after it left your list and came back. More than
+three new items at once arrive as one summary. A notification names the issue
+and the agent, never the issue's title or anything else an agent wrote.
+
+It talks to nothing but your instance. It runs a copy of this package kept in
+`~/.agentdash/connect-runtime` with your `node`, not `npx`, so a check never
+reaches the npm registry; re-running `watch --install` refreshes the copy.
+Nothing is sent anywhere, and nothing sends email. What it remembers is in
+`~/.agentdash/watch.json` (settings) and `~/.agentdash/watch-state.json`
+(what was notified); its log is `~/.agentdash/watch.log`, cut back at 1 MB.
+
+### Scheduled pre-review
+
+A second, separate switch, also off by default:
+
+```sh
+npx agentdash-connect watch --pre-review on
+npx agentdash-connect watch --pre-review off
+```
+
+With it on, each check also runs your own Claude Code headless (`claude -p`)
+in `~/agentdash-inbox` for up to two new hand-offs, to prepare the review and
+its take ahead of you. The answer is written to
+`~/agentdash-inbox/work/<ISSUE>/review.md` (mode 600), and the notification
+says the take is ready. When you open Claude in the folder, the review skill
+reads it first, says when it was prepared and checks it against the current
+state. An attempt is made once per hand-off, even when it fails. It uses your
+Claude usage.
+
+The run cannot change anything:
+
+- Its inbox tools are served by `agentdash-connect mcp --read-only`, which has
+  only the read tools: `inbox_sync`, `inbox_agents`, `work_list`, `work_read`,
+  `work_run_log` and `work_fetch_file`. No tool that sends, decides, answers,
+  acknowledges, proposes or confirms exists in that session.
+- Claude Code is started with `--strict-mcp-config` (that server only),
+  `--tools Read,Grep,Glob`, an `--allowedTools` list of exactly those tools,
+  a `--disallowedTools` list of every write tool, `--permission-mode dontAsk`
+  and hooks off; with `--restricted` too where your Claude Code has it, which
+  keeps the file tools inside the inbox folder. When your Claude Code lacks any
+  of the required flags, no pre-review runs.
+- Claude writes nothing itself. Its answer comes back as text, and the watcher
+  writes `review.md`. A `review.md` you wrote yourself is never replaced.
+
 ## Nothing left running
 
 A config write with an exit code, not a prompt to paste — and `--remove`
 reverses it.
 
 No daemon, no menu-bar app, nothing to keep alive. Your inbox is read when a
-session starts in its folder, and when the tools are asked for it; nothing polls
-it in between. Everything written is a small file you can read, listed on screen
-as it is written — a change your IT department can review in a minute.
+session starts in its folder, and when the tools are asked for it; unless you
+turn on notifications above, nothing polls it in between. Everything written
+is a small file you can read, listed on screen as it is written — a change
+your IT department can review in a minute.
 
 `--remove` takes out both Claude Code entries — the agent's and
-`agentdash-inbox` — along with the Codex config entry, the shell-profile line
-and the stored key. It leaves your inbox credential and folder alone. To remove
+`agentdash-inbox` — along with the Codex config entry, the shell-profile line,
+the stored key, and the notification agent with its files. It leaves your
+inbox credential and folder alone. To remove
 those too, delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json`
 and the `~/agentdash-inbox` folder.
 
@@ -344,12 +410,14 @@ npx agentdash-connect --remove         # undo the agent connection
 npx agentdash-connect --name <name>    # use a different MCP server name
 npx agentdash-connect inbox            # read your inbox (what the SessionStart hook runs)
 npx agentdash-connect mcp              # serve your own inbox tools to Claude Code over stdio
+npx agentdash-connect watch            # macOS notifications and pre-review (see above)
 ```
 
 `mcp` is what the `agentdash-inbox` config entry launches; you do not run it by
 hand. It takes `--server <url>` and `--token-file <path>`, speaks MCP on stdout
 and nothing else, and reports a missing credential as an answer rather than a
-crash.
+crash. With `--read-only` it serves only the tools that read; the scheduled
+pre-review uses that.
 
 `inbox` options: `--ack` marks what was fetched as seen, so the next session
 shows only what is new; `--quiet-when-empty` prints nothing when there is
