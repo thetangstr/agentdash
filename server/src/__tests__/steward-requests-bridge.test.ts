@@ -5,6 +5,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agentCorrections,
+  agentRuns,
   agents,
   authUsers,
   bridgeEndpoints,
@@ -27,9 +29,11 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
+import { registerServerAdapter, unregisterServerAdapter } from "../adapters/registry.js";
 import { bridgeRoutes } from "../routes/bridge.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { featureFlagsService } from "../services/feature-flags.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 import { isDeliveredToRequester } from "../services/steward-request-scope.js";
 import {
@@ -60,6 +64,13 @@ import { truncateWithRetry } from "./helpers/truncate.js";
  */
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
+
+/**
+ * An adapter that renders the wake payload and succeeds without spawning
+ * anything, so a test can run an agent and read the context it was given.
+ * Corrections are handed only to an adapter that renders them.
+ */
+const RENDERING_ADAPTER = "requests_rendering_test";
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
 type TestDb = ReturnType<typeof createDb>;
@@ -139,6 +150,12 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-bridge-requests-");
     db = createDb(tempDb.connectionString);
+    registerServerAdapter({
+      type: RENDERING_ADAPTER,
+      rendersAgentCorrections: true,
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({ adapterType: RENDERING_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
+    } as never);
   }, 30_000);
 
   afterEach(async () => {
@@ -146,8 +163,31 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
   });
 
   afterAll(async () => {
+    unregisterServerAdapter(RENDERING_ADAPTER);
     await tempDb?.cleanup();
   });
+
+  /** Run the agent once on the rendering adapter and return the context its adapter was invoked with. */
+  async function runAgent(agentId: string) {
+    await db.update(agents).set({ adapterType: RENDERING_ADAPTER, adapterConfig: {}, runtimeConfig: {} }).where(eq(agents.id, agentId));
+    const heartbeat = heartbeatService(db);
+    const queued = await heartbeat.invoke(agentId, "on_demand", {}, "manual");
+    expect(queued).not.toBeNull();
+    const deadline = Date.now() + 20_000;
+    let finished = await heartbeat.getRun(queued!.id);
+    while (Date.now() < deadline && finished && ["queued", "running"].includes(finished.status)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      finished = await heartbeat.getRun(queued!.id);
+    }
+    // Let the run's metering land before the table is truncated.
+    const meterDeadline = Date.now() + 10_000;
+    while (Date.now() < meterDeadline) {
+      const metered = await db.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.heartbeatRunId, queued!.id));
+      if (metered.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return { run: finished, context: (finished?.contextSnapshot ?? {}) as Record<string, any> };
+  }
 
   /** A member; every member role carries tasks:assign, a membership with no role carries nothing. */
   async function person(companyId: string, role: string | null, name: string) {
@@ -758,6 +798,55 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
       previousAssigneeAgentId: agentC.id,
       channel: "bridge_work",
     });
+  });
+
+  it("carries the requester's change request to the owning agent's next wake as a what-changed summary", async () => {
+    const { company, personA, agentB } = await seed();
+    const endpoint = await endpointFor(company.id, personA);
+    const { server } = app(endpoint);
+    const { issue } = await requestOfPersonB(server);
+    await db.update(issues).set({ status: "done", completedAt: new Date() }).where(eq(issues.id, issue.id));
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.identifier, action: "changes", note: "Add the third vendor's pricing." });
+    expect(proposed.body.ok).toBe(true);
+    const confirmed = await request(server).post("/api/bridge/work/request/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, kind: "request_changes" });
+
+    const recorded = await db
+      .select()
+      .from(agentCorrections)
+      .where(and(eq(agentCorrections.agentId, agentB.id), eq(agentCorrections.kind, "requester_change_request")));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ issueId: issue.id, sourceActorType: "user", sourceActorId: personA });
+
+    const { run, context } = await runAgent(agentB.id);
+    expect(run?.status).toBe("succeeded");
+    const delivered = (context.paperclipWake?.corrections ?? []) as Array<{ kind: string; summary: string }>;
+    // One summary for one change request: the reopen it implies is not a second correction.
+    expect(delivered.map((entry) => entry.kind)).toEqual(["requester_change_request"]);
+    const change = delivered.find((entry) => entry.kind === "requester_change_request");
+    expect(change?.summary).toBe(
+      `Person A, who requested this work, asked for changes to the result on ${issue.identifier}.\nWhat they asked for: "Add the third vendor's pricing."`,
+    );
+  }, 60_000);
+
+  it("records no correction for a change request while the co-worker loop is off for the agent's company", async () => {
+    const { company, personA, agentB } = await seed();
+    const endpoint = await endpointFor(company.id, personA);
+    const { server } = app(endpoint);
+    const { issue } = await requestOfPersonB(server);
+    await db.update(issues).set({ status: "done", completedAt: new Date() }).where(eq(issues.id, issue.id));
+    const proposed = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.identifier, action: "changes", note: "Shorter, please." });
+    expect(proposed.body.ok).toBe(true);
+    // Switched off between the read-back and the yes: the confirm refuses, and nothing is recorded.
+    await featureFlagsService(db).set(company.id, FEATURE_FLAG_KEYS.COWORKER_BRIDGE, false);
+    const confirmed = await request(server).post("/api/bridge/work/request/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body.ok).toBe(false);
+    expect(await db.select().from(agentCorrections).where(eq(agentCorrections.agentId, agentB.id))).toHaveLength(0);
   });
 
   it("refuses a close-out whose request moved on after the read-back", async () => {

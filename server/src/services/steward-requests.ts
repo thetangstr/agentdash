@@ -24,6 +24,7 @@ import {
 } from "../routes/visibility.js";
 import { accessService } from "./access.js";
 import { logActivity } from "./activity-log.js";
+import { recordAgentCorrectionAfterCommit, requesterChangeRequestCorrectionInput } from "./agent-corrections.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
 import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
@@ -200,20 +201,24 @@ export interface RequestItem {
 }
 
 /**
- * The correction signal for a requester's change request (O6). The learning
- * loop's shared helper (`recordAgentCorrection` in services/agent-corrections.ts,
- * co-worker slice 3) is not on this branch; this is the single call site it
- * replaces, and it records the signal on the issue in the meantime. The agent
- * is woken by the change request's own comment, which carries the summary.
+ * The correction signal for a requester's change request (O6). Records it on
+ * the issue activity, and queues the "what changed" summary for the
+ * deliverable owner's agent's next wake through the learning loop's shared
+ * helper (services/agent-corrections.ts). The change request has already
+ * committed, so a failure to queue the summary is logged, never thrown. While
+ * the company has the co-worker loop off, no summary is queued.
  */
 export async function recordRequesterChangeRequest(
   db: Db,
   input: {
     companyId: string;
     issueId: string;
+    identifier: string | null;
     agentId: string;
     requesterUserId: string;
     commentId: string | null;
+    /** What the requester asked to change: their note, without the comment's fixed prefix. */
+    request: string | null;
     previousStatus: string;
     previousAssigneeAgentId: string | null;
     channel: Record<string, unknown>;
@@ -236,6 +241,24 @@ export async function recordRequesterChangeRequest(
       ...input.channel,
     },
   });
+  const correction = await requesterChangeRequestCorrectionInput(db, {
+    issue: { id: input.issueId, companyId: input.companyId, identifier: input.identifier },
+    ownerAgentId: input.agentId,
+    requesterUserId: input.requesterUserId,
+    request: input.request,
+  });
+  await recordAgentCorrectionAfterCommit(db, {
+    ...correction,
+    details: { ...(correction.details ?? {}), commentId: input.commentId, ...input.channel },
+  });
+}
+
+/** The requester's own note in a change-request comment, without the fixed prefix. */
+export function changeRequestNote(commentBody: string): string | null {
+  const note = commentBody.startsWith(CHANGE_REQUEST_COMMENT_PREFIX)
+    ? commentBody.slice(CHANGE_REQUEST_COMMENT_PREFIX.length)
+    : commentBody;
+  return note.trim() || null;
 }
 
 export function stewardRequestsService(
@@ -907,23 +930,30 @@ export function stewardRequestsService(
       },
       requestChanges: true,
       ...(routedToStewardedAgent ? { routedToStewardedAgent } : {}),
+      // The agent hears this as one requester change request (recorded
+      // below), not also as a reopened task.
+      ...(target.agentId ? { callerRecordsCorrection: true } : {}),
     } as IssuePatchContext);
-    const effects = await actions.dispatch(accepted);
-    if (effects.unresolved) logger.warn({ issueId: issue.id, effects: effects.outcomes }, "bridge change request has unresolved effects");
     const commentId = (accepted.comment as { id?: string } | null)?.id ?? null;
     if (target.agentId) {
-      // The correction signal (O6): see recordRequesterChangeRequest.
+      // The correction signal (O6): see recordRequesterChangeRequest. Queued
+      // before the wake goes out, so the run this change request starts is
+      // the one that carries the "what changed" summary.
       await recordRequesterChangeRequest(db, {
         companyId: owner.companyId,
         issueId: issue.id,
+        identifier: issue.identifier,
         agentId: target.agentId,
         requesterUserId: owner.userId,
         commentId,
+        request: changeRequestNote(commentBody),
         previousStatus: issue.status,
         previousAssigneeAgentId: issue.assigneeAgentId,
         channel,
       }).catch((err) => logger.warn({ err, issueId: issue.id }, "requester change-request correction not recorded"));
     }
+    const effects = await actions.dispatch(accepted);
+    if (effects.unresolved) logger.warn({ issueId: issue.id, effects: effects.outcomes }, "bridge change request has unresolved effects");
     const names = await agentNames([target.agentId]);
     const people = await userNames([target.userId]);
     return {

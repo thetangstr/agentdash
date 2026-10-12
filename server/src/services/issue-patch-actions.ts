@@ -67,6 +67,10 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   // stewards (services/stewarded-agent-routing.ts); recorded on the audit and
   // carried on the assignment wake.
   routedToStewardedAgent?: { fromUserId: string; toAgentId: string };
+  // AgentDash (learning loop): the caller records its own, more specific
+  // correction for this update (a requester's change request, which reopens
+  // the result), so the generic reopened-task correction is not recorded too.
+  callerRecordsCorrection?: boolean;
 }
 export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
   constructor(readonly recovery: { mutationId: string; companyId: string; issueId: string; commentId: string | null; decisionId: string | null }) {
@@ -765,7 +769,11 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
         // back open is a correction for the agent's next wake, with the
         // update's comment as the reason.
         const previousStatus = typeof previous.status === "string" ? previous.status : null;
-        if (actor.actorType === "user" && (previousStatus === "done" || previousStatus === "cancelled")) {
+        if (
+          actor.actorType === "user" &&
+          context.callerRecordsCorrection !== true &&
+          (previousStatus === "done" || previousStatus === "cancelled")
+        ) {
           await recordAgentCorrectionGuarded(tx, issue.companyId, (reader) =>
             taskReopenedCorrectionInput(reader, {
               issue,
