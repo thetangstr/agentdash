@@ -2,6 +2,8 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, costEvents, featureFlags, heartbeatRuns, issues } from "@paperclipai/db";
 import { logActivity } from "./activity-log.js";
+import { handoffReturnedCorrectionInput, recordAgentCorrection } from "./agent-corrections.js";
+import { logger } from "../middleware/logger.js";
 
 /**
  * AgentDash: agent-to-agent hand-offs (O5, O7).
@@ -279,10 +281,9 @@ export async function recordAgentHandoffRefused(
  * that handed it over (or the parent's agent), or cancelled it, with a reason.
  *
  * This is the returned-hand-off correction signal. It records the return and
- * its reason on the issue activity, counted as a round of the request. The
- * agent-correction summary ("what changed", delivered on the agent's next
- * wake) is wired to this function by the learning-loop slice; this is the one
- * call site for it.
+ * its reason on the issue activity, counted as a round of the request, and
+ * queues the "what changed" summary for the receiving agent's next wake
+ * (services/agent-corrections.ts).
  */
 export async function emitHandoffReturned(
   db: Db,
@@ -322,6 +323,15 @@ export async function emitHandoffReturned(
       cap: AGENT_HANDOFF_ROUND_CAP,
     },
   });
+  // The returned-hand-off correction signal: the agent that handed the work
+  // over is told, on its next wake, that it came back and why. Logged and
+  // never thrown -- the return itself is already recorded.
+  try {
+    const correction = await handoffReturnedCorrectionInput(db, input);
+    if (correction) await recordAgentCorrection(db, correction);
+  } catch (err) {
+    logger.warn({ err, issueId: input.issueId }, "hand-off return correction not recorded");
+  }
   return round;
 }
 

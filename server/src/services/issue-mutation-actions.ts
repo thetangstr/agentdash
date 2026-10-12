@@ -10,6 +10,7 @@ import { issueService } from "./issues.js";
 import { issueReferenceService } from "./issue-references.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
+import { recordAgentCorrectionGuarded, taskReopenedCorrectionInput } from "./agent-corrections.js";
 import type { heartbeatService } from "./heartbeat.js";
 
 export type IssueCommentExecutor = NonNullable<Parameters<ReturnType<typeof issueService>["update"]>[2]>;
@@ -264,6 +265,18 @@ export function issueCommentActions(db: Db, heartbeat: Runtime) {
               removedReferencedIssues: diff.removedReferencedIssues.map(summarizeIssueRelationForActivity),
               currentReferencedIssues: diff.currentReferencedIssues.map(summarizeIssueRelationForActivity),
             }) } });
+        // AgentDash (learning loop): a person reopening work the agent closed
+        // is a correction for its next wake, with this comment as the reason.
+        if (reopened && actor.actorType === "user") {
+          await recordAgentCorrectionGuarded(tx, company.id, (reader) =>
+            taskReopenedCorrectionInput(reader, {
+              issue: currentIssue,
+              fromStatus: reopenFromStatus,
+              reopenedByUserId: actor.actorId,
+              reason: intent.body,
+            }),
+          );
+        }
         const expired = await issueThreadInteractionService(db).expireRequestConfirmationsSupersededByComment(currentIssue, comment,
           { agentId: actor.agentId, userId: actor.actorType === "user" ? actor.actorId : null }, tx);
         for (const interaction of expired) await audit({ action: "issue.thread_interaction_expired", entityType: "issue", entityId: issue.id,

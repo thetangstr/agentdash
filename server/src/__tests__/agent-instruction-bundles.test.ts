@@ -393,3 +393,53 @@ describe("agent-to-agent hand-offs in the mandate", () => {
     expect(heartbeat).toMatch(/3 agent-to-agent hand-off rounds/i);
   });
 });
+
+describe("the learning loop in the mandate", () => {
+  // Prose wraps; match on words, not line breaks.
+  const flat = (text: string) => text.replace(/\s+/g, " ");
+  const heartbeat = flat(readFileSync(path.join(serverSrc, "onboarding-assets/default/HEARTBEAT.md"), "utf8"));
+
+  /**
+   * A correction (the steward's send-back, an answer against the agent's
+   * recommendation, a rejection, a reopened task, a requester's change
+   * request, a returned hand-off) reaches the agent's next wake as a "What
+   * changed" summary. The mandate tells it to read its lessons first, record
+   * new ones in its own memory at the end, never with client content, and to
+   * propose a mandate change to its steward when one recurs three times.
+   */
+  it("carries the managed block in every surface", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(flat(surface.content), `${surface.name} omits the managed block`).toMatch(
+        /<!-- AgentDash: agent-learning-loop — DO NOT REMOVE OR REORDER THIS BLOCK -->[\s\S]+<!-- \/AgentDash: agent-learning-loop -->/,
+      );
+    }
+  });
+
+  it("reads lessons at the start, records them at the end, never client content", () => {
+    for (const surface of renderedPromptSurfaces) {
+      const text = flat(surface.content);
+      expect(text, `${surface.name} omits reading lessons first`).toMatch(/at the start of each task, read your lessons/i);
+      expect(text, `${surface.name} omits the memory read`).toContain("agentdashGetMyMemory");
+      expect(text, `${surface.name} omits recording lessons`).toMatch(/at the end of each task, record the lessons/i);
+      expect(text, `${surface.name} omits the memory write`).toContain("agentdashUpdateMyMemory");
+      expect(text, `${surface.name} omits the client-content rule`).toMatch(/never client content in a lesson/i);
+      expect(text, `${surface.name} omits the What changed section`).toContain("paperclipWake.corrections");
+    }
+  });
+
+  it("proposes a mandate change to the steward on the third recurrence, and never edits the mandate", () => {
+    for (const surface of renderedPromptSurfaces) {
+      const text = flat(surface.content);
+      expect(text, `${surface.name} omits the third-time rule`).toMatch(/same lesson comes up the third time, propose a mandate change to your steward/i);
+      expect(text, `${surface.name} omits the mechanism`).toContain('`payload.kind: "mandate_change"`');
+      expect(text, `${surface.name} omits human ownership`).toMatch(/never edit your mandate yourself/i);
+    }
+  });
+
+  it("says the same in the heartbeat checklist", () => {
+    expect(heartbeat).toMatch(/read your lessons in your memory/i);
+    expect(heartbeat).toContain("What changed");
+    expect(heartbeat).toContain("agentdashUpdateMyMemory");
+    expect(heartbeat).toContain('payload.kind: "mandate_change"');
+  });
+});

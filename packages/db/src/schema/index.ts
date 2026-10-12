@@ -11,6 +11,7 @@ export { agentStewardships } from "./agent_stewardships.js";
 export { agentGovernancePolicies } from "./agent_governance_policies.js";
 export { agentDirectives } from "./agent_directives.js";
 export { agentMemory } from "./agent_memory.js";
+export { agentCorrections } from "./agent_corrections.js";
 export { humanChannelBindings } from "./human_channel_bindings.js";
 export { externalChannelEvents } from "./external_channel_events.js";
 export { channelCallbackTokens } from "./channel_callback_tokens.js";

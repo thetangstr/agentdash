@@ -41,6 +41,7 @@ import {
   // of the rest failed with a 500 foreign-key violation.
   agentDirectives,
   agentMemory,
+  agentCorrections,
   bridgeTasks,
   bridgeEndpoints,
   routines,
@@ -554,6 +555,7 @@ export function companyService(db: Db) {
           await tx.delete(bridgeEndpoints).where(eq(bridgeEndpoints.companyId, id));
           await tx.delete(agentDirectives).where(eq(agentDirectives.companyId, id));
           await tx.delete(agentMemory).where(eq(agentMemory.companyId, id));
+          await tx.delete(agentCorrections).where(eq(agentCorrections.companyId, id));
           await tx.delete(routines).where(eq(routines.companyId, id));
           await tx.delete(verdicts).where(eq(verdicts.companyId, id));
           await tx.delete(cosReviewerAssignments).where(eq(cosReviewerAssignments.companyId, id));

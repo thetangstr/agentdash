@@ -12,6 +12,7 @@ import { stewardInboxDecisionService } from "../services/steward-inbox-decisions
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
 import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js";
 import { stewardWorkService } from "../services/steward-work.js";
+import { stewardWorkReplyService } from "../services/steward-work-reply.js";
 import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -87,6 +88,12 @@ export function bridgeRoutes(
   const work = stewardWorkService(db, {
     storage: options.storage,
     readRunLog: (run, opts) => heartbeat.readLog(run, opts),
+  });
+  const workReply = stewardWorkReplyService(db, {
+    heartbeat: options.heartbeat ?? heartbeat,
+    storage: options.storage,
+    pluginWorkerManager: options.pluginWorkerManager,
+    autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
 
   async function requireProfileCompany(req: Request, companyId: string) {
@@ -379,6 +386,51 @@ export function bridgeRoutes(
     if (result.identifier) res.setHeader("x-agentdash-issue", result.identifier);
     result.stream.on("error", (err) => next(err));
     result.stream.pipe(res);
+  });
+
+  // -------------------------------------------------------------------------
+  // Endpoint-facing: the send-back. What the person approved goes back to
+  // their agent as one bundle, as them. Same gates as the reads, plus a
+  // single-use `reply` handle over the exact bundle. See
+  // services/steward-work-reply.ts.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read the bundle back and mint a handle for it. Nothing is written: the
+   * answer is the read-back the person says yes to, and who will see it.
+   * Refusals answer 200 `{ ok: false, code, reason }`.
+   */
+  router.post("/bridge/work/propose", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(
+      await workReply.propose(endpointId, {
+        issueId: body.issueId,
+        answer: body.answer,
+        decision: body.decision,
+        document: body.document,
+        comment: body.comment,
+        lessons: body.lessons,
+        files: body.files,
+      }),
+    );
+  });
+
+  /**
+   * Spend the handle and apply the bundle in one transaction, as the person.
+   * The handle authorises exactly the bundle it was minted over; the issue,
+   * the question, the document revision and the decision authority are
+   * re-checked now. Refusals answer 200 `{ ok: false, code, reason }` and
+   * write nothing.
+   */
+  router.post("/bridge/work/confirm", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const token = typeof req.body?.token === "string" ? req.body.token : null;
+    if (!token) throw badRequest("token is required");
+    res.json(await workReply.confirm(endpointId, token));
   });
 
   router.post("/bridge/result", async (req, res) => {

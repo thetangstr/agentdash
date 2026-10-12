@@ -37,7 +37,7 @@ export const stewardInboxActionHandles = pgTable(
      * redemption, so a handle is proof of delivery and never of permission.
      */
     actorUserId: text("actor_user_id").notNull(),
-    /** `assign_work` | `set_cadence`. */
+    /** `assign_work` | `set_cadence` | `answer_question` | `reply` (the bridge send-back bundle). */
     kind: text("kind").notNull(),
     /** The resolved action, exactly as it was read back. */
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),

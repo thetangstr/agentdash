@@ -314,6 +314,68 @@ describe("hermes_local execute wrapper", () => {
     expect(prompt).not.toContain("Operating Directives");
   });
 
+  // AgentDash (learning loop): the Hermes package renders only promptTemplate,
+  // so the "What changed" section must be in it, before the task.
+  it("renders the run's corrections into the prompt, after the harness rules and before the task", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-corrections-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+    const instructionsPath = join(tempDir, "AGENTS.md");
+    await writeFile(instructionsPath, "You are Priya, the Product Manager.\n", "utf8");
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildCtx({
+        hermesCommand,
+        argsPath,
+        adapterConfig: { instructionsFilePath: instructionsPath },
+        context: {
+          paperclipAgentCorrections: [
+            {
+              kind: "steward_send_back",
+              issueIdentifier: "ACME-7",
+              summary: "Person A reviewed your work on ACME-7.\nTheir comment: \"Use {{the}} Q3 workbook.\"",
+              lessons: ["Lead with the recommendation."],
+              createdAt: "2026-10-01T10:00:00.000Z",
+            },
+          ],
+          paperclipAgentCorrectionsRemaining: 2,
+        },
+      }) as never,
+    );
+
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[] };
+    const prompt = capture.argv[capture.argv.indexOf("-q") + 1] ?? "";
+    expect(prompt).toContain("## What changed (corrections to your work)");
+    expect(prompt).toContain("1. your steward sent your work back (ACME-7), 2026-10-01T10:00:00.000Z");
+    expect(prompt).toContain("   Person A reviewed your work on ACME-7.");
+    expect(prompt).toContain("   - Lead with the recommendation.");
+    expect(prompt).toContain("2 more corrections are waiting");
+    // Quoted mustache braces survive the package's template pass.
+    expect(prompt).toContain("Use { {the}} Q3 workbook.");
+    expect(prompt.indexOf("Never call `clarify`")).toBeLessThan(prompt.indexOf("## What changed"));
+    expect(prompt.indexOf("## What changed")).toBeLessThan(prompt.indexOf("Paperclip API safety rule:"));
+  });
+
+  it("emits no corrections section when the run carries none", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-no-corrections-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(buildCtx({ hermesCommand, argsPath }) as never);
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[] };
+    const prompt = capture.argv[capture.argv.indexOf("-q") + 1] ?? "";
+    expect(prompt).not.toContain("What changed");
+  });
+
+  it("marks the adapters that render corrections, and only those", async () => {
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    for (const type of ["claude_local", "codex_local", "cursor", "gemini_local", "opencode_local", "pi_local", "acpx_local", "openclaw_gateway", "hermes_local"]) {
+      expect(getServerAdapter(type).rendersAgentCorrections, type).toBe(true);
+    }
+    for (const type of ["process", "http"]) {
+      expect(getServerAdapter(type).rendersAgentCorrections, type).toBeFalsy();
+    }
+  });
+
   // AgentDash (AGE-13): the human-question channel fails closed.
   it("tells the agent the terminal clarify tool reaches nobody and to ask through an interaction instead", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-human-question-"));

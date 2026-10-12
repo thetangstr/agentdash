@@ -3,7 +3,7 @@ title: "agentdash-connect"
 summary: "Connect Claude Code or Codex on your machine to your AgentDash agent."
 ---
 
-> Generated at commit `70153f223` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `606dcbd22` by `scripts/docs/generate-mcp-reference.mjs`.
 > This page is `packages/connect/README.md`, the README published to npm with the package. Edit the README, then run `pnpm docs:mcp-reference`.
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
@@ -246,6 +246,28 @@ inbox-enabled machines were upgraded on deploy, each upgrade recorded in the
 activity log), and an administrator must turn on `coworker_bridge_enabled` for
 the company. Until then they answer with the reason. Every file downloaded is
 recorded in the activity log by attachment and size, never by content.
+
+## Sending your reply back
+
+When you and Claude have finished the work, two more tools send it back to
+your agent as you, in one bundle:
+
+- `work_propose_reply` — reads the bundle back and changes nothing: the answer
+  to your agent's question, a decision on an approval, a new revision of a
+  document (built on the revision Claude read, so nothing written since is
+  overwritten), a comment, and two or three lessons for your agent. It says who
+  will see it (everyone who can see the issue, or a restricted project's access
+  list) and who is woken.
+- `work_confirm_reply` — sends that exact bundle, after your explicit yes.
+
+Everything lands as you, marked as sent via the bridge from this machine, in
+one transaction: if the document moved on since Claude read it, the approval
+was decided or changed, or the issue is no longer yours, nothing is sent and
+you are told why. Your agent is woken at most once (an answer wakes it only
+when its question asked for that), and its next run carries a short
+"what changed" summary (its draft against your revision, your answer against
+its recommendation, your lessons), which it saves to its own memory. Files
+cannot be sent back this way yet; attach them on the issue page.
 
 ## Nothing left running
 

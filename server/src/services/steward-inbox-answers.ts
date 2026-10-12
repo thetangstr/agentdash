@@ -5,6 +5,7 @@ import { bridgeEndpoints, issues, stewardInboxActionHandles } from "@paperclipai
 import type { AskUserQuestionsInteraction, RespondIssueThreadInteraction } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { insertActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
+import { answerCorrectionInput, recordAgentCorrectionGuarded } from "./agent-corrections.js";
 import type { heartbeatService } from "./heartbeat.js";
 import { dispatchResolvedInteractionContinuation } from "./issue-interaction-continuation.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
@@ -279,6 +280,17 @@ export function stewardInboxAnswerService(
               channel: STEWARD_INBOX_TOKEN_PROVIDER,
               bridgeEndpointId: endpointId,
             },
+          }),
+        );
+        // AgentDash (learning loop): an answer other than the agent's
+        // recommendation is a correction, delivered on the agent's next wake.
+        // In this transaction, so it lands with the answer; a fault in it
+        // never fails the answer.
+        await recordAgentCorrectionGuarded(tx, addressed.issue.companyId, (reader) =>
+          answerCorrectionInput(reader, {
+            issue: addressed.issue,
+            interaction: updated,
+            answeredByUserId: endpoint.userId,
           }),
         );
         return {

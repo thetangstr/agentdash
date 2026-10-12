@@ -52,6 +52,12 @@ When your company has turned on reviewing from your own session, Claude can read
 
 You see exactly what you see on the issue page, and only your own work: issues assigned to you or to an agent you answer for. Everything written in AgentDash arrives marked as material, so Claude gives you its own view on it and never takes it as instructions. HTML and SVG files are never downloaded, and every download is recorded. If the tools answer that this is not switched on, an administrator turns on `coworker_bridge_enabled` for the company; if they answer 403 about `bridge:work`, [reconnect](./connect-your-terminal) this machine with a fresh code.
 
+## Sending your reply back
+
+When you have finished the work with Claude, it sends it back to your agent as you, in one bundle: your answer to the agent's question, your decision on an approval, a new revision of the document, a comment, and two or three lessons about how you want work done (never client content). First it reads the whole bundle back — every part, who will see it, and who is woken (your agent at most once) — and asks "Send? (yes / change / no)". Only an explicit yes sends it; "change" means a new read-back.
+
+It all lands as you, marked as sent via the bridge from your machine. If the document changed since Claude read it, the approval was decided in between, or the issue is no longer yours, nothing is sent and Claude tells you why. Your agent's next run starts with a short "what changed" summary — its draft against your revision, your answer against its recommendation, your lessons — and it keeps the lessons in its own memory. When the same lesson keeps coming back, your agent asks you to add it to its mandate; you decide. Files cannot be sent back this way yet: attach them on the issue page.
+
 ## Email
 
 Inbox emails are off unless your instance turns them on (an operator sets `AGENTDASH_INBOX_EMAIL=true`). Your agents' questions and decisions reach you in your own Claude or Codex session and on Home in AgentDash. When an instance does turn emails on, each one is a pointer only (the agent, the issue identifier and a link), at most one every 15 minutes, and you can turn it off under **Email me when my agents need me** on **My Agent**.

@@ -102,6 +102,23 @@ describe("the steward contract", () => {
     expect(playbook).not.toMatch(/ask your steward to relay/i);
   });
 
+  /**
+   * The learning loop: a correction reaches the agent's next wake as a "What
+   * changed" summary; the agent keeps the lessons in its own memory, never
+   * client content, and proposes a mandate change to its steward when a lesson
+   * recurs three times.
+   */
+  it("tells the agent to learn from corrections through its own memory", () => {
+    const playbook = STEWARD_PLAYBOOK.replace(/\s+/g, " ");
+    expect(playbook).toContain("## Learning from corrections");
+    expect(playbook).toMatch(/at the start of each task, read your lessons/i);
+    expect(playbook).toContain("agentdashGetMyMemory");
+    expect(playbook).toContain("agentdashUpdateMyMemory");
+    expect(playbook).toMatch(/never client content/i);
+    expect(playbook).toMatch(/third time the same lesson comes up, propose a mandate change/i);
+    expect(playbook).toContain('payload.kind: "mandate_change"');
+  });
+
   it("does not tell a person's agent to provision a company", () => {
     expect(STEWARD_PLAYBOOK).not.toContain("sign the human up");
     expect(STEWARD_PLAYBOOK).not.toContain("agentdash_sign_up");

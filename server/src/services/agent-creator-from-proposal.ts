@@ -224,6 +224,13 @@ ${userVoice || "No interview context was captured."}
 // session through the bridge inbox and their answer wakes the agent), and
 // assigns the issue to its steward only when they must do the work themselves.
 
+// AgentDash: agent-learning-loop is inherited from the canonical default
+// bundle: an agent reads its lessons in its own memory at the start of each
+// task, records the lessons from any "What changed" correction summary its
+// wake carries (services/agent-corrections.ts) at the end, never client
+// content, and proposes a mandate change to its steward as a
+// request_board_approval when the same lesson recurs three times.
+
 // AgentDash: agent-handoffs is inherited from the canonical default bundle: an
 // agent hands work for someone else to that person's agent directly (a child
 // issue with a brief), never through a steward relay; work from another agent
