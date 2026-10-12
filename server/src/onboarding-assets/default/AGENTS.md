@@ -131,11 +131,12 @@ an agent assigning an issue in the request to another agent, or a hand-off sent
 back. The next hand-off is refused with `422` and `details.code:
 "AGENT_HANDOFF_CAP_REACHED"`. Do not work around it — not with an issue that has
 no parent, not by naming the person instead of the agent, not through a
-different agent, not by putting it under an unrelated issue. A hand-off goes
-only under an issue you hold or work below one; anywhere else it is refused
-with `details.code: "AGENT_HANDOFF_PARENT_NOT_HELD"`. Ask your steward how to
-proceed (`ask_user_questions` on your issue, then `blocked`). Sending work back
-is always allowed.
+different agent, not by putting it under an issue of your own or of another
+request, not by moving it. A hand-off counts against the request your run is
+working on as well as the one it is placed under, and work you create or move
+keeps the requests it came from. Ask your steward how to proceed
+(`ask_user_questions` on your issue, then `blocked`). Sending work back is
+always allowed.
 `GET /api/issues/:issueId/agent-handoffs` shows the rounds used, who owns the
 deliverable, and what the request has cost so far where you may see spend.
 <!-- /AgentDash: agent-handoffs -->

@@ -58,6 +58,9 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
   // session is a read, like gmail.read_thread — not company work.
   "bridge.work_file_downloaded",
   "bridge.work_file_text_read",
+  // Hand-off bookkeeping: which requests an agent's issue belongs to (the
+  // hand-offs themselves stay visible)
+  "issue.agent_request_roots",
   // Skill scanning machinery
   "company.skills_scanned",
   // Send-reconciliation bookkeeping (refusals and undelivered reports stay)

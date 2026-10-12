@@ -131,23 +131,22 @@ import {
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 import { resolveStewardedAgentRoute, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
 import {
-  AGENT_HANDOFF_PARENT_CODE,
-  agentHandoffParentMessage,
   agentHandoffsEnabled,
-  countHandoffRounds,
+  checkHandoffRounds,
   emitHandoffReturned,
   handoffRoundCheck,
-  isUnderIssueHeldBy,
   latestHandoffForIssue,
   recordAgentHandoff,
   recordAgentHandoffRefused,
+  recordAgentRequestRoots,
   listRequestIssueIds,
-  requestRootForAgentRun,
-  resolveRequestRootForReassign,
+  requestRootsForAgentRun,
   resolveRequestRootIssueId,
+  resolveRequestRoots,
   summarizeRequestHandoffs,
   type AgentHandoffVia,
 } from "../services/agent-handoffs.js";
+import { defaultStatusForNewIssue, triageOwnerForNewIssue } from "../services/issue-start-policy.js";
 import { answerCorrectionInput, recordAgentCorrectionAfterCommit } from "../services/agent-corrections.js";
 import { applyDeliverableReviewAfterDocumentRevision } from "../services/deliverable-review-revision.js";
 import {
@@ -595,45 +594,65 @@ export function issueRoutes(
   }
 
   /**
-   * The cap refusal for a request, naming its root only when the acting agent
-   * can see it (a root in a restricted project it is not on stays unnamed).
+   * The cap refusal for the fullest of a hand-off's requests, naming that
+   * request's root only when the acting agent can see it (a root in a
+   * restricted project it is not on stays unnamed).
    */
-  async function handoffCapCheck(reader: Db, req: Request, companyId: string, rootIssueId: string, rounds: number) {
-    const check = handoffRoundCheck(rounds, rootIssueId);
+  async function handoffCapCheck(reader: Db, req: Request, companyId: string, fullest: { rounds: number; rootIssueId: string | null }) {
+    if (!fullest.rootIssueId) return handoffRoundCheck(0, "");
+    const check = handoffRoundCheck(fullest.rounds, fullest.rootIssueId);
     if (check.allowed) return check;
-    const visible = await listVisibleIssueIds(reader, req, companyId, [rootIssueId]);
-    return handoffRoundCheck(rounds, rootIssueId, { revealRoot: visible.has(rootIssueId) });
+    const visible = await listVisibleIssueIds(reader, req, companyId, [fullest.rootIssueId]);
+    return handoffRoundCheck(fullest.rounds, fullest.rootIssueId, { revealRoot: visible.has(fullest.rootIssueId) });
   }
 
-  /**
-   * An agent may put a hand-off, or move an issue, only under an issue it
-   * holds or under work below one (services/agent-handoffs.ts): the cap
-   * counts per request, and a parent of the agent's choosing would otherwise
-   * start a fresh count. 422 with AGENT_HANDOFF_PARENT_NOT_HELD.
-   */
-  async function assertAgentHoldsParent(reader: Db, companyId: string, agentId: string, parentId: string | null, kind: "handoff" | "move") {
-    const held = parentId ? await isUnderIssueHeldBy(reader, { companyId, issueId: parentId, agentId }) : false;
-    if (!held) throw new HttpError(422, agentHandoffParentMessage(kind), { code: AGENT_HANDOFF_PARENT_CODE });
-  }
+  const uniqueIds = (ids: string[]) => [...new Set(ids)];
+
+  type AgentCreatePlan = {
+    fromAgentId: string;
+    runId: string | null;
+    parentIssueId: string | null;
+    /** The run's requests, when they are not already the parent's: recorded on the new issue. */
+    runRoots: { primary: string; roots: string[] } | null;
+    handoff: { toAgentId: string; rootIssueId: string | null; rootIssueIds: string[] } | null;
+  };
 
   /**
-   * AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): an agent
-   * creating an issue assigned to another agent is a hand-off. The request is
-   * the parent's root, or for an unparented issue the issue the agent's run is
-   * working on. The parent must be an issue the agent holds or work below one
-   * (422 otherwise). The fourth round in a request is refused (422) and
-   * recorded; otherwise the caller records the hand-off once the issue exists.
+   * AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): what an
+   * agent's create means for the hand-off cap. Creating an issue for another
+   * agent -- named, a person routed to their agent, or an unowned todo routed
+   * to the Chief of Staff -- is a hand-off. It counts against the parent's
+   * requests and the requests of the run the agent is on, and is refused (422,
+   * recorded) when any of them is at the cap. Any other create during a run on
+   * an issue records the run's requests on the new issue, so work an agent
+   * makes for itself cannot start a fresh count. Null for a person, or while
+   * the company flag is off.
    */
-  async function planAgentHandoffForCreate(
+  async function planAgentCreate(
     req: Request,
     companyId: string,
-    input: { assigneeAgentId?: string | null; parentId?: string | null },
-  ): Promise<{ fromAgentId: string; toAgentId: string; rootIssueId: string | null; parentIssueId: string | null } | null> {
+    input: { assigneeAgentId?: string | null; assigneeUserId?: string | null; parentId?: string | null; status?: string | null },
+    opts: { routeToChiefOfStaff: boolean },
+  ): Promise<AgentCreatePlan | null> {
     if (req.actor.type !== "agent" || !req.actor.agentId) return null;
-    const fromAgentId = req.actor.agentId;
-    const toAgentId = input.assigneeAgentId ?? null;
-    if (!toAgentId || toAgentId === fromAgentId) return null;
     if (!(await agentHandoffsEnabled(db, companyId))) return null;
+    const fromAgentId = req.actor.agentId;
+    const runId = req.actor.runId ?? null;
+    const parentIssueId = input.parentId ?? null;
+    const parentRoots = parentIssueId ? await resolveRequestRoots(db, { companyId, issueId: parentIssueId }) : null;
+    const run = await requestRootsForAgentRun(db, { companyId, agentId: fromAgentId, runId });
+    const runRoots = run && !(parentRoots && run.roots.every((root) => parentRoots.roots.includes(root))) ? run : null;
+    const plan: AgentCreatePlan = { fromAgentId, runId, parentIssueId, runRoots, handoff: null };
+
+    let toAgentId = input.assigneeAgentId ?? null;
+    if (!toAgentId && opts.routeToChiefOfStaff) {
+      toAgentId = await triageOwnerForNewIssue(db, companyId, {
+        status: input.status ?? (await defaultStatusForNewIssue(db, companyId)),
+        assigneeAgentId: input.assigneeAgentId ?? null,
+        assigneeUserId: input.assigneeUserId ?? null,
+      });
+    }
+    if (!toAgentId || toAgentId === fromAgentId) return plan;
     // An assignee that is not an assignable agent of this company is the
     // create's own refusal (404/409/422), not a hand-off: no cap answer and no
     // refusal row naming an unvalidated id. Agents see every agent, so there is
@@ -643,74 +662,104 @@ export function issueRoutes(
       .from(agents)
       .where(and(eq(agents.id, toAgentId), eq(agents.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
-    if (!assignee || assignee.status === "pending_approval" || assignee.status === "terminated") return null;
-    const parentIssueId = input.parentId ?? null;
-    if (parentIssueId) await assertAgentHoldsParent(db, companyId, fromAgentId, parentIssueId, "handoff");
-    const rootIssueId = parentIssueId
-      ? await resolveRequestRootIssueId(db, { companyId, issueId: parentIssueId })
-      : await requestRootForAgentRun(db, { companyId, agentId: fromAgentId, runId: req.actor.runId });
-    if (rootIssueId) {
-      const check = await handoffCapCheck(db, req, companyId, rootIssueId, await countHandoffRounds(db, { companyId, rootIssueId }));
+    if (!assignee || assignee.status === "pending_approval" || assignee.status === "terminated") return plan;
+    const rootIssueId = parentRoots?.primary ?? run?.primary ?? null;
+    const rootIssueIds = uniqueIds([...(parentRoots?.roots ?? []), ...(run?.roots ?? [])]);
+    if (rootIssueIds.length > 0) {
+      const fullest = await checkHandoffRounds(db, { companyId, roots: rootIssueIds });
+      const check = await handoffCapCheck(db, req, companyId, fullest);
       if (!check.allowed) {
+        const fullRoot = fullest.rootIssueId!;
         await recordAgentHandoffRefused(db, {
           companyId,
-          entityIssueId: parentIssueId ?? rootIssueId,
-          rootIssueId,
+          entityIssueId: parentIssueId ?? rootIssueId ?? fullRoot,
+          rootIssueId: fullRoot,
           fromAgentId,
           toAgentId,
-          runId: req.actor.runId ?? null,
+          runId,
           rounds: check.rounds,
-        }).catch((err) => logger.warn({ err, rootIssueId }, "failed to record a refused agent hand-off"));
+        }).catch((err) => logger.warn({ err, rootIssueId: fullRoot }, "failed to record a refused agent hand-off"));
         throw new HttpError(422, check.message, check.details);
       }
     }
-    return { fromAgentId, toAgentId, rootIssueId, parentIssueId };
+    return { ...plan, handoff: { toAgentId, rootIssueId, rootIssueIds } };
   }
 
   /**
-   * The request's round count for an agent's reassignment, taken before the
-   * update's transaction opens (the count scans activity rows). Acceptance
-   * uses it when the request it resolves is the same one; otherwise it counts
-   * again. Null when the update is not an agent reassigning to another agent
-   * or the company flag is off.
+   * The requests an agent's reassignment of this issue counts against: the
+   * issue's own (chain and root records) and the run's.
+   */
+  async function reassignRequestRoots(
+    reader: Db,
+    req: Request,
+    issue: { id: string; companyId: string },
+  ): Promise<{ primary: string; roots: string[] }> {
+    const own = await resolveRequestRoots(reader, { companyId: issue.companyId, issueId: issue.id });
+    const run = req.actor.type === "agent" && req.actor.agentId
+      ? await requestRootsForAgentRun(reader, { companyId: issue.companyId, agentId: req.actor.agentId, runId: req.actor.runId })
+      : null;
+    return { primary: own.primary, roots: uniqueIds([...own.roots, ...(run?.roots ?? [])]) };
+  }
+
+  /**
+   * The round counts for an agent's reassignment, taken before the update's
+   * transaction opens (the count scans activity rows). Acceptance uses them
+   * when the requests it resolves are the same; otherwise it counts again.
+   * Null when the update is not an agent reassigning to another agent or the
+   * company flag is off.
    */
   async function precountAgentHandoffRounds(
     req: Request,
-    existing: { id: string; companyId: string; assigneeAgentId: string | null; parentId: string | null; createdByAgentId: string | null },
+    existing: { id: string; companyId: string; assigneeAgentId: string | null },
     requestedAssigneeAgentId: unknown,
-  ): Promise<{ rootIssueId: string; rounds: number } | null> {
+  ): Promise<{ key: string; fullest: { rounds: number; rootIssueId: string | null } } | null> {
     if (req.actor.type !== "agent" || !req.actor.agentId) return null;
     if (typeof requestedAssigneeAgentId !== "string") return null;
     if (requestedAssigneeAgentId === req.actor.agentId || requestedAssigneeAgentId === existing.assigneeAgentId) return null;
     if (!(await agentHandoffsEnabled(db, existing.companyId))) return null;
-    const rootIssueId = await resolveRequestRootForReassign(db, {
-      companyId: existing.companyId, issue: existing, agentId: req.actor.agentId, runId: req.actor.runId,
-    });
-    return { rootIssueId, rounds: await countHandoffRounds(db, { companyId: existing.companyId, rootIssueId }) };
+    const { roots } = await reassignRequestRoots(db, req, existing);
+    return { key: roots.join(","), fullest: await checkHandoffRounds(db, { companyId: existing.companyId, roots }) };
   }
 
-  async function recordPlannedAgentHandoff(
+  async function recordAgentCreate(
     req: Request,
     companyId: string,
-    planned: { fromAgentId: string; toAgentId: string; rootIssueId: string | null; parentIssueId: string | null } | null,
+    plan: AgentCreatePlan | null,
     issue: { id: string; assigneeAgentId: string | null },
     via: AgentHandoffVia,
     routed: StewardedAgentRoute | null,
   ) {
-    if (!planned || issue.assigneeAgentId !== planned.toAgentId) return;
+    if (!plan) return;
     // The issue already exists; a failed audit row is logged, not answered as
     // a failed create the caller might retry into a duplicate.
-    await recordAgentHandoff(db, {
-      companyId,
-      issueId: issue.id,
-      parentIssueId: planned.parentIssueId,
-      rootIssueId: planned.rootIssueId ?? issue.id,
-      fromAgentId: planned.fromAgentId,
-      toAgentId: planned.toAgentId,
-      runId: req.actor.type === "agent" ? req.actor.runId ?? null : null,
-      via,
-      routedFromUserId: routed?.fromUserId ?? null,
-    }).catch((err) => logger.warn({ err, issueId: issue.id }, "failed to record an agent hand-off"));
+    try {
+      if (plan.handoff && issue.assigneeAgentId === plan.handoff.toAgentId) {
+        await recordAgentHandoff(db, {
+          companyId,
+          issueId: issue.id,
+          parentIssueId: plan.parentIssueId,
+          rootIssueId: plan.handoff.rootIssueId ?? issue.id,
+          rootIssueIds: plan.handoff.rootIssueIds.length > 0 ? plan.handoff.rootIssueIds : [issue.id],
+          fromAgentId: plan.fromAgentId,
+          toAgentId: plan.handoff.toAgentId,
+          runId: plan.runId,
+          via,
+          routedFromUserId: routed?.fromUserId ?? null,
+        });
+      } else if (plan.runRoots) {
+        await recordAgentRequestRoots(db, {
+          companyId,
+          issueId: issue.id,
+          agentId: plan.fromAgentId,
+          runId: plan.runId,
+          rootIssueId: plan.runRoots.primary,
+          rootIssueIds: plan.runRoots.roots,
+          reason: "created",
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, issueId: issue.id }, "failed to record an agent hand-off");
+    }
   }
 
   /**
@@ -725,7 +774,7 @@ export function issueRoutes(
     req: Request,
     before: { id: string; companyId: string; status: string; assigneeAgentId: string | null; parentId: string | null },
     after: { id: string; status: string; assigneeAgentId: string | null },
-    planned: { kind: "handoff" | "returned"; rootIssueId: string; toAgentId: string; parentIssueId: string | null } | null,
+    planned: { kind: "handoff" | "returned"; rootIssueId: string; rootIssueIds: string[]; toAgentId: string; parentIssueId: string | null } | null,
     comment: unknown,
   ) {
     if (req.actor.type !== "agent" || !req.actor.agentId) return;
@@ -740,6 +789,7 @@ export function issueRoutes(
             issueId: before.id,
             parentIssueId: planned.parentIssueId,
             rootIssueId: planned.rootIssueId,
+            rootIssueIds: planned.rootIssueIds,
             fromAgentId: actorAgentId,
             toAgentId: planned.toAgentId,
             kind: "reassigned",
@@ -752,6 +802,7 @@ export function issueRoutes(
             issueId: before.id,
             parentIssueId: planned.parentIssueId,
             rootIssueId: planned.rootIssueId,
+            rootIssueIds: planned.rootIssueIds,
             fromAgentId: actorAgentId,
             toAgentId: planned.toAgentId,
             runId,
@@ -769,6 +820,7 @@ export function issueRoutes(
         issueId: before.id,
         parentIssueId: before.parentId,
         rootIssueId: handoff.rootIssueId,
+        rootIssueIds: handoff.rootIssueIds,
         fromAgentId: actorAgentId,
         toAgentId: handoff.fromAgentId,
         kind: "declined",
@@ -2553,8 +2605,8 @@ export function issueRoutes(
     const { requestId: _requestId, ...requestedInput } = req.body;
     const { input: issueInput, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, companyId, requestedInput);
-    const plannedAgentHandoff = await planAgentHandoffForCreate(req, companyId, issueInput);
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, companyId, issueInput);
+    const agentCreatePlan = await planAgentCreate(req, companyId, issueInput, { routeToChiefOfStaff: routeUnownedTodoToChiefOfStaff });
     let issue;
     try {
       issue = await svc.create(companyId, {
@@ -2622,7 +2674,7 @@ export function issueRoutes(
       },
     });
 
-    await recordPlannedAgentHandoff(req, companyId, plannedAgentHandoff, issue, "create", routedToStewardedAgent);
+    await recordAgentCreate(req, companyId, agentCreatePlan, issue, "create", routedToStewardedAgent);
 
     void queueIssueAssignmentWakeup({
       heartbeat,
@@ -2684,8 +2736,10 @@ export function issueRoutes(
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
     const { input: childInput, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, parent.companyId, req.body);
-    const plannedAgentHandoff = await planAgentHandoffForCreate(req, parent.companyId, { ...childInput, parentId: parent.id });
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, parent.companyId, childInput);
+    const agentCreatePlan = await planAgentCreate(req, parent.companyId, { ...childInput, parentId: parent.id }, {
+      routeToChiefOfStaff: routeUnownedTodoToChiefOfStaff,
+    });
     const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
       ...childInput,
       routeUnownedTodoToChiefOfStaff,
@@ -2717,7 +2771,7 @@ export function issueRoutes(
       },
     });
 
-    await recordPlannedAgentHandoff(req, parent.companyId, plannedAgentHandoff, issue, "child_create", routedToStewardedAgent);
+    await recordAgentCreate(req, parent.companyId, agentCreatePlan, issue, "child_create", routedToStewardedAgent);
 
     void queueIssueAssignmentWakeup({
       heartbeat,
@@ -2744,18 +2798,20 @@ export function issueRoutes(
     const { input: patchIntent, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, existing.companyId, req.body, existing);
     // AgentDash (agent-to-agent hand-offs): an agent moving an issue (a new
-    // parent, or none) may move it only under an issue it holds, because the
-    // hand-off cap counts per parent chain.
-    if (req.actor.type === "agent" && req.actor.agentId && Object.prototype.hasOwnProperty.call(patchIntent, "parentId")
-      && (patchIntent.parentId ?? null) !== (existing.parentId ?? null) && (await agentHandoffsEnabled(db, existing.companyId))) {
-      await assertAgentHoldsParent(db, existing.companyId, req.actor.agentId, patchIntent.parentId ?? null, "move");
-    }
+    // parent, or none) leaves a root record naming the requests it was in,
+    // once the update is accepted, so a move cannot restart the hand-off count.
+    const movedFromRoots = req.actor.type === "agent" && req.actor.agentId
+      && Object.prototype.hasOwnProperty.call(patchIntent, "parentId")
+      && (patchIntent.parentId ?? null) !== (existing.parentId ?? null)
+      && (await agentHandoffsEnabled(db, existing.companyId))
+      ? await resolveRequestRoots(db, { companyId: existing.companyId, issueId: existing.id })
+      : null;
     // AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): what
     // this update does between agents, decided inside acceptance. The round
     // count scans activity rows, so it is taken here, before the transaction,
     // for the reassignment the caller asked for.
     const precountedHandoffRounds = await precountAgentHandoffRounds(req, existing, patchIntent.assigneeAgentId);
-    let plannedAgentHandoff: { kind: "handoff" | "returned"; rootIssueId: string; toAgentId: string; parentIssueId: string | null } | null = null;
+    let plannedAgentHandoff: { kind: "handoff" | "returned"; rootIssueId: string; rootIssueIds: string[]; toAgentId: string; parentIssueId: string | null } | null = null;
     let refusedAgentHandoff: { rootIssueId: string; toAgentId: string; rounds: number } | null = null;
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
@@ -2795,9 +2851,7 @@ export function issueRoutes(
           if (!actorAgentId || !toAgentId || toAgentId === actorAgentId || toAgentId === current.assigneeAgentId) return;
           const reader = executor as Db;
           if (!(await agentHandoffsEnabled(reader, current.companyId))) return;
-          const rootIssueId = await resolveRequestRootForReassign(reader, {
-            companyId: current.companyId, issue: current, agentId: actorAgentId, runId: req.actor.type === "agent" ? req.actor.runId : null,
-          });
+          const { primary: rootIssueId, roots: rootIssueIds } = await reassignRequestRoots(reader, req, current);
           // Sending a hand-off back — to the agent that handed it over, or to
           // the parent's agent — is counted but never refused. Only a real
           // hand-off can come back: the issue's hand-off record must name this
@@ -2813,19 +2867,19 @@ export function issueRoutes(
                 .then((rows) => rows[0]?.assigneeAgentId ?? null)
               : null;
             if (handoff.fromAgentId === toAgentId || parentAgentId === toAgentId) {
-              plannedAgentHandoff = { kind: "returned", rootIssueId, toAgentId, parentIssueId: current.parentId };
+              plannedAgentHandoff = { kind: "returned", rootIssueId, rootIssueIds, toAgentId, parentIssueId: current.parentId };
               return;
             }
           }
-          const rounds = precountedHandoffRounds?.rootIssueId === rootIssueId
-            ? precountedHandoffRounds.rounds
-            : await countHandoffRounds(reader, { companyId: current.companyId, rootIssueId });
-          const check = await handoffCapCheck(reader, req, current.companyId, rootIssueId, rounds);
+          const fullest = precountedHandoffRounds?.key === rootIssueIds.join(",")
+            ? precountedHandoffRounds.fullest
+            : await checkHandoffRounds(reader, { companyId: current.companyId, roots: rootIssueIds });
+          const check = await handoffCapCheck(reader, req, current.companyId, fullest);
           if (!check.allowed) {
-            refusedAgentHandoff = { rootIssueId, toAgentId, rounds: check.rounds };
+            refusedAgentHandoff = { rootIssueId: fullest.rootIssueId ?? rootIssueId, toAgentId, rounds: check.rounds };
             throw new IssueCommentPolicyRefusal(422, { error: check.message, details: check.details });
           }
-          plannedAgentHandoff = { kind: "handoff", rootIssueId, toAgentId, parentIssueId: current.parentId };
+          plannedAgentHandoff = { kind: "handoff", rootIssueId, rootIssueIds, toAgentId, parentIssueId: current.parentId };
         },
         // A5 (GH #830 follow-up): keep blockers the actor cannot see instead
         // of silently dropping links in a restricted project.
@@ -2859,6 +2913,18 @@ export function issueRoutes(
         };
       }
       await recordAgentHandoffEffects(req, existing, accepted.issue, plannedAgentHandoff, patchIntent.comment);
+      if (movedFromRoots && req.actor.type === "agent" && req.actor.agentId
+        && (accepted.issue.parentId ?? null) !== (existing.parentId ?? null)) {
+        await recordAgentRequestRoots(db, {
+          companyId: existing.companyId,
+          issueId: existing.id,
+          agentId: req.actor.agentId,
+          runId: req.actor.runId ?? null,
+          rootIssueId: movedFromRoots.primary,
+          rootIssueIds: movedFromRoots.roots,
+          reason: "moved",
+        }).catch((err) => logger.warn({ err, issueId: existing.id }, "failed to record a moved issue's requests"));
+      }
       // AgentDash (recovery budget, explicit clear): say so when the marker
       // outlives this update, and point at the explicit clear.
       const budgetNotice = recoveryBudgetNotice(accepted.issue.id, accepted.issue.executionState);

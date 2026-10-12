@@ -118,19 +118,41 @@ export const OPTIONAL_CLAUDE_FLAGS = Object.freeze(["--restricted", "--no-sessio
  * `missing` lists required flags it does not have; a run needs it empty.
  */
 export function claudeFeaturesFromHelp(helpText) {
-  const text = String(helpText ?? "");
-  // Only a flag an option line defines counts ("  -p, --print  ..."), never
-  // one another option's description mentions ("Only use MCP servers from
-  // --mcp-config"): a CLI that dropped a flag but still names it elsewhere
+  const lines = String(helpText ?? "").split("\n");
+  const indentOf = (line) => line.match(/^\s*/)[0].length;
+  // Option lines sit at the smallest indent any dash-led line has ("  -p,
+  // --print ..."). A wrapped description line further in may also start with
+  // a flag ("                --print and --output-format=stream-json)"); it
+  // defines nothing. A CLI that dropped a flag but still names it elsewhere
   // must not pass as having it.
-  const defined = new Set();
-  for (const line of text.split("\n")) {
-    const names = line.match(/^\s*(-[^\s,=<]+(?:,\s*-[^\s,=<]+)*)/)?.[1];
-    if (names) for (const name of names.split(/,\s*/)) defined.add(name);
+  const dashLines = lines.filter((line) => /^\s*-/.test(line));
+  const optionIndent = dashLines.length > 0 ? Math.min(...dashLines.map(indentOf)) : 0;
+  const options = [];
+  let current = null;
+  for (const line of lines) {
+    if (!line.trim()) {
+      current = null;
+      continue;
+    }
+    const indent = indentOf(line);
+    if (indent === optionIndent && /^\s*-/.test(line)) {
+      const names = line.match(/^\s*(-[^\s,=<[]+(?:,\s*-[^\s,=<[]+)*)/)?.[1] ?? "";
+      current = { names: names.split(/,\s*/), text: line };
+      options.push(current);
+    } else if (current && indent > optionIndent) {
+      current.text += `\n${line}`;
+    } else {
+      current = null;
+    }
   }
+  const defined = new Set(options.flatMap((option) => option.names));
   const has = (flag) => defined.has(flag);
   const missing = REQUIRED_CLAUDE_FLAGS.filter((flag) => !has(flag));
-  if (!/["']?dontAsk["']?/.test(text)) missing.push('--permission-mode "dontAsk"');
+  // `dontAsk` must be one of --permission-mode's own choices, not a word
+  // anywhere in the help.
+  const permissionMode = options.find((option) => option.names.includes("--permission-mode"));
+  const choices = permissionMode?.text.match(/choices:([^)]*)\)/)?.[1] ?? "";
+  if (!/["']dontAsk["']/.test(choices)) missing.push('--permission-mode "dontAsk"');
   const optional = new Set(OPTIONAL_CLAUDE_FLAGS.filter((flag) => has(flag)));
   return { missing, optional };
 }

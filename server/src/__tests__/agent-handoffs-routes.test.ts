@@ -28,10 +28,10 @@ import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import {
   AGENT_HANDOFF_ACTION,
   AGENT_HANDOFF_CAP_CODE,
-  AGENT_HANDOFF_PARENT_CODE,
   AGENT_HANDOFF_REFUSED_ACTION,
   AGENT_HANDOFF_RETURNED_ACTION,
   AGENT_HANDOFF_ROUND_CAP,
+  AGENT_REQUEST_ROOTS_ACTION,
   emitHandoffReturned,
   recordAgentHandoff,
 } from "../services/agent-handoffs.js";
@@ -372,74 +372,136 @@ describeEmbeddedPostgres("agent-to-agent hand-offs", () => {
     expect(await rows(cappedPiece!.id, AGENT_HANDOFF_RETURNED_ACTION)).toHaveLength(0);
   });
 
-  /**
-   * The cap counts per parent chain, so the agent must not be able to pick a
-   * fresh chain: a hand-off goes only under an issue the agent holds (or work
-   * below one), and an agent moves an issue only there too.
-   */
-  it("refuses a hand-off placed under an issue the agent does not hold, so a capped request cannot be escaped", async () => {
-    const root = await rootRequest("Capped, then escaped?");
+  /** An actor for `agent` on a run that is working on `issueId`. */
+  async function runOn(agent: AgentFixture, issueId: string) {
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId: COMPANY, agentId: agent.agentId, status: "running",
+      contextSnapshot: { issueId, taskId: issueId },
+    });
+    return { ...agent.actor, runId };
+  }
+
+  /** A request issue Agent A holds, with every hand-off round used from a run on it. */
+  async function cappedRequest(title: string) {
+    const root = await rootRequest(title);
+    const actor = await runOn(agentA, root.id);
     for (let round = 1; round <= AGENT_HANDOFF_ROUND_CAP; round += 1) {
-      expect((await handOffChild(agentA, root.id, { assigneeAgentId: agentB.agentId }, `Round ${round}`)).status).toBe(201);
+      const res = await request(app(actor))
+        .post(`/api/issues/${root.id}/children`)
+        .send({ title: `Round ${round}`, status: "todo", assigneeAgentId: agentB.agentId });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
     }
-    // An unrelated request Agent A has nothing to do with (fresh count).
+    const fourth = await request(app(actor))
+      .post(`/api/issues/${root.id}/children`)
+      .send({ title: "Round 4", status: "todo", assigneeAgentId: agentB.agentId });
+    expect(fourth.status, JSON.stringify(fourth.body)).toBe(422);
+    return { root, actor };
+  }
+
+  /**
+   * The count follows every request an issue belongs to, and the request the
+   * agent's run is on, so the agent cannot restart it by choosing where to
+   * put work (services/agent-handoffs.ts).
+   */
+  it("keeps counting when an agent makes its own unparented issue and hands off under it", async () => {
+    const { root, actor } = await cappedRequest("Capped, then a fresh issue of its own?");
+    const own = await request(app(actor))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "My own scratch issue", status: "todo", assigneeAgentId: agentA.agentId });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+    const [record] = await rows(own.body.id, AGENT_REQUEST_ROOTS_ACTION);
+    expect(record?.details).toMatchObject({ rootIssueId: root.id, reason: "created" });
+
+    // From the run on the capped request.
+    const fromRun = await handOffChild({ ...agentA, actor } as AgentFixture, own.body.id, { assigneeAgentId: agentB.agentId }, "Under my own");
+    expect(fromRun.status, JSON.stringify(fromRun.body)).toBe(422);
+    expect(fromRun.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
+    // From a later run woken on the new issue itself.
+    const wokenOnOwn = await runOn(agentA, own.body.id);
+    const fromOwnRun = await handOffChild({ ...agentA, actor: wokenOnOwn } as AgentFixture, own.body.id, { assigneeAgentId: agentC.agentId }, "Woken on it");
+    expect(fromOwnRun.status, JSON.stringify(fromOwnRun.body)).toBe(422);
+    // And from a call that names no run.
+    const noRun = await handOffChild({ ...agentA, actor: { ...agentA.actor, runId: undefined } } as AgentFixture, own.body.id, { assigneeAgentId: agentC.agentId }, "No run");
+    expect(noRun.status, JSON.stringify(noRun.body)).toBe(422);
+    expect(await db.select({ id: issues.id }).from(issues).where(eq(issues.parentId, own.body.id))).toHaveLength(0);
+  });
+
+  it("keeps counting when an agent makes itself a child of an unrelated request and hands off from there", async () => {
+    const { root, actor } = await cappedRequest("Capped, then borrowing another request?");
     const [unrelated] = await db
       .insert(issues)
       .values({ companyId: COMPANY, title: "Someone else's request", status: "in_progress", assigneeAgentId: agentC.agentId })
       .returning();
-    const before = await db.select({ id: issues.id }).from(issues).where(eq(issues.parentId, unrelated!.id));
+    const foothold = await request(app(actor))
+      .post(`/api/issues/${unrelated!.id}/children`)
+      .send({ title: "My piece of their request", status: "todo", assigneeAgentId: agentA.agentId });
+    expect(foothold.status, JSON.stringify(foothold.body)).toBe(201);
 
-    const asChild = await handOffChild(agentA, unrelated!.id, { assigneeAgentId: agentB.agentId }, "Escape via child");
-    expect(asChild.status, JSON.stringify(asChild.body)).toBe(422);
-    expect(asChild.body.details).toMatchObject({ code: AGENT_HANDOFF_PARENT_CODE });
-    expect(asChild.body.error).toMatch(/only under an issue you hold/);
-    const companyLevel = await request(app(agentA.actor))
-      .post(`/api/companies/${COMPANY}/issues`)
-      .send({ title: "Escape via parentId", status: "todo", parentId: unrelated!.id, assigneeAgentId: agentB.agentId });
-    expect(companyLevel.status, JSON.stringify(companyLevel.body)).toBe(422);
-    expect(companyLevel.body.details).toMatchObject({ code: AGENT_HANDOFF_PARENT_CODE });
-    expect(await db.select({ id: issues.id }).from(issues).where(eq(issues.parentId, unrelated!.id))).toHaveLength(before.length);
+    const under = await handOffChild({ ...agentA, actor } as AgentFixture, foothold.body.id, { assigneeAgentId: agentB.agentId }, "Under the foothold");
+    expect(under.status, JSON.stringify(under.body)).toBe(422);
+    expect(under.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
 
-    // Under work below an issue Agent A holds is allowed -- and counts against that request.
-    const [belowHeld] = await db
-      .insert(issues)
-      .values({ companyId: COMPANY, title: "Agent B's piece of A's request", status: "todo", parentId: root.id, assigneeAgentId: agentB.agentId })
-      .returning();
-    const nested = await handOffChild(agentA, belowHeld!.id, { assigneeAgentId: agentC.agentId }, "Nested");
-    expect(nested.status, JSON.stringify(nested.body)).toBe(422);
-    expect(nested.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
+    const reassigned = await request(app(actor)).patch(`/api/issues/${foothold.body.id}`).send({ assigneeAgentId: agentB.agentId });
+    expect(reassigned.status, JSON.stringify(reassigned.body)).toBe(422);
+    expect(reassigned.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
 
-    // Agent A may still create work for itself anywhere it could before.
-    const ownWork = await handOffChild(agentA, unrelated!.id, { assigneeAgentId: agentA.agentId }, "Own piece elsewhere");
-    expect(ownWork.status, JSON.stringify(ownWork.body)).toBe(201);
+    // Woken on the foothold later, the foothold still carries the capped request.
+    const wokenThere = await runOn(agentA, foothold.body.id);
+    const later = await request(app(wokenThere)).patch(`/api/issues/${foothold.body.id}`).send({ assigneeAgentId: agentB.agentId });
+    expect(later.status, JSON.stringify(later.body)).toBe(422);
+    const [unchanged] = await db.select().from(issues).where(eq(issues.id, foothold.body.id));
+    expect(unchanged!.assigneeAgentId).toBe(agentA.agentId);
   });
 
-  it("refuses an agent moving an issue out from under the work it holds, then reassigning it", async () => {
-    const root = await rootRequest("Capped, then moved?");
-    for (let round = 1; round <= AGENT_HANDOFF_ROUND_CAP; round += 1) {
-      expect((await handOffChild(agentA, root.id, { assigneeAgentId: agentB.agentId }, `Round ${round}`)).status).toBe(201);
-    }
-    const [own] = await db
+  it("lets an agent tidy its issues, and a moved issue still counts against the request it left", async () => {
+    const { root } = await cappedRequest("Capped, then moved?");
+    const [piece] = await db
       .insert(issues)
       .values({ companyId: COMPANY, title: "Agent A's piece", status: "todo", parentId: root.id, assigneeAgentId: agentA.agentId })
       .returning();
-    const [unrelated] = await db
+    const [epic] = await db
       .insert(issues)
-      .values({ companyId: COMPANY, title: "Unrelated", status: "todo", assigneeAgentId: agentC.agentId })
+      .values({ companyId: COMPANY, title: "A manager's epic", status: "in_progress", assigneeAgentId: agentC.agentId })
       .returning();
 
-    const moved = await request(app(agentA.actor)).patch(`/api/issues/${own!.id}`).send({ parentId: unrelated!.id });
-    expect(moved.status, JSON.stringify(moved.body)).toBe(422);
-    expect(moved.body.details).toMatchObject({ code: AGENT_HANDOFF_PARENT_CODE });
-    const detached = await request(app(agentA.actor)).patch(`/api/issues/${own!.id}`).send({ parentId: null });
-    expect(detached.status, JSON.stringify(detached.body)).toBe(422);
-    const [unchanged] = await db.select().from(issues).where(eq(issues.id, own!.id));
-    expect(unchanged!.parentId).toBe(root.id);
+    // Moves are allowed: to the top level, and under someone else's epic.
+    const detached = await request(app(agentA.actor)).patch(`/api/issues/${piece!.id}`).send({ parentId: null });
+    expect(detached.status, JSON.stringify(detached.body)).toBe(200);
+    const filed = await request(app(agentA.actor)).patch(`/api/issues/${piece!.id}`).send({ parentId: epic!.id });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+    expect((await rows(piece!.id, AGENT_REQUEST_ROOTS_ACTION)).map((row) => (row.details as { reason?: string }).reason)).toEqual(["moved", "moved"]);
 
-    // The reassignment still counts against the capped request.
-    const reassigned = await request(app(agentA.actor)).patch(`/api/issues/${own!.id}`).send({ assigneeAgentId: agentC.agentId });
+    // But the move did not take it out of the capped request, with or without a run.
+    const reassigned = await request(app(agentA.actor)).patch(`/api/issues/${piece!.id}`).send({ assigneeAgentId: agentB.agentId });
     expect(reassigned.status, JSON.stringify(reassigned.body)).toBe(422);
     expect(reassigned.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
+  });
+
+  it("counts an unowned todo routed to the Chief of Staff as a hand-off, and refuses it at the cap", async () => {
+    const [chief] = await db
+      .insert(agents)
+      .values({ companyId: COMPANY, name: "Chief", role: "chief_of_staff", status: "idle", runtimeConfig: noRunRuntime })
+      .returning();
+    try {
+      const open = await rootRequest("Open request");
+      const routed = await request(app(agentA.actor))
+        .post(`/api/companies/${COMPANY}/issues`)
+        .send({ title: "Someone should look at this", status: "todo", parentId: open.id });
+      expect(routed.status, JSON.stringify(routed.body)).toBe(201);
+      expect(routed.body.assigneeAgentId).toBe(chief!.id);
+      const [handoff] = await rows(routed.body.id, AGENT_HANDOFF_ACTION);
+      expect(handoff?.details).toMatchObject({ rootIssueId: open.id, toAgentId: chief!.id, via: "create", round: 1 });
+
+      const { root, actor } = await cappedRequest("Capped, then routed?");
+      const refused = await request(app(actor))
+        .post(`/api/issues/${root.id}/children`)
+        .send({ title: "Unowned, for triage", status: "todo" });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+      expect(refused.body.details).toMatchObject({ code: AGENT_HANDOFF_CAP_CODE, rootIssueId: root.id });
+    } finally {
+      await db.update(agents).set({ status: "terminated" }).where(eq(agents.id, chief!.id));
+    }
   });
 
   it("counts reassigning an unparented issue the agent made for itself against its run's request", async () => {

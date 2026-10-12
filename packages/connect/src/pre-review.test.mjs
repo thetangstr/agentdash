@@ -40,6 +40,76 @@ Options:
   --tools <tools...>                    Specify the list of available tools from the built-in set.
 `;
 
+/**
+ * An excerpt of a real `claude --help` (Claude Code 2.1.x), wrapped the way the
+ * CLI wraps it: descriptions continue on deeper-indented lines, and several of
+ * those continuation lines begin with another flag's name.
+ */
+const REAL_HELP = [
+  "Usage: claude [options] [command] [prompt]",
+  "",
+  "Options:",
+  "  --allowedTools, --allowed-tools <tools...>",
+  "      Comma or space-separated list of tool names to allow (e.g. \"Bash(git *)",
+  "      Edit\")",
+  "  --append-system-prompt <prompt>       Append a system prompt to the default",
+  "                                        system prompt",
+  "  --bare                                Minimal mode: skip hooks. Explicitly provide context",
+  "                                        via: --system-prompt[-file],",
+  "                                        --append-system-prompt[-file], --add-dir",
+  "                                        (CLAUDE.md dirs), --mcp-config,",
+  "                                        --settings, --agents, --plugin-dir.",
+  "  --disallowedTools, --disallowed-tools <tools...>",
+  "      Comma or space-separated list of tool names to deny (e.g. \"Bash(git *)",
+  "      Edit\")",
+  "  --forward-subagent-text               Forward subagent text and thinking",
+  "                                        blocks as assistant/user messages (only works with",
+  "                                        --print and --output-format=stream-json)",
+  "  -h, --help                            Display help for command",
+  "  --mcp-config <configs...>             Load MCP servers from JSON files or",
+  "                                        strings (space-separated)",
+  "  --no-session-persistence              Disable session persistence - sessions",
+  "                                        will not be saved to disk and cannot be",
+  "                                        resumed (only works with --print)",
+  "  --output-format <format>              Output format (only works with --print):",
+  "                                        \"text\" (default), \"json\" (single",
+  "                                        result), or \"stream-json\" (realtime",
+  "                                        streaming) (choices: \"text\", \"json\",",
+  "                                        \"stream-json\")",
+  "  --permission-mode <mode>              Permission mode to use for the session",
+  "                                        (choices: \"acceptEdits\", \"auto\",",
+  "                                        \"bypassPermissions\", \"manual\",",
+  "                                        \"dontAsk\", \"plan\")",
+  "  --permission-prompts <target>         Who answers permission prompts with",
+  "                                        --print: \"host\" (the SDK host or",
+  "                                        --permission-prompt-tool) or \"none\"",
+  "  -p, --print                           Print response and exit (useful for",
+  "                                        pipes).",
+  "  --restricted                          Restricted mode: removes the built-in",
+  "                                        tools that run commands or code (Bash,",
+  "                                        PowerShell, REPL and the other",
+  "                                        code-running tools) and WebFetch unless",
+  "                                        --tools names them, and ignores user,",
+  "                                        project and local settings files",
+  "                                        (managed settings and --settings still",
+  "                                        apply; add --strict-mcp-config to skip",
+  "                                        MCP servers too).",
+  "  --settings <file-or-json>             Path to a settings JSON file or a JSON",
+  "                                        string to load additional settings from",
+  "  --strict-mcp-config                   Only use MCP servers from --mcp-config,",
+  "                                        ignoring all other MCP configurations",
+  "  --system-prompt-snapshot <on|off>     Record the system prompt once per",
+  "                                        conversation: a",
+  "                                        --system-prompt or",
+  "                                        --append-system-prompt included.",
+  "  --tools <tools...>                    Specify the list of available tools from",
+  "                                        the built-in set. Use \"\" to disable all",
+  "                                        tools.",
+  "",
+  "Commands:",
+  "  agents [options]                      List and manage background sessions",
+].join("\n");
+
 const tmpDirs = [];
 function tmp() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "connect-prereview-"));
@@ -179,6 +249,56 @@ describe("claudeFeaturesFromHelp", () => {
     const features = claudeFeaturesFromHelp(CURRENT_HELP);
     expect(features.missing).toEqual([]);
     expect([...features.optional].sort()).toEqual(["--no-session-persistence", "--permission-prompts", "--restricted"]);
+  });
+
+  it("reads a real, wrapped help: every flag found, and none taken from a wrapped description line", () => {
+    const features = claudeFeaturesFromHelp(REAL_HELP);
+    expect(features.missing).toEqual([]);
+    expect([...features.optional].sort()).toEqual(["--no-session-persistence", "--permission-prompts", "--restricted"]);
+
+    /** The help without one option's own line and its wrapped description. */
+    const without = (flagLine) => {
+      const out = [];
+      let dropping = false;
+      for (const line of REAL_HELP.split("\n")) {
+        if (line.startsWith(flagLine)) {
+          dropping = true;
+          continue;
+        }
+        if (dropping && /^ {3,}/.test(line)) continue;
+        dropping = false;
+        out.push(line);
+      }
+      return out.join("\n");
+    };
+    // Each of these is still named at the start of some other option's
+    // wrapped description; removing its own option line must still count.
+    for (const [flag, flagLine] of [
+      ["--tools", "  --tools <tools"],
+      ["--print", "  -p, --print"],
+      ["--output-format", "  --output-format <format>"],
+      ["--settings", "  --settings <file-or-json>"],
+      ["--append-system-prompt", "  --append-system-prompt <prompt>"],
+      ["--mcp-config", "  --mcp-config <configs"],
+      ["--strict-mcp-config", "  --strict-mcp-config"],
+      ["--allowedTools", "  --allowedTools, --allowed-tools"],
+      ["--disallowedTools", "  --disallowedTools, --disallowed-tools"],
+    ]) {
+      const help = without(flagLine);
+      expect(help, flag).not.toBe(REAL_HELP);
+      expect(claudeFeaturesFromHelp(help).missing, flag).toEqual([flag]);
+    }
+    expect(claudeFeaturesFromHelp(without("  --restricted")).missing).toEqual([]);
+    expect([...claudeFeaturesFromHelp(without("  --restricted")).optional]).not.toContain("--restricted");
+  });
+
+  it("needs dontAsk among --permission-mode's own choices, not anywhere in the help", () => {
+    const noDontAsk = REAL_HELP.replace('"dontAsk", "plan")', '"plan")').replace(
+      "Display help for command",
+      'Display help for command (see "dontAsk" in the docs)',
+    );
+    expect(noDontAsk).toContain("dontAsk");
+    expect(claudeFeaturesFromHelp(noDontAsk).missing).toEqual(['--permission-mode "dontAsk"']);
   });
 
   it("reports what an older Claude Code lacks", () => {

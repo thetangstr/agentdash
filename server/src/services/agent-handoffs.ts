@@ -36,21 +36,30 @@ import { logger } from "../middleware/logger.js";
  * hand-offs are neither recorded nor capped, exactly as before. The mandate
  * text describing hand-offs is not flagged.
  *
- * The root of an issue is the top of its parent chain. An issue created without
- * a parent by an agent running on a request belongs to that request (the run's
- * issue), and its hand-off row records that root, so the issues under it
- * resolve to the same request.
+ * The request of an issue -- its primary root -- is the top of its parent
+ * chain, or, when that top carries a root record (below), the request that
+ * record names. That primary root is what the per-request summary reports.
  *
- * Because the count follows the parent chain, an agent must not be able to
- * choose a fresh chain. So, with the flag on, an agent may place a hand-off
- * (create one with a parent) or move an issue (change its parent) only under
- * an issue it holds -- is the assignee of -- or under work below one
- * ({@link isUnderIssueHeldBy}); anything else is refused with
- * {@link AGENT_HANDOFF_PARENT_CODE}. Its own work is the only place it can put
- * a hand-off, so a hand-off always counts against a request the agent is
- * already working on. Likewise an unparented issue an agent created for itself
- * and later reassigns belongs to its run's request, exactly as if it had been
- * created as the hand-off ({@link resolveRequestRootForReassign}).
+ * Counting follows every request an issue belongs to, not only the primary
+ * one, because an agent chooses where it puts work and must not be able to
+ * restart the count by choosing:
+ *
+ * - An issue an agent creates during a run on an issue -- for itself or for
+ *   anyone, with or without a parent -- carries a root record
+ *   ({@link AGENT_REQUEST_ROOTS_ACTION}) naming the run's requests, and a
+ *   hand-off row names them too. So work the agent made for itself, under a
+ *   request or on its own, still belongs to the request it was working on.
+ * - An agent moving an issue to another parent (or to none) leaves a root
+ *   record naming the requests it was in, so the move does not take it out.
+ * - A hand-off counts against the requests of the issue it is placed under (or
+ *   reassigned from) AND the requests of the run the agent is on, and is
+ *   refused when any of them is at the cap ({@link resolveRequestRoots},
+ *   {@link requestRootsForAgentRun}, {@link checkHandoffRounds}).
+ *
+ * Known limitation: the run is the one the request names (the run header or
+ * the run's token). An agent call that names no run on an issue is counted by
+ * the parent chain and root records alone, so an unparented issue it creates
+ * that way starts a new request -- the same rule as before.
  */
 
 export const AGENT_HANDOFF_ROUND_CAP = 3;
@@ -58,7 +67,12 @@ export const AGENT_HANDOFF_ACTION = "issue.agent_handoff";
 export const AGENT_HANDOFF_RETURNED_ACTION = "issue.agent_handoff_returned";
 export const AGENT_HANDOFF_REFUSED_ACTION = "issue.agent_handoff_refused";
 export const AGENT_HANDOFF_CAP_CODE = "AGENT_HANDOFF_CAP_REACHED";
-export const AGENT_HANDOFF_PARENT_CODE = "AGENT_HANDOFF_PARENT_NOT_HELD";
+/**
+ * A root record: the requests an issue belongs to beyond its parent chain,
+ * written when an agent creates an issue during a run on another, or moves an
+ * issue. Not a round.
+ */
+export const AGENT_REQUEST_ROOTS_ACTION = "issue.agent_request_roots";
 
 /** Parent chains deeper than this are treated as rooted where the walk stopped. */
 const MAX_PARENT_DEPTH = 64;
@@ -66,6 +80,8 @@ const MAX_PARENT_DEPTH = 64;
 const MAX_SUMMARY_HANDOFFS = 50;
 
 const ROUND_ACTIONS = [AGENT_HANDOFF_ACTION, AGENT_HANDOFF_RETURNED_ACTION];
+/** Rows that say which requests an issue belongs to. */
+const ROOT_RECORD_ACTIONS = [AGENT_HANDOFF_ACTION, AGENT_REQUEST_ROOTS_ACTION];
 
 type Reader = Pick<Db, "select">;
 
@@ -77,39 +93,6 @@ export async function agentHandoffsEnabled(db: Reader, companyId: string): Promi
   return featureFlagsService(db as Db).isEnabled(companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE);
 }
 
-export function agentHandoffParentMessage(kind: "handoff" | "move"): string {
-  const what = kind === "handoff" ? "hand work to another agent" : "move an issue";
-  return (
-    `You can ${what} only under an issue you hold (are assigned to), or under work below one. ` +
-    "Put it under the issue you are working on, or leave the parent out to hand it off as part of the " +
-    "request your current run is on."
-  );
-}
-
-/**
- * Is this issue held by the agent (it is the assignee), or below an issue the
- * agent holds? Walks the parent chain from the issue itself.
- */
-export async function isUnderIssueHeldBy(
-  db: Reader,
-  input: { companyId: string; issueId: string; agentId: string },
-): Promise<boolean> {
-  let current: string | null = input.issueId;
-  const seen = new Set<string>();
-  for (let depth = 0; current && depth <= MAX_PARENT_DEPTH && !seen.has(current); depth += 1) {
-    seen.add(current);
-    const row: { parentId: string | null; assigneeAgentId: string | null } | null = await db
-      .select({ parentId: issues.parentId, assigneeAgentId: issues.assigneeAgentId })
-      .from(issues)
-      .where(and(eq(issues.id, current), eq(issues.companyId, input.companyId)))
-      .then((rows) => rows[0] ?? null);
-    if (!row) return false;
-    if (row.assigneeAgentId === input.agentId) return true;
-    current = row.parentId;
-  }
-  return false;
-}
-
 export function agentHandoffCapMessage(rounds: number): string {
   return (
     `This request has already been handed between agents ${rounds} times, which is the limit ` +
@@ -119,11 +102,28 @@ export function agentHandoffCapMessage(rounds: number): string {
   );
 }
 
+/** Every root a row names: `rootIssueId` and, on newer rows, `rootIssueIds`. */
+function rootsOfDetails(details: unknown): string[] {
+  const d = (details ?? {}) as Record<string, unknown>;
+  const out: string[] = [];
+  if (typeof d.rootIssueId === "string") out.push(d.rootIssueId);
+  if (Array.isArray(d.rootIssueIds)) for (const id of d.rootIssueIds) if (typeof id === "string") out.push(id);
+  return out;
+}
+
+const unique = (ids: Array<string | null | undefined>) => [...new Set(ids.filter((id): id is string => Boolean(id)))];
+
+/** Does this activity row name `rootIssueId` among its requests? */
+function rowNamesRoot(rootIssueId: string) {
+  return sql`(${activityLog.details} ->> 'rootIssueId' = ${rootIssueId}
+    or coalesce(${activityLog.details} -> 'rootIssueIds', '[]'::jsonb) @> jsonb_build_array(${rootIssueId}::text))`;
+}
+
 /** The hand-off record for one issue, if an agent handed it to another agent. */
 export async function latestHandoffForIssue(
   db: Reader,
   input: { companyId: string; issueId: string },
-): Promise<{ rootIssueId: string; fromAgentId: string | null; toAgentId: string | null } | null> {
+): Promise<{ rootIssueId: string; rootIssueIds: string[]; fromAgentId: string | null; toAgentId: string | null } | null> {
   const row = await db
     .select({ details: activityLog.details })
     .from(activityLog)
@@ -142,44 +142,74 @@ export async function latestHandoffForIssue(
   if (!details || typeof details.rootIssueId !== "string") return null;
   return {
     rootIssueId: details.rootIssueId,
+    rootIssueIds: unique(rootsOfDetails(details)),
     fromAgentId: typeof details.fromAgentId === "string" ? details.fromAgentId : null,
     toAgentId: typeof details.toAgentId === "string" ? details.toAgentId : null,
   };
 }
 
-/**
- * The request an issue belongs to: the top of its parent chain, or, when that
- * top was itself handed off without a parent from a run on another request,
- * that request.
- */
-export async function resolveRequestRootIssueId(
-  db: Reader,
-  input: { companyId: string; issueId: string },
-): Promise<string> {
-  let current = input.issueId;
-  const seen = new Set<string>([current]);
+/** The issue and its ancestors, nearest first, ending at the top. */
+async function parentChain(db: Reader, companyId: string, issueId: string): Promise<string[]> {
+  const chain = [issueId];
+  let current = issueId;
   for (let depth = 0; depth < MAX_PARENT_DEPTH; depth += 1) {
     const row = await db
       .select({ parentId: issues.parentId })
       .from(issues)
-      .where(and(eq(issues.id, current), eq(issues.companyId, input.companyId)))
+      .where(and(eq(issues.id, current), eq(issues.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
-    if (!row?.parentId || seen.has(row.parentId)) break;
-    seen.add(row.parentId);
+    if (!row?.parentId || chain.includes(row.parentId)) break;
+    chain.push(row.parentId);
     current = row.parentId;
   }
-  const handoff = await latestHandoffForIssue(db, { companyId: input.companyId, issueId: current });
-  return handoff?.rootIssueId ?? current;
+  return chain;
 }
 
 /**
- * The request an agent's new, unparented issue belongs to: the issue its run
- * is working on, if the run says so and that issue is in the same company.
+ * Every request an issue belongs to: the top of its parent chain, the request
+ * a root record on that top names (the primary root), and every request named
+ * by a hand-off row or root record anywhere on the chain.
  */
-export async function requestRootForAgentRun(
+export async function resolveRequestRoots(
+  db: Reader,
+  input: { companyId: string; issueId: string },
+): Promise<{ primary: string; roots: string[] }> {
+  const chain = await parentChain(db, input.companyId, input.issueId);
+  const top = chain[chain.length - 1]!;
+  const rows = await db
+    .select({ entityId: activityLog.entityId, details: activityLog.details, createdAt: activityLog.createdAt })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, input.companyId),
+        eq(activityLog.entityType, "issue"),
+        inArray(activityLog.entityId, chain),
+        inArray(activityLog.action, ROOT_RECORD_ACTIONS),
+      ),
+    )
+    .orderBy(desc(activityLog.createdAt));
+  const topRecord = rows.find((row) => row.entityId === top && typeof (row.details as Record<string, unknown> | null)?.rootIssueId === "string");
+  const primary = topRecord ? String((topRecord.details as Record<string, unknown>).rootIssueId) : top;
+  return { primary, roots: unique([primary, top, ...rows.flatMap((row) => rootsOfDetails(row.details))]) };
+}
+
+/** The request an issue belongs to (its primary root). */
+export async function resolveRequestRootIssueId(
+  db: Reader,
+  input: { companyId: string; issueId: string },
+): Promise<string> {
+  return (await resolveRequestRoots(db, input)).primary;
+}
+
+/**
+ * The requests an agent's run is working on: those of the issue the run is
+ * on, if the run is this agent's and says so. Null when the call names no run
+ * or the run is on no issue.
+ */
+export async function requestRootsForAgentRun(
   db: Reader,
   input: { companyId: string; agentId: string; runId: string | null | undefined },
-): Promise<string | null> {
+): Promise<{ primary: string; roots: string[] } | null> {
   if (!input.runId) return null;
   const run = await db
     .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
@@ -200,28 +230,15 @@ export async function requestRootForAgentRun(
     .where(and(eq(issues.id, issueId), eq(issues.companyId, input.companyId)))
     .then((rows) => rows[0] ?? null);
   if (!exists) return null;
-  return resolveRequestRootIssueId(db, { companyId: input.companyId, issueId });
+  return resolveRequestRoots(db, { companyId: input.companyId, issueId });
 }
 
-/**
- * The request an agent's reassignment counts against: the issue's own root,
- * except that an unparented issue the agent created for itself, with no
- * hand-off record, belongs to the request its run is on -- the same request
- * it would have belonged to had it been created as the hand-off. Without this,
- * creating work for yourself and then reassigning it would start a fresh count.
- */
-export async function resolveRequestRootForReassign(
+/** The request an agent's new, unparented issue belongs to: its run's primary root. */
+export async function requestRootForAgentRun(
   db: Reader,
-  input: {
-    companyId: string;
-    issue: { id: string; parentId: string | null; createdByAgentId: string | null };
-    agentId: string;
-    runId: string | null | undefined;
-  },
-): Promise<string> {
-  const root = await resolveRequestRootIssueId(db, { companyId: input.companyId, issueId: input.issue.id });
-  if (root !== input.issue.id || input.issue.parentId || input.issue.createdByAgentId !== input.agentId) return root;
-  return (await requestRootForAgentRun(db, { companyId: input.companyId, agentId: input.agentId, runId: input.runId })) ?? root;
+  input: { companyId: string; agentId: string; runId: string | null | undefined },
+): Promise<string | null> {
+  return (await requestRootsForAgentRun(db, input))?.primary ?? null;
 }
 
 /** Rounds used so far by a request: hand-offs plus hand-offs sent back. */
@@ -236,10 +253,36 @@ export async function countHandoffRounds(
       and(
         eq(activityLog.companyId, input.companyId),
         inArray(activityLog.action, ROUND_ACTIONS),
-        sql`${activityLog.details} ->> 'rootIssueId' = ${input.rootIssueId}`,
+        rowNamesRoot(input.rootIssueId),
       ),
     );
   return Number(row?.count ?? 0);
+}
+
+/**
+ * The most rounds any of these requests has used, and which request that is
+ * (the first listed on a tie, so the primary root is named when it is full).
+ */
+export async function checkHandoffRounds(
+  db: Reader,
+  input: { companyId: string; roots: string[] },
+): Promise<{ rounds: number; rootIssueId: string | null }> {
+  let best: { rounds: number; rootIssueId: string | null } = { rounds: 0, rootIssueId: input.roots[0] ?? null };
+  for (const rootIssueId of unique(input.roots)) {
+    const rounds = await countHandoffRounds(db, { companyId: input.companyId, rootIssueId });
+    if (rounds > best.rounds) best = { rounds, rootIssueId };
+  }
+  return best;
+}
+
+/** The requests of an issue placed under `parentId` (or none) by an agent's run, together. */
+export async function requestRootsForPlacement(
+  db: Reader,
+  input: { companyId: string; agentId: string; runId: string | null | undefined; parentId: string | null },
+): Promise<{ primary: string | null; roots: string[] }> {
+  const parent = input.parentId ? await resolveRequestRoots(db, { companyId: input.companyId, issueId: input.parentId }) : null;
+  const run = await requestRootsForAgentRun(db, input);
+  return { primary: parent?.primary ?? run?.primary ?? null, roots: unique([...(parent?.roots ?? []), ...(run?.roots ?? [])]) };
 }
 
 export type HandoffRoundCheck =
@@ -266,12 +309,30 @@ export function handoffRoundCheck(rounds: number, rootIssueId: string, opts: { r
   };
 }
 
-/** May an agent hand an issue in this request to another agent now? */
-export async function checkHandoffRoundAvailable(
-  db: Reader,
-  input: { companyId: string; rootIssueId: string; revealRoot?: boolean },
-): Promise<HandoffRoundCheck> {
-  return handoffRoundCheck(await countHandoffRounds(db, input), input.rootIssueId, { revealRoot: input.revealRoot });
+/** Record which requests an issue belongs to (an agent's create, or an agent's move). */
+export async function recordAgentRequestRoots(
+  db: Db,
+  input: {
+    companyId: string;
+    issueId: string;
+    agentId: string;
+    runId: string | null;
+    rootIssueId: string;
+    rootIssueIds: string[];
+    reason: "created" | "moved";
+  },
+): Promise<void> {
+  await logActivity(db, {
+    companyId: input.companyId,
+    actorType: "agent",
+    actorId: input.agentId,
+    agentId: input.agentId,
+    runId: input.runId,
+    action: AGENT_REQUEST_ROOTS_ACTION,
+    entityType: "issue",
+    entityId: input.issueId,
+    details: { rootIssueId: input.rootIssueId, rootIssueIds: unique([input.rootIssueId, ...input.rootIssueIds]), reason: input.reason },
+  });
 }
 
 /** Record one agent-to-agent hand-off. Returns the round it used. */
@@ -281,7 +342,10 @@ export async function recordAgentHandoff(
     companyId: string;
     issueId: string;
     parentIssueId: string | null;
+    /** The primary root: the request the summary reports this hand-off under. */
     rootIssueId: string;
+    /** Every request it counts against (the placement's and the run's). */
+    rootIssueIds?: string[];
     fromAgentId: string;
     toAgentId: string;
     runId: string | null;
@@ -289,7 +353,8 @@ export async function recordAgentHandoff(
     routedFromUserId?: string | null;
   },
 ): Promise<number> {
-  const round = (await countHandoffRounds(db, input)) + 1;
+  const rootIssueIds = unique([input.rootIssueId, ...(input.rootIssueIds ?? [])]);
+  const round = (await checkHandoffRounds(db, { companyId: input.companyId, roots: rootIssueIds })).rounds + 1;
   await logActivity(db, {
     companyId: input.companyId,
     actorType: "agent",
@@ -301,6 +366,7 @@ export async function recordAgentHandoff(
     entityId: input.issueId,
     details: {
       rootIssueId: input.rootIssueId,
+      rootIssueIds,
       parentIssueId: input.parentIssueId,
       fromAgentId: input.fromAgentId,
       toAgentId: input.toAgentId,
@@ -362,6 +428,8 @@ export async function emitHandoffReturned(
     issueId: string;
     parentIssueId: string | null;
     rootIssueId: string;
+    /** Every request the return counts against; defaults to the primary root. */
+    rootIssueIds?: string[];
     /** The agent sending the work back. */
     fromAgentId: string;
     /** The agent receiving it back, when there is one. */
@@ -372,7 +440,8 @@ export async function emitHandoffReturned(
     runId: string | null;
   },
 ): Promise<number> {
-  const round = (await countHandoffRounds(db, input)) + 1;
+  const rootIssueIds = unique([input.rootIssueId, ...(input.rootIssueIds ?? [])]);
+  const round = (await checkHandoffRounds(db, { companyId: input.companyId, roots: rootIssueIds })).rounds + 1;
   await logActivity(db, {
     companyId: input.companyId,
     actorType: "agent",
@@ -384,6 +453,7 @@ export async function emitHandoffReturned(
     entityId: input.issueId,
     details: {
       rootIssueId: input.rootIssueId,
+      rootIssueIds,
       parentIssueId: input.parentIssueId,
       fromAgentId: input.fromAgentId,
       toAgentId: input.toAgentId,
@@ -407,7 +477,7 @@ export async function emitHandoffReturned(
 
 /**
  * Every issue in a request: the root, everything under it, and everything
- * under an unparented issue handed off from a run on it.
+ * under an issue whose hand-off row or root record names the request.
  */
 export async function listRequestIssueIds(
   db: Reader,
@@ -419,8 +489,8 @@ export async function listRequestIssueIds(
     .where(
       and(
         eq(activityLog.companyId, input.companyId),
-        eq(activityLog.action, AGENT_HANDOFF_ACTION),
-        sql`${activityLog.details} ->> 'rootIssueId' = ${input.rootIssueId}`,
+        inArray(activityLog.action, ROOT_RECORD_ACTIONS),
+        rowNamesRoot(input.rootIssueId),
       ),
     );
   const seeds = new Set<string>([input.rootIssueId, ...linked.map((row) => row.entityId)]);
@@ -497,7 +567,7 @@ export async function summarizeRequestHandoffs(
       and(
         eq(activityLog.companyId, input.companyId),
         inArray(activityLog.action, ROUND_ACTIONS),
-        sql`${activityLog.details} ->> 'rootIssueId' = ${input.rootIssueId}`,
+        rowNamesRoot(input.rootIssueId),
       ),
     )
     .orderBy(activityLog.createdAt)

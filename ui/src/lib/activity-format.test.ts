@@ -412,6 +412,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.agent_handoff",
   "issue.agent_handoff_refused",
   "issue.agent_handoff_returned",
+  "issue.agent_request_roots",
   "issue.approval_linked",
   "issue.approval_unlinked",
   "issue.approvers_updated",
@@ -556,6 +557,7 @@ const CONSTANT_ACTION_WRITES = new Map<string, string | null>([
   ["AGENT_HANDOFF_ACTION", "issue.agent_handoff"], // services/agent-handoffs.ts
   ["AGENT_HANDOFF_RETURNED_ACTION", "issue.agent_handoff_returned"], // services/agent-handoffs.ts
   ["AGENT_HANDOFF_REFUSED_ACTION", "issue.agent_handoff_refused"], // services/agent-handoffs.ts
+  ["AGENT_REQUEST_ROOTS_ACTION", "issue.agent_request_roots"], // services/agent-handoffs.ts
   ["DEMO_SCOPE", null], // services/handshake-demo.ts — attestation scope, not an activity action
 ]);
 
@@ -842,6 +844,8 @@ describe("plumbing hidden by default", () => {
       // read, like gmail.read_thread: shown only under "Show system events".
       "bridge.work_file_downloaded",
       "bridge.work_file_text_read",
+      // Hand-off bookkeeping: which requests an agent's issue belongs to.
+      "issue.agent_request_roots",
       "cost.reported",
       "heartbeat.completed",
       "heartbeat.cancel_failed",
