@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, gt, gte, inArray, isNull, max, min, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { getClosedIsolatedExecutionWorkspaceMessage, isClosedIsolatedExecutionWorkspace } from "@paperclipai/shared";
 import {
   activityLog,
   agents,
@@ -15,13 +16,20 @@ import {
 } from "@paperclipai/db";
 import { HttpError } from "../errors.js";
 import { logger } from "../middleware/logger.js";
-import { isProjectIdVisible, issueVisibilityCondition, visibleAgentIdsFor } from "../routes/visibility.js";
+import {
+  isProjectIdVisible,
+  issueVisibilityCondition,
+  projectVisibilityCondition,
+  visibleAgentIdsFor,
+} from "../routes/visibility.js";
 import { accessService } from "./access.js";
 import { logActivity } from "./activity-log.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
+import { executionWorkspaceService } from "./execution-workspaces.js";
 import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
 import { IssueCommentPolicyRefusal, isClosedIssueStatus } from "./issue-mutation-actions.js";
 import { issuePatchActions, type IssuePatchContext } from "./issue-patch-actions.js";
+import { issuePatchHooks, type IssuePatchHooks } from "./issue-patch-hooks.js";
 import { issueReferenceService } from "./issue-references.js";
 import { issueService } from "./issues.js";
 import type { heartbeatService } from "./heartbeat.js";
@@ -95,6 +103,11 @@ export const REQUEST_LIMITS = {
   deliveredWindowDays: 14,
   /** Candidate rows read per call; more says `truncated`. */
   scan: 500,
+  /**
+   * Candidate rows the session-start digest reads: it runs on every session
+   * start, and says "at least" (`truncated`) when there are more.
+   */
+  digestScan: 100,
 } as const;
 
 /**
@@ -103,6 +116,9 @@ export const REQUEST_LIMITS = {
  * the database, so the two clocks can differ by a moment.
  */
 const ACK_CLOCK_SKEW_MS = 5_000;
+
+/** How an agent the requester cannot see is named to them. */
+export const HIDDEN_AGENT_LABEL = "an agent you cannot see";
 
 /** The prefix of the comment a change request posts, read back word for word. */
 export const CHANGE_REQUEST_COMMENT_PREFIX = "Changes requested on the delivered result.";
@@ -227,9 +243,15 @@ export function stewardRequestsService(
   options: {
     /** Wakes on create and runs the issue update pipeline on close-out. */
     runtime?: PatchRuntime;
+    /**
+     * The issue update hooks the page's PATCH route passes (review queue,
+     * telemetry), so a close-out here has the page's effects. Tests substitute them.
+     */
+    patchHooks?: IssuePatchHooks;
   } = {},
 ) {
   const work = stewardWorkService(db);
+  const patchHooks = options.patchHooks ?? issuePatchHooks(db);
   const access = accessService(db);
   const accountability = agentAccountabilityService(db);
 
@@ -417,12 +439,17 @@ export function stewardRequestsService(
     // The project, when one is named: one the requester sees, and so does the person.
     let project: { id: string; name: string; restricted: boolean } | null = null;
     if (projectGiven) {
-      const rows = await db
+      // One query: the company's open projects the requester can see.
+      const visible = await db
         .select({ id: projects.id, name: projects.name, visibility: projects.visibility })
         .from(projects)
-        .where(and(eq(projects.companyId, owner.companyId), isNull(projects.archivedAt)));
-      const visible = [];
-      for (const row of rows) if (await isProjectIdVisible(db, owner.req, row.id)) visible.push(row);
+        .where(
+          and(
+            eq(projects.companyId, owner.companyId),
+            isNull(projects.archivedAt),
+            projectVisibilityCondition(owner.req, owner.companyId),
+          ),
+        );
       const named = visible.filter((row) => normalizeName(row.name) === normalizeName(projectGiven));
       if (named.length !== 1) {
         return {
@@ -528,22 +555,54 @@ export function stewardRequestsService(
   /**
    * The deliverable owner (O7): the agent of the person the request was asked
    * of, by the same routing rule the create used; that person when no agent
-   * takes their work; otherwise the agent holding it, if it is not the
-   * requester's own.
+   * takes their work. Without a record of who it was asked of, the person
+   * holding it keeps it (a person assignment made on the page that the
+   * routing rule did not apply to, such as one kept with them on purpose, is
+   * not moved to their agent from here), or else the agent holding it, if it
+   * is not the requester's own. `hidden` marks an agent the requester cannot
+   * see: it is never named to them.
    */
   async function deliverableOwner(owner: Owner, issue: IssueRow) {
-    const requestedFor = (await requestedForUserIds(db, owner.companyId, [issue.id])).get(issue.id)
-      ?? (issue.assigneeUserId && issue.assigneeUserId !== owner.userId ? issue.assigneeUserId : null);
-    if (requestedFor) {
-      const routed = await routeFor(owner, requestedFor);
-      if (routed) return { agentId: routed.toAgentId, userId: null, routed, personUserId: requestedFor };
-      const member = await activeMembership(db, owner.companyId, requestedFor);
-      if (member) return { agentId: null, userId: requestedFor, routed: null, personUserId: requestedFor };
+    const recorded = (await requestedForUserIds(db, owner.companyId, [issue.id])).get(issue.id) ?? null;
+    if (recorded) {
+      const routed = await routeFor(owner, recorded);
+      if (routed) return { agentId: routed.toAgentId, userId: null, routed, personUserId: recorded, hidden: false };
+      const member = await activeMembership(db, owner.companyId, recorded);
+      if (member) return { agentId: null, userId: recorded, routed: null, personUserId: recorded, hidden: false };
+    } else if (issue.assigneeUserId && issue.assigneeUserId !== owner.userId) {
+      const member = await activeMembership(db, owner.companyId, issue.assigneeUserId);
+      if (member) {
+        return { agentId: null, userId: issue.assigneeUserId, routed: null, personUserId: issue.assigneeUserId, hidden: false };
+      }
     }
     if (issue.assigneeAgentId && !owner.agentIds.includes(issue.assigneeAgentId)) {
-      return { agentId: issue.assigneeAgentId, userId: null, routed: null, personUserId: null };
+      const visible = await visibleAgentIdsFor(db, owner.req, owner.companyId);
+      const hidden = visible !== null && !visible.has(issue.assigneeAgentId);
+      return { agentId: issue.assigneeAgentId, userId: null, routed: null, personUserId: null, hidden };
     }
     return null;
+  }
+
+  /** "Agent B, Person B's agent", "Person B", or, for an agent hidden from the requester, never its name. */
+  async function deliverableOwnerLabel(target: NonNullable<Awaited<ReturnType<typeof deliverableOwner>>>) {
+    if (target.agentId && target.hidden) return HIDDEN_AGENT_LABEL;
+    const names = await agentNames([target.agentId]);
+    const people = await userNames([target.userId, target.personUserId]);
+    if (target.agentId) {
+      return `${names.get(target.agentId) ?? "the agent"}${target.personUserId ? `, ${people.get(target.personUserId) ?? "their person"}'s agent` : ""}`;
+    }
+    return people.get(target.userId!) ?? "that person";
+  }
+
+  /** Why a request has no result for the requester yet, in words. */
+  async function undeliveredState(issue: IssueRow): Promise<string> {
+    if (issue.status === "cancelled") return "cancelled";
+    if (issue.status === "in_review" && issue.assigneeAgentId) {
+      const steward = (await accountability.resolveForAgents(issue.companyId, [issue.assigneeAgentId])).get(issue.assigneeAgentId);
+      const name = steward?.userId ? (await userNames([steward.userId])).get(steward.userId) : null;
+      return `in review with ${name ?? "the person whose agent drafted it"}, who finishes it before it comes back to you`;
+    }
+    return `still being worked on (${issue.status})`;
   }
 
   async function respond(endpointId: string, input: Record<string, unknown>) {
@@ -558,10 +617,10 @@ export function stewardRequestsService(
     const ref = issue.identifier ?? issue.id;
     const title = frameUntrustedText(issue.title, REQUEST_BRIEF_CAPS.title);
 
-    if (!isDeliveredToRequester(issue, owner.userId)) {
+    if (!isDeliveredToRequester(issue, owner)) {
       return workRefusal(
         "not_delivered",
-        `${ref} has no result to act on yet: it is ${issue.status === "cancelled" ? "cancelled" : `still being worked on (${issue.status})`}. Check work_list for who has it.`,
+        `${ref} has no result to act on yet: it is ${await undeliveredState(issue)}. Check work_list for who has it.`,
       );
     }
     const bound = {
@@ -606,11 +665,7 @@ export function stewardRequestsService(
         `No one's agent owns ${ref} now, so there is nobody to hand the changes to from here. Reassign it on the page.`,
       );
     }
-    const names = await agentNames([target.agentId]);
-    const people = await userNames([target.userId, target.personUserId]);
-    const targetLabel = target.agentId
-      ? `${names.get(target.agentId) ?? "the agent"}${target.personUserId ? `, ${people.get(target.personUserId) ?? "their person"}'s agent` : ""}`
-      : people.get(target.userId!) ?? "that person";
+    const targetLabel = await deliverableOwnerLabel(target);
     const commentBody = `${CHANGE_REQUEST_COMMENT_PREFIX}\n\n${note}`;
     const reassign = (target.agentId ?? null) !== issue.assigneeAgentId || (target.userId ?? null) !== issue.assigneeUserId;
     const handle = await mintHandle(owner, "request_changes", {
@@ -771,7 +826,7 @@ export function stewardRequestsService(
       issue.status !== payload.status ||
       issue.assigneeAgentId !== (payload.assigneeAgentId ?? null) ||
       issue.assigneeUserId !== (payload.assigneeUserId ?? null);
-    if (movedOn || !isDeliveredToRequester(issue, owner.userId)) {
+    if (movedOn || !isDeliveredToRequester(issue, owner)) {
       return workRefusal(
         "moved_on",
         `${ref} changed since the read-back (it is now ${issue.status}). Nothing was sent; read it again and propose again.`,
@@ -779,7 +834,9 @@ export function stewardRequestsService(
     }
     if (!options.runtime) throw new HttpError(503, "Issue updates are not available on this server");
     const channel = channelOf(owner);
-    const actions = issuePatchActions(db, options.runtime);
+    // The page's hooks: the review queue follows the status (an accepted
+    // in_review result leaves the queue), and completion telemetry.
+    const actions = issuePatchActions(db, options.runtime, patchHooks);
     const baseContext = {
       issueId: issue.id,
       companyId: owner.companyId,
@@ -787,7 +844,15 @@ export function stewardRequestsService(
       actorKind: "board",
       actorSource: "bridge_endpoint",
       attribution: channel,
-      validate: async () => undefined,
+      // The page's PATCH refuses a comment on an issue whose isolated
+      // execution workspace is closed; so does a change request from here.
+      validate: async (executor: unknown, current: { executionWorkspaceId?: string | null }, intent: { comment?: unknown }) => {
+        if (!intent.comment || !current.executionWorkspaceId) return;
+        const workspace = await executionWorkspaceService(executor as Db).getById(current.executionWorkspaceId);
+        if (workspace && isClosedIsolatedExecutionWorkspace(workspace)) {
+          throw new IssueCommentPolicyRefusal(409, { error: getClosedIsolatedExecutionWorkspaceMessage(workspace) });
+        }
+      },
       validateResume: async () => undefined,
       validateAssignment: async (executor: unknown) => {
         if (!(await mayAssign(owner, executor as Db))) {
@@ -867,9 +932,9 @@ export function stewardRequestsService(
       issue: { issueId: issue.id, identifier: issue.identifier, status: accepted.issue.status },
       commentId,
       handedTo: target.agentId
-        ? { kind: "agent" as const, name: names.get(target.agentId) ?? null }
+        ? { kind: "agent" as const, name: target.hidden ? null : names.get(target.agentId) ?? null }
         : { kind: "person" as const, name: people.get(target.userId!) ?? null },
-      note: "Sent as you. The agent is woken with your comment.",
+      note: target.agentId ? "Sent as you. The agent is woken with your comment." : "Sent as you. It is back with them, with your comment.",
     };
   }
 
@@ -877,7 +942,9 @@ export function stewardRequestsService(
   // Your requests: where each one is, and for how long
   // -------------------------------------------------------------------------
 
-  async function describeRequests(owner: Owner, now = new Date()) {
+  async function describeRequests(owner: Owner, opts: { scan?: number; now?: Date } = {}) {
+    const now = opts.now ?? new Date();
+    const scan = opts.scan ?? REQUEST_LIMITS.scan;
     const windowStart = new Date(now.getTime() - REQUEST_LIMITS.deliveredWindowDays * 24 * 60 * 60 * 1000);
     const rows = await db
       .select()
@@ -892,9 +959,9 @@ export function stewardRequestsService(
         ),
       )
       .orderBy(desc(issues.updatedAt))
-      .limit(REQUEST_LIMITS.scan + 1);
-    const scanTruncated = rows.length > REQUEST_LIMITS.scan;
-    const candidates = rows.slice(0, REQUEST_LIMITS.scan);
+      .limit(scan + 1);
+    const scanTruncated = rows.length > scan;
+    const candidates = rows.slice(0, scan);
     if (candidates.length === 0) return { items: [] as RequestItem[], scanTruncated };
     const ids = candidates.map((row) => row.id);
 
@@ -995,7 +1062,7 @@ export function stewardRequestsService(
         waitingOn = { kind: "you", name: null, why: "handed_back" };
         since = changedAt;
         summaryTail = "";
-      } else if (row.status === "in_review") {
+      } else if (row.status === "in_review" && isDeliveredToRequester(row, owner)) {
         delivered = true;
         waitingOn = { kind: "you", name: null, why: "ready_for_review" };
         since = changedAt;
@@ -1015,6 +1082,12 @@ export function stewardRequestsService(
           waitingOn = { kind: "person", name: personName, why: "approval" };
           since = approval;
           summaryTail = ` (an approval for ${name ?? "their agent"})`;
+        } else if (row.status === "in_review" && personName) {
+          // The agent handed its draft to its own person, who finishes it
+          // before the result comes back to the requester.
+          waitingOn = { kind: "person", name: personName, why: "steward_review" };
+          since = changedAt;
+          summaryTail = ` (${name ?? "their agent"}'s draft is in their review)`;
         } else {
           waitingOn = { kind: "agent", name, why: row.status === "blocked" ? "blocked" : "working" };
           since = changedAt;
@@ -1023,7 +1096,7 @@ export function stewardRequestsService(
       } else if (row.assigneeUserId) {
         waitingOn = { kind: "person", name: people.get(row.assigneeUserId) ?? "a person", why: "assigned" };
         since = changedAt;
-        summaryTail = row.status === "blocked" ? " (blocked)" : "";
+        summaryTail = row.status === "blocked" ? " (blocked)" : row.status === "in_review" ? " (in review)" : "";
       } else {
         waitingOn = { kind: "nobody", name: null, why: "unassigned" };
         since = changedAt;
@@ -1097,7 +1170,9 @@ export function stewardRequestsService(
       throw err;
     }
     if (isWorkRefusal(owner)) return null;
-    const { items } = await describeRequests(owner);
+    // Bounded: the digest runs on every session start. Past the cap the
+    // counts are a floor, said by `truncated`, and work_list has the rest.
+    const { items, scanTruncated } = await describeRequests(owner, { scan: REQUEST_LIMITS.digestScan });
     const delivered = items.filter((item) => item.delivered);
     const waiting = items.filter((item) => !item.delivered);
     const pointers = [...delivered, ...waiting].slice(0, REQUEST_LIMITS.digestItems).map((item) => ({
@@ -1107,7 +1182,14 @@ export function stewardRequestsService(
       delivered: item.delivered,
       summary: item.summary,
     }));
-    return { total: items.length, delivered: delivered.length, waiting: waiting.length, shown: pointers.length, items: pointers };
+    return {
+      total: items.length,
+      delivered: delivered.length,
+      waiting: waiting.length,
+      shown: pointers.length,
+      truncated: scanTruncated,
+      items: pointers,
+    };
   }
 
   async function list(endpointId: string, input: { limit?: unknown } = {}) {

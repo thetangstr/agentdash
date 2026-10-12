@@ -144,6 +144,67 @@ describe("bridge inbox rendering", () => {
     });
     expect(renderInbox(quiet as never, NOW)).toBe("AgentDash inbox: nothing waiting on you.");
   });
+
+  // The person's requests of other people, as agentdash-connect renders them:
+  // after their own agents' items, before finished work, in the server's words.
+  const requestsOnly = (requests: Record<string, unknown>) =>
+    digest({
+      events: [],
+      digest: {
+        agentsAnsweredFor: 1,
+        approvals: { total: 0, shown: 0, items: [] },
+        blockers: { total: 0, shown: 0, items: [] },
+        completions: { total: 0, shown: 0, items: [] },
+        requests,
+        truncated: false,
+      },
+    });
+
+  it("renders your requests after blockers and before finished work", () => {
+    const text = renderInbox(
+      digest({
+        digest: {
+          ...(digest().digest as Record<string, unknown>),
+          requests: {
+            total: 3,
+            delivered: 1,
+            waiting: 2,
+            shown: 2,
+            items: [
+              { issueId: "i1", identifier: "ABC-12", title: "Draft the vendor summary", delivered: true, summary: "done 3 hours ago; accept it or ask for changes" },
+              { issueId: "i2", identifier: "ABC-9", title: "Check the figures", delivered: false, summary: "waiting on Person B for 2 days (Agent B's draft is in their review)" },
+            ],
+          },
+        },
+      }) as never,
+      NOW,
+    );
+    const yours = text.indexOf("Your requests (3: 1 delivered, 2 waiting):");
+    expect(yours).toBeGreaterThan(text.indexOf("Stopped and needs you"));
+    expect(yours).toBeLessThan(text.indexOf("Finished (3):"));
+    expect(text).toContain('  - ABC-12 "Draft the vendor summary" — done 3 hours ago; accept it or ask for changes');
+    expect(text).toContain('  - ABC-9 "Check the figures" — waiting on Person B for 2 days (Agent B\'s draft is in their review)');
+    expect(text).toContain("… and 1 more (3 in total)");
+    expect(text).toContain("Accept a result or ask for changes on the issue in AgentDash.");
+  });
+
+  it("is not empty when only your requests are waiting, and says when the counts are a floor", () => {
+    const text = renderInbox(
+      requestsOnly({
+        total: 100,
+        delivered: 0,
+        waiting: 100,
+        shown: 1,
+        truncated: true,
+        items: [{ issueId: "i2", identifier: "ABC-9", title: "Check\nthe figures", delivered: false, summary: "waiting on Agent B for 5 hours (working on it)" }],
+      }) as never,
+      NOW,
+    );
+    expect(text).not.toContain("nothing waiting on you");
+    expect(text).toContain("Your requests (at least 100: 0 delivered, 100 waiting):");
+    expect(text).toContain('  - ABC-9 "Check the figures" — waiting on Agent B for 5 hours (working on it)');
+    expect(text).not.toContain("Accept a result");
+  });
 });
 
 describe("bridge inbox command", () => {
@@ -217,6 +278,38 @@ describe("bridge inbox command", () => {
     );
     expect(code).toBe(0);
     expect(lines).toEqual([]);
+  });
+
+  it("is not quiet when only your requests are waiting", async () => {
+    const lines: string[] = [];
+    const onlyRequests = digest({
+      events: [],
+      digest: {
+        agentsAnsweredFor: 1,
+        approvals: { total: 0, shown: 0, items: [] },
+        blockers: { total: 0, shown: 0, items: [] },
+        completions: { total: 0, shown: 0, items: [] },
+        requests: {
+          total: 1,
+          delivered: 1,
+          waiting: 0,
+          shown: 1,
+          items: [{ issueId: "i1", identifier: "ABC-12", title: "Draft the vendor summary", delivered: true, summary: "done 1 hour ago; accept it or ask for changes" }],
+        },
+        truncated: false,
+      },
+    });
+    const code = await runBridgeInbox(
+      { server: "http://x.test", tokenFile, quietWhenEmpty: true },
+      {
+        env: {},
+        log: (line) => lines.push(line),
+        errorLog: () => {},
+        fetchImpl: makeFetch({ sync: () => ({ ok: true, body: onlyRequests }) }).impl,
+      },
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("Your requests (1: 1 delivered, 0 waiting):");
   });
 
   it("asks for the digest and sends the endpoint token as a bearer", async () => {

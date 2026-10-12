@@ -587,7 +587,9 @@ export function renderInbox(response, now, { session = false } = {}) {
   // Work this person asked other people for: results to accept first, then
   // what is still waiting and on whom. After their own agents' items.
   if (requests.total > 0) {
-    lines.push(`Your requests (${requests.total}: ${requests.delivered} delivered, ${requests.waiting} waiting):`);
+    // `truncated`: the server counted only its most recent requests, so the counts are a floor.
+    const atLeast = requests.truncated === true ? "at least " : "";
+    lines.push(`Your requests (${atLeast}${requests.total}: ${requests.delivered} delivered, ${requests.waiting} waiting):`);
     for (const item of requests.items ?? []) lines.push(requestLine(item));
     const more = remainder(requests);
     if (more) lines.push(more);

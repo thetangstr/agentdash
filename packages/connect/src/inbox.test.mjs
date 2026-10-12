@@ -175,6 +175,23 @@ describe("renderInbox", () => {
     expect(text).not.toContain("Accept a result");
   });
 
+  it("says the request counts are a floor when the server counted only its most recent", () => {
+    const response = {
+      events: [],
+      digest: digest({
+        requests: {
+          total: 100,
+          delivered: 2,
+          waiting: 98,
+          shown: 0,
+          truncated: true,
+          items: [],
+        },
+      }),
+    };
+    expect(renderInbox(response, NOW)).toContain("Your requests (at least 100: 2 delivered, 98 waiting):");
+  });
+
   it("keeps the CLI mirror's closing line in step", () => {
     const mirror = readFileSync(new URL("../../../cli/src/commands/bridge-inbox.ts", import.meta.url), "utf8");
     expect(mirror).toContain(JSON.stringify(TERMINAL_CLOSING_LINE));

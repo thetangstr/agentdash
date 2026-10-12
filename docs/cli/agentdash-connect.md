@@ -272,13 +272,18 @@ cannot travel with a request yet.
 
 `work_list` shows your requests under `requests`: delivered results first, then
 what is still waiting, each with who it waits on and for how long ("waiting on
-Person B for 2 days"), worked out on the server. A delivered result stays there
-until you accept it, ask for changes or act on it on the page, for at most 14
-days. `work_read` reads a request as the issue itself, its comments, documents
-and attachments; the other person's agent's run log and their other work are
-not yours to read and answer as if they did not exist. The session-start
-digest adds a "Your requests" section with counts and pointers, never the
-brief.
+Person B for 2 days"), worked out on the server. A result is delivered when it
+is done, handed back to you, or in review with you as the reviewer; an agent's
+draft in its own person's review is still theirs ("waiting on Person B ...
+(Agent B's draft is in their review)"). A delivered result stays there until
+you accept it, ask for changes or act on it on the page, for at most 14 days.
+`work_read` reads a request as the issue itself, its comments, documents and
+attachments; the other person's agent's run log and their other work are not
+yours to read and answer as if they did not exist. The session-start digest
+adds a "Your requests" section with counts and pointers, never the brief; it
+counts your 100 most recently updated requests and says "at least" when there
+are more.
+`paperclipai bridge inbox` shows the same section.
 
 ## Nothing left running
 

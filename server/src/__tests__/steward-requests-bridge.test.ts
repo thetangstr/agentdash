@@ -11,8 +11,10 @@ import {
   companies,
   companyMemberships,
   createDb,
+  executionWorkspaces,
   heartbeatRuns,
   issueComments,
+  issueReviewQueueState,
   issues,
   issueThreadInteractions,
   principalPermissionGrants,
@@ -29,8 +31,10 @@ import { bridgeRoutes } from "../routes/bridge.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { featureFlagsService } from "../services/feature-flags.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
+import { isDeliveredToRequester } from "../services/steward-request-scope.js";
 import {
   CHANGE_REQUEST_COMMENT_PREFIX,
+  HIDDEN_AGENT_LABEL,
   composeRequestDescription,
   parseDeadline,
   waitedInWords,
@@ -89,6 +93,42 @@ describe("request helpers", () => {
     expect(text).toContain("Deadline: 2026-10-20");
     expect(text).toContain("## What is wanted\n\nA one-page note.");
     expect(text).toContain("## What done means\n\nReviewed by Person B.");
+  });
+
+  it("counts a result in review as delivered only when the requester is the reviewer", () => {
+    const requester = { userId: "user-a", agentIds: ["agent-a"] };
+    const inReview = { status: "in_review", assigneeUserId: null, assigneeAgentId: "agent-b" };
+    // Agent B's draft in its own person's review: not the requester's yet.
+    expect(isDeliveredToRequester(inReview, requester)).toBe(false);
+    // Handed to the requester, or held by an agent the requester answers for.
+    expect(isDeliveredToRequester({ ...inReview, assigneeAgentId: null, assigneeUserId: "user-a" }, requester)).toBe(true);
+    expect(isDeliveredToRequester({ ...inReview, assigneeAgentId: "agent-a" }, requester)).toBe(true);
+    // The execution policy names the requester as the review's participant.
+    expect(
+      isDeliveredToRequester(
+        { ...inReview, executionState: { currentStageId: "s1", currentParticipant: { type: "user", userId: "user-a" } } },
+        requester,
+      ),
+    ).toBe(true);
+    expect(
+      isDeliveredToRequester(
+        {
+          ...inReview,
+          executionPolicy: { stages: [{ id: "s1", participants: [{ id: "p1", type: "user", userId: "user-a" }] }] },
+          executionState: { currentStageId: "s1", currentParticipant: { type: "user", userId: "user-b" } },
+        },
+        requester,
+      ),
+    ).toBe(true);
+    expect(
+      isDeliveredToRequester(
+        { ...inReview, executionState: { currentStageId: "s1", currentParticipant: { type: "user", userId: "user-b" } } },
+        requester,
+      ),
+    ).toBe(false);
+    // Done is delivered whoever holds it; cancelled never is.
+    expect(isDeliveredToRequester({ ...inReview, status: "done" }, requester)).toBe(true);
+    expect(isDeliveredToRequester({ ...inReview, status: "cancelled", assigneeUserId: "user-a" }, requester)).toBe(false);
   });
 });
 
@@ -512,12 +552,22 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
     expect(res.body.handle).toBeUndefined();
   });
 
-  it("accepts a result in review as done, as the requester, and takes it off the list", async () => {
+  it("accepts a result in review with the requester as done, as the requester, and takes it off the list and the review queue", async () => {
     const { company, personA } = await seed();
     const endpoint = await endpointFor(company.id, personA);
     const { server } = app(endpoint);
     const { issue } = await requestOfPersonB(server);
-    await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issue.id));
+    // Person B finished it and handed it to the requester for review; the
+    // page's in_review hook put it in the review queue.
+    await db
+      .update(issues)
+      .set({ status: "in_review", assigneeAgentId: null, assigneeUserId: personA })
+      .where(eq(issues.id, issue.id));
+    await db.insert(issueReviewQueueState).values({
+      issueId: issue.id,
+      companyId: company.id,
+      escalateAfter: new Date(Date.now() + 60_000),
+    });
 
     const proposed = await request(server).post("/api/bridge/work/request/respond").send({ issueId: issue.id, action: "accept" });
     expect(proposed.body.ok).toBe(true);
@@ -535,6 +585,127 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
 
     const list = await request(server).post("/api/bridge/work/list").send({});
     expect(list.body.requests.total).toBe(0);
+
+    // The page's status hook ran: a finished issue leaves the review queue,
+    // so the review cycle never escalates it.
+    expect(await db.select().from(issueReviewQueueState).where(eq(issueReviewQueueState.issueId, issue.id))).toHaveLength(0);
+  });
+
+  it("does not count an agent's draft in its own person's review as delivered: refused, and listed as waiting on that person", async () => {
+    const { company, personA, agentB } = await seed();
+    const endpoint = await endpointFor(company.id, personA);
+    const { server } = app(endpoint);
+    const { issue } = await requestOfPersonB(server);
+    // Agent B handed its draft to Person B, its steward, for review.
+    await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issue.id));
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0]!.assigneeAgentId).toBe(agentB.id);
+
+    const respond = await request(server).post("/api/bridge/work/request/respond").send({ issueId: issue.id, action: "accept" });
+    expect(respond.body).toMatchObject({ ok: false, code: "not_delivered" });
+    expect(respond.body.reason).toContain("in review with Person B");
+    expect(respond.body.handle).toBeUndefined();
+    const changes = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.id, action: "changes", note: "Shorter, please." });
+    expect(changes.body).toMatchObject({ ok: false, code: "not_delivered" });
+
+    const list = await request(server).post("/api/bridge/work/list").send({});
+    expect(list.body.requests).toMatchObject({ delivered: { total: 0 }, waiting: { total: 1 } });
+    expect(list.body.requests.waiting.items[0]).toMatchObject({
+      issueId: issue.id,
+      delivered: false,
+      waitingOn: { kind: "person", name: "Person B", why: "steward_review" },
+    });
+    expect(list.body.requests.waiting.items[0].summary).toMatch(/^waiting on Person B for .+ \(Agent B's draft is in their review\)$/);
+
+    const read = await request(server).post("/api/bridge/work/read").send({ issueId: issue.id });
+    expect(read.body.yourRequest).toMatchObject({ delivered: false });
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0]!.status).toBe("in_review");
+  });
+
+  it("refuses a change request on an issue whose isolated workspace is closed, as the page does", async () => {
+    const { company, personA, personB } = await seed();
+    const endpoint = await endpointFor(company.id, personA);
+    const { server } = app(endpoint);
+    const { issue } = await requestOfPersonB(server);
+    const project = await db
+      .insert(projects)
+      .values({ companyId: company.id, name: "Open work", createdByUserId: personB })
+      .returning()
+      .then((rows) => rows[0]!);
+    const workspace = await db
+      .insert(executionWorkspaces)
+      .values({
+        companyId: company.id,
+        projectId: project.id,
+        sourceIssueId: issue.id,
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "Closed workspace",
+        status: "archived",
+        closedAt: new Date(),
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await db
+      .update(issues)
+      .set({ status: "done", completedAt: new Date(), executionWorkspaceId: workspace.id })
+      .where(eq(issues.id, issue.id));
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.id, action: "changes", note: "Add the third vendor's pricing." });
+    expect(proposed.body.ok).toBe(true);
+    const confirmed = await request(server).post("/api/bridge/work/request/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: false, code: "refused" });
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issue.id))).toHaveLength(0);
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0]!.status).toBe("done");
+  });
+
+  it("never names an agent the requester cannot see as the one taking the changes", async () => {
+    const { company, prefix, personA, agentC } = await seed();
+    await db.update(companies).set({ agentVisibilityDefault: "owner" }).where(eq(companies.id, company.id));
+    // Person A's request, now with Agent C, whom Person A cannot see; no record of whom it was asked of.
+    const issue = await makeIssue(company.id, prefix, {
+      createdByUserId: personA,
+      assigneeAgentId: agentC.id,
+      status: "done",
+      completedAt: new Date(),
+    });
+    const endpoint = await endpointFor(company.id, personA);
+    const { server } = app(endpoint);
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.id, action: "changes", note: "Add the totals." });
+    expect(proposed.body).toMatchObject({ ok: true, handTo: HIDDEN_AGENT_LABEL });
+    expect(JSON.stringify(proposed.body)).not.toContain("Agent C");
+    const confirmed = await request(server).post("/api/bridge/work/request/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, kind: "request_changes", handedTo: { kind: "agent", name: null } });
+    expect(JSON.stringify(confirmed.body)).not.toContain("Agent C");
+  });
+
+  it("sends changes on work assigned to a person on the page back to that person, not to their agent", async () => {
+    const { company, prefix, personA, personB } = await seed();
+    // Assigned to Person B on the page and kept with them: no routing was recorded.
+    const issue = await makeIssue(company.id, prefix, {
+      createdByUserId: personA,
+      assigneeUserId: personB,
+      status: "done",
+      completedAt: new Date(),
+    });
+    const endpoint = await endpointFor(company.id, personA);
+    const { server, rt } = app(endpoint);
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.id, action: "changes", note: "Add the totals." });
+    expect(proposed.body).toMatchObject({ ok: true, handTo: "Person B" });
+    const confirmed = await request(server).post("/api/bridge/work/request/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, kind: "request_changes", handedTo: { kind: "person", name: "Person B" } });
+    const after = (await db.select().from(issues).where(eq(issues.id, issue.id)))[0]!;
+    expect(after).toMatchObject({ status: "todo", assigneeUserId: personB, assigneeAgentId: null });
+    expect(rt.wakeup).not.toHaveBeenCalled();
   });
 
   it("sends a change request to the deliverable owner's agent, wakes it with the comment, and records the correction", async () => {
@@ -594,7 +765,10 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
     const endpoint = await endpointFor(company.id, personA);
     const { server } = app(endpoint);
     const { issue } = await requestOfPersonB(server);
-    await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issue.id));
+    await db
+      .update(issues)
+      .set({ status: "in_review", assigneeAgentId: null, assigneeUserId: personA })
+      .where(eq(issues.id, issue.id));
     const proposed = await request(server)
       .post("/api/bridge/work/request/respond")
       .send({ issueId: issue.id, action: "changes", note: "Shorter, please." });

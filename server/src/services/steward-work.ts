@@ -858,7 +858,7 @@ export function stewardWorkService(
         ? {
             yourRequest: {
               note: REQUEST_SCOPE_NOTE,
-              delivered: isDeliveredToRequester(issue, owner.userId),
+              delivered: isDeliveredToRequester(issue, owner),
             },
           }
         : {}),

@@ -54,17 +54,58 @@ export async function isOwnersRequest(db: Pick<Db, "select">, owner: RequestOwne
 }
 
 /**
- * A result is delivered when the work is done, waiting in review, or handed
- * back to the requester. Only then may the requester accept it or ask for
- * changes from their own session: closing work still in someone's hands is a
- * page action, not a close-out.
+ * A result is delivered when the work is done, handed back to the requester,
+ * or in review with the requester as the reviewer. Only then may the
+ * requester accept it or ask for changes from their own session: closing
+ * work still in someone's hands is a page action, not a close-out.
+ *
+ * `in_review` alone is not delivery. On an issue an agent holds it is that
+ * agent handing its draft to its own steward (the counterpart's review
+ * item), and the result reaches the requester only after that person has
+ * finished it. It counts as delivered when the requester is the review's
+ * participant: the person it is assigned to, the execution policy's current
+ * participant, or a participant of the current stage. On an issue held by an
+ * agent the requester answers for, the review is the requester's own.
  */
 export function isDeliveredToRequester(
-  issue: { status: string; assigneeUserId: string | null },
-  requesterUserId: string,
+  issue: {
+    status: string;
+    assigneeUserId: string | null;
+    assigneeAgentId?: string | null;
+    executionPolicy?: unknown;
+    executionState?: unknown;
+  },
+  requester: { userId: string; agentIds: readonly string[] },
 ): boolean {
   if (issue.status === "cancelled") return false;
-  return issue.status === "done" || issue.status === "in_review" || issue.assigneeUserId === requesterUserId;
+  if (issue.status === "done" || issue.assigneeUserId === requester.userId) return true;
+  if (issue.status !== "in_review") return false;
+  if (issue.assigneeAgentId && requester.agentIds.includes(issue.assigneeAgentId)) return true;
+  return isReviewParticipant(issue, requester.userId);
+}
+
+/** Is this person the current review participant named by the issue's execution policy? */
+export function isReviewParticipant(
+  issue: { executionPolicy?: unknown; executionState?: unknown },
+  userId: string,
+): boolean {
+  const state = (issue.executionState ?? null) as
+    | { currentParticipant?: { type?: unknown; userId?: unknown } | null; currentStageId?: unknown }
+    | null;
+  const current = state?.currentParticipant;
+  if (current?.type === "user" && current.userId === userId) return true;
+  const stageId = typeof state?.currentStageId === "string" ? state.currentStageId : null;
+  if (!stageId) return false;
+  const stages = (issue.executionPolicy as { stages?: unknown } | null | undefined)?.stages;
+  if (!Array.isArray(stages)) return false;
+  const stage = stages.find((entry) => (entry as { id?: unknown } | null)?.id === stageId) as
+    | { participants?: unknown }
+    | undefined;
+  const participants = Array.isArray(stage?.participants) ? stage.participants : [];
+  return participants.some((entry) => {
+    const participant = entry as { type?: unknown; userId?: unknown } | null;
+    return participant?.type === "user" && participant.userId === userId;
+  });
 }
 
 /**
