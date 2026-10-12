@@ -112,15 +112,144 @@ export function resolveBridgeToken({ tokenFile, env = process.env } = {}) {
   );
 }
 
+const COWORKER_SKILL_URL = new URL("../skills/agentdash-coworker/SKILL.md", import.meta.url);
+const SKILL_VERSION_MARKER = /<!--\s*agentdash-coworker-skill-version:\s*(\d+)\s*-->/;
+
+/** The review skill as shipped in this package. */
+export function packagedCoworkerSkill() {
+  return readFileSync(COWORKER_SKILL_URL, "utf8");
+}
+
+/**
+ * The version marker a managed copy carries, or null. A file without it was
+ * written by the person, not by this package, and is never replaced.
+ */
+export function coworkerSkillVersion(text) {
+  const match = typeof text === "string" ? text.match(SKILL_VERSION_MARKER) : null;
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * The same rules for Codex, which reads AGENTS.md rather than skills. Codex
+ * gets no session-start hook from this package, so the header tells it to run
+ * the review on the first turn instead. The body is the skill's, verbatim,
+ * minus its frontmatter and its marker (the header carries the marker).
+ */
+export function codexInboxAgentsMd(skillText) {
+  const version = coworkerSkillVersion(skillText) ?? 0;
+  const body = skillText
+    .replace(/^---\n[\s\S]*?\n---\n/, "")
+    .replace(SKILL_VERSION_MARKER, "")
+    .replace(/^\s+/, "");
+  return [
+    "# AgentDash inbox: rules for this folder",
+    "",
+    `<!-- agentdash-coworker-skill-version: ${version} -->`,
+    "",
+    "This folder is the person's AgentDash inbox. These are the same rules the",
+    "`agentdash-coworker` skill gives Claude Code here (`.claude/skills/`).",
+    "",
+    "No session-start hook runs for Codex here, so on the first turn of every session",
+    "in this folder, before anything else, start the review in section 1: call",
+    "`inbox_sync` (and `work_list` when available) and go through every waiting item.",
+    "If the `agentdash-inbox` tools are not available in this session, say so plainly",
+    "and point the person to their AgentDash page.",
+    "",
+    "Remove the version line above to keep your own edits: a file without it is",
+    "never replaced by `agentdash-connect`.",
+    "",
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
+/**
+ * Write a managed file: create it when absent, replace it when the installed
+ * copy carries an older version marker, and otherwise leave it alone — an
+ * equal or newer marker, or no marker at all (the person's own file).
+ *
+ * Never throws. An odd path (a directory where the file should be, a file it
+ * cannot read or write) is left alone and reported, because the caller goes
+ * on to register the inbox tools and an unrelated file must not stop that.
+ * Anything not installed for a reason the person should hear about — their
+ * own file, or one that could not be read or written — is also listed in
+ * `notInstalled` with the reason, so the caller can say so.
+ */
+function writeManaged(file, text, { created, updated, skipped, notInstalled }) {
+  try {
+    if (!existsSync(file)) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, text);
+      created.push(file);
+      return;
+    }
+    const installed = coworkerSkillVersion(readFileSync(file, "utf8"));
+    const packaged = coworkerSkillVersion(text);
+    if (installed === null) {
+      skipped.push(file);
+      notInstalled.push({ file, reason: "own" });
+      return;
+    }
+    if (packaged !== null && packaged > installed) {
+      writeFileSync(file, text);
+      updated.push(file);
+      return;
+    }
+    skipped.push(file);
+  } catch (err) {
+    skipped.push(file);
+    notInstalled.push({ file, reason: "unusable", detail: err?.code ?? err?.message ?? String(err) });
+  }
+}
+
+/**
+ * Install or update the review rules (the skill and the Codex AGENTS.md) in
+ * an inbox folder, and nothing else. The SessionStart hook runs this, so a
+ * machine that connected before the rules existed gets them without a fresh
+ * connect code; the hook and the inbox tools both run `@latest`, and wording
+ * that points at the skill must not reach a folder without it for long.
+ *
+ * Only touches a folder that is already a scaffolded inbox (it has the
+ * `.claude/` the connect flow made). Never throws.
+ */
+export function installCoworkerRules(dir, { skillText } = {}) {
+  const lists = { created: [], updated: [], skipped: [], notInstalled: [] };
+  if (!existsSync(path.join(dir, ".claude"))) return lists;
+  let skill;
+  try {
+    skill = skillText ?? packagedCoworkerSkill();
+  } catch (err) {
+    lists.notInstalled.push({ file: COWORKER_SKILL_URL.pathname, reason: "unusable", detail: err?.code ?? String(err) });
+    return lists;
+  }
+  writeManaged(path.join(dir, ".claude", "skills", "agentdash-coworker", "SKILL.md"), skill, lists);
+  writeManaged(path.join(dir, "AGENTS.md"), codexInboxAgentsMd(skill), lists);
+  return lists;
+}
+
+/** One line per rules file that was not installed, for the person to read. */
+export function describeNotInstalled(notInstalled) {
+  return notInstalled.map(({ file, reason, detail }) =>
+    reason === "own"
+      ? `kept your own ${file}; the packaged agentdash-coworker rules were not installed there`
+      : `could not use ${file}${detail ? ` (${detail})` : ""}; the packaged agentdash-coworker rules were not installed there`,
+  );
+}
+
 /**
  * The dedicated inbox workspace. The "never inject into an arbitrary coding
  * chat" rule is enforced by WHERE the hook is configured: a project-level
  * `.claude/settings.json` applies only to sessions started in that directory,
- * so a hook that lives here cannot fire anywhere else.
+ * so a hook that lives here cannot fire anywhere else. The review skill lives
+ * here for the same reason.
+ *
+ * `skillText` is for tests; callers get the packaged skill.
  */
-export function scaffoldInboxWorkspace(dir, { server } = {}) {
+export function scaffoldInboxWorkspace(dir, { server, skillText } = {}) {
   const created = [];
   const skipped = [];
+  const updated = [];
   const claudeDir = path.join(dir, ".claude");
   mkdirSync(claudeDir, { recursive: true });
 
@@ -180,31 +309,44 @@ export function scaffoldInboxWorkspace(dir, { server } = {}) {
         "`.claude/settings.json`, which applies only to sessions started here — your",
         "coding sessions elsewhere are untouched and always will be.",
         "",
-        "## Deciding",
+        "## Reviewing and deciding",
         "",
-        "On your AgentDash page, for now. This session tells you what is waiting; it",
-        "cannot yet decide — that needs an add-on this instance does not ship to",
-        "steward machines yet. When it lands, decisions will spend a handle good for",
-        "one approval, at one revision, once.",
+        "Your own Claude reviews what is waiting before you decide anything: the",
+        "agent's work in its own words, then my take — agree, disagree, reject or",
+        "rewrite — and works on it with you. The rules it follows are in",
+        "`.claude/skills/agentdash-coworker/` (and `AGENTS.md`, for Codex).",
         "",
-        "## Answering your agents",
-        "",
-        "When an agent needs you, it restates the request, recommends an answer and",
-        "asks. Those questions arrive here. Tell Claude your answer and it sends it",
-        "with `inbox_answer` (when the `agentdash-inbox` tools are connected); your",
-        "answer wakes the agent. Or answer on the issue in AgentDash.",
+        "Nothing is sent without your explicit go. When you decide, Claude sends your",
+        "choice as you with the `agentdash-inbox` tools (when they are connected):",
+        "`inbox_decide` for an approval, `inbox_answer` for a question from an agent.",
+        "Each spends a handle good for one item, once. You can always act on your",
+        "AgentDash page instead.",
         "",
         "## What arrives here",
         "",
-        "The ask and a pointer, never the evidence. Anything delivered into a session",
-        "becomes model context, so figures, client names and rates stay in AgentDash.",
+        "At session start, the ask and a pointer, never the evidence. Anything",
+        "delivered into a session becomes model context, so the hook carries only",
+        "counts and pointers; Claude reads more only with the tools, as you, and only",
+        "what you could see on the page.",
+        "",
+        "## Folders",
+        "",
+        "- `work/<ISSUE>/` — drafts and a `notes.md` per item, so work picks up where",
+        "  it stopped next session.",
+        "- `incoming/<ISSUE>/` — downloaded attachments. Read as text only; never",
+        "  run or open them with an application.",
         "",
       ].join("\n"),
     );
     created.push(readmePath);
   }
 
-  return { created, skipped };
+  const rules = installCoworkerRules(dir, { skillText });
+  created.push(...rules.created);
+  updated.push(...rules.updated);
+  skipped.push(...rules.skipped);
+
+  return { created, updated, skipped, notInstalled: rules.notInstalled };
 }
 
 /** "and 4 more" — never silently. A shown list that hides its total lies. */
@@ -318,7 +460,32 @@ export function undeliveredSendLines(response) {
 }
 
 /** The plain-text rendering a SessionStart hook feeds straight into a session. */
-export function renderInbox(response, now) {
+/**
+ * The closing line read by a person at a plain terminal. Word for word the
+ * line `cli/src/commands/bridge-inbox.ts` ends with, so the two renderers
+ * agree wherever neither is talking to a Claude session.
+ */
+export const TERMINAL_CLOSING_LINE =
+  "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.";
+
+/**
+ * The closing line the inbox folder's SessionStart hook puts into a Claude
+ * session. It starts the review instead of telling the session to stand
+ * aside, and it carries the core honesty and send rules itself: a session can
+ * start before the agentdash-coworker skill is installed in the folder (the
+ * hook installs it, and a skill written mid-start may only load next time),
+ * so the line must be safe to act on without the skill. It names no tool: a
+ * session may not have the inbox tools (an older connect, or Codex).
+ */
+export const SESSION_CLOSING_LINE =
+  "I will review each item above with you, in order, and give you my take before you decide anything: the agent's facts and figures as the agent labelled them, nothing invented, and anything I could not check called unverified. Nothing is sent without your explicit go; you can also act on your AgentDash page. This carries the ask and a pointer — never the evidence.";
+
+/**
+ * `session` is true only for the inbox folder's SessionStart hook, where the
+ * output becomes the start of a Claude session. A person running
+ * `npx agentdash-connect inbox` at a terminal gets lines addressed to them.
+ */
+export function renderInbox(response, now, { session = false } = {}) {
   const digest = response.digest;
   const lines = [];
 
@@ -377,7 +544,9 @@ export function renderInbox(response, now) {
     const more = remainder(questions);
     if (more) lines.push(more);
     lines.push(
-      "  Tell me your answer and I will send it with inbox_answer, or answer on the issue in AgentDash. Your answer wakes the agent.",
+      session
+        ? "  I will give you my take on each. Tell me your answer and I will send it as you with inbox_answer after your go, or answer on the issue in AgentDash. Your answer wakes the agent."
+        : "  Answer on the issue in AgentDash, or from a Claude Code session in your inbox folder. Your answer wakes the agent.",
     );
     lines.push("");
   }
@@ -408,12 +577,7 @@ export function renderInbox(response, now) {
   if (other > 0) {
     lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
   }
-  // Point at the surface that works. This used to name inbox_decide, and the
-  // first steward through the flow met a session with no such tool — deciding
-  // in-session is not wired yet, and delivered text must not promise it.
-  lines.push(
-    "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
-  );
+  lines.push(session ? SESSION_CLOSING_LINE : TERMINAL_CLOSING_LINE);
   return lines.join("\n").trimEnd();
 }
 
@@ -445,12 +609,33 @@ export function resolveInboxServer({ server, env = process.env, claudeConfigPath
 /**
  * Sync, render, optionally acknowledge. Returns a process exit code — 1 for
  * every failure, by the hook rule above.
+ *
+ * Session mode is the inbox folder's SessionStart hook. Every hook this
+ * package has scaffolded passes `--ack --quiet-when-empty`, and the command
+ * is fixed in settings.json on machines that connected long ago, so those two
+ * flags together are the signal (or `opts.session`, for callers that know).
+ * In session mode the output speaks to the Claude session, and the review
+ * rules are installed or updated in the inbox folder first.
  */
 export async function runInbox(opts = {}, deps = {}) {
   const log = deps.log ?? ((line) => process.stdout.write(`${line}\n`));
   const errorLog = deps.errorLog ?? ((line) => process.stderr.write(`${line}\n`));
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ? deps.now() : Date.now();
+  const session = opts.session ?? Boolean(opts.ack && opts.quietWhenEmpty);
+
+  let rulesNote = null;
+  if (session) {
+    const rules = installCoworkerRules(deps.inboxDir ?? defaultInboxDir(), { skillText: deps.skillText });
+    // The person's own file is their choice and is kept every session; only
+    // a file that could not be used is worth a line (stderr, never the session).
+    const unusable = rules.notInstalled.filter((entry) => entry.reason !== "own");
+    for (const line of describeNotInstalled(unusable)) errorLog(line);
+    if (rules.created.length + rules.updated.length > 0) {
+      rulesNote =
+        "(The agentdash-coworker review rules were just installed or updated in this folder; they load fully from the next session.)";
+    }
+  }
 
   let server;
   let token;
@@ -491,7 +676,8 @@ export async function runInbox(opts = {}, deps = {}) {
         digest.completions.total === 0));
 
   if (!(empty && opts.quietWhenEmpty)) {
-    log(renderInbox(response, now));
+    log(renderInbox(response, now, { session }));
+    if (rulesNote) log(rulesNote);
   }
 
   if (opts.ack && response.events.length > 0) {

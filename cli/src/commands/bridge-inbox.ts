@@ -213,8 +213,11 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
     lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
   }
   // Point at the surface that works. This named inbox_decide, and the first
-  // steward through the flow met a session with no such tool — deciding
-  // in-session is not wired yet, and delivered text must not promise it.
+  // steward through the flow met a session with no such tool, so delivered
+  // text must not promise it. agentdash-connect ends a plain-terminal read
+  // with this same line (TERMINAL_CLOSING_LINE). Its inbox-folder hook ends
+  // differently on purpose: that output starts a review in a Claude session
+  // that has the inbox tools and the review rules, which this CLI does not set up.
   lines.push(
     "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
   );

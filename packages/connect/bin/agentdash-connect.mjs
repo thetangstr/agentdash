@@ -27,6 +27,7 @@ import { VerifyError, redeemConnectCode } from "../src/verify.mjs";
 import { formatConnectCode, looksLikeConnectCode } from "../src/codes.mjs";
 import {
   defaultInboxDir,
+  describeNotInstalled,
   ownerConflict,
   readBridgeOwner,
   runInbox,
@@ -81,8 +82,11 @@ function usage() {
   npx agentdash-connect --url <url>      skip the URL question
   npx agentdash-connect --check          is the existing connection still good?
   npx agentdash-connect --remove         undo everything this wrote
-  npx agentdash-connect inbox            read your AgentDash inbox (used by the
-                                         SessionStart hook in ~/agentdash-inbox)
+  npx agentdash-connect inbox            read your AgentDash inbox (with --ack
+                                         --quiet-when-empty it is the SessionStart
+                                         hook in ~/agentdash-inbox: it speaks to
+                                         Claude and keeps the review rules there
+                                         up to date)
   npx agentdash-connect mcp              serve your own inbox tools (sync, decide,
                                          assign) to Claude Code over stdio
 
@@ -339,7 +343,7 @@ async function main() {
       const tokenPath = storeBridgeToken(pairedWith.bridgeToken);
       if (pairedWith.owner) storeBridgeOwner(pairedWith.owner, { server: instanceUrl });
       const inboxDir = defaultInboxDir();
-      const { created } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
+      const { created, updated, notInstalled } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
       out("");
       const ownerLine = pairedWith.owner?.name
         ? `${pairedWith.owner.name}${pairedWith.owner.email ? ` (${pairedWith.owner.email})` : ""}`
@@ -348,13 +352,15 @@ async function main() {
       out(`  token   ${tokenPath}
           your inbox credential (mode 600) — questions for you arrive with it`);
       for (const file of created) out(`  inbox   ${file}`);
+      for (const file of updated) out(`  inbox   ${file} (updated to the packaged version)`);
+      for (const line of describeNotInstalled(notInstalled)) out(`  inbox   ${line}`);
       if (harnesses.claude) {
         const inboxMcp = applyInboxMcp({ serverName, instanceUrl });
         out(`  claude  ${inboxMcp.file}
-          "${inboxMcp.name}" — your own inbox tools, so you can approve or reject from Claude`);
+          "${inboxMcp.name}" — your own inbox tools: Claude reviews with you and sends only what you approve`);
       }
       out("");
-      out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);
+      out(`Open ${inboxDir} in Claude Code: anything waiting on you appears as the session starts, and Claude reviews it with you.`);
     } catch (error) {
       if (!error?.skipped) {
         // The agent pairing above already succeeded; say what did not, precisely.

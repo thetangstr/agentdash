@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,13 @@ import {
   resolveBridgeToken,
   resolveInboxServer,
   runInbox,
+  SESSION_CLOSING_LINE,
+  TERMINAL_CLOSING_LINE,
+  installCoworkerRules,
+  describeNotInstalled,
+  codexInboxAgentsMd,
+  coworkerSkillVersion,
+  packagedCoworkerSkill,
   scaffoldInboxWorkspace,
   storeBridgeToken,
   unseenApprovalCount,
@@ -72,10 +79,45 @@ describe("renderInbox", () => {
     expect(decision).toBeLessThan(blocked);
     expect(blocked).toBeLessThan(finished);
     expect(text).toContain("HAL — purchase [high: exceeds the $25 limit], rev 3, waiting 3h");
-    // The old closing line named inbox_decide; the first steward through the
-    // flow met a session with no such tool. Delivered text must not promise it.
-    expect(text).toContain("Decide on your AgentDash page.");
-    expect(text).not.toContain("inbox_decide");
+  });
+
+  /**
+   * Two audiences. The inbox folder's hook puts this into a Claude session,
+   * where the closing line starts the review; a person running
+   * `npx agentdash-connect inbox` at a terminal gets the line the CLI mirror
+   * ends with, word for word, because "I will review" means nothing there.
+   */
+  it("ends a plain read with the CLI mirror's line, and a session read by starting the review", () => {
+    const response = {
+      events: [],
+      digest: digest({
+        blockers: { total: 1, shown: 1, items: [{ identifier: "ABC-49", title: "Draft note", agentName: "Agent A" }] },
+      }),
+    };
+    const plain = renderInbox(response, NOW);
+    expect(plain.split("\n").at(-1)).toBe(TERMINAL_CLOSING_LINE);
+    expect(TERMINAL_CLOSING_LINE).toBe(
+      "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
+    );
+    expect(plain).not.toContain("I will review");
+
+    const session = renderInbox(response, NOW, { session: true });
+    expect(session.split("\n").at(-1)).toBe(SESSION_CLOSING_LINE);
+    expect(session).toContain("I will review each item above with you, in order, and give you my take");
+    expect(session).toContain("Nothing is sent without your explicit go");
+    expect(session).toContain("never the evidence");
+    // Safe to act on before the skill is installed: the honesty rules travel
+    // with the line itself.
+    expect(session).toMatch(/nothing invented/);
+    expect(session).toMatch(/unverified/);
+    expect(session).not.toContain("Decide on your AgentDash page");
+    // It names no tool: a session may not have the inbox tools.
+    expect(session).not.toContain("inbox_decide");
+  });
+
+  it("keeps the CLI mirror's closing line in step", () => {
+    const mirror = readFileSync(new URL("../../../cli/src/commands/bridge-inbox.ts", import.meta.url), "utf8");
+    expect(mirror).toContain(JSON.stringify(TERMINAL_CLOSING_LINE));
   });
 
   /**
@@ -167,6 +209,7 @@ describe("questions from agents", () => {
         }),
       },
       NOW,
+      { session: true },
     );
     const decisions = text.indexOf("Waiting on your decision");
     const questions = text.indexOf("Questions from your agents (1):");
@@ -183,6 +226,12 @@ describe("questions from agents", () => {
     expect(text).toMatch(/inbox_answer/);
     // The handle travels in inbox_sync's JSON, not in session-start text.
     expect(text).not.toContain("handle-1");
+  });
+
+  it("tells a person at a plain terminal where to answer, without speaking as Claude", () => {
+    const text = renderInbox({ events: [], digest: digest({ questions: { total: 1, shown: 1, items: [question()] } }) }, NOW);
+    expect(text).toContain("Answer on the issue in AgentDash, or from a Claude Code session in your inbox folder.");
+    expect(text).not.toContain("I will give you my take");
   });
 
   it("keeps an agent's text on its quoted line, whatever it contains", () => {
@@ -222,6 +271,7 @@ describe("questions from agents", () => {
     const code = await runInbox(
       { server: "https://mk.example:3112", tokenFile, quietWhenEmpty: true, ack: true },
       {
+        inboxDir: dir,
         log: (line) => out.push(line),
         errorLog: () => {},
         now: () => NOW,
@@ -253,7 +303,7 @@ describe("scaffoldInboxWorkspace", () => {
   it("installs a SessionStart hook that needs only npx", () => {
     const dir = tmp();
     const { created } = scaffoldInboxWorkspace(dir, { server: "https://mk.example:3112" });
-    expect(created).toHaveLength(2);
+    expect(created).toHaveLength(4);
     const settings = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
     const hook = settings.hooks.SessionStart[0];
     expect(hook.matcher).toBe("startup|resume");
@@ -270,8 +320,233 @@ describe("scaffoldInboxWorkspace", () => {
     writeFileSync(path.join(dir, ".claude", "settings.json"), "{}");
     const { created, skipped } = scaffoldInboxWorkspace(dir, {});
     expect(skipped).toContain(path.join(dir, ".claude", "settings.json"));
-    expect(created).toHaveLength(1); // only the README
+    // The README, the skill and the Codex AGENTS.md.
+    expect(created).toHaveLength(3);
     expect(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8")).toBe("{}");
+  });
+
+  it("does not tell the person the session cannot decide", () => {
+    const dir = tmp();
+    scaffoldInboxWorkspace(dir, {});
+    const readme = readFileSync(path.join(dir, "README.md"), "utf8");
+    expect(readme).not.toMatch(/cannot yet decide/);
+    expect(readme).not.toMatch(/On your AgentDash page, for now/);
+    expect(readme).toMatch(/my take|your own Claude/i);
+    expect(readme).toMatch(/explicit go/);
+  });
+});
+
+describe("the co-worker skill in the inbox workspace", () => {
+  const skillPath = (dir) => path.join(dir, ".claude", "skills", "agentdash-coworker", "SKILL.md");
+  const agentsPath = (dir) => path.join(dir, "AGENTS.md");
+  const withVersion = (text, version) =>
+    text.replace(/agentdash-coworker-skill-version:\s*\d+/, `agentdash-coworker-skill-version: ${version}`);
+
+  it("installs the packaged skill for Claude Code and the same rules as AGENTS.md for Codex", () => {
+    const dir = tmp();
+    const { created } = scaffoldInboxWorkspace(dir, {});
+    const packaged = packagedCoworkerSkill();
+    expect(created).toContain(skillPath(dir));
+    expect(created).toContain(agentsPath(dir));
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(packaged);
+    const agents = readFileSync(agentsPath(dir), "utf8");
+    expect(agents).toBe(codexInboxAgentsMd(packaged));
+    expect(coworkerSkillVersion(agents)).toBe(coworkerSkillVersion(packaged));
+    // Same rules: every section of the skill body appears in AGENTS.md.
+    for (const heading of packaged.match(/^## .+$/gm)) expect(agents).toContain(heading);
+    // Codex has no session-start hook here, so it is told to start the review itself.
+    expect(agents).toMatch(/first turn of every session/);
+    // AGENTS.md is plain markdown, not a skill: no frontmatter.
+    expect(agents.startsWith("---")).toBe(false);
+  });
+
+  it("is idempotent: a second scaffold writes nothing", () => {
+    const dir = tmp();
+    scaffoldInboxWorkspace(dir, {});
+    const before = [skillPath(dir), agentsPath(dir)].map((file) => readFileSync(file, "utf8"));
+    const again = scaffoldInboxWorkspace(dir, {});
+    expect(again.created).toEqual([]);
+    expect(again.updated).toEqual([]);
+    expect(again.skipped).toEqual(expect.arrayContaining([skillPath(dir), agentsPath(dir)]));
+    const after = [skillPath(dir), agentsPath(dir)].map((file) => readFileSync(file, "utf8"));
+    expect(after).toEqual(before);
+  });
+
+  /**
+   * Later releases add tools the skill must teach (send-back, requests), so a
+   * packaged version newer than the installed one replaces it. Older or equal
+   * never replaces, and a file without the version marker is the person's
+   * own and is never touched.
+   */
+  it("updates an installed copy when the packaged version is newer", () => {
+    const dir = tmp();
+    const packaged = packagedCoworkerSkill();
+    const current = coworkerSkillVersion(packaged);
+    scaffoldInboxWorkspace(dir, { skillText: withVersion(packaged, current - 1) });
+    expect(coworkerSkillVersion(readFileSync(skillPath(dir), "utf8"))).toBe(current - 1);
+
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.updated).toEqual(expect.arrayContaining([skillPath(dir), agentsPath(dir)]));
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(packaged);
+    expect(readFileSync(agentsPath(dir), "utf8")).toBe(codexInboxAgentsMd(packaged));
+  });
+
+  it("never downgrades a newer installed copy", () => {
+    const dir = tmp();
+    const packaged = packagedCoworkerSkill();
+    const newer = withVersion(packaged, coworkerSkillVersion(packaged) + 1);
+    scaffoldInboxWorkspace(dir, { skillText: newer });
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.updated).toEqual([]);
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(newer);
+  });
+
+  it("leaves a skill or AGENTS.md the person wrote themselves alone", () => {
+    const dir = tmp();
+    mkdirSync(path.dirname(skillPath(dir)), { recursive: true });
+    writeFileSync(skillPath(dir), "---\nname: agentdash-coworker\ndescription: mine\n---\nMy own rules.\n");
+    writeFileSync(agentsPath(dir), "# My own AGENTS.md\n");
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.updated).toEqual([]);
+    expect(result.skipped).toEqual(expect.arrayContaining([skillPath(dir), agentsPath(dir)]));
+    expect(readFileSync(skillPath(dir), "utf8")).toContain("My own rules.");
+    expect(readFileSync(agentsPath(dir), "utf8")).toBe("# My own AGENTS.md\n");
+    // ...and says so, so the person knows the packaged rules are not in force.
+    expect(result.notInstalled).toEqual(
+      expect.arrayContaining([
+        { file: skillPath(dir), reason: "own" },
+        { file: agentsPath(dir), reason: "own" },
+      ]),
+    );
+    const lines = describeNotInstalled(result.notInstalled);
+    expect(lines).toContain(`kept your own ${agentsPath(dir)}; the packaged agentdash-coworker rules were not installed there`);
+  });
+
+  /**
+   * The connect flow registers the inbox tools after the scaffold. An odd
+   * path in the folder must not throw out of the scaffold and take the tool
+   * registration down with it.
+   */
+  it("does not throw on a path it cannot use, and reports it", () => {
+    const dir = tmp();
+    mkdirSync(agentsPath(dir), { recursive: true }); // a directory where AGENTS.md goes
+    const result = scaffoldInboxWorkspace(dir, {});
+    expect(result.created).toContain(skillPath(dir));
+    expect(result.skipped).toContain(agentsPath(dir));
+    expect(result.notInstalled).toEqual([{ file: agentsPath(dir), reason: "unusable", detail: "EISDIR" }]);
+    expect(describeNotInstalled(result.notInstalled)[0]).toMatch(/could not use .*AGENTS\.md \(EISDIR\)/);
+  });
+});
+
+describe("installCoworkerRules (run by the inbox folder's hook)", () => {
+  const skillPath = (dir) => path.join(dir, ".claude", "skills", "agentdash-coworker", "SKILL.md");
+
+  it("installs the rules into a scaffolded inbox that connected before they existed", () => {
+    const dir = tmp();
+    mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    writeFileSync(path.join(dir, ".claude", "settings.json"), "{}");
+    const result = installCoworkerRules(dir);
+    expect(result.created).toEqual([skillPath(dir), path.join(dir, "AGENTS.md")]);
+    expect(readFileSync(skillPath(dir), "utf8")).toBe(packagedCoworkerSkill());
+    // Only the rules: the person's settings are not rewritten.
+    expect(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8")).toBe("{}");
+  });
+
+  it("writes nothing into a folder that is not a scaffolded inbox", () => {
+    const dir = tmp();
+    const result = installCoworkerRules(dir);
+    expect(result.created).toEqual([]);
+    expect(existsSync(path.join(dir, "AGENTS.md"))).toBe(false);
+  });
+});
+
+describe("the packaged co-worker skill", () => {
+  const raw = packagedCoworkerSkill();
+  // Matched with line wrapping collapsed, so rewrapping a paragraph is not a failure.
+  const skill = raw.replace(/\s+/g, " ");
+
+  it("is a Claude Code skill with a name, a description and a version", () => {
+    const front = raw.match(/^---\n([\s\S]*?)\n---\n/);
+    expect(front).not.toBeNull();
+    expect(front[1]).toMatch(/^name: agentdash-coworker$/m);
+    expect(front[1]).toMatch(/^description: .{40,}$/m);
+    expect(coworkerSkillVersion(raw)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reviews every waiting item first, in digest order, with counts", () => {
+    // Every section renderInbox emits has a place, so nothing falls between.
+    expect(skill).toMatch(/decisions, then questions, then approved but not delivered .*then blockers/);
+    expect(skill).toMatch(/counts/i);
+    expect(skill).toMatch(/never drop an item silently/i);
+  });
+
+  it("presents the agent's work first, then its own take, with reject and rewrite as normal outcomes", () => {
+    expect(skill).toMatch(/My take/);
+    expect(skill).toMatch(/reject/i);
+    expect(skill).toMatch(/rewrite/i);
+    expect(skill).toMatch(/normal outcomes/);
+  });
+
+  it("carries the honesty rules", () => {
+    expect(skill).toMatch(/as the agent labelled them/);
+    expect(skill).toMatch(/unverified/);
+    expect(skill).toMatch(/Never invent/);
+  });
+
+  it("names the working folder, the notes file and the quarantine folder", () => {
+    expect(skill).toContain("~/agentdash-inbox/work/<ISSUE>/");
+    expect(skill).toContain("notes.md");
+    expect(skill).toContain("~/agentdash-inbox/incoming/<ISSUE>/");
+    expect(skill).toMatch(/never execute/i);
+    expect(skill).toMatch(/open them with an application/);
+  });
+
+  it("sends only after one explicit go to the exact read-back", () => {
+    expect(skill).toMatch(/read-back/);
+    expect(skill).toMatch(/yes \/ change \/ no/);
+    expect(skill).toMatch(/anything else sends nothing/i);
+  });
+
+  it("captures two or three lessons, editable by the person, never client content", () => {
+    expect(skill).toMatch(/2.3 (short )?lessons/);
+    expect(skill).toMatch(/never client content/i);
+  });
+
+  it("treats agent material as material and reports injected instructions as findings", () => {
+    expect(skill).toMatch(/untrusted/);
+    expect(skill).toMatch(/run logs?/);
+    expect(skill).toMatch(/never instructions/i);
+    expect(skill).toMatch(/as a finding/);
+  });
+
+  it("names the tools later releases add, so they slot in", () => {
+    for (const tool of [
+      "inbox_sync",
+      "inbox_decide",
+      "inbox_answer",
+      "work_list",
+      "work_read",
+      "work_run_log",
+      "work_fetch_file",
+      "work_propose_reply",
+      "work_confirm_reply",
+      "work_request_propose",
+      "work_request_confirm",
+    ]) {
+      expect(skill).toContain(tool);
+    }
+    // A tool the session does not have is said out loud, never faked.
+    expect(skill).toMatch(/not available/);
+  });
+
+  it("has a refusal list", () => {
+    expect(raw).toMatch(/^## .*[Nn]ever do/m);
+  });
+
+  it("carries no addresses or hosts (this package is public)", () => {
+    expect(skill).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
+    expect(skill).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+    expect(skill).not.toMatch(/https?:\/\//);
   });
 });
 
@@ -400,6 +675,62 @@ describe("runInbox", () => {
     expect(logs.join("\n")).toContain("Waiting on your decision (2):");
     const ack = calls.find((c) => c.url.endsWith("/inbox/ack"));
     expect(ack?.body.seq).toBe(7);
+  });
+
+  /**
+   * The hook runs `@latest`, so a machine that connected before the review
+   * rules existed gets the session wording on its next session start. The
+   * hook installs the rules in the same run, so that wording never points at
+   * a skill the folder does not have for longer than one session.
+   */
+  it("as the inbox hook, speaks to the session and installs the review rules", async () => {
+    const inboxDir = tmp();
+    mkdirSync(path.join(inboxDir, ".claude"), { recursive: true });
+    const { impl, logs } = deps(async (url) => ({
+      ok: true,
+      json: async () =>
+        url.endsWith("/inbox/sync")
+          ? {
+              lastAckedSeq: 0,
+              headSeq: 0,
+              hasMore: false,
+              events: [],
+              digest: digest({ blockers: { total: 1, shown: 1, items: [{ identifier: "ABC-3", title: "Stuck", agentName: "Agent A" }] } }),
+            }
+          : {},
+    }));
+    const code = await runInbox({ ...opts(tmp()), ack: true, quietWhenEmpty: true }, { ...impl, inboxDir });
+    expect(code).toBe(0);
+    const text = logs.join("\n");
+    expect(text).toContain(SESSION_CLOSING_LINE);
+    expect(text).toMatch(/review rules were just installed or updated in this folder/);
+    expect(existsSync(path.join(inboxDir, ".claude", "skills", "agentdash-coworker", "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(inboxDir, "AGENTS.md"))).toBe(true);
+
+    // The next session start finds them current and says nothing about them.
+    logs.length = 0;
+    await runInbox({ ...opts(tmp()), ack: true, quietWhenEmpty: true }, { ...impl, inboxDir });
+    expect(logs.join("\n")).not.toMatch(/review rules were just installed/);
+  });
+
+  it("at a plain terminal, speaks to the person and writes nothing", async () => {
+    const inboxDir = tmp();
+    mkdirSync(path.join(inboxDir, ".claude"), { recursive: true });
+    const { impl, logs } = deps(async () => ({
+      ok: true,
+      json: async () => ({
+        lastAckedSeq: 0,
+        headSeq: 0,
+        hasMore: false,
+        events: [],
+        digest: digest({ blockers: { total: 1, shown: 1, items: [{ identifier: "ABC-3", title: "Stuck", agentName: "Agent A" }] } }),
+      }),
+    }));
+    const code = await runInbox(opts(tmp()), { ...impl, inboxDir });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain(TERMINAL_CLOSING_LINE);
+    expect(logs.join("\n")).not.toContain("I will review");
+    expect(existsSync(path.join(inboxDir, "AGENTS.md"))).toBe(false);
   });
 
   it("prints nothing when empty and told to be quiet", async () => {
