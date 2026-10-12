@@ -2,6 +2,7 @@ import readline from "node:readline";
 import process from "node:process";
 
 import { defaultInboxDir, readBridgeOwner, resolveBridgeToken, resolveInboxServer } from "./inbox.mjs";
+import { REQUEST_INSTRUCTIONS, REQUEST_TOOLS } from "./request-tools.mjs";
 import { WORK_INSTRUCTIONS, WORK_TOOLS } from "./work-tools.mjs";
 import { REPLY_INSTRUCTIONS, REPLY_TOOLS } from "./reply-tools.mjs";
 
@@ -216,11 +217,12 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
   const owner = deps.owner !== undefined ? deps.owner : readBridgeOwner();
   const version = deps.version ?? "0.0.0";
   const inboxDir = deps.inboxDir ?? defaultInboxDir();
-  // The work tools (work-tools.mjs) travel beside the inbox tools: same
-  // credential, their own routes (`tool.path`), and the file tool writes its
-  // own response (`tool.handleResponse`).
-  // The send-back (reply-tools.mjs) is the work surface's write half.
-  const allTools = [...TOOLS, ...WORK_TOOLS, ...REPLY_TOOLS];
+  // The work tools (work-tools.mjs) and the request tools (request-tools.mjs)
+  // travel beside the inbox tools: same credential, their own routes
+  // (`tool.path`), and the file tool writes its own response
+  // (`tool.handleResponse`). The send-back (reply-tools.mjs) is the work
+  // surface's write half.
+  const allTools = [...TOOLS, ...WORK_TOOLS, ...REPLY_TOOLS, ...REQUEST_TOOLS];
   const toolsByName = new Map(allTools.map((tool) => [tool.name, tool]));
 
   async function callTool(name, input) {
@@ -305,7 +307,7 @@ export function createInboxMcpHandler(opts = {}, deps = {}) {
           protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: "agentdash-inbox", version },
-          instructions: [instructionsFor(owner), WORK_INSTRUCTIONS, REPLY_INSTRUCTIONS].join("\n"),
+          instructions: [instructionsFor(owner), WORK_INSTRUCTIONS, REPLY_INSTRUCTIONS, REQUEST_INSTRUCTIONS].join("\n"),
         });
       case "ping":
         return isRequest ? reply({}) : null;

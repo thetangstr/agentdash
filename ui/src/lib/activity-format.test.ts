@@ -291,6 +291,8 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "bridge.task_created",
   "bridge.task_declined",
   "bridge.work_file_downloaded",
+  "bridge.work_request_accepted",
+  "bridge.work_requested",
   // budgets
   "budget.hard_threshold_crossed",
   "budget.incident_resolved",
@@ -444,6 +446,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.recovery_budget_exhausted",
   "issue.relations.updated",
   "issue.released",
+  "issue.requester_changes_requested",
   "issue.reviewers_updated",
   "issue.task_recovery_authorized",
   "issue.task_recovery_permit_consumed",

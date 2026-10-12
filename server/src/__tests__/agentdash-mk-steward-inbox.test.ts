@@ -146,6 +146,9 @@ describe("steward inbox caller existence", () => {
         // The send-back: propose reads back and mints a handle; confirm spends it.
         "/api/bridge/work/propose",
         "/api/bridge/work/confirm",
+        "/api/bridge/work/request",
+        "/api/bridge/work/request/respond",
+        "/api/bridge/work/request/confirm",
       ].sort(),
     );
   });

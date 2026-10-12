@@ -2,6 +2,7 @@ import { redactApprovalForReader } from "../redaction.js";
 import { issueCurrentAuthority } from "../services/issue-current-authority.js";
 import { registerRossRequestRoutes } from "./ross-requests.js";
 import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
+import { issuePatchHooks } from "../services/issue-patch-hooks.js";
 import {
   issueCommentActions,
   IssueCommentPolicyRefusal,
@@ -72,8 +73,6 @@ import {
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
 import { FEATURE_FLAG_KEYS, definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
-import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
-import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
 // AgentDash: goals-eval-hitl
@@ -2692,16 +2691,7 @@ export function issueRoutes(
     // AgentDash (GH #830 A5, #854/#868): write targets are checked before
     // acceptance, so a restricted project/parent/blocker is 404 here.
     await assertIssueWriteTargetsVisible(req, existing.companyId, req.body);
-    const actions = issuePatchActions(db, heartbeat, {
-      statusChanged: (id, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(id, before, after),
-      completed: async agentId => {
-        const tc = getTelemetryClient();
-        if (!tc) return;
-        const agent = await agentsSvc.getById(agentId);
-        if (agent) trackAgentTaskCompleted(tc, { agentRole: agent.role, agentId: agent.id, adapterType: agent.adapterType,
-          model: typeof agent.adapterConfig?.model === "string" ? agent.adapterConfig.model : undefined });
-      },
-    });
+    const actions = issuePatchActions(db, heartbeat, issuePatchHooks(db, { orchestrator: cosVerdictOrchestratorSvc, agents: agentsSvc }));
     const { input: patchIntent, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, existing.companyId, req.body, existing);
     // AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): what
@@ -2862,9 +2852,7 @@ export function issueRoutes(
       return;
     }
     const status = existing.assigneeAgentId || existing.assigneeUserId ? "in_progress" : "todo";
-    const actions = issuePatchActions(db, heartbeat, {
-      statusChanged: (id, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(id, before, after),
-    });
+    const actions = issuePatchActions(db, heartbeat, issuePatchHooks(db, { orchestrator: cosVerdictOrchestratorSvc, agents: agentsSvc }));
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
         actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req),

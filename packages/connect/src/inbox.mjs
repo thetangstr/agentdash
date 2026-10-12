@@ -405,6 +405,23 @@ function questionLines(item, now) {
   return lines;
 }
 
+/**
+ * One of the person's requests of someone else: the issue and where it stands,
+ * in the server's words ("waiting on Person B for 2 days"). Pointers only.
+ */
+function requestLine(item) {
+  const ref = item.identifier ? `${oneLine(item.identifier, 40)} ` : "";
+  const title = item.title ? `"${oneLine(item.title, 200)}"` : "";
+  return `  - ${ref}${title} — ${oneLine(item.summary, 240)}`;
+}
+
+/** The digest's requests section, or an empty one when the server sent none. */
+function requestsOf(digest) {
+  const section = digest?.requests;
+  if (!section || typeof section.total !== "number") return { total: 0, shown: 0, delivered: 0, waiting: 0, items: [] };
+  return section;
+}
+
 function issueLine(item) {
   const ref = item.identifier ? `${item.identifier} ` : "";
   const who = item.agentName ? ` (${item.agentName})` : "";
@@ -502,11 +519,13 @@ export function renderInbox(response, now, { session = false } = {}) {
 
   const undelivered = undeliveredSendLines(response);
   const questions = digest.questions ?? { total: 0, shown: 0, items: [] };
+  const requests = requestsOf(digest);
   const nothing =
     digest.approvals.total === 0 &&
     questions.total === 0 &&
     digest.blockers.total === 0 &&
     digest.completions.total === 0 &&
+    requests.total === 0 &&
     undelivered.length === 0;
   if (nothing) {
     const other = unseenApprovalCount(response);
@@ -562,6 +581,25 @@ export function renderInbox(response, now, { session = false } = {}) {
     for (const item of digest.blockers.items) lines.push(issueLine(item));
     const more = remainder(digest.blockers);
     if (more) lines.push(more);
+    lines.push("");
+  }
+
+  // Work this person asked other people for: results to accept first, then
+  // what is still waiting and on whom. After their own agents' items.
+  if (requests.total > 0) {
+    // `truncated`: the server counted only its most recent requests, so the counts are a floor.
+    const atLeast = requests.truncated === true ? "at least " : "";
+    lines.push(`Your requests (${atLeast}${requests.total}: ${requests.delivered} delivered, ${requests.waiting} waiting):`);
+    for (const item of requests.items ?? []) lines.push(requestLine(item));
+    const more = remainder(requests);
+    if (more) lines.push(more);
+    if (requests.delivered > 0) {
+      lines.push(
+        session
+          ? "  I will review each delivered result with you. Accepting it or asking for changes goes out as you, only after your go."
+          : "  Accept a result or ask for changes on the issue in AgentDash, or from a Claude Code session in your inbox folder.",
+      );
+    }
     lines.push("");
   }
 
@@ -673,7 +711,8 @@ export async function runInbox(opts = {}, deps = {}) {
       (digest.approvals.total === 0 &&
         (digest.questions?.total ?? 0) === 0 &&
         digest.blockers.total === 0 &&
-        digest.completions.total === 0));
+        digest.completions.total === 0 &&
+        requestsOf(digest).total === 0));
 
   if (!(empty && opts.quietWhenEmpty)) {
     log(renderInbox(response, now, { session }));

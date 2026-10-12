@@ -39,6 +39,7 @@ import { logActivity } from "./activity-log.js";
 import { AGENT_MATERIAL_FRAMING, STEWARD_WORK_CAPABILITY, frameUntrustedAgentMaterial } from "./bridge.js";
 import { featureFlagsService } from "./feature-flags.js";
 import { redactRunLogText } from "./run-log-redaction.js";
+import { isDeliveredToRequester, isOwnersRequest } from "./steward-request-scope.js";
 import {
   DECIDABLE_STATUSES,
   activeMembership,
@@ -175,9 +176,17 @@ export type WorkRefusal = { ok: false; code: string; reason: string };
 type EndpointRow = typeof bridgeEndpoints.$inferSelect;
 type IssueRow = typeof issues.$inferSelect;
 
+/**
+ * How an issue is reachable: the owner's own work (theirs or an agent they
+ * answer for), or one of their requests of someone else (steward-requests.ts),
+ * which reads narrower: the issue, its comments, documents and attachments,
+ * never the counterpart's run logs, parent chain or child issues.
+ */
+export type WorkIssueScope = "own" | "request";
+
 /** Who a work call acts for, resolved from the endpoint. Exported for the send-back (steward-work-reply.ts). */
-export type WorkOwner = Owner;
-type Owner = {
+export type WorkOwner = StewardWorkOwner;
+export type StewardWorkOwner = {
   endpoint: EndpointRow;
   companyId: string;
   userId: string;
@@ -185,6 +194,16 @@ type Owner = {
   agentIds: string[];
   agentNameById: Map<string, string>;
 };
+
+type Owner = StewardWorkOwner;
+
+export function workRefusal(code: string, reason: string): WorkRefusal {
+  return refusal(code, reason);
+}
+
+export function isWorkRefusal<T>(value: T | WorkRefusal): value is WorkRefusal {
+  return (value as WorkRefusal | null)?.ok === false;
+}
 
 function refusal(code: string, reason: string): WorkRefusal {
   return { ok: false, code, reason };
@@ -350,10 +369,15 @@ export function stewardWorkService(
   }
 
   /**
-   * The issue, or 404. Unknown, hidden, off the owner's page, and not the
-   * owner's work all answer the same, so the answer reveals nothing.
+   * The issue, or 404. Unknown, hidden, off the owner's page, and neither the
+   * owner's work nor (when `allowRequests`) one of their requests all answer
+   * the same, so the answer reveals nothing.
    */
-  async function findWorkIssue(owner: Owner, issueRef: unknown): Promise<IssueRow> {
+  async function workIssueAccess(
+    owner: Owner,
+    issueRef: unknown,
+    opts: { allowRequests?: boolean } = {},
+  ): Promise<{ issue: IssueRow; scope: WorkIssueScope }> {
     const missing = notFound("Issue not found");
     const ref = typeof issueRef === "string" ? issueRef.trim() : "";
     let match;
@@ -366,9 +390,16 @@ export function stewardWorkService(
       .where(and(match, eq(issues.companyId, owner.companyId)))
       .then((rows) => rows[0] ?? null);
     if (!issue || issue.hiddenAt) throw missing;
-    if (!isOwnersWork(owner, issue)) throw missing;
+    let scope: WorkIssueScope;
+    if (isOwnersWork(owner, issue)) scope = "own";
+    else if (opts.allowRequests && (await isOwnersRequest(db, owner, issue.id))) scope = "request";
+    else throw missing;
     if (!(await visibleOnPage(owner, issue.id))) throw missing;
-    return issue;
+    return { issue, scope };
+  }
+
+  async function findWorkIssue(owner: Owner, issueRef: unknown): Promise<IssueRow> {
+    return (await workIssueAccess(owner, issueRef)).issue;
   }
 
   async function namesFor(input: { agentIds?: Array<string | null>; userIds?: Array<string | null> }) {
@@ -544,6 +575,12 @@ export function stewardWorkService(
     return chain;
   }
 
+  /** Said on a read of one of the owner's requests, so the narrower view is not mistaken for the whole. */
+  const REQUEST_SCOPE_NOTE =
+    "This is one of your requests of someone else. You see the issue, its comments, documents and attachments; " +
+    "the other person's agent's run logs, parent work and child issues are theirs and are not shown. " +
+    "When the result is delivered, accept it or ask for changes with work_request_respond.";
+
   /** Said once in an overview read, so the session knows how to read on. */
   const PAGING_NOTE =
     "Bodies here are the start of each text, inside one size budget. When a body says truncated, " +
@@ -562,7 +599,7 @@ export function stewardWorkService(
   ) {
     const owner = await resolveOwner(endpointId);
     if (isRefusal(owner)) return owner;
-    const issue = await findWorkIssue(owner, input.issueId);
+    const { issue, scope } = await workIssueAccess(owner, input.issueId, { allowRequests: true });
     const documentKey = typeof input.documentKey === "string" && input.documentKey.trim() ? input.documentKey.trim() : null;
     const commentId = typeof input.commentId === "string" && input.commentId.trim() ? input.commentId.trim() : null;
     const section = typeof input.section === "string" && input.section.trim() ? input.section.trim() : null;
@@ -694,7 +731,12 @@ export function stewardWorkService(
           .then((rows) => rows[0] ?? null)
       : null;
 
-    const chain = await contextChain(owner, issue);
+    // A request reads as the issue itself: the counterpart's parent chain and
+    // child issues are their own work, not the requester's.
+    const chain = scope === "request" ? [] : await contextChain(owner, issue);
+    // A result handed back to its requester is their own work again, and still their request.
+    const isRequest =
+      scope === "request" || (issue.createdByUserId === owner.userId && (await isOwnersRequest(db, owner, issue.id)));
 
     const commentTotal = await db
       .select({ n: count() })
@@ -727,7 +769,7 @@ export function stewardWorkService(
       .where(eq(issueAttachments.issueId, issue.id))
       .orderBy(desc(issueAttachments.createdAt));
 
-    const childRows = await db
+    const childRows = scope === "request" ? [] : await db
       .select({
         id: issues.id,
         identifier: issues.identifier,
@@ -813,6 +855,15 @@ export function stewardWorkService(
       ok: true as const,
       framing: AGENT_MATERIAL_FRAMING,
       paging: PAGING_NOTE,
+      scope,
+      ...(isRequest
+        ? {
+            yourRequest: {
+              note: REQUEST_SCOPE_NOTE,
+              delivered: isDeliveredToRequester(issue, owner),
+            },
+          }
+        : {}),
       issue: {
         ...issueHeader,
         priority: issue.priority,
@@ -882,7 +933,7 @@ export function stewardWorkService(
           };
         }),
       },
-      children: {
+      children: scope === "request" ? null : {
         total: childRows.length,
         shown: shownChildren.length,
         truncated: childRows.length > shownChildren.length,
@@ -1101,7 +1152,8 @@ export function stewardWorkService(
     if (!attachment) throw notFound("Attachment not found");
     let issue: IssueRow;
     try {
-      issue = await findWorkIssue(owner, attachment.issueId);
+      // A requester may fetch the deliverable files on their request.
+      issue = (await workIssueAccess(owner, attachment.issueId, { allowRequests: true })).issue;
     } catch {
       throw notFound("Attachment not found");
     }
@@ -1153,9 +1205,12 @@ export function stewardWorkService(
     read,
     runLog,
     file,
-    // The send-back (steward-work-reply.ts) resolves the person and the issue
-    // exactly as the reads do.
+    // The send-back (steward-work-reply.ts) and the requests
+    // (steward-requests.ts) resolve the person and the issue exactly as the
+    // reads do. The send-back takes only the owner's own work (findWorkIssue);
+    // requests reach their narrower scope through workIssueAccess.
     resolveOwner,
+    workIssueAccess,
     findWorkIssue,
     isRefusal,
   };

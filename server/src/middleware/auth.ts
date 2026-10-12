@@ -101,6 +101,13 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // authority -- see steward-work-reply.ts.
   "/api/bridge/work/propose",
   "/api/bridge/work/confirm",
+  // Asking someone else for work, and closing it out (steward-requests.ts).
+  // `request` and `request/respond` mint a single-use handle over a resolved
+  // brief or close-out and change nothing; `request/confirm` spends it and
+  // re-checks the owner's authority before acting as them.
+  "/api/bridge/work/request",
+  "/api/bridge/work/request/respond",
+  "/api/bridge/work/request/confirm",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

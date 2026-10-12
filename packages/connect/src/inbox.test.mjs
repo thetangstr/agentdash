@@ -115,6 +115,83 @@ describe("renderInbox", () => {
     expect(session).not.toContain("inbox_decide");
   });
 
+  /**
+   * The person's requests of other people: pointers and the server's own
+   * words for where each one stands, after their own agents' items and before
+   * finished work. Never the brief.
+   */
+  it("renders your requests after blockers and before finished work, in the server's words", () => {
+    const requests = {
+      total: 3,
+      delivered: 1,
+      waiting: 2,
+      shown: 2,
+      items: [
+        { issueId: "i1", identifier: "ABC-12", title: "Draft the vendor summary", delivered: true, summary: "done 3 hours ago; accept it or ask for changes" },
+        { issueId: "i2", identifier: "ABC-9", title: "Check the figures", delivered: false, summary: "waiting on Person B for 2 days (Agent B asked them a question)" },
+      ],
+    };
+    const response = {
+      events: [],
+      digest: digest({
+        blockers: { total: 1, shown: 1, items: [{ identifier: "ABC-49", title: "Draft note", agentName: "Agent A" }] },
+        completions: { total: 1, shown: 1, items: [{ identifier: "ABC-47", title: "Health check", agentName: "Agent A" }] },
+        requests,
+      }),
+    };
+    const plain = renderInbox(response, NOW);
+    const blocked = plain.indexOf("Stopped and needs you (1):");
+    const yours = plain.indexOf("Your requests (3: 1 delivered, 2 waiting):");
+    const finished = plain.indexOf("Finished (1):");
+    expect(blocked).toBeGreaterThan(-1);
+    expect(blocked).toBeLessThan(yours);
+    expect(yours).toBeLessThan(finished);
+    expect(plain).toContain('  - ABC-12 "Draft the vendor summary" — done 3 hours ago; accept it or ask for changes');
+    expect(plain).toContain('  - ABC-9 "Check the figures" — waiting on Person B for 2 days (Agent B asked them a question)');
+    expect(plain).toContain("… and 1 more (3 in total)");
+    expect(plain).toContain("Accept a result or ask for changes on the issue in AgentDash");
+
+    const session = renderInbox(response, NOW, { session: true });
+    expect(session).toContain("I will review each delivered result with you");
+    expect(session).toContain("only after your go");
+  });
+
+  it("is not empty when only your requests are waiting", () => {
+    const response = {
+      events: [],
+      digest: digest({
+        requests: {
+          total: 1,
+          delivered: 0,
+          waiting: 1,
+          shown: 1,
+          items: [{ issueId: "i2", identifier: "ABC-9", title: "Check the figures", delivered: false, summary: "waiting on Agent B for 5 hours (working on it)" }],
+        },
+      }),
+    };
+    const text = renderInbox(response, NOW);
+    expect(text).not.toContain("nothing waiting on you");
+    expect(text).toContain("Your requests (1: 0 delivered, 1 waiting):");
+    expect(text).not.toContain("Accept a result");
+  });
+
+  it("says the request counts are a floor when the server counted only its most recent", () => {
+    const response = {
+      events: [],
+      digest: digest({
+        requests: {
+          total: 100,
+          delivered: 2,
+          waiting: 98,
+          shown: 0,
+          truncated: true,
+          items: [],
+        },
+      }),
+    };
+    expect(renderInbox(response, NOW)).toContain("Your requests (at least 100: 2 delivered, 98 waiting):");
+  });
+
   it("keeps the CLI mirror's closing line in step", () => {
     const mirror = readFileSync(new URL("../../../cli/src/commands/bridge-inbox.ts", import.meta.url), "utf8");
     expect(mirror).toContain(JSON.stringify(TERMINAL_CLOSING_LINE));
@@ -531,6 +608,7 @@ describe("the packaged co-worker skill", () => {
       "work_propose_reply",
       "work_confirm_reply",
       "work_request_propose",
+      "work_request_respond",
       "work_request_confirm",
     ]) {
       expect(skill).toContain(tool);
@@ -731,6 +809,30 @@ describe("runInbox", () => {
     expect(logs.join("\n")).toContain(TERMINAL_CLOSING_LINE);
     expect(logs.join("\n")).not.toContain("I will review");
     expect(existsSync(path.join(inboxDir, "AGENTS.md"))).toBe(false);
+  });
+
+  it("speaks up for your requests even when told to be quiet otherwise", async () => {
+    const { impl, logs } = deps(async () => ({
+      ok: true,
+      json: async () => ({
+        lastAckedSeq: 0,
+        headSeq: 0,
+        hasMore: false,
+        events: [],
+        digest: digest({
+          requests: {
+            total: 1,
+            delivered: 1,
+            waiting: 0,
+            shown: 1,
+            items: [{ issueId: "i1", identifier: "ABC-12", title: "Draft the vendor summary", delivered: true, summary: "done 1 hour ago; accept it or ask for changes" }],
+          },
+        }),
+      }),
+    }));
+    const code = await runInbox({ ...opts(tmp()), quietWhenEmpty: true }, impl);
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("Your requests (1: 1 delivered, 0 waiting):");
   });
 
   it("prints nothing when empty and told to be quiet", async () => {

@@ -64,7 +64,7 @@ describe("agentdash-connect mcp", () => {
       expect(text).not.toMatch(/never pick the agent's recommendation/i);
     }
     const byName = Object.fromEntries(list.result.tools.map((t) => [t.name, t.description]));
-    for (const name of ["inbox_decide", "inbox_answer", "inbox_confirm"]) {
+    for (const name of ["inbox_decide", "inbox_answer", "inbox_confirm", "work_request_confirm"]) {
       expect(byName[name], name).toMatch(/explicit/);
       expect(byName[name], name).toMatch(/never because/);
     }
@@ -131,6 +131,9 @@ describe("agentdash-connect mcp", () => {
         "work_list",
         "work_propose_reply",
         "work_read",
+        "work_request_confirm",
+        "work_request_propose",
+        "work_request_respond",
         "work_run_log",
       ],
     );
