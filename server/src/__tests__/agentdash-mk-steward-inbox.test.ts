@@ -143,6 +143,9 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/work/read",
         "/api/bridge/work/run-log",
         "/api/bridge/work/file",
+        "/api/bridge/work/request",
+        "/api/bridge/work/request/respond",
+        "/api/bridge/work/request/confirm",
       ].sort(),
     );
   });

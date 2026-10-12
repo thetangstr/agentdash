@@ -72,10 +72,11 @@ POST /api/bridge/result      POST /api/bridge/inbox/ack      POST /api/bridge/in
 POST /api/bridge/decline     POST /api/bridge/inbox/decide   POST /api/bridge/inbox/confirm
                              POST /api/bridge/inbox/answer
 POST /api/bridge/work/list   POST /api/bridge/work/read      POST /api/bridge/work/run-log
-POST /api/bridge/work/file
+POST /api/bridge/work/file   POST /api/bridge/work/request   POST /api/bridge/work/request/respond
+POST /api/bridge/work/request/confirm
 ```
 
-An endpoint token decides nothing on its own: the inbox routes that act on an approval spend a separate single-use handle, minted for that one decision. The work routes only read, and need the endpoint capability `bridge:work` and the company flag `coworker_bridge_enabled`.
+An endpoint token decides nothing on its own: the inbox routes that act on an approval spend a separate single-use handle, minted for that one decision. The work routes need the endpoint capability `bridge:work` and the company flag `coworker_bridge_enabled`. They only read, except the request routes, which act only by spending a single-use handle minted over the exact read-back.
 
 ### The MCP endpoints
 

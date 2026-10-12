@@ -12,6 +12,7 @@ import { stewardInboxDecisionService } from "../services/steward-inbox-decisions
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
 import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js";
 import { stewardWorkService } from "../services/steward-work.js";
+import { stewardRequestsService } from "../services/steward-requests.js";
 import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -70,6 +71,11 @@ export function bridgeRoutes(
     heartbeat?: Pick<ReturnType<typeof heartbeatService>, "wakeup">;
     /** Where attachment bytes live; `/bridge/work/file` reads through it. */
     storage?: StorageService;
+    /**
+     * Substituted in tests to observe the wakes and run effects of a request
+     * created or closed out from the bridge (steward-requests.ts).
+     */
+    issueRuntime?: Pick<ReturnType<typeof heartbeatService>, "wakeup" | "cancelRun" | "reportRunActivity">;
   } = {},
 ) {
   const router = Router();
@@ -88,6 +94,7 @@ export function bridgeRoutes(
     storage: options.storage,
     readRunLog: (run, opts) => heartbeat.readLog(run, opts),
   });
+  const requests = stewardRequestsService(db, { runtime: options.issueRuntime ?? heartbeat });
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -174,6 +181,15 @@ export function bridgeRoutes(
     // making it the default would spend most of its cost on nobody looking.
     const includeDigest = req.body?.includeDigest === true;
     const result = await inbox.syncForEndpoint(endpointId, { limit, includeDigest });
+    // The person's requests of others, as counts and pointers: only for an
+    // endpoint with `bridge:work` in a company with the co-worker flag on.
+    if (result.digest) {
+      const yourRequests = await requests.digestSection(endpointId);
+      if (yourRequests) {
+        res.json({ ...result, digest: { ...result.digest, requests: yourRequests } });
+        return;
+      }
+    }
     res.json(result);
   });
 
@@ -306,11 +322,21 @@ export function bridgeRoutes(
   // every agent-written field framed. See services/steward-work.ts.
   // -------------------------------------------------------------------------
 
-  /** What the owner's agents handed them: decisions, questions, blockers, reviews. */
+  /**
+   * What the owner's agents handed them: decisions, questions, blockers,
+   * reviews. Beside them, `requests`: the work the owner asked other people
+   * for, delivered results first (steward-requests.ts).
+   */
   router.post("/bridge/work/list", async (req, res) => {
     const { endpointId } = requireEndpoint(req);
     await bridge.touchEndpoint(endpointId);
-    res.json(await work.list(endpointId, { limit: req.body?.limit }));
+    const handoffs = await work.list(endpointId, { limit: req.body?.limit });
+    if (handoffs.ok === false) {
+      res.json(handoffs);
+      return;
+    }
+    const yourRequests = await requests.list(endpointId, { limit: req.body?.limit });
+    res.json(yourRequests && "ok" in yourRequests ? handoffs : { ...handoffs, requests: yourRequests });
   });
 
   /**
@@ -379,6 +405,46 @@ export function bridgeRoutes(
     if (result.identifier) res.setHeader("x-agentdash-issue", result.identifier);
     result.stream.on("error", (err) => next(err));
     result.stream.pipe(res);
+  });
+
+  // -------------------------------------------------------------------------
+  // Endpoint-facing: asking someone else for work, and closing it out.
+  // Same gates as the reads above. Each write is a single-use handle over
+  // the exact read-back, spent by `request/confirm` with the owner's
+  // authority re-checked. See services/steward-requests.ts.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read back a request for another person: the brief as it will be sent,
+   * who takes it (their agent, by the routing rule), and who will see it.
+   * Creates nothing. An unknown or ambiguous name mints no handle.
+   */
+  router.post("/bridge/work/request", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    res.json(await requests.propose(endpointId, req.body ?? {}));
+  });
+
+  /**
+   * Read back accepting a delivered result, or asking for changes (a comment
+   * as the owner, handed straight to the deliverable owner's agent). Changes
+   * nothing.
+   */
+  router.post("/bridge/work/request/respond", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(await requests.respond(endpointId, body));
+  });
+
+  /** Spend a request handle: create the request, accept the result, or send the changes. */
+  router.post("/bridge/work/request/confirm", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const token = typeof req.body?.token === "string" ? req.body.token : null;
+    if (!token) throw badRequest("token is required");
+    res.json(await requests.confirm(endpointId, token));
   });
 
   router.post("/bridge/result", async (req, res) => {
