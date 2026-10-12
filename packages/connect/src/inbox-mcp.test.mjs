@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { createInboxMcpHandler, runInboxMcp } from "./inbox-mcp.mjs";
 import { inboxMcpLaunch, upsertClaudeStdioServer } from "./harnesses.mjs";
+import { DESKTOP_CLIENT, DESKTOP_SERVER_INSTRUCTIONS } from "./clients.mjs";
 
 const SERVER = "http://10.0.0.5:3102";
 
@@ -31,6 +32,28 @@ function handler(respond, extra = {}) {
   );
   return { handle, calls: fetch.calls };
 }
+
+describe("agentdash-connect mcp in Claude Desktop", () => {
+  /**
+   * Desktop registers the tools for every chat and has no inbox folder or
+   * session-start hook, so its launch passes `--client claude-desktop` and the
+   * server says so in its instructions. Claude Code and Codex never get it.
+   */
+  it("adds the Desktop rules only when Claude Desktop launched it", async () => {
+    const desktop = createInboxMcpHandler(
+      { client: DESKTOP_CLIENT },
+      { readServer: () => SERVER, readToken: () => "t", owner: { name: "Person A" } },
+    );
+    const init = await desktop({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    expect(init.result.instructions).toContain(DESKTOP_SERVER_INSTRUCTIONS);
+    expect(init.result.instructions).toMatch(/explicit go/);
+
+    const code = createInboxMcpHandler({}, { readServer: () => SERVER, readToken: () => "t", owner: { name: "Person A" } });
+    const plain = await code({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} });
+    expect(plain.result.instructions).not.toContain(DESKTOP_SERVER_INSTRUCTIONS);
+    expect(plain.result.instructions).not.toMatch(/Claude Desktop/);
+  });
+});
 
 describe("agentdash-connect mcp", () => {
   it("introduces itself as the person's own inbox, not an agent", async () => {
