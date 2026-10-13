@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents,
+  agentWakeupRequests,
   approvals,
   bridgeEndpoints,
   companies,
@@ -21,6 +23,10 @@ import {
   type RespondIssueThreadInteraction,
 } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
+import { agentRowWakeBlocker } from "./agent-wake-policy.js";
+import { budgetService } from "./budgets.js";
+import { DELIBERATE_PERSON_WAKE_REASONS } from "./run-facts.js";
+import { TOKEN_CEILING_SKIP_REASON, UNMETERED_RUNAWAY_GUARD_REASON } from "./token-ceiling.js";
 import { insertActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import {
   answersThatDifferFromRecommendation,
@@ -201,6 +207,7 @@ export function stewardWorkReplyService(
 ) {
   const work = stewardWorkService(db, { storage: options.storage });
   const authority = approvalAuthorityService(db);
+  const budgets = budgetService(db);
   const effects = approvalDecisionEffectsService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
@@ -244,6 +251,62 @@ export function stewardWorkReplyService(
       .where(and(eq(issueApprovals.issueId, issueId), eq(issueApprovals.approvalId, approvalId)))
       .then((rows) => rows[0]?.approval ?? null);
     return row;
+  }
+
+  /**
+   * Why the send-back's wake would not start a run of the assignee right now,
+   * as a code `wakeBlockerPhrase` words, or null. The checks enqueueWakeup
+   * makes on the agent before any issue-level hold: the budget, the agent's
+   * status, its wake policy and wakeOnDemand. The daily token ceiling is not
+   * one of them: a send-back is a wake the person aimed at the agent
+   * (run-facts.ts), which the ceiling does not pause.
+   */
+  async function assigneeWakeBlocker(
+    companyId: string,
+    agentId: string,
+    issue: { id: string; projectId: string | null },
+  ): Promise<{ code: string; detail?: string } | null> {
+    const agent = await db
+      .select({ status: agents.status, runtimeConfig: agents.runtimeConfig, metadata: agents.metadata })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (!agent) return null;
+    const budgetBlock = await budgets
+      .getInvocationBlock(companyId, agentId, { issueId: issue.id, projectId: issue.projectId })
+      .catch(() => null);
+    if (budgetBlock) return { code: "budget.blocked", detail: budgetBlock.reason };
+    const code = agentRowWakeBlocker(agent);
+    if (code) return { code };
+    // Not a blocker: the wake goes out. The read-back still says so.
+    if (agent.status === "error") return { code: "agent_error" };
+    return null;
+  }
+
+  /**
+   * After a wake that started no run: why, from the wakeup request the
+   * heartbeat wrote for it (a skip records its reason; a wake held behind the
+   * agent's current run on this issue is deferred). Holds that write no row
+   * read as a generic hold.
+   */
+  async function notStartedWakeCode(agentId: string, issueId: string, since: Date) {
+    const row = await db
+      .select({ status: agentWakeupRequests.status, reason: agentWakeupRequests.reason })
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.agentId, agentId),
+          gte(agentWakeupRequests.updatedAt, since),
+          sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
+          sql`${agentWakeupRequests.payload} ->> 'mutation' = 'bridge_reply'`,
+        ),
+      )
+      .orderBy(desc(agentWakeupRequests.updatedAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (row?.status === "deferred_issue_execution") return "deferred";
+    if (row?.status === "skipped" && row.reason) return row.reason;
+    return "held";
   }
 
   // -------------------------------------------------------------------------
@@ -472,13 +535,18 @@ export function stewardWorkReplyService(
     const agentName = issue.assigneeAgentId
       ? frameUntrustedText(owner.agentNameById.get(issue.assigneeAgentId), 80)
       : null;
-    const assigneeWoken =
+    const assigneeWakes =
       Boolean(issue.assigneeAgentId) &&
       (Boolean(stored.document) ||
         Boolean(stored.comment) ||
         Boolean(stored.files?.length) ||
         answerWakes ||
         (Boolean(stored.decision) && decisionRequesterId === issue.assigneeAgentId));
+    // Never promise a wake the heartbeat will refuse.
+    const wakeBlocker =
+      assigneeWakes && issue.assigneeAgentId
+        ? await assigneeWakeBlocker(owner.companyId, issue.assigneeAgentId, issue)
+        : null;
     if (stored.lessons.length > 0) {
       readback.push(
         `lessons for ${agentName ?? "the agent"} (it saves them to its own memory, which you and your company's members can read):`,
@@ -521,7 +589,8 @@ export function stewardWorkReplyService(
       wakes: describeWake({
         agentName,
         assigned: Boolean(issue.assigneeAgentId),
-        assigneeWoken,
+        assigneeWoken: assigneeWakes,
+        wakeBlocker,
         quietAnswer: Boolean(stored.answer) && !answerWakes,
         decisionWakesAnother: Boolean(stored.decision) && decisionRequesterId !== null && decisionRequesterId !== issue.assigneeAgentId,
       }),
@@ -1096,6 +1165,16 @@ export function stewardWorkReplyService(
 
     // At most one wake for the assignee, carrying the whole bundle.
     let agentWoken = false;
+    const assigneeName = assigneeId ? frameUntrustedText(owner.agentNameById.get(assigneeId), 80) : null;
+    // Said whenever the agent is not woken, so the person is never left to
+    // guess after a read-back that said it would be.
+    let notWokenReason: string | null = !assigneeId
+      ? "No agent is assigned to this issue."
+      : !assigneeOpen
+        ? `The issue is ${applied.status}, so ${assigneeName ?? "the agent"} is not woken.`
+        : !wakeAssignee
+          ? `${assigneeName ?? "The agent"} is not woken by this: ${quietReason(Boolean(stored.answer) && !applied.answerWakes)}.`
+          : null;
     if (assigneeId && wakeAssignee) {
       const decisionInWake = decisionForAssignee && applied.decision
         ? {
@@ -1107,13 +1186,14 @@ export function stewardWorkReplyService(
         : null;
       // A decision riding in the wake names it: it is the news, and the
       // approval_* and connector_send_* reasons get a follow-up even while the
-      // issue is running. The wake is the person's own, so a reopen of
-      // closed work still happens without the reopen reason.
-      const wakeReason = decisionInWake
-        ? decisionInWake.reason
-        : applied.reopened
-          ? "issue_reopened_via_comment"
-          : "issue_commented";
+      // issue is running. Otherwise the wake is the send-back itself: the
+      // person's own decision on the hand-off, classed with approvals
+      // (run-facts.ts), so the daily token ceiling, which pauses comment
+      // wakes, does not hold it back. It was "issue_commented" before, and
+      // was paused. The wake is the person's own, so a reopen of closed work
+      // still happens without the reopen reason.
+      const wakeReason = decisionInWake ? decisionInWake.reason : DELIBERATE_PERSON_WAKE_REASONS.bridgeReply;
+      const wakeSentAt = new Date(Date.now() - 5_000);
       try {
         const run = await options.heartbeat.wakeup(assigneeId, {
           source: "automation",
@@ -1160,8 +1240,13 @@ export function stewardWorkReplyService(
           },
         });
         agentWoken = run != null;
+        if (!run) {
+          const code = await notStartedWakeCode(assigneeId, issue.id, wakeSentAt).catch(() => "held");
+          notWokenReason = `${assigneeName ?? "The agent"} ${wakeBlockerPhrase(code)}.`;
+        }
       } catch (err) {
         logger.warn({ err, issueId: issue.id }, "send-back wake failed; the agent reads the bundle on its next run");
+        notWokenReason = `${assigneeName ?? "The agent"} ${wakeBlockerPhrase(refusedWakeCode(err), (err as Error)?.message)}.`;
       }
     }
     // A comment that names another agent wakes it, as on the web page.
@@ -1202,10 +1287,65 @@ export function stewardWorkReplyService(
         ...(applied.decision && stored.decision ? { decision: stored.decision.decision } : {}),
       },
       agentWoken,
+      ...(agentWoken || !notWokenReason ? {} : { notWokenReason }),
     };
   }
 
   return { propose, confirm };
+}
+
+/** Why a bundle does not wake its assignee when nothing stops the agent. */
+function quietReason(quietAnswer: boolean) {
+  return quietAnswer
+    ? "its question was set not to wake it when answered"
+    : "a decision on its own wakes only the agent that asked for the approval";
+}
+
+/** The code of a wake the heartbeat refused by throwing (budget, status). */
+function refusedWakeCode(err: unknown): string {
+  const details = (err as { details?: { status?: unknown; scopeType?: unknown } } | null)?.details;
+  if (typeof details?.status === "string") return `agent_${details.status}`;
+  if (details?.scopeType) return "budget.blocked";
+  return "failed";
+}
+
+/**
+ * A wake that does not start a run, in words that follow the agent's name:
+ * "Agent A is paused". Codes are the heartbeat's own skip reasons plus a few
+ * of this file's (agent_<status>, deferred, held, failed).
+ */
+function wakeBlockerPhrase(code: string, detail?: string | null): string {
+  switch (code) {
+    case "agent_paused":
+      return "is paused";
+    case "agent_terminated":
+      return "is terminated";
+    case "agent_pending_approval":
+      return "is waiting for approval before it can run";
+    case "heartbeat.wakeOnDemand.disabled":
+      return "is set not to be woken on demand";
+    case TOKEN_CEILING_SKIP_REASON:
+      return "has reached its daily token ceiling";
+    case UNMETERED_RUNAWAY_GUARD_REASON:
+      return "is paused for today by the unmetered-run guard";
+    case "budget.blocked": {
+      const why = detail?.trim().replace(/\.$/, "");
+      return why ? `cannot start new work (${why})` : "cannot start new work under its budget";
+    }
+    case "issue_tree_hold_active":
+      return "is held: this issue's tree is paused";
+    case "issue_dependencies_blocked":
+      return "is held: this issue is waiting on the issues that block it";
+    case "deferred":
+      return "is already running on this issue and picks this up when that run ends";
+    case "held":
+      return "did not start a run: a hold on the agent or this issue kept it back";
+    case "failed":
+      return "could not be woken; it sees all of this on its next run";
+    default:
+      if (code.startsWith("travel_pairing.")) return "only runs when a board member assigns it an issue";
+      return `did not start a run (${code})`;
+  }
 }
 
 /** The read-back's wake line: who is woken, and once. */
@@ -1213,6 +1353,8 @@ function describeWake(input: {
   agentName: string | null;
   assigned: boolean;
   assigneeWoken: boolean;
+  /** Why the agent cannot run right now, when the bundle would wake it. */
+  wakeBlocker?: { code: string; detail?: string } | null;
   /** An answer is in the bundle and its question does not wake the agent. */
   quietAnswer: boolean;
   decisionWakesAnother: boolean;
@@ -1220,11 +1362,14 @@ function describeWake(input: {
   const another = input.decisionWakesAnother ? " The agent that asked for the approval is woken with your decision." : "";
   if (!input.assigned) return `No agent is assigned to this issue.${another || " Nobody is woken."}`;
   const name = input.agentName ?? "The agent";
+  if (input.assigneeWoken && input.wakeBlocker?.code === "agent_error") {
+    return `${name} is woken once with all of this. Its last run ended in an error, so check on it if nothing happens.${another}`;
+  }
+  if (input.assigneeWoken && input.wakeBlocker) {
+    return `${name} is not woken by this: it ${wakeBlockerPhrase(input.wakeBlocker.code, input.wakeBlocker.detail)}. It sees all of this when it next runs.${another}`;
+  }
   if (input.assigneeWoken) return `${name} is woken once with all of this.${another}`;
-  const why = input.quietAnswer
-    ? "its question was set not to wake it when answered"
-    : "a decision on its own wakes only the agent that asked for the approval";
-  return `${name} is not woken by this: ${why}. It sees all of this on its next run.${another}`;
+  return `${name} is not woken by this: ${quietReason(input.quietAnswer)}. It sees all of this on its next run.${another}`;
 }
 
 /** The read-back lines for an answer: which question, which option, as labelled by the agent. */

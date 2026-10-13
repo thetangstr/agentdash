@@ -9,11 +9,13 @@ import {
   companies,
   createDb,
   heartbeatRuns,
+  issueComments,
   issues,
   stewardInboxEvents,
 } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_DAILY_TOKENS } from "@paperclipai/shared";
 import { heartbeatService } from "../services/heartbeat.js";
+import { dispatchResolvedInteractionContinuation } from "../services/issue-interaction-continuation.js";
 import {
   TOKEN_CEILING_SKIP_REASON,
   UNMETERED_RUNAWAY_GUARD_LIMIT,
@@ -213,6 +215,136 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     });
     expect(run).not.toBeNull();
     expect(run?.status).toBe("queued");
+  });
+
+  /** An open issue assigned to the agent, with one comment by a person on it. */
+  async function issueWithPersonComment(companyId: string, agentId: string) {
+    const issueId = randomUUID();
+    await db.insert(issues).values({ id: issueId, companyId, title: "Hand-off", status: "in_progress", assigneeAgentId: agentId });
+    const commentId = randomUUID();
+    await db.insert(issueComments).values({ id: commentId, companyId, issueId, authorUserId: "person-1", body: "Here is what I changed." });
+    return { issueId, commentId };
+  }
+
+  it("still pauses a plain comment wake, exactly as a person's comment on the page sends it", async () => {
+    const { companyId, agentId } = await seedAgent();
+    await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+    const { issueId, commentId } = await issueWithPersonComment(companyId, agentId);
+
+    // issue-patch-actions' comment wake, verbatim.
+    const run = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_commented",
+      payload: { issueId, commentId, mutation: "comment" },
+      requestedByActorType: "user",
+      requestedByActorId: "person-1",
+      contextSnapshot: {
+        issueId,
+        taskId: issueId,
+        commentId,
+        wakeCommentId: commentId,
+        source: "issue.comment",
+        wakeReason: "issue_commented",
+      },
+    });
+    expect(run).toBeNull();
+    expect(await skippedRequestsToday(agentId)).toHaveLength(1);
+  });
+
+  it("wakes the agent with a person's send-back over the ceiling: the wake that was skipped as token_ceiling", async () => {
+    const { companyId, agentId } = await seedAgent();
+    await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+    const { issueId, commentId } = await issueWithPersonComment(companyId, agentId);
+    const interactionId = randomUUID();
+
+    // The observed wake: source "automation", trigger "system", payload
+    // {issueId, mutation: "bridge_reply", commentId, interactionId}.
+    const run = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "bridge_reply",
+      payload: { issueId, mutation: "bridge_reply", commentId, interactionId },
+      requestedByActorType: "user",
+      requestedByActorId: "person-1",
+      contextSnapshot: {
+        issueId,
+        taskId: issueId,
+        commentId,
+        wakeCommentId: commentId,
+        interactionId,
+        source: "bridge.work.reply",
+        wakeReason: "bridge_reply",
+      },
+    });
+    expect(run).not.toBeNull();
+    expect(run?.status).toBe("queued");
+    expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+  });
+
+  it("wakes the agent with a person's change request over the ceiling", async () => {
+    const { companyId, agentId } = await seedAgent();
+    await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+    const { issueId, commentId } = await issueWithPersonComment(companyId, agentId);
+
+    const run = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "changes_requested",
+      payload: { issueId, commentId, mutation: "comment" },
+      requestedByActorType: "user",
+      requestedByActorId: "person-1",
+      contextSnapshot: {
+        issueId,
+        taskId: issueId,
+        commentId,
+        wakeCommentId: commentId,
+        source: "issue.comment",
+        wakeReason: "changes_requested",
+      },
+    });
+    expect(run).not.toBeNull();
+    expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+  });
+
+  it("wakes the agent with a person's answer to its question over the ceiling, but not with an agent's", async () => {
+    const { companyId, agentId } = await seedAgent();
+    await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+    const issueId = randomUUID();
+    await db.insert(issues).values({ id: issueId, companyId, title: "Asked", status: "in_progress", assigneeAgentId: agentId });
+    const interaction = (id: string) => ({
+      id,
+      kind: "ask_user_questions",
+      status: "answered",
+      continuationPolicy: "wake_assignee",
+      sourceCommentId: null,
+      sourceRunId: null,
+    });
+
+    // The one continuation every answer path uses: the web route, the
+    // inbox, and the bridge's inbox_answer.
+    const byPerson = await dispatchResolvedInteractionContinuation({
+      heartbeat,
+      issue: { id: issueId, assigneeAgentId: agentId, status: "in_progress" },
+      interaction: interaction(randomUUID()),
+      actor: { actorType: "user", actorId: "person-1" },
+      source: "issue.interaction.respond",
+    });
+    expect(byPerson).not.toBeNull();
+    expect(byPerson?.contextSnapshot).toMatchObject({ wakeReason: "interaction_resolved" });
+    expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+
+    // Another agent answering is unattended spend: still a comment wake.
+    await db.update(heartbeatRuns).set({ status: "cancelled" }).where(eq(heartbeatRuns.id, byPerson!.id));
+    const byAgent = await dispatchResolvedInteractionContinuation({
+      heartbeat,
+      issue: { id: issueId, assigneeAgentId: agentId, status: "in_progress" },
+      interaction: interaction(randomUUID()),
+      actor: { actorType: "agent", actorId: randomUUID() },
+      source: "issue.interaction.respond",
+    });
+    expect(byAgent).toBeNull();
+    expect(await skippedRequestsToday(agentId)).toHaveLength(1);
   });
 
   it("lets a manual wake run even over the ceiling", async () => {

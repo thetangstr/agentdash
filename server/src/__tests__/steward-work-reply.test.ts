@@ -16,6 +16,7 @@ import {
   companyMemberships,
   createDb,
   documentRevisions,
+  heartbeatRuns,
   issueApprovals,
   issueComments,
   issues,
@@ -24,7 +25,7 @@ import {
   projects,
   stewardInboxActionHandles,
 } from "@paperclipai/db";
-import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_DAILY_TOKENS, FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -95,6 +96,58 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
   });
 
   const quietRuntime = { heartbeat: { enabled: false, wakeOnDemand: false } };
+  /** No timer runs, but a person's send-back may wake it (the read-back says whether). */
+  const wakeableRuntime = { heartbeat: { enabled: false, wakeOnDemand: true } };
+  async function wakeable(agentId: string) {
+    await db.update(agents).set({ runtimeConfig: wakeableRuntime }).where(eq(agents.id, agentId));
+  }
+
+  /** Today's spend at the default daily token ceiling, as finished runs record it. */
+  async function overDailyCeiling(companyId: string, agentId: string) {
+    const now = new Date();
+    await db.insert(heartbeatRuns).values({
+      companyId,
+      agentId,
+      invocationSource: "timer",
+      triggerDetail: "system",
+      status: "succeeded",
+      resultJson: {
+        runFacts: {
+          meteringStatus: "metered",
+          inputTokens: AGENT_DEFAULT_MAX_DAILY_TOKENS,
+          cachedInputTokens: null,
+          outputTokens: 0,
+          outcome: "no_op",
+          wakeReason: "timer",
+        },
+      },
+      createdAt: now,
+      startedAt: now,
+      finishedAt: now,
+    });
+  }
+
+  /** Let a run the real heartbeat started finish (and meter) before the tables are truncated. */
+  async function settled(runId: string) {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const [row] = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+      if (!row || !["queued", "running"].includes(row.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const meterDeadline = Date.now() + 10_000;
+    while (Date.now() < meterDeadline) {
+      const metered = await db.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.heartbeatRunId, runId));
+      if (metered.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /** The real heartbeat: a test reads what it decided about the wake. */
+  function realWakeup() {
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+    return vi.fn((agentId: string, opts: Parameters<typeof heartbeat.wakeup>[1]) => heartbeat.wakeup(agentId, opts));
+  }
 
   /** Run the agent once through the real heartbeat and return its run context. */
   async function runAgent(agentId: string) {
@@ -228,7 +281,10 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     );
   }
 
-  function app(endpoint: { id: string; companyId: string }, wakeup = vi.fn(async () => ({ id: randomUUID() }))) {
+  function app(
+    endpoint: { id: string; companyId: string },
+    wakeup: (...args: any[]) => Promise<unknown> = vi.fn(async () => ({ id: randomUUID() })),
+  ) {
     const server = express();
     server.use(express.json());
     server.use((req, _res, next) => {
@@ -309,7 +365,8 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
   });
 
   it("reads the whole bundle back, says who will see it, and writes nothing", async () => {
-    const { issue, draft, question, endpoint } = await handoff();
+    const { issue, draft, question, endpoint, agentA } = await handoff();
+    await wakeable(agentA.id);
     const res = await request(app(endpoint).server)
       .post("/api/bridge/work/propose")
       .send(fullBundle(issue.identifier!, question.id, draft.latestRevisionId));
@@ -519,6 +576,7 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
       .then((rows) => rows[0]!);
     await db.insert(issueApprovals).values({ companyId: company.id, issueId: issue.id, approvalId: approval.id });
 
+    await wakeable(agentA.id);
     const { server, wakeup } = app(endpoint);
     const proposed = await request(server)
       .post("/api/bridge/work/propose")
@@ -623,7 +681,12 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     expect(proposed.body.ok).toBe(true);
     expect(proposed.body.wakes).toContain("Agent A is not woken by this: its question was set not to wake it when answered.");
     const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
-    expect(confirmed.body).toMatchObject({ ok: true, sent: { answer: { interactionId: question.id } }, agentWoken: false });
+    expect(confirmed.body).toMatchObject({
+      ok: true,
+      sent: { answer: { interactionId: question.id } },
+      agentWoken: false,
+      notWokenReason: "Agent A is not woken by this: its question was set not to wake it when answered.",
+    });
     expect(wakeup).not.toHaveBeenCalled();
     const [answered] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, question.id));
     expect(answered!.status).toBe("answered");
@@ -641,5 +704,78 @@ describeEmbeddedPostgres("bridge work: the send-back bundle", () => {
     expect(readback.some((line) => line.trimStart().startsWith("decision"))).toBe(false);
     expect(readback[0]).toContain('Send back to Agent A decision approve "Wire the funds" (revision 1) on');
     expect(proposed.body.wakes).not.toContain("\n");
+  });
+
+  it("wakes the agent with a send-back even when it is over its daily token ceiling", async () => {
+    const { issue, draft, question, endpoint, agentA, company } = await handoff();
+    await wakeable(agentA.id);
+    await overDailyCeiling(company.id, agentA.id);
+    const { server, wakeup } = app(endpoint, realWakeup());
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send(fullBundle(issue.id, question.id, draft.latestRevisionId));
+    expect(proposed.body.wakes).toBe("Agent A is woken once with all of this.");
+
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, agentWoken: true });
+    expect(confirmed.body).not.toHaveProperty("notWokenReason");
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(wakeup).toHaveBeenCalledWith(
+      agentA.id,
+      expect.objectContaining({
+        source: "automation",
+        triggerDetail: "system",
+        reason: "bridge_reply",
+        payload: expect.objectContaining({ issueId: issue.id, mutation: "bridge_reply", interactionId: question.id }),
+      }),
+    );
+
+    // Not skipped: the heartbeat queued a run, and no token_ceiling skip was written.
+    const requests = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentA.id));
+    expect(requests.filter((row) => row.status === "skipped")).toEqual([]);
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.agentId, agentA.id), eq(heartbeatRuns.invocationSource, "automation")));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.contextSnapshot).toMatchObject({ wakeReason: "bridge_reply", source: "bridge.work.reply", issueId: issue.id });
+    await settled(runs[0]!.id);
+  });
+
+  it("does not promise a wake to a paused agent, and says why it was not woken", async () => {
+    const { issue, endpoint, agentA } = await handoff();
+    await wakeable(agentA.id);
+    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, agentA.id));
+    const { server } = app(endpoint, realWakeup());
+
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, comment: "Revised; please move it to review." });
+    expect(proposed.body.ok).toBe(true);
+    expect(proposed.body.wakes).toBe("Agent A is not woken by this: it is paused. It sees all of this when it next runs.");
+
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, agentWoken: false, notWokenReason: "Agent A is paused." });
+    // The comment is sent all the same.
+    expect(await db.select().from(issueComments).where(eq(issueComments.issueId, issue.id))).toHaveLength(1);
+  });
+
+  it("says when the agent is set not to be woken on demand, and the skip the heartbeat recorded", async () => {
+    // The default fixture: wakeOnDemand off. The real heartbeat skips the wake.
+    const { issue, endpoint } = await handoff();
+    const { server } = app(endpoint, realWakeup());
+    const proposed = await request(server)
+      .post("/api/bridge/work/propose")
+      .send({ issueId: issue.id, comment: "Revised; please move it to review." });
+    expect(proposed.body.wakes).toBe(
+      "Agent A is not woken by this: it is set not to be woken on demand. It sees all of this when it next runs.",
+    );
+    const confirmed = await request(server).post("/api/bridge/work/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({
+      ok: true,
+      agentWoken: false,
+      notWokenReason: "Agent A is set not to be woken on demand.",
+    });
   });
 });

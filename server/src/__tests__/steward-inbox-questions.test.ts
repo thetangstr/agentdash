@@ -411,7 +411,7 @@ describeEmbeddedPostgres("steward inbox: agent questions", () => {
     expect(wakes[0]).toMatchObject({
       agentId: agentA.id,
       opts: {
-        reason: "issue_commented",
+        reason: "interaction_resolved",
         payload: { issueId: issue.id, interactionId: question.id, interactionStatus: "answered" },
         requestedByActorType: "user",
         requestedByActorId: stewardA.principalId,

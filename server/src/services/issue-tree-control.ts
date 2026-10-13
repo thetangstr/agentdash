@@ -30,6 +30,7 @@ import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-lo
 import { insertActivity, publishActivity, logActivity, type ActivityPublication } from "./activity-log.js";
 import type { issueTreeCurrentAuthority, TreeAuthorityTarget } from "./issue-current-authority.js";
 import type { heartbeatService } from "./heartbeat.js";
+import { DELIBERATE_PERSON_WAKE_REASONS } from "./run-facts.js";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
 type IssueRow = typeof issues.$inferSelect;
@@ -85,11 +86,19 @@ export const ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS: ReadonlySet<string> = 
   "issue_commented",
   "issue_reopened_via_comment",
   "issue_comment_mentioned",
-] as const);
+  // A person's comment-carrying wakes that have their own reason so the
+  // token ceiling does not pause them (run-facts.ts). They stay interactions
+  // exactly as they were when they went out as "issue_commented".
+  DELIBERATE_PERSON_WAKE_REASONS.changesRequested,
+  DELIBERATE_PERSON_WAKE_REASONS.bridgeReply,
+]);
 const ISSUE_TREE_CONTROL_INTERACTION_WAKE_SOURCES: Readonly<Record<string, ReadonlySet<string>>> = {
   issue_commented: new Set(["issue.comment"]),
   issue_reopened_via_comment: new Set(["issue.comment.reopen"]),
   issue_comment_mentioned: new Set(["comment.mention"]),
+  // The change request's wake keeps its comment's source. The send-back
+  // ("bridge.work.reply") was never a verified tree-hold source and is not one now.
+  [DELIBERATE_PERSON_WAKE_REASONS.changesRequested]: new Set(["issue.comment", "issue.comment.reopen"]),
 };
 
 type VerifiedInteractionActor = {

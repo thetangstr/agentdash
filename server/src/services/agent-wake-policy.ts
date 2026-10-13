@@ -1,6 +1,7 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { agents, environments, issues, type Db } from "@paperclipai/db";
 import type { AgentWakePolicy, AgentWakePolicyRefusalCode } from "@paperclipai/shared";
+import { asBoolean } from "../adapters/utils.js";
 
 /**
  * AgentDash (wake policy): the per-agent rule for which wakes may start a run.
@@ -140,5 +141,37 @@ export async function boardAssignmentOnlyEnvironmentRefusal(
     .where(and(eq(environments.id, pinnedEnvironmentId), eq(environments.companyId, agent.companyId)))
     .then((rows) => rows[0] ?? null);
   if (!pinned || pinned.driver === "local") return WAKE_POLICY_REFUSAL.noEnvironment;
+  return null;
+}
+
+/**
+ * `runtimeConfig.heartbeat.wakeOnDemand` (and its older spellings): whether a
+ * wake that is not the agent's own timer may start a run. On unless set off.
+ * The one reading of it; heartbeat.ts's policy parse uses it too.
+ */
+export function heartbeatWakeOnDemandEnabled(agent: AgentPolicyFields): boolean {
+  const heartbeat = asRecord(asRecord(agent?.runtimeConfig)?.heartbeat) ?? {};
+  return asBoolean(
+    heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation,
+    true,
+  );
+}
+
+/** Statuses enqueueWakeup refuses outright ("Agent is not invokable in its current state"). */
+export const NOT_INVOKABLE_AGENT_STATUSES: ReadonlySet<string> = new Set(["paused", "terminated", "pending_approval"]);
+
+/**
+ * Why a wake that is not a timer wake and not an issue assignment (a comment,
+ * a send-back, an answer) would not start a run, judged from the agent row
+ * alone, in enqueueWakeup's order: the agent's status, the
+ * board_assignment_only policy, then wakeOnDemand. Null when nothing on the
+ * agent stops it. A read-back uses this to avoid promising a wake the
+ * heartbeat will refuse; the budget, the token ceiling and issue-level holds
+ * need reads of their own and are not judged here.
+ */
+export function agentRowWakeBlocker(agent: AgentPolicyFields & { status: string }): string | null {
+  if (NOT_INVOKABLE_AGENT_STATUSES.has(agent.status)) return `agent_${agent.status}`;
+  if (isBoardAssignmentOnlyAgent(agent)) return WAKE_POLICY_REFUSAL.wakeSource;
+  if (!heartbeatWakeOnDemandEnabled(agent)) return "heartbeat.wakeOnDemand.disabled";
   return null;
 }

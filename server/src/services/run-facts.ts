@@ -30,6 +30,26 @@ function parseObject(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * The context wake reasons for wakes a person deliberately aimed at an agent
+ * by answering what the agent put in front of them. See the map below.
+ */
+export const DELIBERATE_PERSON_WAKE_REASONS = {
+  bridgeReply: "bridge_reply",
+  changesRequested: "changes_requested",
+  interactionResolved: "interaction_resolved",
+} as const;
+
+/**
+ * The wake classes the daily token ceiling pauses: the unattended spend
+ * (routine timer wakes and comment wakes). Everything else a person aimed at
+ * the agent, plus retries and automation, still runs (heartbeat.ts).
+ */
+export const TOKEN_CEILING_PAUSED_WAKE_CLASSES: ReadonlySet<RunFactWakeReason> = new Set<RunFactWakeReason>([
+  "timer",
+  "comment",
+]);
+
+/**
  * Fine-grained `contextSnapshot.wakeReason` → the coarse label a founder reads.
  * Anything recognized here outranks `invocation_source`, which is coarse enough
  * that a comment wake and a retry both arrive as "automation".
@@ -55,6 +75,24 @@ const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
   execution_review_requested: "approval",
   execution_changes_requested: "approval",
   issue_assigned: "assignment",
+  // A person's own answer to work the agent put in front of them, sent from
+  // the bridge or the web. Each is that person's decision on the agent's
+  // hand-off, so it buckets with the approval wakes above (an approval
+  // decision and an execution-stage "changes requested" are the same kind of
+  // act) rather than with a comment: the token ceiling pauses comment wakes
+  // as unattended spend, and none of these is unattended. A plain comment,
+  // from an agent or a person, stays "comment".
+  //   bridge_reply          - the send-back bundle (POST /bridge/work/confirm)
+  //   changes_requested     - a person asks for changes on a delivered result
+  //                           (POST /issues/:id/request-changes, and the
+  //                           requester's change request from the bridge)
+  //   interaction_resolved  - a person answers, accepts, rejects or withdraws
+  //                           an interaction the agent opened (its questions,
+  //                           a confirmation, suggested tasks), from the web,
+  //                           the inbox or the bridge
+  [DELIBERATE_PERSON_WAKE_REASONS.bridgeReply]: "approval",
+  [DELIBERATE_PERSON_WAKE_REASONS.changesRequested]: "approval",
+  [DELIBERATE_PERSON_WAKE_REASONS.interactionResolved]: "approval",
   // A human restored a held issue tree — an operator action, not automation.
   issue_tree_restored: "manual",
   process_lost_retry: "retry",
