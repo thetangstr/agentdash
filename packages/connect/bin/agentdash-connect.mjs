@@ -15,7 +15,6 @@ import readline from "node:readline";
 import {
   DEFAULT_SERVER_NAME,
   applyConnection,
-  applyInboxMcp,
   checkConnection,
   detectHarnesses,
   mcpEndpointFor,
@@ -27,14 +26,25 @@ import { VerifyError, redeemConnectCode } from "../src/verify.mjs";
 import { formatConnectCode, looksLikeConnectCode } from "../src/codes.mjs";
 import {
   defaultInboxDir,
+  describeNotInstalled,
   ownerConflict,
   readBridgeOwner,
+  resolveBridgeToken,
+  resolveInboxServer,
   runInbox,
   scaffoldInboxWorkspace,
   storeBridgeOwner,
   storeBridgeToken,
 } from "../src/inbox.mjs";
 import { runInboxMcp } from "../src/inbox-mcp.mjs";
+import { installWatch, runWatchCommand, uninstallWatch } from "../src/watch.mjs";
+import {
+  describeClientEntries,
+  detectClaudeDesktop,
+  removeInboxClients,
+  setupInboxClients,
+} from "../src/clients.mjs";
+import { runCheck } from "../src/check.mjs";
 
 // Read the real version rather than restating it. A CLI that misreports which
 // version it is turns "did the fix reach me?" into guesswork -- which is
@@ -62,10 +72,13 @@ function parseArgs(argv) {
     else if (token === "--name") args.name = argv[++i];
     else if (token === "--server") args.server = argv[++i];
     else if (token === "--token-file") args.tokenFile = argv[++i];
+    else if (token === "--client") args.client = argv[++i];
     else if (token === "--ack") args.ack = true;
     else if (token === "--quiet-when-empty") args.quietWhenEmpty = true;
+    else if (token === "--read-only") args.readOnly = true;
     else if (token.startsWith("--server=")) args.server = token.slice(9);
     else if (token.startsWith("--token-file=")) args.tokenFile = token.slice(13);
+    else if (token.startsWith("--client=")) args.client = token.slice(9);
     else if (token.startsWith("--url=")) args.url = token.slice(6);
     else if (token.startsWith("--name=")) args.name = token.slice(7);
     else args._.push(token);
@@ -79,12 +92,24 @@ function usage() {
   npx agentdash-connect KVTX-8F02        redeem a connect code
   npx agentdash-connect                  interactive: asks for the link and code
   npx agentdash-connect --url <url>      skip the URL question
-  npx agentdash-connect --check          is the existing connection still good?
+  npx agentdash-connect check            which clients are connected, whose inbox
+                                         this is, and whether review (bridge:work)
+                                         is enabled (--check works too)
+  npx agentdash-connect clients          add your inbox tools to Claude Code,
+                                         Claude Desktop and Codex, using this
+                                         machine's existing inbox connection
   npx agentdash-connect --remove         undo everything this wrote
-  npx agentdash-connect inbox            read your AgentDash inbox (used by the
-                                         SessionStart hook in ~/agentdash-inbox)
+  npx agentdash-connect inbox            read your AgentDash inbox (with --ack
+                                         --quiet-when-empty it is the SessionStart
+                                         hook in ~/agentdash-inbox: it speaks to
+                                         Claude and keeps the review rules there
+                                         up to date)
   npx agentdash-connect mcp              serve your own inbox tools (sync, decide,
-                                         assign) to Claude Code over stdio
+                                         assign) to Claude Code, Claude Desktop
+                                         or Codex over stdio
+  npx agentdash-connect watch            macOS: a notification when an agent hands
+                                         you work, and an optional read-only
+                                         pre-review (watch --help for more)
 
 Options
   --name <name>   MCP server name to write (default: ${DEFAULT_SERVER_NAME})
@@ -145,16 +170,60 @@ function ask(question, { silent = false } = {}) {
   });
 }
 
+/**
+ * The watcher is opt-in: asked on a terminal only, default no, and never
+ * installed by a scripted run (which has nobody to answer). The pre-review is
+ * a second, separate question.
+ */
+async function offerWatch(instanceUrl) {
+  if (process.platform !== "darwin") return;
+  if (!process.stdin.isTTY) {
+    out("Mac notifications for new hand-offs are off. Turn them on any time: npx agentdash-connect watch --install");
+    return;
+  }
+  out("");
+  const watch = await ask(
+    "Show a Mac notification when an agent hands you work? It checks your AgentDash every 15 minutes and talks to nothing else. [y/N]: ",
+  );
+  if (!/^y(es)?$/i.test(watch.trim())) {
+    out("No notifications. Turn them on any time: npx agentdash-connect watch --install");
+    return;
+  }
+  const pre = await ask(
+    "Also let Claude Code prepare a first review of each hand-off in the background? Read-only, nothing is sent, and it uses your Claude usage. [y/N]: ",
+  );
+  try {
+    const result = installWatch({ server: instanceUrl, preReview: /^y(es)?$/i.test(pre.trim()) });
+    if (!result.config) {
+      bad(`Notifications were not turned on: ${result.message}`);
+      return;
+    }
+    out(`  watch   every ${result.config.intervalMinutes} minutes; pre-review ${result.config.preReview ? "on" : "off"}`);
+    for (const file of result.written) out(`          ${file}`);
+    if (result.message) bad(`  ${result.message}`);
+    out("          turn it off with: npx agentdash-connect watch --uninstall");
+  } catch (error) {
+    bad(`Notifications were not turned on (${error?.message ?? error}). The connection above still works.`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const serverName = args.name ?? DEFAULT_SERVER_NAME;
   const account = serverName;
 
+  // `watch` has its own options (watch.mjs); hand it everything after the word.
+  const argv = process.argv.slice(2);
+  if (argv[0] === "watch") return runWatchCommand(argv.slice(1).filter((token) => token !== "--help" && token !== "-h"));
+
   if (args.help) return usage(), 0;
   if (args.version) return out(pkg.version), 0;
 
   if (args.remove) {
-    const { removed } = removeConnection({ serverName, account });
+    const { removed: agentRemoved } = removeConnection({ serverName, account });
+    const removed = [...agentRemoved, ...removeInboxClients({ serverName })];
+    // The watcher is part of what connect set up, so it goes too.
+    for (const file of uninstallWatch().removed) removed.push({ harness: "watch", file });
     if (removed.length === 0) {
       out(`Nothing to remove — no "${serverName}" connection was configured.`);
       return 0;
@@ -181,39 +250,99 @@ async function main() {
   // Launched by Claude Code, not by a person: stdout is the protocol channel,
   // so nothing else may print to it.
   if (args._[0] === "mcp") {
-    return runInboxMcp({ server: args.server, tokenFile: args.tokenFile }, { version: pkg.version });
+    return runInboxMcp(
+      { server: args.server, tokenFile: args.tokenFile, readOnly: Boolean(args.readOnly), client: args.client },
+      { version: pkg.version },
+    );
   }
 
-  if (args.check) {
-    const status = await checkConnection({ serverName, account });
-    if (!status.configured) {
-      bad(`No "${serverName}" connection is configured on this machine.`);
+  if (args.check || args._[0] === "check") {
+    const found = detectHarnesses();
+    return runCheck(
+      { serverName, server: args.server },
+      {
+        installed: { claude: found.claude, codex: found.codex, desktop: detectClaudeDesktop().installed },
+        checkAgent: () => checkConnection({ serverName, account }),
+      },
+    );
+  }
+
+  /*
+   * Add the inbox tools to every client on this machine without a new
+   * connect code: for someone who installed Claude Desktop or Codex after
+   * connecting. Rides the inbox credential already stored here.
+   */
+  if (args._[0] === "clients") {
+    const owner = readBridgeOwner();
+    let instanceUrl = args.server ?? process.env.AGENTDASH_BRIDGE_SERVER ?? owner?.server ?? null;
+    if (!instanceUrl) {
+      try {
+        instanceUrl = resolveInboxServer({});
+      } catch {
+        instanceUrl = null;
+      }
+    }
+    try {
+      resolveBridgeToken({ tokenFile: args.tokenFile });
+    } catch (error) {
+      bad(error.message);
       return 1;
     }
-    out(`Endpoint  ${status.endpoint}`);
-    out(`Claude    ${status.claudeServer ? "configured" : "not configured"}`);
-    out(`Codex     ${status.codexServer ? `configured (reads ${status.codexServer.envVar})` : "not configured"}`);
-    if (status.verified) {
-      out(`Status    working — ${status.verified.toolCount} tools available`);
-      return 0;
+    if (!instanceUrl) {
+      bad("No instance address found. Pass --server <url>.");
+      return 1;
     }
-    bad(`Status    NOT working — ${status.reason ?? "unknown reason"}`);
-    return 1;
+    try {
+      instanceUrl = normalizeInstanceUrl(instanceUrl);
+    } catch (error) {
+      bad(error.message);
+      return 1;
+    }
+    const found = detectHarnesses();
+    const desktop = detectClaudeDesktop().installed;
+    if (!found.claude && !found.codex && !desktop) {
+      bad("None of Claude Code, Claude Desktop or Codex was found on this machine.");
+      return 1;
+    }
+    // The inbox folder too (hook, skill, AGENTS.md for Codex): idempotent,
+    // and the only place Codex and Claude Code get the review rules.
+    const inboxDir = defaultInboxDir();
+    const scaffolded = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
+    const entries = setupInboxClients({
+      serverName,
+      instanceUrl,
+      clients: { claude: found.claude, codex: found.codex, desktop },
+    });
+    out(`Your inbox tools (${instanceUrl}):`);
+    for (const file of scaffolded.created) out(`  inbox   ${file}`);
+    for (const file of scaffolded.updated) out(`  inbox   ${file} (updated to the packaged version)`);
+    for (const line of describeNotInstalled(scaffolded.notInstalled)) out(`  inbox   ${line}`);
+    let failed = false;
+    for (const line of describeClientEntries(entries)) {
+      if (line.problem) {
+        failed = true;
+        bad(line.text);
+      } else out(line.text);
+    }
+    return failed ? 1 : 0;
   }
 
   const harnesses = detectHarnesses();
-  if (!harnesses.claude && !harnesses.codex) {
-    bad("Neither Claude Code nor Codex was found on this machine.");
+  const desktopFound = detectClaudeDesktop().installed;
+  if (!harnesses.claude && !harnesses.codex && !desktopFound) {
+    bad("None of Claude Code, Claude Desktop or Codex was found on this machine.");
     bad("Install one of them first — this command only wires up what is already here.");
     return 1;
   }
 
   out("Connecting this machine to an AgentDash agent.");
-  out(`Found: ${[harnesses.claude && "Claude Code", harnesses.codex && "Codex"].filter(Boolean).join(", ")}`);
+  out(
+    `Found: ${[harnesses.claude && "Claude Code", desktopFound && "Claude Desktop", harnesses.codex && "Codex"].filter(Boolean).join(", ")}`,
+  );
   out("");
 
   let instanceUrl = args.url ?? process.env.AGENTDASH_URL ?? "";
-  if (!instanceUrl) instanceUrl = await ask("Instance link (e.g. http://mkmini.local:3103): ");
+  if (!instanceUrl) instanceUrl = await ask("Instance link (e.g. http://box.example.com:3103): ");
   try {
     instanceUrl = normalizeInstanceUrl(instanceUrl);
   } catch (error) {
@@ -339,7 +468,7 @@ async function main() {
       const tokenPath = storeBridgeToken(pairedWith.bridgeToken);
       if (pairedWith.owner) storeBridgeOwner(pairedWith.owner, { server: instanceUrl });
       const inboxDir = defaultInboxDir();
-      const { created } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
+      const { created, updated, notInstalled } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
       out("");
       const ownerLine = pairedWith.owner?.name
         ? `${pairedWith.owner.name}${pairedWith.owner.email ? ` (${pairedWith.owner.email})` : ""}`
@@ -348,13 +477,25 @@ async function main() {
       out(`  token   ${tokenPath}
           your inbox credential (mode 600) — questions for you arrive with it`);
       for (const file of created) out(`  inbox   ${file}`);
-      if (harnesses.claude) {
-        const inboxMcp = applyInboxMcp({ serverName, instanceUrl });
-        out(`  claude  ${inboxMcp.file}
-          "${inboxMcp.name}" — your own inbox tools, so you can approve or reject from Claude`);
-      }
+      for (const file of updated) out(`  inbox   ${file} (updated to the packaged version)`);
+      for (const line of describeNotInstalled(notInstalled)) out(`  inbox   ${line}`);
+      // The person's own inbox tools in every client here: Claude Code,
+      // Claude Desktop (merged into its config, backed up first) and Codex.
+      const entries = setupInboxClients({
+        serverName,
+        instanceUrl,
+        clients: { claude: harnesses.claude, codex: harnesses.codex, desktop: desktopFound },
+      });
+      for (const line of describeClientEntries(entries)) (line.problem ? bad : out)(line.text);
       out("");
-      out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);
+      if (harnesses.claude) {
+        out(`Open ${inboxDir} in Claude Code: anything waiting on you appears as the session starts, and Claude reviews it with you.`);
+      }
+      if (harnesses.codex) {
+        out(`In Codex, start sessions in ${inboxDir}: its AGENTS.md tells Codex to review what is waiting first.`);
+      }
+      out("Check the connection any time with:  npx agentdash-connect check");
+      await offerWatch(instanceUrl);
     } catch (error) {
       if (!error?.skipped) {
         // The agent pairing above already succeeded; say what did not, precisely.

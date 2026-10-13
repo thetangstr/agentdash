@@ -41,8 +41,8 @@ export const CONNECTOR_SEND_TEAMS_GUIDANCE =
   "set the issue to blocked, or open a request_board_approval linked to it. A blocked issue or an open " +
   "approval appears in your steward's inbox (the accountable human's, if you have no steward), which reaches them on their own machine (the agentdash-inbox " +
   "harness tools) and in Teams through their steward webhook if they registered one (\"Get told in Teams\" " +
-  "on their My Agent page). To reach someone other than your steward, name them in the comment and ask " +
-  "your steward to relay it.";
+  "on their My Agent page). To reach someone other than your steward, name them, or hand the work to " +
+  "their agent directly: a child issue assigned to that agent with a brief and the files it needs.";
 
 export type ConnectorSendPayloadProblem =
   | "teams_not_supported"
@@ -144,6 +144,8 @@ export function checkConnectorSendPayload(payload: unknown): ConnectorSendPayloa
 // should not claim a laptop decision came from the board. `assistant` is the
 // same distinction for the assistant MCP surface (GH #679): a decision taken
 // through a person's assistant records itself as one, never as "web".
+// `bridge_work` is a decision sent as part of a send-back bundle from the
+// person's own Claude session (POST /api/bridge/work/confirm).
 export const APPROVAL_DECISION_CHANNELS = [
   "web",
   "telegram",
@@ -151,6 +153,7 @@ export const APPROVAL_DECISION_CHANNELS = [
   "whatsapp",
   "bridge_inbox",
   "assistant",
+  "bridge_work",
 ] as const;
 export type ApprovalDecisionChannel = (typeof APPROVAL_DECISION_CHANNELS)[number];
 

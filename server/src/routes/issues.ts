@@ -2,6 +2,7 @@ import { redactApprovalForReader } from "../redaction.js";
 import { issueCurrentAuthority } from "../services/issue-current-authority.js";
 import { registerRossRequestRoutes } from "./ross-requests.js";
 import { issuePatchActions, updateIssueRouteSchema, type IssuePatchContext } from "../services/issue-patch-actions.js";
+import { issuePatchHooks } from "../services/issue-patch-hooks.js";
 import {
   issueCommentActions,
   IssueCommentPolicyRefusal,
@@ -71,14 +72,15 @@ import {
   preserveIssueRecoveryBudget,
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
-import { definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
-import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
-import { getTelemetryClient } from "../telemetry.js";
+import { FEATURE_FLAG_KEYS, definitionOfDoneSchema, isUuidLike } from "@paperclipai/shared";
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { featureFlagsService } from "../services/feature-flags.js";
+import { attachmentTextService } from "../services/attachment-text.js";
+import { currentVersionOf } from "../services/attachment-versions.js";
+import { frameRunForAgent, standInFrameRunId } from "../services/frame-run.js";
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.js";
 import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
 import * as serviceIndex from "../services/index.js";
@@ -128,6 +130,25 @@ import {
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 import { resolveStewardedAgentRoute, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
+import {
+  agentHandoffsEnabled,
+  checkHandoffRounds,
+  emitHandoffReturned,
+  handoffRoundCheck,
+  latestHandoffForIssue,
+  recordAgentHandoff,
+  recordAgentHandoffRefused,
+  recordAgentRequestRoots,
+  listRequestIssueIds,
+  requestRootsForAgentRun,
+  resolveRequestRootIssueId,
+  resolveRequestRoots,
+  summarizeRequestHandoffs,
+  type AgentHandoffVia,
+} from "../services/agent-handoffs.js";
+import { defaultStatusForNewIssue, triageOwnerForNewIssue } from "../services/issue-start-policy.js";
+import { answerCorrectionInput, recordAgentCorrectionAfterCommit } from "../services/agent-corrections.js";
+import { applyDeliverableReviewAfterDocumentRevision } from "../services/deliverable-review-revision.js";
 import {
   clearIssueRecoveryBudget,
   EXHAUSTED_RECOVERY_CHECKOUT_REFUSAL,
@@ -273,195 +294,6 @@ export function workProductSelfAcceptanceRefusal(
   return null;
 }
 
-/**
- * AgentDash (batch 2 review lane): a new revision written to the document of
- * a deliverable sends that deliverable back to review. An accepted
- * deliverable whose document changed after the accepted revision returns to
- * ready_for_review — and reopens a done issue to in_review so the review
- * actually surfaces again; a sent-back deliverable on an issue already in
- * review becomes reviewable once the revision it was asked for lands.
- *
- * AgentDash (review #1003): a board user's own write or restore does not
- * reopen what they accepted — the new revision is recorded as the accepted
- * one instead. The issue status is re-read under the row lock so a
- * concurrent PATCH cannot move the issue between the route's stale read and
- * this hook, and the reopen goes through the issue service rather than a raw
- * update.
- */
-async function applyDeliverableReviewAfterDocumentRevision(input: {
-  db: Db;
-  issue: { id: string; companyId: string; identifier?: string | null };
-  key: string;
-  latestRevisionId: string | null;
-  latestRevisionNumber: number;
-  actor: { actorType: "agent" | "plugin" | "system" | "user"; actorId: string; agentId: string | null; runId: string | null; source?: string | null };
-  onIssueStatusChanged: (issueId: string, before: string, after: string) => Promise<unknown>;
-}) {
-  const { db, issue, key, latestRevisionId, latestRevisionNumber, actor, onIssueStatusChanged } = input;
-  const publications: ActivityPublication[] = [];
-  let reopenedDoneIssue = false;
-  await db.transaction(async (tx) => {
-    const freshIssue = await tx
-      .select({ status: issues.status, identifier: issues.identifier })
-      .from(issues)
-      .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)))
-      .for("update")
-      .then((rows) => rows[0] ?? null);
-    if (!freshIssue) return;
-    const identifier = freshIssue.identifier ?? issue.identifier ?? null;
-    const candidates = await tx
-      .select({ id: issueWorkProducts.id, status: issueWorkProducts.status, metadata: issueWorkProducts.metadata })
-      .from(issueWorkProducts)
-      .where(and(
-        eq(issueWorkProducts.companyId, issue.companyId),
-        eq(issueWorkProducts.issueId, issue.id),
-        inArray(issueWorkProducts.status, ["approved", "changes_requested"]),
-        sql`${issueWorkProducts.metadata} ->> 'documentKey' = ${key}`,
-      ));
-    if (candidates.length === 0) return;
-    const now = new Date();
-    let reopenedAccepted = false;
-    for (const product of candidates) {
-      const meta = (product.metadata ?? null) as Record<string, unknown> | null;
-      if (product.status === "approved") {
-        const acceptance = meta?.acceptance as Record<string, unknown> | undefined;
-        const acceptedRevision =
-          typeof acceptance?.acceptedRevisionNumber === "number" ? acceptance.acceptedRevisionNumber : null;
-        // The revision the person accepted already covers this write.
-        if (acceptedRevision !== null && acceptedRevision >= latestRevisionNumber) continue;
-        // A board user's own edit or restore accepts what they just wrote —
-        // reopening their own change would churn the review queue. Writes by
-        // an agent, plugin or assistant grant are not the reviewer.
-        const boardUserWrite = actor.actorType === "user" && actor.source !== "assistant_grant";
-        if (boardUserWrite) {
-          await tx.update(issueWorkProducts)
-            .set({
-              metadata: sql`${issueWorkProducts.metadata} || jsonb_build_object('acceptance',
-                coalesce(${issueWorkProducts.metadata} -> 'acceptance', '{}'::jsonb) || jsonb_build_object(
-                  'acceptedRevisionId', ${latestRevisionId}::text,
-                  'acceptedRevisionNumber', ${latestRevisionNumber}::int,
-                  'acceptedAt', ${now.toISOString()}::text,
-                  'acceptedByUserId', ${actor.actorId}::text))`,
-              updatedAt: now,
-            })
-            .where(eq(issueWorkProducts.id, product.id));
-          publications.push(await insertActivity(tx, {
-            companyId: issue.companyId,
-            actorType: actor.actorType,
-            actorId: actor.actorId,
-            agentId: actor.agentId,
-            runId: actor.runId,
-            action: "issue.work_product_updated",
-            entityType: "issue",
-            entityId: issue.id,
-            details: {
-              identifier,
-              workProductId: product.id,
-              changedKeys: ["metadata"],
-              reason: "accepted_revision_updated",
-              key,
-              revisionNumber: latestRevisionNumber,
-            },
-          }));
-          continue;
-        }
-        await tx.update(issueWorkProducts)
-          .set({
-            status: "ready_for_review",
-            reviewState: "needs_board_review",
-            metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object(
-              'reviewReopenedAt', ${now.toISOString()}::text,
-              'reviewReopenReason', 'document_revised_after_acceptance')`,
-            updatedAt: now,
-          })
-          .where(eq(issueWorkProducts.id, product.id));
-        reopenedAccepted = true;
-        publications.push(await insertActivity(tx, {
-          companyId: issue.companyId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-          agentId: actor.agentId,
-          runId: actor.runId,
-          action: "issue.work_product_updated",
-          entityType: "issue",
-          entityId: issue.id,
-          details: {
-            identifier,
-            workProductId: product.id,
-            changedKeys: ["metadata", "reviewState", "status"],
-            status: "ready_for_review",
-            reviewState: "needs_board_review",
-            reason: "document_revised_after_acceptance",
-            key,
-            revisionNumber: latestRevisionNumber,
-          },
-        }));
-      } else if (product.status === "changes_requested") {
-        // A sent-back deliverable is resubmitted by the new revision only
-        // while the issue sits in review — and only when this revision is
-        // newer than the one the changes request was made against.
-        if (freshIssue.status !== "in_review") continue;
-        const requestedRevision =
-          typeof meta?.changesRequestedAtRevision === "number" ? meta.changesRequestedAtRevision : null;
-        if (requestedRevision !== null && latestRevisionNumber <= requestedRevision) continue;
-        await tx.update(issueWorkProducts)
-          .set({
-            status: "ready_for_review",
-            reviewState: "needs_board_review",
-            metadata: sql`coalesce(${issueWorkProducts.metadata}, '{}'::jsonb) || jsonb_build_object('resubmittedAt', ${now.toISOString()}::text)`,
-            updatedAt: now,
-          })
-          .where(eq(issueWorkProducts.id, product.id));
-        publications.push(await insertActivity(tx, {
-          companyId: issue.companyId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-          agentId: actor.agentId,
-          runId: actor.runId,
-          action: "issue.work_product_updated",
-          entityType: "issue",
-          entityId: issue.id,
-          details: {
-            identifier,
-            workProductId: product.id,
-            changedKeys: ["metadata", "reviewState", "status"],
-            status: "ready_for_review",
-            reviewState: "needs_board_review",
-            reason: "resubmitted_for_review",
-            key,
-            revisionNumber: latestRevisionNumber,
-          },
-        }));
-      }
-    }
-    if (reopenedAccepted && freshIssue.status === "done") {
-      reopenedDoneIssue = true;
-      await issueService(tx as unknown as Db).update(issue.id, { status: "in_review" }, tx as unknown as Db);
-      publications.push(await insertActivity(tx, {
-        companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "issue.updated",
-        entityType: "issue",
-        entityId: issue.id,
-        details: {
-          identifier,
-          status: "in_review",
-          _previous: { status: "done" },
-          reason: "document_revised_after_acceptance",
-          key,
-        },
-      }));
-    }
-  });
-  for (const publication of publications) publishActivity(publication);
-  if (reopenedDoneIssue) {
-    await onIssueStatusChanged(issue.id, "done", "in_review");
-  }
-}
-
 export function issueRoutes(
   db: Db,
   storage: StorageService,
@@ -497,6 +329,7 @@ export function issueRoutes(
   // AgentDash: goals-eval-hitl
   const verdictsSvc = verdictsService(db);
   const featureFlagsSvc = featureFlagsService(db);
+  const attachmentTextSvc = attachmentTextService(storage);
   const reviewerAutoHireSvc = cosReviewerAutoHire(db);
   const cosVerdictOrchestratorSvc = cosVerdictOrchestrator(db, {
     verdicts: verdictsSvc,
@@ -517,6 +350,21 @@ export function issueRoutes(
   };
   const feedbackExportService = opts?.feedbackExportService;
   const environmentsSvc = environmentService(db);
+  /**
+   * The agent a file is credited to when an agent attaches it (co-worker slice 5).
+   * Null for a person, and null in a company without `coworker_bridge_enabled`,
+   * where an agent's upload keeps its name and gets no version, as before.
+   */
+  async function agentVersionAuthor(
+    companyId: string,
+    actor: { actorType: string; agentId: string | null },
+  ) {
+    if (actor.actorType !== "agent" || !actor.agentId) return null;
+    if (!(await featureFlagsSvc.isEnabled(companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE))) return null;
+    const agent = await agentsSvc.getById(actor.agentId);
+    return agent?.name ?? "agent";
+  }
+
   function withContentPath<T extends { id: string }>(attachment: T) {
     return {
       ...attachment,
@@ -743,6 +591,247 @@ export function issueRoutes(
         return p?.type === "user" && p.userId === userId;
       });
     });
+  }
+
+  /**
+   * The cap refusal for the fullest of a hand-off's requests, naming that
+   * request's root only when the acting agent can see it (a root in a
+   * restricted project it is not on stays unnamed).
+   */
+  async function handoffCapCheck(reader: Db, req: Request, companyId: string, fullest: { rounds: number; rootIssueId: string | null }) {
+    if (!fullest.rootIssueId) return handoffRoundCheck(0, "");
+    const check = handoffRoundCheck(fullest.rounds, fullest.rootIssueId);
+    if (check.allowed) return check;
+    const visible = await listVisibleIssueIds(reader, req, companyId, [fullest.rootIssueId]);
+    return handoffRoundCheck(fullest.rounds, fullest.rootIssueId, { revealRoot: visible.has(fullest.rootIssueId) });
+  }
+
+  const uniqueIds = (ids: string[]) => [...new Set(ids)];
+
+  type AgentCreatePlan = {
+    fromAgentId: string;
+    runId: string | null;
+    parentIssueId: string | null;
+    /** The run's requests, when they are not already the parent's: recorded on the new issue. */
+    runRoots: { primary: string; roots: string[] } | null;
+    handoff: { toAgentId: string; rootIssueId: string | null; rootIssueIds: string[] } | null;
+  };
+
+  /**
+   * AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): what an
+   * agent's create means for the hand-off cap. Creating an issue for another
+   * agent -- named, a person routed to their agent, or an unowned todo routed
+   * to the Chief of Staff -- is a hand-off. It counts against the parent's
+   * requests and the requests of the run the agent is on, and is refused (422,
+   * recorded) when any of them is at the cap. Any other create during a run on
+   * an issue records the run's requests on the new issue, so work an agent
+   * makes for itself cannot start a fresh count. Null for a person, or while
+   * the company flag is off.
+   */
+  async function planAgentCreate(
+    req: Request,
+    companyId: string,
+    input: { assigneeAgentId?: string | null; assigneeUserId?: string | null; parentId?: string | null; status?: string | null },
+    opts: { routeToChiefOfStaff: boolean },
+  ): Promise<AgentCreatePlan | null> {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return null;
+    if (!(await agentHandoffsEnabled(db, companyId))) return null;
+    const fromAgentId = req.actor.agentId;
+    const runId = req.actor.runId ?? null;
+    const parentIssueId = input.parentId ?? null;
+    const parentRoots = parentIssueId ? await resolveRequestRoots(db, { companyId, issueId: parentIssueId }) : null;
+    const run = await requestRootsForAgentRun(db, { companyId, agentId: fromAgentId, runId, jwtRunId: req.actor.jwtRunId });
+    const runRoots = run && !(parentRoots && run.roots.every((root) => parentRoots.roots.includes(root))) ? run : null;
+    const plan: AgentCreatePlan = { fromAgentId, runId, parentIssueId, runRoots, handoff: null };
+
+    let toAgentId = input.assigneeAgentId ?? null;
+    if (!toAgentId && opts.routeToChiefOfStaff) {
+      toAgentId = await triageOwnerForNewIssue(db, companyId, {
+        status: input.status ?? (await defaultStatusForNewIssue(db, companyId)),
+        assigneeAgentId: input.assigneeAgentId ?? null,
+        assigneeUserId: input.assigneeUserId ?? null,
+      });
+    }
+    if (!toAgentId || toAgentId === fromAgentId) return plan;
+    // An assignee that is not an assignable agent of this company is the
+    // create's own refusal (404/409/422), not a hand-off: no cap answer and no
+    // refusal row naming an unvalidated id. Agents see every agent, so there is
+    // no agent-visibility question here.
+    const assignee = await db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(and(eq(agents.id, toAgentId), eq(agents.companyId, companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (!assignee || assignee.status === "pending_approval" || assignee.status === "terminated") return plan;
+    const rootIssueId = parentRoots?.primary ?? run?.primary ?? null;
+    const rootIssueIds = uniqueIds([...(parentRoots?.roots ?? []), ...(run?.roots ?? [])]);
+    if (rootIssueIds.length > 0) {
+      const fullest = await checkHandoffRounds(db, { companyId, roots: rootIssueIds });
+      const check = await handoffCapCheck(db, req, companyId, fullest);
+      if (!check.allowed) {
+        const fullRoot = fullest.rootIssueId!;
+        await recordAgentHandoffRefused(db, {
+          companyId,
+          entityIssueId: parentIssueId ?? rootIssueId ?? fullRoot,
+          rootIssueId: fullRoot,
+          fromAgentId,
+          toAgentId,
+          runId,
+          rounds: check.rounds,
+        }).catch((err) => logger.warn({ err, rootIssueId: fullRoot }, "failed to record a refused agent hand-off"));
+        throw new HttpError(422, check.message, check.details);
+      }
+    }
+    return { ...plan, handoff: { toAgentId, rootIssueId, rootIssueIds } };
+  }
+
+  /**
+   * The requests an agent's reassignment of this issue counts against: the
+   * issue's own (chain and root records) and the run's.
+   */
+  async function reassignRequestRoots(
+    reader: Db,
+    req: Request,
+    issue: { id: string; companyId: string },
+  ): Promise<{ primary: string; roots: string[] }> {
+    const own = await resolveRequestRoots(reader, { companyId: issue.companyId, issueId: issue.id });
+    const run = req.actor.type === "agent" && req.actor.agentId
+      ? await requestRootsForAgentRun(reader, {
+        companyId: issue.companyId, agentId: req.actor.agentId, runId: req.actor.runId, jwtRunId: req.actor.jwtRunId,
+      })
+      : null;
+    return { primary: own.primary, roots: uniqueIds([...own.roots, ...(run?.roots ?? [])]) };
+  }
+
+  /**
+   * The round counts for an agent's reassignment, taken before the update's
+   * transaction opens (the count scans activity rows). Acceptance uses them
+   * when the requests it resolves are the same; otherwise it counts again.
+   * Null when the update is not an agent reassigning to another agent or the
+   * company flag is off.
+   */
+  async function precountAgentHandoffRounds(
+    req: Request,
+    existing: { id: string; companyId: string; assigneeAgentId: string | null },
+    requestedAssigneeAgentId: unknown,
+  ): Promise<{ key: string; fullest: { rounds: number; rootIssueId: string | null } } | null> {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return null;
+    if (typeof requestedAssigneeAgentId !== "string") return null;
+    if (requestedAssigneeAgentId === req.actor.agentId || requestedAssigneeAgentId === existing.assigneeAgentId) return null;
+    if (!(await agentHandoffsEnabled(db, existing.companyId))) return null;
+    const { roots } = await reassignRequestRoots(db, req, existing);
+    return { key: roots.join(","), fullest: await checkHandoffRounds(db, { companyId: existing.companyId, roots }) };
+  }
+
+  async function recordAgentCreate(
+    req: Request,
+    companyId: string,
+    plan: AgentCreatePlan | null,
+    issue: { id: string; assigneeAgentId: string | null },
+    via: AgentHandoffVia,
+    routed: StewardedAgentRoute | null,
+  ) {
+    if (!plan) return;
+    // The issue already exists; a failed audit row is logged, not answered as
+    // a failed create the caller might retry into a duplicate.
+    try {
+      if (plan.handoff && issue.assigneeAgentId === plan.handoff.toAgentId) {
+        await recordAgentHandoff(db, {
+          companyId,
+          issueId: issue.id,
+          parentIssueId: plan.parentIssueId,
+          rootIssueId: plan.handoff.rootIssueId ?? issue.id,
+          rootIssueIds: plan.handoff.rootIssueIds.length > 0 ? plan.handoff.rootIssueIds : [issue.id],
+          fromAgentId: plan.fromAgentId,
+          toAgentId: plan.handoff.toAgentId,
+          runId: plan.runId,
+          via,
+          routedFromUserId: routed?.fromUserId ?? null,
+        });
+      } else if (plan.runRoots) {
+        await recordAgentRequestRoots(db, {
+          companyId,
+          issueId: issue.id,
+          agentId: plan.fromAgentId,
+          runId: plan.runId,
+          rootIssueId: plan.runRoots.primary,
+          rootIssueIds: plan.runRoots.roots,
+          reason: "created",
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, issueId: issue.id }, "failed to record an agent hand-off");
+    }
+  }
+
+  /**
+   * AgentDash: after an accepted update, record what it did between agents: a
+   * hand-off (an agent assigning the issue to another agent), a hand-off sent
+   * back (reassigned to the agent that handed it over), or a hand-off declined
+   * (the receiving agent cancelled it). The return reason is the update's
+   * comment. Recorded after commit; a failure is logged, never answered as a
+   * failed update, because the update itself is already stored.
+   */
+  async function recordAgentHandoffEffects(
+    req: Request,
+    before: { id: string; companyId: string; status: string; assigneeAgentId: string | null; parentId: string | null },
+    after: { id: string; status: string; assigneeAgentId: string | null },
+    planned: { kind: "handoff" | "returned"; rootIssueId: string; rootIssueIds: string[]; toAgentId: string; parentIssueId: string | null } | null,
+    comment: unknown,
+  ) {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return;
+    const actorAgentId = req.actor.agentId;
+    const runId = req.actor.runId ?? null;
+    const reason = typeof comment === "string" && comment.trim() ? comment.trim().slice(0, 1000) : null;
+    try {
+      if (planned && after.assigneeAgentId === planned.toAgentId) {
+        if (planned.kind === "returned") {
+          await emitHandoffReturned(db, {
+            companyId: before.companyId,
+            issueId: before.id,
+            parentIssueId: planned.parentIssueId,
+            rootIssueId: planned.rootIssueId,
+            rootIssueIds: planned.rootIssueIds,
+            fromAgentId: actorAgentId,
+            toAgentId: planned.toAgentId,
+            kind: "reassigned",
+            reason,
+            runId,
+          });
+        } else {
+          await recordAgentHandoff(db, {
+            companyId: before.companyId,
+            issueId: before.id,
+            parentIssueId: planned.parentIssueId,
+            rootIssueId: planned.rootIssueId,
+            rootIssueIds: planned.rootIssueIds,
+            fromAgentId: actorAgentId,
+            toAgentId: planned.toAgentId,
+            runId,
+            via: "reassign",
+          });
+        }
+        return;
+      }
+      const declined = before.status !== "cancelled" && after.status === "cancelled" && before.assigneeAgentId === actorAgentId;
+      if (!declined || !(await agentHandoffsEnabled(db, before.companyId))) return;
+      const handoff = await latestHandoffForIssue(db, { companyId: before.companyId, issueId: before.id });
+      if (!handoff || handoff.toAgentId !== actorAgentId) return;
+      await emitHandoffReturned(db, {
+        companyId: before.companyId,
+        issueId: before.id,
+        parentIssueId: before.parentId,
+        rootIssueId: handoff.rootIssueId,
+        rootIssueIds: handoff.rootIssueIds,
+        fromAgentId: actorAgentId,
+        toAgentId: handoff.fromAgentId,
+        kind: "declined",
+        reason,
+        runId,
+      });
+    } catch (err) {
+      logger.warn({ err, issueId: before.id }, "failed to record an agent hand-off");
+    }
   }
 
   /**
@@ -1488,6 +1577,10 @@ export function issueRoutes(
         byteSize: a.byteSize,
         contentPath: withContentPath(a).contentPath,
         createdAt: a.createdAt,
+        // Versioned files: read the current one unless told to use another.
+        version: a.version,
+        isCurrent: a.isCurrent,
+        ...(a.isCurrent ? {} : { currentAttachmentId: a.currentAttachmentId }),
       })),
       continuationSummary: continuationSummary
         ? {
@@ -2356,6 +2449,34 @@ export function issueRoutes(
     res.json(approvals.map(approval => redactApprovalForReader(approval, canReadSpend)));
   });
 
+  // AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): the
+  // request an issue belongs to, how many of its agent-to-agent hand-off
+  // rounds are used, who owns the final deliverable (the agent the request
+  // itself is assigned to), and — for readers who may see spend — what the
+  // request's issues have cost so far. Only issues the reader can see are
+  // listed or costed; an invisible issue is 404.
+  router.get("/issues/:id/agent-handoffs", async (req, res) => {
+    const issue = await svc.getById(req.params.id as string);
+    if (!issue) throw notFound("Issue not found");
+    assertCompanyAccess(req, issue.companyId);
+    await assertIssueIdVisible(db, req, issue.id, "Issue");
+    const companyId = issue.companyId;
+    const rootIssueId = await resolveRequestRootIssueId(db, { companyId, issueId: issue.id });
+    const requestIssueIds = await listRequestIssueIds(db, { companyId, rootIssueId });
+    const visibleIssueIds = await listVisibleIssueIds(db, req, companyId, requestIssueIds);
+    const canReadSpend = await canReadCompanySpend(db, req, companyId);
+    const summary = await summarizeRequestHandoffs(db, { companyId, rootIssueId, visibleIssueIds, canReadSpend });
+    const root = visibleIssueIds.has(rootIssueId) ? await svc.getById(rootIssueId) : null;
+    res.json({
+      issueId: issue.id,
+      // False while the company's co-worker flag is off: hand-offs are then
+      // neither recorded nor capped, and the counts stay at what was recorded.
+      capEnforced: await agentHandoffsEnabled(db, companyId),
+      request: root ? { issueId: root.id, identifier: root.identifier, title: root.title } : null,
+      ...summary,
+    });
+  });
+
   router.post("/issues/:id/approvals", validate(linkIssueApprovalSchema), async (req, res) => {
     const id = req.params.id as string;
     const issue = await svc.getById(id);
@@ -2487,6 +2608,7 @@ export function issueRoutes(
     const { input: issueInput, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, companyId, requestedInput);
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, companyId, issueInput);
+    const agentCreatePlan = await planAgentCreate(req, companyId, issueInput, { routeToChiefOfStaff: routeUnownedTodoToChiefOfStaff });
     let issue;
     try {
       issue = await svc.create(companyId, {
@@ -2554,6 +2676,8 @@ export function issueRoutes(
       },
     });
 
+    await recordAgentCreate(req, companyId, agentCreatePlan, issue, "create", routedToStewardedAgent);
+
     void queueIssueAssignmentWakeup({
       heartbeat,
       issue,
@@ -2615,6 +2739,9 @@ export function issueRoutes(
     const { input: childInput, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, parent.companyId, req.body);
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, parent.companyId, childInput);
+    const agentCreatePlan = await planAgentCreate(req, parent.companyId, { ...childInput, parentId: parent.id }, {
+      routeToChiefOfStaff: routeUnownedTodoToChiefOfStaff,
+    });
     const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
       ...childInput,
       routeUnownedTodoToChiefOfStaff,
@@ -2646,6 +2773,8 @@ export function issueRoutes(
       },
     });
 
+    await recordAgentCreate(req, parent.companyId, agentCreatePlan, issue, "child_create", routedToStewardedAgent);
+
     void queueIssueAssignmentWakeup({
       heartbeat,
       issue,
@@ -2667,18 +2796,25 @@ export function issueRoutes(
     // AgentDash (GH #830 A5, #854/#868): write targets are checked before
     // acceptance, so a restricted project/parent/blocker is 404 here.
     await assertIssueWriteTargetsVisible(req, existing.companyId, req.body);
-    const actions = issuePatchActions(db, heartbeat, {
-      statusChanged: (id, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(id, before, after),
-      completed: async agentId => {
-        const tc = getTelemetryClient();
-        if (!tc) return;
-        const agent = await agentsSvc.getById(agentId);
-        if (agent) trackAgentTaskCompleted(tc, { agentRole: agent.role, agentId: agent.id, adapterType: agent.adapterType,
-          model: typeof agent.adapterConfig?.model === "string" ? agent.adapterConfig.model : undefined });
-      },
-    });
+    const actions = issuePatchActions(db, heartbeat, issuePatchHooks(db, { orchestrator: cosVerdictOrchestratorSvc, agents: agentsSvc }));
     const { input: patchIntent, routed: routedToStewardedAgent } =
       await routePersonAssigneeToStewardedAgent(req, existing.companyId, req.body, existing);
+    // AgentDash (agent-to-agent hand-offs): an agent moving an issue (a new
+    // parent, or none) leaves a root record naming the requests it was in,
+    // once the update is accepted, so a move cannot restart the hand-off count.
+    const movedFromRoots = req.actor.type === "agent" && req.actor.agentId
+      && Object.prototype.hasOwnProperty.call(patchIntent, "parentId")
+      && (patchIntent.parentId ?? null) !== (existing.parentId ?? null)
+      && (await agentHandoffsEnabled(db, existing.companyId))
+      ? await resolveRequestRoots(db, { companyId: existing.companyId, issueId: existing.id })
+      : null;
+    // AgentDash (agent-to-agent hand-offs, services/agent-handoffs.ts): what
+    // this update does between agents, decided inside acceptance. The round
+    // count scans activity rows, so it is taken here, before the transaction,
+    // for the reassignment the caller asked for.
+    const precountedHandoffRounds = await precountAgentHandoffRounds(req, existing, patchIntent.assigneeAgentId);
+    let plannedAgentHandoff: { kind: "handoff" | "returned"; rootIssueId: string; rootIssueIds: string[]; toAgentId: string; parentIssueId: string | null } | null = null;
+    let refusedAgentHandoff: { rootIssueId: string; toAgentId: string; rounds: number } | null = null;
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
         actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req), intent: patchIntent,
@@ -2710,6 +2846,43 @@ export function issueRoutes(
         },
         validateResume: async (executor, current) => { await assertExplicitResumeIntentAllowed(req, res, current, executor as Db); },
         validateAssignment: (executor, current) => assertCanAssignTasks(req, current.companyId, executor as Db),
+        validateAgentHandoff: async (executor, current, next) => {
+          plannedAgentHandoff = null;
+          const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
+          const toAgentId = next.assigneeAgentId;
+          if (!actorAgentId || !toAgentId || toAgentId === actorAgentId || toAgentId === current.assigneeAgentId) return;
+          const reader = executor as Db;
+          if (!(await agentHandoffsEnabled(reader, current.companyId))) return;
+          const { primary: rootIssueId, roots: rootIssueIds } = await reassignRequestRoots(reader, req, current);
+          // Sending a hand-off back — to the agent that handed it over, or to
+          // the parent's agent — is counted but never refused. Only a real
+          // hand-off can come back: the issue's hand-off record must name this
+          // agent as the receiver. Passing on work a person assigned is a
+          // hand-off like any other.
+          const handoff = current.assigneeAgentId === actorAgentId
+            ? await latestHandoffForIssue(reader, { companyId: current.companyId, issueId: current.id })
+            : null;
+          if (handoff && handoff.toAgentId === actorAgentId) {
+            const parentAgentId = current.parentId
+              ? await reader.select({ assigneeAgentId: issues.assigneeAgentId }).from(issues)
+                .where(and(eq(issues.id, current.parentId), eq(issues.companyId, current.companyId)))
+                .then((rows) => rows[0]?.assigneeAgentId ?? null)
+              : null;
+            if (handoff.fromAgentId === toAgentId || parentAgentId === toAgentId) {
+              plannedAgentHandoff = { kind: "returned", rootIssueId, rootIssueIds, toAgentId, parentIssueId: current.parentId };
+              return;
+            }
+          }
+          const fullest = precountedHandoffRounds?.key === rootIssueIds.join(",")
+            ? precountedHandoffRounds.fullest
+            : await checkHandoffRounds(reader, { companyId: current.companyId, roots: rootIssueIds });
+          const check = await handoffCapCheck(reader, req, current.companyId, fullest);
+          if (!check.allowed) {
+            refusedAgentHandoff = { rootIssueId: fullest.rootIssueId ?? rootIssueId, toAgentId, rounds: check.rounds };
+            throw new IssueCommentPolicyRefusal(422, { error: check.message, details: check.details });
+          }
+          plannedAgentHandoff = { kind: "handoff", rootIssueId, rootIssueIds, toAgentId, parentIssueId: current.parentId };
+        },
         // A5 (GH #830 follow-up): keep blockers the actor cannot see instead
         // of silently dropping links in a restricted project.
         retainHiddenBlockerIds: async (executor, companyId, blockerIds) => {
@@ -2741,6 +2914,19 @@ export function issueRoutes(
           referencedIssueIdentifiers: visibleRelatedWork.outbound.map((item) => item.issue.identifier ?? item.issue.id),
         };
       }
+      await recordAgentHandoffEffects(req, existing, accepted.issue, plannedAgentHandoff, patchIntent.comment);
+      if (movedFromRoots && req.actor.type === "agent" && req.actor.agentId
+        && (accepted.issue.parentId ?? null) !== (existing.parentId ?? null)) {
+        await recordAgentRequestRoots(db, {
+          companyId: existing.companyId,
+          issueId: existing.id,
+          agentId: req.actor.agentId,
+          runId: req.actor.runId ?? null,
+          rootIssueId: movedFromRoots.primary,
+          rootIssueIds: movedFromRoots.roots,
+          reason: "moved",
+        }).catch((err) => logger.warn({ err, issueId: existing.id }, "failed to record a moved issue's requests"));
+      }
       // AgentDash (recovery budget, explicit clear): say so when the marker
       // outlives this update, and point at the explicit clear.
       const budgetNotice = recoveryBudgetNotice(accepted.issue.id, accepted.issue.executionState);
@@ -2750,6 +2936,18 @@ export function issueRoutes(
       if (error instanceof IssueCommentPolicyRefusal) {
         if (error.body.error === "Agent cannot mutate another agent's issue") reportAuthzRefusal(req, {
           companyId: existing.companyId, entityType: "issue", entityId: existing.id, reasonCode: "ISSUE_MUTATION_OTHER_AGENT" });
+        const refused = refusedAgentHandoff as { rootIssueId: string; toAgentId: string; rounds: number } | null;
+        if (refused && error.status === 422 && req.actor.type === "agent" && req.actor.agentId) {
+          await recordAgentHandoffRefused(db, {
+            companyId: existing.companyId,
+            entityIssueId: existing.id,
+            rootIssueId: refused.rootIssueId,
+            fromAgentId: req.actor.agentId,
+            toAgentId: refused.toAgentId,
+            runId: req.actor.runId ?? null,
+            rounds: refused.rounds,
+          }).catch((err) => logger.warn({ err, issueId: existing.id }, "failed to record a refused agent hand-off"));
+        }
         res.status(error.status).json(error.body);
         return;
       }
@@ -2781,9 +2979,7 @@ export function issueRoutes(
       return;
     }
     const status = existing.assigneeAgentId || existing.assigneeUserId ? "in_progress" : "todo";
-    const actions = issuePatchActions(db, heartbeat, {
-      statusChanged: (id, before, after) => cosVerdictOrchestratorSvc.onIssueStatusChanged(id, before, after),
-    });
+    const actions = issuePatchActions(db, heartbeat, issuePatchHooks(db, { orchestrator: cosVerdictOrchestratorSvc, agents: agentsSvc }));
     try {
       const context: IssuePatchContext = { issueId: existing.id, companyId: existing.companyId,
         actor: getActorInfo(req), actorKind: req.actor.type, actorSource: req.actor.source, attribution: assistantGrantAttribution(req),
@@ -3536,6 +3732,18 @@ export function issueRoutes(
         ? await protectedQuestions(req, authority, issue.companyId, 'human_questions.respond', { issueId: id, interactionId, shareWithCompany: req.body.shareWithCompany === true }, (executor, acceptance, guards) => respond(executor, acceptance, guards), true)
         : await assistantQuestionWrite(issue, interactionId, (executor, acceptance) => respond(executor, acceptance));
 
+      // AgentDash (learning loop): an answer other than the agent's
+      // recommendation is a correction for its next wake. Recorded before the
+      // wake is queued, so the run it starts carries it.
+      if (actor.actorType === "user") {
+        const correction = await answerCorrectionInput(db, {
+          issue,
+          interaction,
+          answeredByUserId: actor.actorId,
+        }).catch(() => null);
+        if (correction) await recordAgentCorrectionAfterCommit(db, correction);
+      }
+
       queueResolvedInteractionContinuationWakeup({
         heartbeat,
         issue,
@@ -4016,6 +4224,9 @@ export function issueRoutes(
       originalFilename: stored.originalFilename,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      // With the co-worker bridge on, an agent's file is the next version of its
+      // name, credited to the agent (slice 5). A person's upload keeps its name.
+      versionAuthor: await agentVersionAuthor(companyId, actor),
     });
 
     await logActivity(db, {
@@ -4147,6 +4358,7 @@ export function issueRoutes(
         originalFilename: stored.originalFilename,
         createdByAgentId: actor.agentId,
         createdByUserId: null,
+        versionAuthor: await agentVersionAuthor(companyId, actor),
       });
 
       await logActivity(db, {
@@ -4208,6 +4420,87 @@ export function issueRoutes(
       next(err);
     });
     object.stream.pipe(res);
+  });
+
+  // AgentDash (co-worker slice 5a): one page of an attachment's text, for an
+  // agent that cannot read the file's bytes itself. Same readers as /content
+  // (company access plus the issue's project visibility; invisible is 404).
+  // The text is framed as untrusted material and bound to the requesting run
+  // so that run's stored log withholds it (services/attachment-text.ts). The
+  // run is verified, never taken from the header as given
+  // (services/frame-run.ts): a person's frame never verifies, and an agent's
+  // only in one of its own live runs.
+  // Gated by the company's coworker_bridge_enabled flag: off, the file's
+  // details come back with reason "not_enabled" and nothing is read.
+  router.get("/attachments/:attachmentId/text", async (req, res) => {
+    const attachmentId = req.params.attachmentId as string;
+    if (!isUuidLike(attachmentId)) {
+      res.status(404).json({ error: "Attachment not found" });
+      return;
+    }
+    const rawOffset = req.query.offset;
+    let offset = 0;
+    if (rawOffset !== undefined) {
+      const parsed = typeof rawOffset === "string" && /^\d{1,10}$/.test(rawOffset) ? Number(rawOffset) : Number.NaN;
+      if (!Number.isSafeInteger(parsed)) {
+        res.status(400).json({ error: "offset must be a whole number of characters, 0 or more" });
+        return;
+      }
+      offset = parsed;
+    }
+    const requested = await svc.getAttachmentById(attachmentId);
+    if (!requested) {
+      res.status(404).json({ error: "Attachment not found" });
+      return;
+    }
+    assertCompanyAccess(req, requested.companyId);
+    await assertIssueIdVisible(db, req, requested.issueId, "Attachment");
+
+    // Versioned files (co-worker slice 5): `current=1` reads the current
+    // version of this file's name, whichever version's id was given. Same
+    // issue, so the visibility check above holds for it.
+    const current = await currentVersionOf(db, requested);
+    const wantCurrent = parseBooleanQuery(req.query.current);
+    const attachment =
+      wantCurrent && current.attachmentId !== requested.id
+        ? (await svc.getAttachmentById(current.attachmentId)) ?? requested
+        : requested;
+    const isCurrent = attachment.id === current.attachmentId;
+    const versionInfo = {
+      version: attachment.version ?? null,
+      isCurrent,
+      currentAttachmentId: current.attachmentId,
+      ...(isCurrent
+        ? {}
+        : {
+            versionNote:
+              `This is version ${attachment.version} of this file; the current one is version ${current.version} ` +
+              `(attachmentId ${current.attachmentId}). Read the current one unless you were told to use this version.`,
+          }),
+    };
+
+    if (!(await featureFlagsSvc.isEnabled(attachment.companyId, FEATURE_FLAG_KEYS.COWORKER_BRIDGE))) {
+      res.json({ ...attachmentTextSvc.notEnabled(attachment), ...versionInfo });
+      return;
+    }
+    const actor = getActorInfo(req);
+    let runId: string;
+    if (req.actor.type === "agent" && actor.agentId) {
+      const run = await frameRunForAgent(db, {
+        companyId: attachment.companyId,
+        agentId: actor.agentId,
+        requestRunId: actor.runId,
+        jwtRunId: req.actor.jwtRunId ?? null,
+      });
+      if (!run.ok) {
+        res.status(run.status).json({ error: run.message, details: { reason: run.reason } });
+        return;
+      }
+      runId = run.runId;
+    } else {
+      runId = standInFrameRunId("user", actor.actorId);
+    }
+    res.json({ ...(await attachmentTextSvc.read(attachment, { offset, runId })), ...versionInfo });
   });
 
   router.delete("/attachments/:attachmentId", async (req, res) => {

@@ -76,8 +76,47 @@ interface InboxSyncResponse {
     questions?: DigestSection<{ identifier: string | null; issueTitle: string | null; agentName: string | null }>;
     blockers: DigestSection<{ identifier: string | null; title: string; agentName: string | null }>;
     completions: DigestSection<{ identifier: string | null; title: string; agentName: string | null }>;
+    /**
+     * Work this person asked other people for, as pointers. Present only for
+     * an endpoint with `bridge:work` in a company with the co-worker bridge on.
+     */
+    requests?: RequestsSection;
     truncated: boolean;
   };
+}
+
+interface RequestsSection extends DigestSection<{
+  issueId: string;
+  identifier: string | null;
+  title: string | null;
+  delivered: boolean;
+  summary: string;
+}> {
+  delivered: number;
+  waiting: number;
+  /** The server counted only its most recent requests: the counts are a floor. */
+  truncated?: boolean;
+}
+
+/** Text from the server as one line, control characters collapsed, capped. Mirrors agentdash-connect's `oneLine`. */
+function oneLine(value: unknown, max = 300): string {
+  if (typeof value !== "string") return "";
+  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** The digest's requests section, or an empty one when the server sent none. Mirrors agentdash-connect. */
+function requestsOf(digest: InboxSyncResponse["digest"]): RequestsSection {
+  const section = digest?.requests;
+  if (!section || typeof section.total !== "number") return { total: 0, shown: 0, delivered: 0, waiting: 0, items: [] };
+  return section;
+}
+
+/** One request: the issue and where it stands, in the server's words ("waiting on Person B for 2 days"). */
+function requestLine(item: RequestsSection["items"][number]): string {
+  const ref = item.identifier ? `${oneLine(item.identifier, 40)} ` : "";
+  const title = item.title ? `"${oneLine(item.title, 200)}"` : "";
+  return `  - ${ref}${title} — ${oneLine(item.summary, 240)}`;
 }
 
 /** "and 4 more" — never silently. A shown list that hides its total lies. */
@@ -148,11 +187,13 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
   }
 
   const questions = digest.questions ?? { total: 0, shown: 0, items: [] };
+  const requests = requestsOf(digest);
   const nothing =
     digest.approvals.total === 0 &&
     questions.total === 0 &&
     digest.blockers.total === 0 &&
-    digest.completions.total === 0;
+    digest.completions.total === 0 &&
+    requests.total === 0;
   if (nothing) {
     // Still name uncovered events: `--ack` advances the cursor over the whole
     // fetched page, so anything unmentioned here is buried permanently.
@@ -200,6 +241,20 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
     lines.push("");
   }
 
+  // Work this person asked other people for, after their own agents' items,
+  // in the same place and words as agentdash-connect's render.
+  if (requests.total > 0) {
+    const atLeast = requests.truncated === true ? "at least " : "";
+    lines.push(`Your requests (${atLeast}${requests.total}: ${requests.delivered} delivered, ${requests.waiting} waiting):`);
+    for (const item of requests.items ?? []) lines.push(requestLine(item));
+    const more = remainder(requests);
+    if (more) lines.push(more);
+    if (requests.delivered > 0) {
+      lines.push("  Accept a result or ask for changes on the issue in AgentDash.");
+    }
+    lines.push("");
+  }
+
   if (digest.completions.total > 0) {
     lines.push(`Finished (${digest.completions.total}):`);
     for (const item of digest.completions.items) lines.push(issueLine(item));
@@ -213,8 +268,11 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
     lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
   }
   // Point at the surface that works. This named inbox_decide, and the first
-  // steward through the flow met a session with no such tool — deciding
-  // in-session is not wired yet, and delivered text must not promise it.
+  // steward through the flow met a session with no such tool, so delivered
+  // text must not promise it. agentdash-connect ends a plain-terminal read
+  // with this same line (TERMINAL_CLOSING_LINE). Its inbox-folder hook ends
+  // differently on purpose: that output starts a review in a Claude session
+  // that has the inbox tools and the review rules, which this CLI does not set up.
   lines.push(
     "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
   );
@@ -276,7 +334,8 @@ export async function runBridgeInbox(
       (digest.approvals.total === 0 &&
         (digest.questions?.total ?? 0) === 0 &&
         digest.blockers.total === 0 &&
-        digest.completions.total === 0));
+        digest.completions.total === 0 &&
+        requestsOf(digest).total === 0));
 
   if (opts.json) {
     log(JSON.stringify(response, null, 2));

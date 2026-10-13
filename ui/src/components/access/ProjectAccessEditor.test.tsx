@@ -63,14 +63,14 @@ describe("ProjectAccessEditor", () => {
     mockProjectsApi.update.mockReset();
     mockAccessApi.listMembers.mockReset();
     mockAccessApi.listMembers.mockResolvedValue({
-      members: [member("titus", "Titus"), member("sam", "Sam"), member("yang", "Yang", "admin")],
+      members: [member("person-a", "Person A"), member("person-b", "Person B"), member("admin-1", "Admin", "admin")],
       access: { currentUserRole: "admin", canManageMembers: true },
     });
     mockProjectsApi.getAccess.mockResolvedValue({
       visibility: "restricted",
       access: [
-        { principalType: "agent", principalId: "agent-lead", grantedByUserId: "yang" },
-        { principalType: "user", principalId: "titus", grantedByUserId: "yang" },
+        { principalType: "agent", principalId: "agent-lead", grantedByUserId: "admin-1" },
+        { principalType: "user", principalId: "person-a", grantedByUserId: "admin-1" },
       ],
     });
   });
@@ -111,8 +111,8 @@ describe("ProjectAccessEditor", () => {
       {
         access: [
           { principalType: "agent", principalId: "agent-lead" },
-          { principalType: "user", principalId: "titus" },
-          { principalType: "user", principalId: "sam" },
+          { principalType: "user", principalId: "person-a" },
+          { principalType: "user", principalId: "person-b" },
         ],
       },
       "company-1",

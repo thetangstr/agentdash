@@ -670,7 +670,7 @@ describe("InviteLandingPage", () => {
     getInviteMock.mockReturnValue(new Promise(() => {}));
     getSessionMock.mockResolvedValue({
       session: { id: "session-1", userId: "user-1" },
-      user: { id: "user-1", name: "Yang Tang", email: "yang@example.com", image: null },
+      user: { id: "user-1", name: "Person A", email: "person-a@example.com", image: null },
     });
 
     const root = createRoot(container);
@@ -704,8 +704,8 @@ describe("InviteLandingPage", () => {
       session: { id: "session-1", userId: "user-1" },
       user: {
         id: "user-1",
-        name: "Yang Tang",
-        email: "yang@example.com",
+        name: "Person A",
+        email: "person-a@example.com",
         image: null,
       },
     });

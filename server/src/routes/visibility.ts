@@ -767,7 +767,19 @@ const ACTIVITY_ISSUE_SUMMARY_KEYS = [
   "removedReferencedIssues",
   "currentReferencedIssues",
 ] as const;
-const ACTIVITY_ISSUE_ID_KEYS = ["blockedByIssueIds", "addedBlockedByIssueIds", "removedBlockedByIssueIds"] as const;
+const ACTIVITY_ISSUE_ID_KEYS = [
+  "blockedByIssueIds",
+  "addedBlockedByIssueIds",
+  "removedBlockedByIssueIds",
+  // Agent hand-offs and root records (services/agent-handoffs.ts): every
+  // request the row counts against.
+  "rootIssueIds",
+] as const;
+/**
+ * Single issue ids that name another issue: a hand-off's request and parent.
+ * A hidden one is removed from the row, key and all.
+ */
+const ACTIVITY_ISSUE_SCALAR_ID_KEYS = ["rootIssueId", "parentIssueId"] as const;
 
 function asDetailsRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -790,6 +802,10 @@ export function relatedIssueIdsInActivityDetails(details: unknown): string[] {
     const value = record[key];
     if (!Array.isArray(value)) continue;
     for (const id of value) if (typeof id === "string") ids.add(id);
+  }
+  for (const key of ACTIVITY_ISSUE_SCALAR_ID_KEYS) {
+    const value = record[key];
+    if (typeof value === "string") ids.add(value);
   }
   // `issue.updated` keeps the previous values (e.g. the old blocker ids) under _previous.
   if (asDetailsRecord(record._previous)) {
@@ -820,6 +836,10 @@ export function pruneRelatedIssuesInActivityDetails<D>(details: D, visible: (iss
     if (!Array.isArray(value)) continue;
     const kept = value.filter((id) => typeof id === "string" && visible(id));
     if (kept.length !== value.length) (next ??= { ...record })[key] = kept;
+  }
+  for (const key of ACTIVITY_ISSUE_SCALAR_ID_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && !visible(value)) delete (next ??= { ...record })[key];
   }
   if (asDetailsRecord(record._previous)) {
     const previous = pruneRelatedIssuesInActivityDetails(record._previous, visible);

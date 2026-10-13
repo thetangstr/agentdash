@@ -556,4 +556,15 @@ export interface IssueAttachment {
   createdAt: Date;
   updatedAt: Date;
   contentPath: string;
+  /**
+   * Files sent through the bridge or attached by an agent are versioned per
+   * base name on their issue (`q3 figures v2 (Person A).csv`). Null for a
+   * file a person attached on the page.
+   */
+  version?: number | null;
+  versionBaseName?: string | null;
+  /** True for an unversioned file and for the newest version of its name. */
+  isCurrent?: boolean;
+  /** The attachment that is current for this file's name (its own id when current). */
+  currentAttachmentId?: string;
 }

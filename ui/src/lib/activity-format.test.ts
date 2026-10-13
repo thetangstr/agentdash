@@ -106,6 +106,20 @@ describe("bookkeeping activity", () => {
   });
 });
 
+// Agent-to-agent hand-offs are recorded as their own activity rows; a person
+// reading the feed sees what happened between the agents, not action names.
+describe("agent hand-off activity", () => {
+  it("says hand-offs, returns and the hand-off limit in plain language", () => {
+    for (const action of ["issue.agent_handoff", "issue.agent_handoff_returned", "issue.agent_handoff_refused"]) {
+      expect(formatActivityVerb(action)).not.toMatch(/agent_handoff|issue\./);
+      expect(formatIssueActivityAction(action)).not.toMatch(/agent_handoff|issue\./);
+    }
+    expect(formatIssueActivityAction("issue.agent_handoff")).toBe("handed this to another agent");
+    expect(formatIssueActivityAction("issue.agent_handoff_returned")).toBe("sent this back to the agent that handed it over");
+    expect(formatIssueActivityAction("issue.agent_handoff_refused")).toMatch(/hand-off limit/);
+  });
+});
+
 // AgentDash (c3 copy): "cancelled heartbeat" hid who and why — the row names
 // the agent's run and the reason it stopped.
 describe("heartbeat cancellations", () => {
@@ -270,11 +284,16 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "board_api_key.created",
   "board_api_key.revoked",
   // local-harness bridge
+  "bridge.endpoint_capability_added",
   "bridge.endpoint_enrolled",
   "bridge.endpoint_revoked",
   "bridge.task_completed",
   "bridge.task_created",
   "bridge.task_declined",
+  "bridge.work_file_downloaded",
+  "bridge.work_file_text_read",
+  "bridge.work_request_accepted",
+  "bridge.work_requested",
   // budgets
   "budget.hard_threshold_crossed",
   "budget.incident_resolved",
@@ -390,6 +409,10 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "invite.revoked",
   // issues
   "issue.admin_force_release",
+  "issue.agent_handoff",
+  "issue.agent_handoff_refused",
+  "issue.agent_handoff_returned",
+  "issue.agent_request_roots",
   "issue.approval_linked",
   "issue.approval_unlinked",
   "issue.approvers_updated",
@@ -398,6 +421,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.attachment_removed",
   "issue.blockers.updated",
   "issue.blockers_updated",
+  "issue.bridge_reply_sent",
   "issue.checked_out",
   "issue.checkout_lock_adopted",
   "issue.child_created",
@@ -424,6 +448,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.recovery_budget_exhausted",
   "issue.relations.updated",
   "issue.released",
+  "issue.requester_changes_requested",
   "issue.reviewers_updated",
   "issue.task_recovery_authorized",
   "issue.task_recovery_permit_consumed",
@@ -529,6 +554,10 @@ const NON_ACTIVITY_ACTION_FIELDS = new Set([
 const CONSTANT_ACTION_WRITES = new Map<string, string | null>([
   ["AUTHZ_REFUSED_ACTION", "authz.refused"], // services/activity-log.ts
   ["ISSUE_RECOVERY_BUDGET_CLEARED_ACTION", "issue.recovery_budget_cleared"], // services/issue-recovery-budget.ts
+  ["AGENT_HANDOFF_ACTION", "issue.agent_handoff"], // services/agent-handoffs.ts
+  ["AGENT_HANDOFF_RETURNED_ACTION", "issue.agent_handoff_returned"], // services/agent-handoffs.ts
+  ["AGENT_HANDOFF_REFUSED_ACTION", "issue.agent_handoff_refused"], // services/agent-handoffs.ts
+  ["AGENT_REQUEST_ROOTS_ACTION", "issue.agent_request_roots"], // services/agent-handoffs.ts
   ["DEMO_SCOPE", null], // services/handshake-demo.ts — attestation scope, not an activity action
 ]);
 
@@ -792,6 +821,11 @@ describe("hosted activity gaps", () => {
     expect(formatActivityVerb("invite.created", { inviteType: "agent" })).toBe("created an agent invite");
   });
 
+  it("keeps bridge file reads in plain words when system events are shown", () => {
+    expect(formatActivityVerb("bridge.work_file_downloaded")).toBe("downloaded a file through a local machine from");
+    expect(formatActivityVerb("bridge.work_file_text_read")).toBe("read a file's text through a local machine from");
+  });
+
   it("keeps preflight check results in plain words, hidden or shown", () => {
     expect(formatActivityVerb("agent.harness_preflight_passed")).toBe("confirmed this agent can run:");
     expect(formatActivityVerb("agent.harness_preflight_failed")).toBe("found a setup problem on");
@@ -806,6 +840,12 @@ describe("plumbing hidden by default", () => {
       "gmail.search",
       "gmail.draft",
       "bridge.task_created",
+      // A person reading their own deliverable through their session is a
+      // read, like gmail.read_thread: shown only under "Show system events".
+      "bridge.work_file_downloaded",
+      "bridge.work_file_text_read",
+      // Hand-off bookkeeping: which requests an agent's issue belongs to.
+      "issue.agent_request_roots",
       "cost.reported",
       "heartbeat.completed",
       "heartbeat.cancel_failed",

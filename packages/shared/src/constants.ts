@@ -1308,6 +1308,14 @@ export const FEATURE_FLAG_KEYS = {
    * an instance admin, and are purged after the document-run retention window.
    */
   DOCUMENT_ACCESS: "document_access_enabled",
+  /**
+   * The person's own Claude as co-worker. While on, an endpoint holding
+   * `bridge:work` may read the hand-offs of the agents its owner answers for
+   * (issue, comments, documents, attachments, run logs) through
+   * `/api/bridge/work/*`, and agents may read the text of issue attachments.
+   * Off by default: every work route and the attachment-text read refuse.
+   */
+  COWORKER_BRIDGE: "coworker_bridge_enabled",
 } as const;
 
 // AgentDash (#157): billing-infra activity log action names.

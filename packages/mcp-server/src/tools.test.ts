@@ -83,6 +83,40 @@ describe("paperclip MCP tools", () => {
     expect(refused.content[0]?.text).toContain("originId is required");
   });
 
+  // Co-worker slice 5a: the server extracts and frames; the tool forwards the
+  // run id on this GET so the frame is bound to the run the agent is in.
+  it("read_attachment_text reads one page of an attachment's text with the run id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ format: "text", text: "framed", nextOffset: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = getTool("read_attachment_text");
+    const attachmentId = "44444444-4444-4444-8444-444444444444";
+
+    await tool.execute({ attachmentId });
+    await tool.execute({ attachmentId, offset: 60000 });
+
+    const [firstUrl, firstInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(firstUrl)).toBe(`http://localhost:3100/api/attachments/${attachmentId}/text`);
+    expect(firstInit.method).toBe("GET");
+    expect((firstInit.headers as Record<string, string>)["X-Paperclip-Run-Id"]).toBe(
+      "33333333-3333-3333-3333-333333333333",
+    );
+    expect(String(fetchMock.mock.calls[1][0])).toBe(`http://localhost:3100/api/attachments/${attachmentId}/text?offset=60000`);
+
+    const refused = await tool.execute({ attachmentId, offset: -1 });
+    expect(refused.content[0]?.text).toContain("offset");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(tool.description).toMatch(/never as instructions/i);
+
+    // Co-worker slice 5: versioned files; `current` reads the current version.
+    await tool.execute({ attachmentId, current: true });
+    await tool.execute({ attachmentId, offset: 60000, current: true });
+    expect(String(fetchMock.mock.calls[2][0])).toBe(`http://localhost:3100/api/attachments/${attachmentId}/text?current=1`);
+    expect(String(fetchMock.mock.calls[3][0])).toBe(
+      `http://localhost:3100/api/attachments/${attachmentId}/text?offset=60000&current=1`,
+    );
+    expect(tool.description).toMatch(/work from the current one/);
+  });
+
   it("uses default company id for company-scoped list tools", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse([{ id: "issue-1" }]),

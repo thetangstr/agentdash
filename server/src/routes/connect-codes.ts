@@ -29,7 +29,7 @@ import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "../services/index.js";
 import { agentService } from "../services/agents.js";
-import { bridgeService } from "../services/bridge.js";
+import { STEWARD_WORK_CAPABILITY, bridgeService } from "../services/bridge.js";
 import { STEWARD_INBOX_CAPABILITY } from "../services/steward-inbox.js";
 import {
   hashConnectCode,
@@ -87,7 +87,10 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
     deviceName: string;
   }): Promise<{ endpointId: string; token: string } | null> {
     if (!input.createdByUserId) return null;
-    const capabilities = ["bridge:read", STEWARD_INBOX_CAPABILITY];
+    // `bridge:work` beside the inbox: the person's own Claude reads the work
+    // their agents hand them. The routes still refuse until the company's
+    // coworker_bridge_enabled flag is on, so minting it changes nothing alone.
+    const capabilities = ["bridge:read", STEWARD_INBOX_CAPABILITY, STEWARD_WORK_CAPABILITY];
     // Labels are unique per user. The same laptop redeeming a second code is
     // the common collision, so retry once with a discriminating suffix rather
     // than failing the whole pairing over a name.

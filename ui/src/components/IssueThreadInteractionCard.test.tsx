@@ -8,6 +8,7 @@ import { IssueThreadInteractionCard } from "./IssueThreadInteractionCard";
 import { ThemeProvider } from "../context/ThemeContext";
 import { TooltipProvider } from "./ui/tooltip";
 import {
+  answeredAskUserQuestionsInteraction,
   pendingAskUserQuestionsInteraction,
   commentExpiredRequestConfirmationInteraction,
   disabledDeclineReasonRequestConfirmationInteraction,
@@ -62,6 +63,21 @@ afterEach(() => {
 });
 
 describe("IssueThreadInteractionCard", () => {
+  it("says an answer came through the bridge, and from which machine", () => {
+    const host = renderCard({
+      interaction: answeredAskUserQuestionsInteraction,
+      viaBridge: { channel: "bridge_inbox", endpointLabel: "person-a-laptop" },
+    });
+    expect(host.textContent).toContain("Resolved by");
+    expect(host.querySelector('[data-testid="via-bridge-badge"]')?.textContent).toBe("via bridge (person-a-laptop)");
+  });
+
+  it("shows no bridge badge on an answer given on the page", () => {
+    const host = renderCard({ interaction: answeredAskUserQuestionsInteraction });
+    expect(host.textContent).toContain("Resolved by");
+    expect(host.querySelector('[data-testid="via-bridge-badge"]')).toBeNull();
+  });
+
   it("exposes pending question options as selectable radio and checkbox controls", () => {
     const host = renderCard({
       interaction: pendingAskUserQuestionsInteraction,

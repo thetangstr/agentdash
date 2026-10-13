@@ -44,7 +44,7 @@ function relativeImports(source) {
 describe("the published package", () => {
   const root = packAndExtract();
 
-  it("continues the owned package lineage at 0.4.0", () => {
+  it("continues the owned package lineage at 0.5.0", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     expect(pkg.name).toBe("agentdash-connect");
     // 0.2.0: the inbox half. Redeem stores the bridge token, scaffolds the
@@ -55,7 +55,9 @@ describe("the published package", () => {
     // steward can approve or reject from their harness as themselves.
     // 0.4.0: `inbox_answer` — the person answers their agents' questions from
     // their own session, and the inbox hook shows those questions.
-    expect(pkg.version).toBe("0.4.0");
+    // 0.5.0: the co-worker review — work_* and request tools, files both ways,
+    // and the `watch`, `check` and `clients` commands.
+    expect(pkg.version).toBe("0.5.0");
   });
 
   it("ships the entry point named in bin", () => {
@@ -102,6 +104,34 @@ describe("the published package", () => {
     const output = execFileSync(process.execPath, [entry, "--help"], { encoding: "utf8" });
     expect(output).toMatch(/agentdash-connect/);
     expect(output).toMatch(/connect code/i);
+  });
+
+  /**
+   * The scaffold reads the review skill from the package at run time, not
+   * through an import, so the import walk above cannot see it. A package
+   * without it would scaffold every inbox folder with no skill and no
+   * AGENTS.md — or crash on connect. So: present, identical to the source, and
+   * installed by the packaged code itself.
+   */
+  it("ships the co-worker skill, and the packaged scaffold installs it", () => {
+    const shipped = path.join(root, "skills", "agentdash-coworker", "SKILL.md");
+    expect(fs.existsSync(shipped)).toBe(true);
+    const source = fs.readFileSync(path.join(pkgRoot, "skills", "agentdash-coworker", "SKILL.md"), "utf8");
+    expect(fs.readFileSync(shipped, "utf8")).toBe(source);
+
+    const inboxDir = fs.mkdtempSync(path.join(workDir, "inbox-"));
+    const script = [
+      `import { scaffoldInboxWorkspace } from ${JSON.stringify(path.join(root, "src", "inbox.mjs"))};`,
+      `const r = scaffoldInboxWorkspace(${JSON.stringify(inboxDir)}, {});`,
+      "process.stdout.write(JSON.stringify(r));",
+    ].join("\n");
+    const result = JSON.parse(
+      execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" }),
+    );
+    const installed = path.join(inboxDir, ".claude", "skills", "agentdash-coworker", "SKILL.md");
+    expect(result.created).toContain(installed);
+    expect(result.created).toContain(path.join(inboxDir, "AGENTS.md"));
+    expect(fs.readFileSync(installed, "utf8")).toBe(source);
   });
 
   it("does not ship its own tests", () => {

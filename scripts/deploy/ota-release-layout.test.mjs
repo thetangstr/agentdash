@@ -104,7 +104,7 @@ test("releaseNameForPath identifies the release a path belongs to", () => {
   );
   // A developer checkout is not a release, which is exactly the distinction
   // the status endpoint relies on.
-  assert.equal(releaseNameForPath(root, "/Users/yang/agentdash/server"), null);
+  assert.equal(releaseNameForPath(root, "/Users/operator/agentdash/server"), null);
   assert.equal(releaseNameForPath(root, null), null);
   assert.equal(releaseNameForPath(root, "/opt/releases/current/server"), null);
   assert.equal(releaseNameForPath(root, "/opt/releases/.staging-v1-abc/server"), null);

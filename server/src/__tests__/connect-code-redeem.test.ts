@@ -215,12 +215,12 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
    * never to the unauthenticated redeemer.
    */
   describe("the bridge endpoint minted alongside the key", () => {
-    it("binds to the code's creator, enrolled, with read and inbox capabilities", async () => {
+    it("binds to the code's creator, enrolled, with read, inbox and work capabilities", async () => {
       const { companyId, code } = await seed({ createdByUserId: "user-steward" });
 
       const res = await request(app)
         .post("/api/connect/redeem")
-        .send({ code, deviceName: "chris-laptop" });
+        .send({ code, deviceName: "person-a-laptop" });
 
       expect(res.status).toBe(200);
       expect(res.body.bridgeToken).toBeTruthy();
@@ -230,8 +230,8 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
       expect(endpoint).toMatchObject({
         companyId,
         userId: "user-steward",
-        label: "chris-laptop",
-        capabilities: ["bridge:read", "bridge:inbox"],
+        label: "person-a-laptop",
+        capabilities: ["bridge:read", "bridge:inbox", "bridge:work"],
       });
       // Enrolled means approved: a usable credential exists only past that step.
       expect(endpoint?.enrolledAt).toBeTruthy();
@@ -255,8 +255,8 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
       const { code } = await seed({ createdByUserId: "user-steward" });
       await db.insert(authUsers).values({
         id: "user-steward",
-        name: "Chris Hong",
-        email: "chris@example.test",
+        name: "Person A",
+        email: "person-a@example.test",
         emailVerified: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -264,12 +264,12 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
 
       const res = await request(app)
         .post("/api/connect/redeem")
-        .send({ code, deviceName: "chris-laptop (win32)" });
+        .send({ code, deviceName: "person-a-laptop (win32)" });
 
       expect(res.status).toBe(200);
-      expect(res.body.owner).toEqual({ name: "Chris Hong", email: "chris@example.test" });
+      expect(res.body.owner).toEqual({ name: "Person A", email: "person-a@example.test" });
       // The platform suffix survives sanitization into the stored names.
-      expect(res.body.deviceName).toBe("chris-laptop (win32)");
+      expect(res.body.deviceName).toBe("person-a-laptop (win32)");
     });
 
     it("mints no endpoint when the code has no recorded creator", async () => {
@@ -293,7 +293,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
      */
     it("survives a label collision with a suffixed label", async () => {
       const first = await seed({ createdByUserId: "user-steward" });
-      await request(app).post("/api/connect/redeem").send({ code: first.code, deviceName: "chris-laptop" });
+      await request(app).post("/api/connect/redeem").send({ code: first.code, deviceName: "person-a-laptop" });
 
       // A second code for a second agent, same creator, same device name.
       const companyId = first.companyId;
@@ -320,7 +320,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
 
       const res = await request(app)
         .post("/api/connect/redeem")
-        .send({ code: secondCode, deviceName: "chris-laptop" });
+        .send({ code: secondCode, deviceName: "person-a-laptop" });
 
       expect(res.status).toBe(200);
       expect(res.body.bridgeToken).toBeTruthy();
@@ -328,8 +328,8 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
       const endpoints = await db.select().from(bridgeEndpoints);
       expect(endpoints).toHaveLength(2);
       const labels = endpoints.map((e) => e.label).sort();
-      expect(labels[0]).toBe("chris-laptop");
-      expect(labels[1]).toMatch(/^chris-laptop \(/);
+      expect(labels[0]).toBe("person-a-laptop");
+      expect(labels[1]).toMatch(/^person-a-laptop \(/);
     });
   });
 

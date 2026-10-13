@@ -102,7 +102,7 @@ export function readClaudeServer(config, serverName) {
  * the next table header or end of file. Done textually and deliberately: a
  * full TOML parse would reformat the rest of a file we do not own.
  */
-function findCodexBlock(text, serverName) {
+export function findCodexBlock(text, serverName) {
   const lines = String(text ?? "").split("\n");
   const header = `[mcp_servers.${serverName}]`;
   const start = lines.findIndex((line) => line.trim() === header);

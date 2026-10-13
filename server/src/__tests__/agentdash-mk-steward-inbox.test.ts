@@ -122,7 +122,7 @@ describe("steward inbox caller existence", () => {
     }
   });
 
-  it("widens the bridge route allowlist by exactly the inbox routes", () => {
+  it("widens the bridge route allowlist by exactly the whoami, inbox and work routes", () => {
     const source = readFileSync(path.join(repoRoot, "server/src/middleware/auth.ts"), "utf8");
     const block = source.match(/const BRIDGE_ENDPOINT_ROUTES = new Set\(\[([\s\S]*?)\]\);/);
     expect(block, "BRIDGE_ENDPOINT_ROUTES must remain a literal set").toBeTruthy();
@@ -132,6 +132,8 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/poll",
         "/api/bridge/result",
         "/api/bridge/decline",
+        // `agentdash-connect check`: the machine describing itself.
+        "/api/bridge/whoami",
         "/api/bridge/inbox/sync",
         "/api/bridge/inbox/ack",
         "/api/bridge/inbox/decide",
@@ -139,6 +141,19 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/inbox/propose",
         "/api/bridge/inbox/confirm",
         "/api/bridge/inbox/answer",
+        "/api/bridge/work/list",
+        "/api/bridge/work/read",
+        "/api/bridge/work/run-log",
+        "/api/bridge/work/file",
+        "/api/bridge/work/file-text",
+        // The send-back: propose reads back and mints a handle; confirm spends it.
+        "/api/bridge/work/propose",
+        "/api/bridge/work/confirm",
+        // Bytes for a send-back or a request, stored only against a live handle naming them.
+        "/api/bridge/work/upload",
+        "/api/bridge/work/request",
+        "/api/bridge/work/request/respond",
+        "/api/bridge/work/request/confirm",
       ].sort(),
     );
   });

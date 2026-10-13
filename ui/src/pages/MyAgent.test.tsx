@@ -126,7 +126,7 @@ describe("MyAgent", () => {
     mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "https://mk.example:3112" });
     mockAuthApi.getSession.mockResolvedValue({
       session: { id: "s", userId: "user-me" },
-      user: { id: "user-me", name: "Yang Tang", email: "yang@x", image: null },
+      user: { id: "user-me", name: "Person A", email: "person-a@x", image: null },
     });
     mockBridgeApi.listMyEndpoints.mockResolvedValue({ endpoints: [] });
     mockStewardWebhooksApi.list.mockResolvedValue({ webhooks: [] });
@@ -863,7 +863,7 @@ describe("MyAgent", () => {
       await render();
 
       expect(container.textContent ?? "").toContain("Connecting as");
-      expect(container.textContent ?? "").toContain("Yang Tang");
+      expect(container.textContent ?? "").toContain("Person A");
     });
 
     /**
@@ -891,6 +891,8 @@ describe("MyAgent", () => {
       expect(text).toContain("Connected machines");
       expect(text).toContain("chris-laptop (win32)");
       expect(text).toContain("inbox");
+      // No bridge:work on this machine: its owner's Claude cannot review from it.
+      expect(text).toContain("review not enabled; reconnect");
       const buttons = Array.from(container.querySelectorAll("button")).map((b) => b.textContent);
       expect(buttons).toContain("Disconnect");
     });

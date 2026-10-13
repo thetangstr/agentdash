@@ -105,11 +105,16 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "authz.refused": "was denied access",
   "board_api_key.created": "created a board API key",
   "board_api_key.revoked": "revoked a board API key",
+  "bridge.endpoint_capability_added": "gave a local machine new access",
   "bridge.endpoint_enrolled": "connected a local machine",
   "bridge.endpoint_revoked": "disconnected a local machine",
   "bridge.task_completed": "finished a local task",
   "bridge.task_created": "created a local task",
   "bridge.task_declined": "declined a local task",
+  "bridge.work_file_downloaded": "downloaded a file through a local machine from",
+  "bridge.work_file_text_read": "read a file's text through a local machine from",
+  "bridge.work_request_accepted": "accepted the result of",
+  "bridge.work_requested": "requested through a local machine",
   "budget.hard_threshold_crossed": "hit the hard budget limit",
   "budget.incident_resolved": "resolved a budget incident",
   "budget.policy_upserted": "updated the budget policy",
@@ -212,6 +217,11 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "invite.openclaw_prompt_created": "created an agent invite prompt",
   "invite.revoked": "revoked an invite",
   "issue.admin_force_release": "force-released the checkout lock on",
+  "issue.agent_handoff": "handed to another agent",
+  "issue.agent_handoff_refused": "was stopped at the hand-off limit on",
+  "issue.agent_handoff_returned": "sent back",
+  "issue.agent_request_roots": "noted which requests this belongs to on",
+  "issue.requester_changes_requested": "asked for changes on",
   "issue.approval_linked": "linked an approval to",
   "issue.approval_unlinked": "unlinked an approval from",
   "issue.approvers_updated": "updated approvers on",
@@ -220,6 +230,8 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "issue.attachment_removed": "removed attachment from",
   "issue.blockers.updated": "updated blockers on",
   "issue.blockers_updated": "updated blockers on",
+  // AgentDash (co-worker send-back): the person's reply from their own session.
+  "issue.bridge_reply_sent": "sent a reply from their own session on",
   "issue.checked_out": "checked out",
   "issue.checkout_lock_adopted": "adopted the checkout lock on",
   "issue.child_created": "created a sub-issue of",
@@ -334,6 +346,14 @@ const ISSUE_ACTIVITY_LABELS: Record<string, string> = {
   "issue.feedback_vote_saved": "saved feedback on an AI output",
   "issue.attachment_added": "added an attachment",
   "issue.attachment_removed": "removed an attachment",
+  "issue.bridge_reply_sent": "sent a reply from their own session",
+  "issue.agent_handoff": "handed this to another agent",
+  "issue.agent_handoff_returned": "sent this back to the agent that handed it over",
+  "issue.agent_handoff_refused": "was stopped from handing this to another agent: the request reached its hand-off limit",
+  "issue.agent_request_roots": "noted which requests this belongs to",
+  "issue.requester_changes_requested": "asked for changes on the delivered result",
+  "bridge.work_requested": "asked for this work from their own session",
+  "bridge.work_request_accepted": "accepted the result",
   "issue.document_created": "created a document",
   "issue.document_updated": "updated a document",
   "issue.document_deleted": "deleted a document",
@@ -569,7 +589,7 @@ function formatWorkProductUpdatePhrase(details: ActivityDetails): string | null 
 
 /**
  * AgentDash (c4 trust): approval rows carried "requested approval" /
- * "rejected" with no object — "Yang rejected" told the owner nothing. The
+ * "rejected" with no object — "Person A rejected" told the owner nothing. The
  * approval's `type` names what was decided.
  */
 const APPROVAL_TYPE_OBJECTS: Record<string, string> = {

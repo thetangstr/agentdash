@@ -67,6 +67,10 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   "/api/bridge/poll",
   "/api/bridge/result",
   "/api/bridge/decline",
+  // The machine describing itself to itself (owner, label, capabilities, the
+  // company's co-worker flag) for `agentdash-connect check`. Reads nothing
+  // about anyone else and changes nothing.
+  "/api/bridge/whoami",
   // The steward inbox: read a position, move a position. Both are scoped to
   // the endpoint's own owner by the endpoint identity, and neither decides
   // anything -- resolving an approval from the inbox is the separate route
@@ -87,6 +91,33 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // answers it through the canonical answer path after re-checking that the
   // question is still theirs -- see steward-inbox-answers.ts.
   "/api/bridge/inbox/answer",
+  // The person's own Claude reviewing their agents' work: read-only, scoped by
+  // the endpoint's owner, and refused without `bridge:work` and the company's
+  // coworker_bridge_enabled flag -- see steward-work.ts. `file` returns one
+  // attachment's bytes and logs the download; `file-text` returns one page of
+  // its extracted text, framed, and logs the read.
+  "/api/bridge/work/list",
+  "/api/bridge/work/read",
+  "/api/bridge/work/run-log",
+  "/api/bridge/work/file",
+  "/api/bridge/work/file-text",
+  // The send-back: `propose` reads the bundle back and mints a single-use
+  // `reply` handle over it, writing nothing; `confirm` spends that handle and
+  // applies the bundle as the endpoint's owner after re-checking their
+  // authority -- see steward-work-reply.ts.
+  "/api/bridge/work/propose",
+  "/api/bridge/work/confirm",
+  // Bytes for a send-back or a request (bridge-staged-files.ts): stored only
+  // against a live handle that names the file's exact sha256 and size, and
+  // attached only when that handle is confirmed.
+  "/api/bridge/work/upload",
+  // Asking someone else for work, and closing it out (steward-requests.ts).
+  // `request` and `request/respond` mint a single-use handle over a resolved
+  // brief or close-out and change nothing; `request/confirm` spends it and
+  // re-checks the owner's authority before acting as them.
+  "/api/bridge/work/request",
+  "/api/bridge/work/request/respond",
+  "/api/bridge/work/request/confirm",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

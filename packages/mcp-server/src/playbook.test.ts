@@ -83,6 +83,42 @@ describe("the steward contract", () => {
     expect(STEWARD_PLAYBOOK).toContain("that is not a gap to");
   });
 
+  /**
+   * Agent-to-agent hand-offs: an agent hands a piece of work to a colleague's
+   * agent directly (a child issue with a brief), work from another agent gets
+   * the same first pass and mandate test as work from a person, the agent the
+   * request was assigned to owns the final deliverable, and a request goes
+   * through at most three agent-to-agent rounds.
+   */
+  it("tells the agent to hand work to a colleague's agent directly, within the cap", () => {
+    // Prose wraps; match on words, not line breaks.
+    const playbook = STEWARD_PLAYBOOK.replace(/\s+/g, " ");
+    expect(playbook).toMatch(/hand the work to their agent directly/i);
+    expect(playbook).toMatch(/work handed to you by another agent[^.]*same first pass/i);
+    expect(playbook).toMatch(/finish nothing alone/i);
+    expect(playbook).toMatch(/owns the final deliverable/i);
+    expect(playbook).toMatch(/at most 3 agent-to-agent hand-off rounds/i);
+    expect(playbook).toContain("AGENT_HANDOFF_CAP_REACHED");
+    expect(playbook).not.toMatch(/ask your steward to relay/i);
+  });
+
+  /**
+   * The learning loop: a correction reaches the agent's next wake as a "What
+   * changed" summary; the agent keeps the lessons in its own memory, never
+   * client content, and proposes a mandate change to its steward when a lesson
+   * recurs three times.
+   */
+  it("tells the agent to learn from corrections through its own memory", () => {
+    const playbook = STEWARD_PLAYBOOK.replace(/\s+/g, " ");
+    expect(playbook).toContain("## Learning from corrections");
+    expect(playbook).toMatch(/at the start of each task, read your lessons/i);
+    expect(playbook).toContain("agentdashGetMyMemory");
+    expect(playbook).toContain("agentdashUpdateMyMemory");
+    expect(playbook).toMatch(/never client content/i);
+    expect(playbook).toMatch(/third time the same lesson comes up, propose a mandate change/i);
+    expect(playbook).toContain('payload.kind: "mandate_change"');
+  });
+
   it("does not tell a person's agent to provision a company", () => {
     expect(STEWARD_PLAYBOOK).not.toContain("sign the human up");
     expect(STEWARD_PLAYBOOK).not.toContain("agentdash_sign_up");

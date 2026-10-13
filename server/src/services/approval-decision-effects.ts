@@ -26,6 +26,7 @@ import {
 } from "./index.js";
 import { stewardInboxService } from "./steward-inbox.js";
 import { workflowRecommendationService } from "./workflow-recommendations.js";
+import { approvalRejectedCorrectionInput, recordAgentCorrectionAfterCommit } from "./agent-corrections.js";
 
 type ApprovalRow = typeof approvals.$inferSelect;
 
@@ -40,13 +41,27 @@ export interface DecisionEffectsContext {
    */
   via?: string;
   /**
-   * Whether to wake the requesting agent with `approval_approved`. Default
-   * true. False only when the decision records an outcome a human already
-   * brought about directly — a hire activated from the agent's own page —
-   * which never woke the requester before the approval was recorded, and a
-   * wake is a full agent run.
+   * Whether to wake the requesting agent with the decision. Default true.
+   * False when the decision records an outcome a human already brought about
+   * directly — a hire activated from the agent's own page — which never woke
+   * the requester before the approval was recorded, and a wake is a full
+   * agent run. Also false when the caller wakes the requester itself with the
+   * decision in that one wake (a send-back bundle whose agent is the
+   * requester); the caller then uses the returned {@link DecisionWake}.
    */
   wakeRequester?: boolean;
+}
+
+/**
+ * The wake an applied decision gives its requester: the reason, and an
+ * approved connector_send's delivery outcome. Returned whether or not this
+ * service sent the wake, so a caller that wakes the requester itself carries
+ * the same news. Null when the decision was not applied.
+ */
+export interface DecisionWake {
+  reason: string;
+  approvalStatus: string;
+  connectorSend: { outcome: string; reason: string | null } | null;
 }
 
 /**
@@ -201,7 +216,8 @@ export function approvalDecisionEffectsService(
     approval: ApprovalRow,
     applied: boolean,
     { actorUserId, decisionNote, via, wakeRequester = true }: DecisionEffectsContext,
-  ): Promise<void> {
+  ): Promise<DecisionWake | null> {
+  let requesterWake: DecisionWake | null = null;
   if (applied) {
     const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
     const linkedIssueIds = linkedIssues.map((issue) => issue.id);
@@ -261,6 +277,7 @@ export function approvalDecisionEffectsService(
     const connectorSendOutcome = connectorSendReport
       ? { outcome: connectorSendReport.outcome, reason: connectorSendReport.reason }
       : null;
+    requesterWake = { reason: wakeReason, approvalStatus: approval.status, connectorSend: connectorSendOutcome };
 
     if (approval.requestedByAgentId && wakeRequester) {
       try {
@@ -386,13 +403,14 @@ export function approvalDecisionEffectsService(
     }
   }
 
+  return requesterWake;
   }
 
   async function afterReject(
     approval: ApprovalRow,
     applied: boolean,
-    { actorUserId, decisionNote, via }: DecisionEffectsContext,
-  ): Promise<void> {
+    { actorUserId, decisionNote, via, wakeRequester = true }: DecisionEffectsContext,
+  ): Promise<DecisionWake | null> {
   if (applied) {
     await logActivity(db, {
       companyId: approval.companyId,
@@ -462,51 +480,70 @@ export function approvalDecisionEffectsService(
         logger.warn({ err, approvalId: approval.id }, "linked issues unavailable for rejection wake");
       }
       const primaryIssueId = linkedIssueIds[0] ?? null;
+      // AgentDash (learning loop): the rejection and its reason are a
+      // correction, delivered with the wake below. Recorded first so that
+      // wake carries it; a failure is logged and the wake still goes.
       try {
-        const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
-          source: "automation",
-          triggerDetail: "system",
-          reason: "approval_rejected",
-          payload: {
-            approvalId: approval.id,
-            approvalStatus: approval.status,
-            issueId: primaryIssueId,
-            issueIds: linkedIssueIds,
-          },
-          requestedByActorType: "user",
-          requestedByActorId: actorUserId,
-          contextSnapshot: {
-            source: "approval.rejected",
-            approvalId: approval.id,
-            approvalStatus: approval.status,
-            issueId: primaryIssueId,
-            issueIds: linkedIssueIds,
-            taskId: primaryIssueId,
-            wakeReason: "approval_rejected",
-          },
+        const correction = await approvalRejectedCorrectionInput(db, {
+          approval,
+          issueId: primaryIssueId,
+          rejectedByUserId: actorUserId,
+          note: decisionNote ?? null,
         });
-        await logActivity(db, {
-          companyId: approval.companyId,
-          actorType: "user",
-          actorId: actorUserId,
-          action: "approval.requester_wakeup_queued",
-          entityType: "approval",
-          entityId: approval.id,
-          details: {
-            requesterAgentId: approval.requestedByAgentId,
-            wakeRunId: wakeRun?.id ?? null,
-            wakeReason: "approval_rejected",
-            linkedIssueIds,
-          },
-        });
+        if (correction) await recordAgentCorrectionAfterCommit(db, correction);
       } catch (err) {
-        logger.warn(
-          { err, approvalId: approval.id, requestedByAgentId: approval.requestedByAgentId },
-          "failed to queue requester wakeup after rejection",
-        );
+        logger.warn({ err, approvalId: approval.id }, "rejection correction not recorded");
+      }
+      // A caller that wakes the requester itself with this decision (see
+      // DecisionEffectsContext.wakeRequester) gets the wake back instead.
+      if (wakeRequester) {
+        try {
+          const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "approval_rejected",
+            payload: {
+              approvalId: approval.id,
+              approvalStatus: approval.status,
+              issueId: primaryIssueId,
+              issueIds: linkedIssueIds,
+            },
+            requestedByActorType: "user",
+            requestedByActorId: actorUserId,
+            contextSnapshot: {
+              source: "approval.rejected",
+              approvalId: approval.id,
+              approvalStatus: approval.status,
+              issueId: primaryIssueId,
+              issueIds: linkedIssueIds,
+              taskId: primaryIssueId,
+              wakeReason: "approval_rejected",
+            },
+          });
+          await logActivity(db, {
+            companyId: approval.companyId,
+            actorType: "user",
+            actorId: actorUserId,
+            action: "approval.requester_wakeup_queued",
+            entityType: "approval",
+            entityId: approval.id,
+            details: {
+              requesterAgentId: approval.requestedByAgentId,
+              wakeRunId: wakeRun?.id ?? null,
+              wakeReason: "approval_rejected",
+              linkedIssueIds,
+            },
+          });
+        } catch (err) {
+          logger.warn(
+            { err, approvalId: approval.id, requestedByAgentId: approval.requestedByAgentId },
+            "failed to queue requester wakeup after rejection",
+          );
+        }
       }
     }
   }
+  return applied ? { reason: "approval_rejected", approvalStatus: approval.status, connectorSend: null } : null;
   }
 
   return { afterApprove, afterReject };

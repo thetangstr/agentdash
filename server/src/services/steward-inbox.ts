@@ -205,7 +205,7 @@ export type StoredQuestionPayload = {
 };
 
 /** A person-shaped request, for the project visibility rule. Grants nothing. */
-function personRequest(
+export function personRequest(
   userId: string,
   member: { companyId: string; membershipRole: string | null; status: string },
 ): Request {
@@ -221,7 +221,7 @@ function personRequest(
   } as unknown as Request;
 }
 
-async function activeMembership(reader: Db, companyId: string, userId: string) {
+export async function activeMembership(reader: Db, companyId: string, userId: string) {
   return reader
     .select()
     .from(companyMemberships)
@@ -1206,5 +1206,6 @@ export function stewardInboxService(db: Db) {
     waitingItemsFor,
     syncForEndpoint,
     acknowledge,
+    agentsAnsweredForBy,
   };
 }

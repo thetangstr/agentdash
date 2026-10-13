@@ -95,3 +95,22 @@ describe("advertised tool surface", () => {
     expect(surfaceFor("").length).toBeGreaterThan(BRIDGE_TOOLS.length * 2);
   });
 });
+
+/**
+ * The same wording rule agentdash-connect's own inbox tools follow: the
+ * person's Claude may hold and state a view of an agent's question; what it
+ * sends is only the person's answer, after their explicit go. The old
+ * "never on your own judgment" conflated forming a view with sending one.
+ */
+describe("inbox_answer wording on the bridge surface", () => {
+  it("lets Claude give its own view and sends only the operator's answer after their go", () => {
+    const config = { apiUrl: "http://instance.test/api", apiKey: "Zr8kQ2xVb1nT7yFhLmP4wCdG9sJuXe0aRtYiOpNkQvE", companyId: null, agentId: null, runId: null };
+    const tools = buildToolSurface(new PaperclipApiClient(config), config);
+    const answer = tools.find((tool) => tool.name === "inbox_answer");
+    expect(answer?.description).toBeDefined();
+    expect(answer?.description).not.toMatch(/never on your own judgment/i);
+    expect(answer?.description).toMatch(/your own view/);
+    expect(answer?.description).toMatch(/explicit go/);
+    expect(answer?.description).toMatch(/never because/);
+  });
+});

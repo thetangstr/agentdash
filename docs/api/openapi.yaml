@@ -6847,6 +6847,7 @@ components:
             - whatsapp
             - bridge_inbox
             - assistant
+            - bridge_work
     RotateSecretRequest:
       type: object
       properties:

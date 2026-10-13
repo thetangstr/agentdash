@@ -6,6 +6,8 @@ import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
 import { approvalsApi } from "../api/approvals";
 import { activityApi, type RunForIssue } from "../api/activity";
+import { collectBridgeProvenance } from "../lib/bridge-provenance";
+import { ViaBridgeBadge } from "../components/ViaBridgeBadge";
 import { heartbeatsApi, type ActiveRunForIssue, type LiveRunForIssue } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { accessApi } from "../api/access";
@@ -19,6 +21,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
+import { attachmentVersionMarker } from "../lib/attachment-version";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, buildMarkdownMentionOptions } from "../lib/company-members";
 import { stewardedRoutingNotice } from "../lib/stewarded-routing-notice";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
@@ -827,6 +830,11 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
     () => extractIssueTimelineEvents(resolvedActivity),
     [resolvedActivity],
   );
+  // Comments and answers sent from the person's own Claude or Codex.
+  const bridgeProvenance = useMemo(
+    () => collectBridgeProvenance(resolvedActivity),
+    [resolvedActivity],
+  );
 
   return (
     <div className="space-y-3">
@@ -846,6 +854,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
       <IssueChatThread
         composerRef={composerRef}
         comments={commentsWithRunMeta}
+        bridgeProvenance={bridgeProvenance}
         interactions={interactions}
         feedbackVotes={feedbackVotes}
         feedbackDataSharingPreference={feedbackDataSharingPreference}
@@ -1116,6 +1125,24 @@ function IssueDetailActivityTab({
   );
 }
 
+/** "current" or "older version" beside a versioned file's name (co-worker slice 5). */
+function AttachmentVersionTag({ attachment }: { attachment: IssueAttachment }) {
+  const marker = attachmentVersionMarker(attachment);
+  if (!marker) return null;
+  return (
+    <span
+      title={marker.title}
+      className={
+        marker.current
+          ? "ml-1.5 rounded border border-border px-1 text-[10px] text-foreground"
+          : "ml-1.5 rounded border border-border px-1 text-[10px] text-muted-foreground"
+      }
+    >
+      {marker.text}
+    </span>
+  );
+}
+
 export function IssueDetail() {
   const { issueId } = useParams<{ issueId: string }>();
   const { selectedCompanyId } = useCompany();
@@ -1247,6 +1274,17 @@ export function IssueDetail() {
     enabled: !!issueId,
     placeholderData: keepPreviousDataForSameQueryTail<IssueAttachment[]>(issueId ?? "pending"),
   });
+  // The issue feed the chat tab reads (same key, one shared request): which
+  // attachments a person sent from their own Claude or Codex.
+  const { data: issueActivity } = useQuery({
+    queryKey: queryKeys.issues.activity(issue?.id ?? "pending"),
+    queryFn: () => activityApi.forIssue(issue!.id),
+    enabled: Boolean(issue?.id),
+  });
+  const attachmentProvenance = useMemo(
+    () => collectBridgeProvenance(issueActivity).attachments,
+    [issueActivity],
+  );
 
   const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
     queryKey: queryKeys.issues.liveRuns(issueId!),
@@ -3793,6 +3831,10 @@ export function IssueDetail() {
                   className="h-full w-full object-cover"
                   loading="lazy"
                 />
+                <ViaBridgeBadge
+                  via={attachmentProvenance.get(attachment.id)}
+                  className="absolute bottom-1.5 left-1.5 max-w-[90%] bg-background/90"
+                />
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors" />
                 {confirmDeleteId === attachment.id ? (
                   <div
@@ -3856,6 +3898,7 @@ export function IssueDetail() {
                     title={attachment.originalFilename ?? attachment.id}
                   >
                     {attachment.originalFilename ?? attachment.id}
+                    <AttachmentVersionTag attachment={attachment} />
                   </a>
                   <button
                     type="button"
@@ -3867,8 +3910,9 @@ export function IssueDetail() {
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  {attachment.contentType} · {(attachment.byteSize / 1024).toFixed(1)} KB
+                <p className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                  <span>{attachment.contentType} · {(attachment.byteSize / 1024).toFixed(1)} KB</span>
+                  <ViaBridgeBadge via={attachmentProvenance.get(attachment.id)} />
                 </p>
               </div>
             ))}

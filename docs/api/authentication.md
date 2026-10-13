@@ -70,9 +70,16 @@ A request whose grant lacks the scope a route needs answers 403 `insufficient_sc
 POST /api/bridge/poll        POST /api/bridge/inbox/sync     POST /api/bridge/inbox/agents
 POST /api/bridge/result      POST /api/bridge/inbox/ack      POST /api/bridge/inbox/propose
 POST /api/bridge/decline     POST /api/bridge/inbox/decide   POST /api/bridge/inbox/confirm
+POST /api/bridge/whoami      POST /api/bridge/inbox/answer
+POST /api/bridge/work/list   POST /api/bridge/work/read      POST /api/bridge/work/run-log
+POST /api/bridge/work/file   POST /api/bridge/work/propose   POST /api/bridge/work/confirm
+POST /api/bridge/work/file-text
+POST /api/bridge/work/request
+POST /api/bridge/work/request/respond
+POST /api/bridge/work/request/confirm
 ```
 
-An endpoint token decides nothing on its own: the inbox routes that act on an approval spend a separate single-use handle, minted for that one decision.
+An endpoint token decides nothing on its own: the inbox routes that act on an approval spend a separate single-use handle, minted for that one decision. The work routes need the endpoint capability `bridge:work` and the company flag `coworker_bridge_enabled`. They only read, except `work/confirm`, which spends a single-use `reply` handle minted by `work/propose` over one exact bundle, and the request routes, which act only by spending a single-use handle minted over the exact read-back; each re-checks the owner's authority before writing as them.
 
 ### The MCP endpoints
 

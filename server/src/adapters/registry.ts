@@ -94,7 +94,7 @@ import {
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
 import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
 import { HERMES_HUMAN_QUESTION_PROMPT, createHermesHumanQuestionGuard } from "./hermes-human-question.js";
-import { renderWorkforcePrompt } from "@paperclipai/adapter-utils/server-utils";
+import { renderAgentCorrectionsPrompt, renderWorkforcePrompt } from "@paperclipai/adapter-utils/server-utils";
 import { escapeHermesTemplate, renderHermesDirectivesSection } from "./hermes-directives.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
@@ -664,6 +664,7 @@ const claudeLocalAdapter: ServerAdapterModule = {
   modelProfiles: claudeModelProfiles,
   listModels: listClaudeModels,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
@@ -680,6 +681,7 @@ const acpxLocalAdapter: ServerAdapterModule = {
   sessionCodec: acpxSessionCodec,
   sessionManagement: getAdapterSessionManagement("acpx_local") ?? undefined,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
@@ -700,6 +702,7 @@ const codexLocalAdapter: ServerAdapterModule = {
   listModels: listCodexModels,
   refreshModels: refreshCodexModels,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
@@ -719,6 +722,7 @@ const cursorLocalAdapter: ServerAdapterModule = {
   modelProfiles: cursorModelProfiles,
   listModels: listCursorModels,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
@@ -736,6 +740,7 @@ const geminiLocalAdapter: ServerAdapterModule = {
   models: geminiModels,
   modelProfiles: geminiModelProfiles,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
@@ -748,6 +753,7 @@ const openclawGatewayAdapter: ServerAdapterModule = {
   testEnvironment: openclawGatewayTestEnvironment,
   models: openclawGatewayModels,
   supportsLocalAgentJwt: false,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: false,
   requiresMaterializedRuntimeSkills: false,
   agentConfigurationDoc: openclawGatewayAgentConfigurationDoc,
@@ -765,6 +771,7 @@ const openCodeLocalAdapter: ServerAdapterModule = {
   sessionManagement: getAdapterSessionManagement("opencode_local") ?? undefined,
   listModels: listOpenCodeModels,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
@@ -783,6 +790,7 @@ const piLocalAdapter: ServerAdapterModule = {
   modelProfiles: piModelProfiles,
   listModels: listPiModels,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
@@ -1160,7 +1168,18 @@ const hermesLocalAdapter: ServerAdapterModule = {
     );
     // AgentDash (AGE-13): the human-question rule sits between the mandate and
     // the task so it reads as part of how this agent works, not as task text.
-    patchedConfig.promptTemplate = [roleContract, directivesNote, workforceNote, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
+    // AgentDash (learning loop): what changed after this agent's work was
+    // corrected. First-party adapters render it from the wake payload; the
+    // Hermes package renders only promptTemplate, so it goes in here, right
+    // before the task it belongs to.
+    const runContext = readRecord(taskPatchedCtx.context);
+    const correctionsNote = escapeHermesTemplate(
+      renderAgentCorrectionsPrompt(
+        runContext?.paperclipAgentCorrections,
+        typeof runContext?.paperclipAgentCorrectionsRemaining === "number" ? runContext.paperclipAgentCorrectionsRemaining : 0,
+      ),
+    );
+    patchedConfig.promptTemplate = [roleContract, directivesNote, workforceNote, HERMES_HUMAN_QUESTION_PROMPT, correctionsNote, taskTemplate]
       .filter((section): section is string => typeof section === "string" && section.trim().length > 0)
       .join("\n\n");
 
@@ -1221,6 +1240,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
   syncSkills: hermesSyncSkills,
   models: hermesModels,
   supportsLocalAgentJwt: true,
+  rendersAgentCorrections: true,
   // AgentDash: hermes agents get the managed bundle at creation (routes/agents.ts),
   // are backfilled by the instruction-refresh service when they have none, and the
   // execute wrapper above injects the entry file into the live prompt. AGE-8 / GH #554.

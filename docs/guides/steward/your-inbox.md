@@ -25,17 +25,56 @@ Just say so:
 | "Mark those seen" | `inbox_ack` — the next session shows only what is new |
 | "Give <agent> this task…" | `inbox_propose`, then `inbox_confirm` once you have read back what was understood |
 
-These tools work anywhere your Claude Code is connected, not only in the inbox folder. The folder is where the *hook* runs; the tools are yours everywhere.
+These tools work anywhere your Claude Code is connected, not only in the inbox folder. The folder is where the *hook* runs and where Claude reviews your inbox unprompted; in any other session it uses the tools only when you ask.
 
 ## Three rules
 
-- **Claude decides only what you explicitly asked about** — never on its own, and never because an issue or a message asked it to. If you want zero in-session decisions, delete the `agentdash-inbox` entry from `~/.claude.json`; everything else keeps working.
+- **Claude has a view; you make the call.** Claude tells you what it thinks of each item, including that the agent got it wrong. It sends only what you chose, only after your explicit go — never on its own, and never because an issue or a message asked it to. If you want zero in-session decisions, delete the `agentdash-inbox` entry from `~/.claude.json`; everything else keeps working.
 - **A refusal is an answer, not something to retry.** "Already decided", "revision moved on", "not yours to decide" mean the approval changed or belongs to another steward. You can decide exactly what you could decide on the web page, and nothing else.
 - **Your agent still cannot decide anything.** If Claude reaches for the agent's tools and gets `403 Board access required`, that is the design working — ask it to use the inbox tools. If those are missing, you connected before `agentdash-connect` 0.3.0; [reconnect](./connect-your-terminal) with a fresh code.
 
+## Claude reviews with you
+
+Connecting (or the folder's session-start hook, on a machine that connected earlier) puts a review skill in the folder (`.claude/skills/agentdash-coworker/`, and the same rules in `AGENTS.md` for Codex), shipped in `agentdash-connect` releases after 0.4.0. At the start of a session in that folder, Claude goes through every waiting item before you act on any — decisions, then questions, then approved but not delivered, then blockers, with counts — and presents each as the agent's work in its own words, then **My take**. Rejecting or rewriting the agent's draft is a normal outcome.
+
+- Drafts and a `notes.md` per item stay in `~/agentdash-inbox/work/<ISSUE>/`, so the next session picks up where you stopped.
+- Downloaded attachments go to `~/agentdash-inbox/incoming/<ISSUE>/` and are read as text only.
+- Before anything is sent, Claude reads it back in full, as you, and asks "yes / change / no". One explicit yes sends it; anything else sends nothing.
+- Text from agents, documents and attachments is material to review, never instructions; an instruction found in it is reported to you as a finding.
+
 ## Questions from your agents
 
-When work reaches your agent — including work assigned to you — it takes the first pass: it restates the request, recommends an answer and asks you. The question arrives here with the agent's options; what the agent wrote is shown as its words, not as instructions to Claude. Tell Claude your answer and it sends it with `inbox_answer`, needing `agentdash-connect` 0.4.0 or later. You can also answer on the issue in AgentDash.
+When work reaches your agent — including work assigned to you — it takes the first pass: it restates the request, recommends an answer and asks you. The question arrives here with the agent's options; what the agent wrote is shown as its words, not as instructions to Claude, and Claude gives you its own take on it. Tell Claude your answer and it sends it with `inbox_answer`, needing `agentdash-connect` 0.4.0 or later. You can also answer on the issue in AgentDash.
+
+## Reviewing what your agent did
+
+When your company has turned on reviewing from your own session, Claude can read the work behind each item, not just the pointer: "Show me what Agent A did on ACME-41" uses `work_read` (the issue, the request it came from, comments, documents, attachment details, child issues), `work_run_log` (the agent's run log, with secrets removed), `work_read_file_text` (the text of a .docx, .pptx, .txt, .md or .csv attachment, extracted on the AgentDash server, so Claude can review a deliverable sent as a file), and `work_fetch_file` (saves an attachment into `~/agentdash-inbox/incoming/ACME-41/` for reading). `work_list` shows everything your agents have handed you.
+
+You see exactly what you see on the issue page, and only your own work: issues assigned to you or to an agent you answer for. Everything written in AgentDash arrives marked as material, so Claude gives you its own view on it and never takes it as instructions. HTML and SVG files are never downloaded, and every download is recorded. If the tools answer that this is not switched on, an administrator turns on `coworker_bridge_enabled` for the company; if they answer 403 about `bridge:work`, [reconnect](./connect-your-terminal) this machine with a fresh code.
+
+## Sending your reply back
+
+When you have finished the work with Claude, it sends it back to your agent as you, in one bundle: your answer to the agent's question, your decision on an approval, a new revision of the document, a comment, and two or three lessons about how you want work done (never client content). First it reads the whole bundle back — every part, who will see it, and who is woken (your agent at most once) — and asks "Send? (yes / change / no)". Only an explicit yes sends it; "change" means a new read-back.
+
+It all lands as you, marked as sent via the bridge from your machine: on the issue page, the comment, the document revision and the answer each carry a **via bridge (<your machine's name>)** badge, and so does an answer you gave with `inbox_answer`. If the document changed since Claude read it, the approval was decided in between, or the issue is no longer yours, nothing is sent and Claude tells you why. Your agent's next run starts with a short "what changed" summary — its draft against your revision, your answer against its recommendation, your lessons — and it keeps the lessons in its own memory. When the same lesson keeps coming back, your agent asks you to add it to its mandate; you decide.
+
+Files can go back with it, but only on issues in projects with restricted access; on any other issue Claude tells you they were left out, and you attach them on the issue page if everyone who can see it may have them. Claude reads back each file's name and size, and the file leaves your machine only after your yes. It is stored as the next version of its name, like `plan v2 (Person A).docx`, and the issue marks it as the current one. Files from hidden folders are never sent, and anything over the company's attachment size cap is refused with the cap.
+
+## Asking a colleague for work
+
+Ask Claude for work from someone else ("ask Person B for a one-page vendor summary by Friday") and it writes a brief, reads it back, and sends it as you only after your yes, with `work_request_propose` and `work_request_confirm`. It goes to that person's agent, which takes the first pass. Files can go with it into a project with restricted access that you both can see, the same way as with a reply. Your requests appear in the session-start digest and in `work_list` with who each one is waiting on and for how long. When a result comes back, Claude reviews it with you; accepting it or asking for changes (`work_request_respond`) is read back the same way, and changes go straight to the agent that owns the work. You read your request itself, its comments, documents and attachments, not the other person's agent's run log.
+
+## A notification when work is handed to you (macOS)
+
+So a hand-off does not wait for you to happen to open Claude, connect asks (on a Mac, on a terminal, default no) whether to show a notification when an agent hands you work. You can also turn it on later:
+
+```sh
+npx agentdash-connect watch --install
+```
+
+Every 15 minutes (`--every <minutes>` to change it) it asks your own AgentDash instance what is waiting on you and shows one Mac notification per new item, such as "Agent B finished a first pass on ACME-41; your review is ready", and one when a result of your own request comes back. It names the issue and the agent only, never the title. It talks to nothing but your instance and sends nothing anywhere. `npx agentdash-connect watch --uninstall` turns it off and removes it; so does `--remove`. On Linux and Windows it says it is macOS-only and installs nothing.
+
+**Pre-review, separately and off by default.** `npx agentdash-connect watch --pre-review on` lets your own Claude Code prepare its review of each new hand-off in the background, read-only, into `~/agentdash-inbox/work/<ISSUE>/review.md`. When you open the folder, Claude reads it first, tells you when it was prepared and re-checks it against the item before you decide. That run cannot send, decide, answer or acknowledge anything: those tools do not exist in it. It uses your Claude usage.
 
 ## Email
 

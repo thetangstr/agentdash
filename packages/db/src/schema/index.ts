@@ -11,6 +11,7 @@ export { agentStewardships } from "./agent_stewardships.js";
 export { agentGovernancePolicies } from "./agent_governance_policies.js";
 export { agentDirectives } from "./agent_directives.js";
 export { agentMemory } from "./agent_memory.js";
+export { agentCorrections } from "./agent_corrections.js";
 export { humanChannelBindings } from "./human_channel_bindings.js";
 export { externalChannelEvents } from "./external_channel_events.js";
 export { channelCallbackTokens } from "./channel_callback_tokens.js";
@@ -158,6 +159,7 @@ export {
 // AgentDash-MK: a proposed action read back to a person, waiting on their
 // confirmation. Same single-use, endpoint-bound shape as a decision handle.
 export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
+export { bridgeStagedFiles } from "./bridge_staged_files.js";
 export { stewardWebhooks } from "./steward_webhooks.js";
 export { stewardEmailNotices } from "./steward_email_notices.js";
 export { userNotificationPreferences } from "./user_notification_preferences.js";

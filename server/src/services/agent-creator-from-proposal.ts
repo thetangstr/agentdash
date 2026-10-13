@@ -162,6 +162,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // ready for review"), and never paste runtime lines (tool output, scanner
 // warnings) into what a person reads. Proposal-created hires add nothing to
 // that.
+// AgentDash: attachment-text (co-worker slice 5a) is inherited from the
+// canonical worker: read an attachment's text with GET
+// /api/attachments/:attachmentId/text (paged, framed as untrusted material).
+// Proposal-created hires add nothing to that.
 // AgentDash: onboarding-parked-work (scan 2) is inherited from the canonical
 // worker: the onboarding wizard's tasks arrive in `backlog` and start only when
 // a person moves them to `todo`. Proposal-created hires add nothing to that.
@@ -219,6 +223,21 @@ ${userVoice || "No interview context was captured."}
 // option, then blocked; the question reaches the steward's own Claude or Codex
 // session through the bridge inbox and their answer wakes the agent), and
 // assigns the issue to its steward only when they must do the work themselves.
+
+// AgentDash: agent-learning-loop is inherited from the canonical default
+// bundle: an agent reads its lessons in its own memory at the start of each
+// task, records the lessons from any "What changed" correction summary its
+// wake carries (services/agent-corrections.ts) at the end, never client
+// content, and proposes a mandate change to its steward as a
+// request_board_approval when the same lesson recurs three times.
+
+// AgentDash: agent-handoffs is inherited from the canonical default bundle: an
+// agent hands work for someone else to that person's agent directly (a child
+// issue with a brief), never through a steward relay; work from another agent
+// gets the same first pass and mandate test as work from a person; the agent
+// of the person the request was assigned to owns the final deliverable; and a
+// request allows at most 3 agent-to-agent hand-off rounds, the next refused
+// server-side with AGENT_HANDOFF_CAP_REACHED (services/agent-handoffs.ts).
 
 // AgentDash: workspace-persistence-recovery is inherited from the canonical default
 // worker bundle: uncertain workspace persistence requires read-back, no blind retry

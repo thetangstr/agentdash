@@ -16,6 +16,7 @@ import { featureFlagsService } from "./feature-flags.js";
 import { resolveAgentClosingStatus } from "./issue-blocked-declaration.js";
 import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
 import { insertActivity, publishActivity, type ActivityPublication, type LogActivityInput } from "./activity-log.js";
+import { recordAgentCorrectionGuarded, taskReopenedCorrectionInput } from "./agent-corrections.js";
 import { issueDocumentKey, listIssueDocumentsByKey, resubmitSentBackDeliverables, workProductDocumentKey } from "./work-products.js";
 import {
   digestIssueIntentFacts, IssueCommentPolicyRefusal, selectActiveIssueRun, isClosedIssueStatus, shouldImplicitlyMoveCommentedIssueToTodo,
@@ -42,6 +43,14 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   validate(executor: IssueCommentExecutor, issue: Issue, intent: Intent): Promise<void>;
   validateResume(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
   validateAssignment(executor: IssueCommentExecutor, issue: Issue): Promise<void>;
+  // AgentDash (agent-to-agent hand-offs): an agent changing the assignee, with
+  // the resolved next assignee. The route bounds hand-offs between agents
+  // (services/agent-handoffs.ts) and refuses here, inside acceptance.
+  validateAgentHandoff?(
+    executor: IssueCommentExecutor,
+    issue: Issue,
+    next: { assigneeAgentId: string | null; assigneeUserId: string | null },
+  ): Promise<void>;
   // AgentDash (GH #830 A5 follow-up): blockedByIssueIds replaces the whole
   // set, but an off-list actor never sees blockers in a restricted project.
   // Returns the current blocker ids the actor cannot see; they are kept.
@@ -58,6 +67,10 @@ export interface IssuePatchContext extends Omit<IssueCommentContext, "intent" | 
   // stewards (services/stewarded-agent-routing.ts); recorded on the audit and
   // carried on the assignment wake.
   routedToStewardedAgent?: { fromUserId: string; toAgentId: string };
+  // AgentDash (learning loop): the caller records its own, more specific
+  // correction for this update (a requester's change request, which reopens
+  // the result), so the generic reopened-task correction is not recorded too.
+  callerRecordsCorrection?: boolean;
 }
 export class IssuePatchAcceptanceUncertain extends IssueCommentPolicyRefusal {
   constructor(readonly recovery: { mutationId: string; companyId: string; issueId: string; commentId: string | null; decisionId: string | null }) {
@@ -500,6 +513,9 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       if (!isAgentReturningIssueToCreator && !isAgentHandingIssueToItsSteward) {
         await context.validateAssignment(executor, existing);
       }
+      if (context.actorKind === "agent" && context.validateAgentHandoff) {
+        await context.validateAgentHandoff(executor, existing, { assigneeAgentId: nextAssigneeAgentId, assigneeUserId: nextAssigneeUserId });
+      }
     }
 
     // AgentDash: goals-eval-hitl
@@ -748,6 +764,25 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             ),
           },
         });
+
+        // AgentDash (learning loop): a person moving an issue the agent closed
+        // back open is a correction for the agent's next wake, with the
+        // update's comment as the reason.
+        const previousStatus = typeof previous.status === "string" ? previous.status : null;
+        if (
+          actor.actorType === "user" &&
+          context.callerRecordsCorrection !== true &&
+          (previousStatus === "done" || previousStatus === "cancelled")
+        ) {
+          await recordAgentCorrectionGuarded(tx, issue.companyId, (reader) =>
+            taskReopenedCorrectionInput(reader, {
+              issue,
+              fromStatus: previousStatus,
+              reopenedByUserId: actor.actorId,
+              reason: commentBody ?? null,
+            }),
+          );
+        }
 
         // AgentDash (MVP launch lane B, item 6): a human board user moving
         // the issue to done is the acceptance of what the agent shipped. Its

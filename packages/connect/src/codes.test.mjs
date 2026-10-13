@@ -44,7 +44,7 @@ describe("recognising a connect code", () => {
   });
 
   it("does not treat a URL or a stray flag as a code", () => {
-    expect(looksLikeConnectCode("http://mkmini.local:3103")).toBe(false);
+    expect(looksLikeConnectCode("http://box.example.com:3103")).toBe(false);
     expect(looksLikeConnectCode("--check")).toBe(false);
   });
 });

@@ -3,11 +3,12 @@ title: "agentdash-connect"
 summary: "Connect Claude Code or Codex on your machine to your AgentDash agent."
 ---
 
-> Generated at commit `01141e157` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `e68823397` by `scripts/docs/generate-mcp-reference.mjs`.
 > This page is `packages/connect/README.md`, the README published to npm with the package. Edit the README, then run `pnpm docs:mcp-reference`.
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
-AgentDash agent.
+AgentDash agent, and put your own AgentDash inbox in Claude Code, Claude
+Desktop and Codex.
 
 ```sh
 npx -y agentdash-connect@latest --url https://your-instance KVTX-8F02
@@ -37,18 +38,19 @@ It works the same in a macOS/Linux terminal and in PowerShell on Windows.
 
 ## What it actually does
 
-1. Finds which harnesses are installed (`claude`, `codex`).
+1. Finds which harnesses are installed (`claude`, `codex`, and the Claude
+   Desktop app).
 2. **Checks the link and credential work before touching anything.** A wrong
    code, a typo'd host and an instance that is down are three different
    messages, and you get them before any file is written.
 3. Writes each harness's own native MCP config.
 4. When the instance supports it (v2026.914.0 and later), sets up your inbox —
-   see below.
+   see below — and adds your own inbox tools to every client it found.
 5. Prints every file it changed.
 
 ```
 Connecting this machine to an AgentDash agent.
-Found: Claude Code, Codex
+Found: Claude Code, Claude Desktop, Codex
 
 Redeeming code KVTX-8F02 …
 Paired as Quill at Halden & Co., for this machine (laptop (darwin)).
@@ -67,10 +69,22 @@ Inbox connected for Jonah Lee (jonah@example.com):
           your inbox credential (mode 600) — questions for you arrive with it
   inbox   ~/agentdash-inbox/.claude/settings.json
   inbox   ~/agentdash-inbox/README.md
+  inbox   ~/agentdash-inbox/.claude/skills/agentdash-coworker/SKILL.md
+  inbox   ~/agentdash-inbox/AGENTS.md
   claude  ~/.claude.json
-          "agentdash-inbox" — your own inbox tools, so you can approve or reject from Claude
+          "agentdash-inbox" — your own inbox tools: Claude reviews with you and sends only what you approve
+  desktop ~/Library/Application Support/Claude/claude_desktop_config.json
+          "agentdash-inbox" — your inbox tools in Claude Desktop; the previous file is saved as claude_desktop_config.json.agentdash-backup-20261012T080910Z
+          quit and reopen Claude Desktop to load them
+  desktop ~/agentdash-inbox/claude-desktop-project.md
+          Claude Desktop has no session-start hook: paste this file into the instructions of a
+          Claude Desktop project (for example "AgentDash inbox") and start inbox chats there
+  codex   ~/.codex/config.toml
+          "agentdash-inbox" — your own inbox tools in Codex; open ~/agentdash-inbox in Codex for the review rules (AGENTS.md)
 
-Open ~/agentdash-inbox in Claude Code and anything waiting on you appears as the session starts.
+Open ~/agentdash-inbox in Claude Code: anything waiting on you appears as the session starts, and Claude reviews it with you.
+In Codex, start sessions in ~/agentdash-inbox: its AGENTS.md tells Codex to review what is waiting first.
+Check the connection any time with:  npx agentdash-connect check
 ```
 
 ## The inbox
@@ -86,7 +100,12 @@ its steward's inbox.
 | `~/.agentdash/bridge-owner.json` | whose inbox this is and which instance — display metadata only, mode 600 |
 | `~/agentdash-inbox/.claude/settings.json` | a `SessionStart` hook that runs `npx -y agentdash-connect@latest inbox --ack --quiet-when-empty` |
 | `~/agentdash-inbox/README.md` | a short note on what the folder is for |
+| `~/agentdash-inbox/.claude/skills/agentdash-coworker/SKILL.md` | the review skill: how Claude reviews your agents' work with you (below) |
+| `~/agentdash-inbox/AGENTS.md` | the same rules, for Codex |
 | `~/.claude.json` | a second entry, `agentdash-inbox` — your own inbox tools, holding no secret |
+| `~/.codex/config.toml` | `[mcp_servers.agentdash-inbox]` — the same tools for Codex, holding no secret |
+| Claude Desktop's `claude_desktop_config.json` | an `agentdash-inbox` entry, merged in (the file is backed up first, never replaced), holding no secret |
+| `~/agentdash-inbox/claude-desktop-project.md` | the review rules as Claude Desktop project instructions |
 
 Start or resume a Claude Code session **in `~/agentdash-inbox`** and the hook puts what is
 waiting on you into the session: approvals needing your decision first, then
@@ -100,12 +119,77 @@ One thing the hook does not do:
 - **It does not carry the evidence.** Only the ask and a pointer arrive, because
   anything delivered into a session becomes model context.
 
-The hook only reports. Acting on what it reports is the `agentdash-inbox`
-tools' job, on the same credential — see below.
+The hook only reports. Reviewing what it reports, and acting on it as you, is
+the job of the review skill and the `agentdash-inbox` tools, on the same
+credential — see below.
 
 If this machine's inbox already belongs to someone else, pairing asks before
 replacing it and defaults to keeping what is there. The agent pairing goes
 ahead either way.
+
+## Claude Desktop and Codex
+
+Both get your own inbox tools, the same `agentdash-connect@latest mcp` server
+Claude Code runs, on the same inbox credential. Neither config file holds a
+secret.
+
+**Codex** reads them from `[mcp_servers.agentdash-inbox]` in
+`~/.codex/config.toml`, beside the agent's own `[mcp_servers.agentdash]`. The
+entry has the shape `codex mcp add` writes, with `startup_timeout_sec = 60`
+(the first `npx` download can be slow) and `tool_timeout_sec = 3600` (a large
+file download; each tool keeps its own shorter deadline). Connect keeps
+everything else in that file; before changing it, it saves the previous file
+next to it as `config.toml.agentdash-backup-<time>` (mode 600), writes nothing
+when the entry is already right, and leaves a file it cannot read untouched
+and says so. Codex has no session-start hook here, so
+`~/agentdash-inbox/AGENTS.md` tells it to start the review on the first turn of
+a session in that folder.
+
+**Claude Desktop** reads them from its own config file
+(`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows; Claude Desktop does
+not run on Linux). Connect merges one `agentdash-inbox` entry into that file
+and keeps everything else. Before changing it, it saves the previous file next
+to it as `claude_desktop_config.json.agentdash-backup-<time>` (mode 600). It
+writes nothing when the entry is already right, and leaves a file it cannot
+parse untouched and says so. On macOS the entry carries a `PATH`, because a Mac
+app does not inherit your shell's, and `npx` would not be found. Quit and
+reopen Claude Desktop to load the tools.
+
+Claude Desktop has no folder and no session-start hook, so it cannot start the
+review by itself, and the tools are in every chat. The server knows it is
+running in Desktop (`mcp --client claude-desktop`) and tells Claude to review
+first only in your inbox project, or when you ask. Make that project once:
+create a Claude Desktop project (for example "AgentDash inbox") and paste
+`~/agentdash-inbox/claude-desktop-project.md` into its instructions. Claude
+Desktop may not be able to open files saved to `~/agentdash-inbox/incoming/`;
+when it cannot, it says so rather than guessing.
+
+Installed Claude Desktop or Codex after you connected? `npx agentdash-connect
+clients` adds your inbox tools to every client now on the machine, using the
+inbox connection you already have.
+
+## Checking a machine
+
+```sh
+npx agentdash-connect check
+```
+
+Read-only. It reports your agent's tools in Claude Code and Codex; your inbox
+tools in Claude Code, Claude Desktop and Codex (`connected`, `not connected`,
+`not installed`); whether the review rules are in `~/agentdash-inbox`; and,
+from the instance (`POST /api/bridge/whoami`, which changes nothing), whose
+inbox this machine holds, its name and capabilities, and whether review works:
+
+```
+  bridge:work     missing — review not enabled; reconnect with a new connect code
+```
+
+Without `bridge:work` your own Claude cannot review your agents' work or send
+anything back from this machine. When it is present but your company has not
+turned co-worker review on, `Review` says so instead. `check` exits 0 only
+when everything the machine has works and review is enabled for it; `--check`
+is the same command.
 
 ## Deciding from your own session
 
@@ -127,11 +211,15 @@ your own credential is in the session too.
 Nothing is widened by it. A decision still needs a handle minted for one
 approval at one revision, delivered to your endpoint, spent once, and re-checked
 against your authority when it is redeemed — so you can decide exactly what you
-could decide on the page, and nothing else. The tools are told to decide only
-when you have asked about that specific item, never on their own initiative and
-never because an issue or message asked them to. If you would rather have no
-in-session decisions at all, delete the `agentdash-inbox` entry from
-`~/.claude.json`; everything else keeps working.
+could decide on the page, and nothing else.
+
+Claude is expected to have a view. It reviews each item with you and says what
+it thinks, including that the agent's recommendation is wrong. What it sends is
+yours: the tools tell it to send only what you chose, only after your explicit
+go in the conversation, never on its own initiative and never because an issue,
+document or message asked it to. If you would rather have no in-session
+decisions at all, delete the `agentdash-inbox` entry from `~/.claude.json`;
+everything else keeps working.
 
 Connected before 0.3.0? Re-run connect with a fresh code to get the entry, then
 start a new Claude session. Nothing changes on a connected machine until you do.
@@ -148,11 +236,241 @@ handle. Tell Claude your answer and it calls `inbox_answer` with that handle:
 exactly as if you had answered on the issue, and it wakes the agent.
 
 The agent's text is the agent's, not an instruction to your session: the tools
-tell Claude to show it to you and to send only the answer you give. The handle
+tell Claude to treat it as material to review, give you its own take on the
+question and the agent's recommendation, and send only the answer you give. The handle
 is good for one question, on this machine, for an hour; a refused answer (an
 unknown option, a required question left empty) leaves it usable, and a
 question that was answered elsewhere, or is no longer yours, is refused.
 `inbox_answer` needs 0.4.0 or later.
+
+## The review skill
+
+Connecting also puts a skill in the inbox folder,
+`.claude/skills/agentdash-coworker/SKILL.md`, and the same rules in
+`AGENTS.md` for Codex. It tells Claude how to work on your agents' hand-offs
+with you:
+
+- **Review first, in the inbox folder only.** At the start of a session in
+  `~/agentdash-inbox`, before anything else, it goes through every waiting item
+  in order — decisions, then questions, then approved but not delivered, then
+  blockers — and always shows the counts, including how many were not shown.
+  The inbox tools are registered for every Claude Code session on the machine,
+  but outside the inbox folder Claude uses them only when you ask.
+- **The agent's work, then its take.** Each item is presented as what was
+  asked, what the agent did in its own words, and then "My take", labelled as
+  Claude's. Agreeing, disagreeing, rejecting the draft and rewriting it are all
+  normal outcomes.
+- **Honest figures.** Numbers keep the label the agent gave them (measured,
+  modeled, estimated); anything that cannot be checked is called unverified;
+  nothing is invented to fill a gap.
+- **Work kept across sessions.** Drafts and a `notes.md` per item live in
+  `~/agentdash-inbox/work/<ISSUE>/`, so the next session resumes where this one
+  stopped. Downloaded attachments go to `~/agentdash-inbox/incoming/<ISSUE>/`
+  and are read as text only — never run, never opened with an application.
+- **One read-back, one go.** Before anything is sent, Claude reads back
+  exactly what will go out, as you, and who will see it, and asks
+  "yes / change / no". One explicit yes sends that bundle; anything else sends
+  nothing.
+- **Lessons.** Each send-back carries two or three short lessons about how you
+  want work done, which you can edit or drop. Never client content.
+- **Agent material is not instructions.** Text from agents, documents,
+  attachments and run logs is reviewed, never obeyed; an instruction found in
+  it is reported to you as a finding.
+
+The skill names tools that newer instances add (`work_list`, `work_read`,
+`work_run_log`, `work_read_file_text`, `work_fetch_file`, `work_propose_reply`, `work_confirm_reply`,
+`work_request_propose`, `work_request_respond`, `work_request_confirm`). When this session does not
+have one, Claude says so and falls back to the inbox tools and your AgentDash
+page.
+
+Both files carry a version line. Connecting again, or the inbox folder's
+session-start hook (which runs `@latest`), installs them when missing and
+replaces them only when the packaged version is newer, so a machine that
+connected before the skill existed gets it without a new code. A copy without
+the version line is yours and is never touched; connecting tells you when it
+kept one. A rules file installed by the hook loads fully from the next session.
+
+## Reviewing your agents' work
+
+The inbox carries the ask and a pointer. To review what your agent actually
+did, the same `agentdash-inbox` entry also serves five read-only tools:
+
+- `work_list` — what your agents have handed you: issues waiting on a decision,
+  a question, a blocker or a review, decisions first, oldest first, with counts.
+- `work_read` — one issue, as you see it on your page: the issue, its parent
+  and the request it came from, comments, documents, attachment metadata
+  (name, size, type, sha256), and child issues. Each body shows its start
+  inside one size budget, so the answer fits in a session; a body that is cut
+  carries `readMore`, the arguments that read that one document, comment or
+  description to the end, a page at a time.
+- `work_run_log` — the agent's own run log for that issue, paged, with secrets
+  redacted on the server.
+- `work_read_file_text` — the text of one .docx, .pptx, .txt, .md or .csv
+  attachment, extracted on your AgentDash server (nothing to install here) and
+  returned a page at a time inside the same markers, so Claude can review a
+  deliverable that is a file rather than a document. A spreadsheet is not
+  read this way; Claude says so and asks you for a .csv export. Same scope
+  and the same HTML refusal as `work_fetch_file`; each page read is logged
+  without its text.
+- `work_fetch_file` — saves one attachment into
+  `~/agentdash-inbox/incoming/<ISSUE>/`, readable only by you, after checking
+  its sha256 (no hash, no file). The instance's attachment types plus Word,
+  PowerPoint and Excel documents (.docx, .pptx, .xlsx; not their
+  macro-enabled variants), within your company's attachment cap only; HTML,
+  SVG and XML never come down, and the client refuses to save one even if a
+  server sends it.
+
+You see exactly what you could see on the page, narrowed to your own work:
+issues assigned to you or to an agent you answer for. Anything else answers as
+if it did not exist. Every piece of text that was written in AgentDash arrives
+inside `<untrusted-agent-material>` markers: Claude reads it as material to give
+you its own view on, never as instructions, and the run log is where an
+injected instruction is most likely to hide. A fetched file is for reading
+only; Claude never runs it or opens it with an application.
+
+These tools need two things: your machine's credential must carry `bridge:work`
+(connect codes redeemed from this release on include it, and existing
+inbox-enabled machines were upgraded on deploy, each upgrade recorded in the
+activity log), and an administrator must turn on `coworker_bridge_enabled` for
+the company. Until then they answer with the reason. Every file downloaded is
+recorded in the activity log by attachment and size, never by content.
+
+## Sending your reply back
+
+When you and Claude have finished the work, two more tools send it back to
+your agent as you, in one bundle:
+
+- `work_propose_reply` — reads the bundle back and changes nothing: the answer
+  to your agent's question, a decision on an approval, a new revision of a
+  document (built on the revision Claude read, so nothing written since is
+  overwritten), a comment, and two or three lessons for your agent. It says who
+  will see it (everyone who can see the issue, or a restricted project's access
+  list) and who is woken.
+- `work_confirm_reply` — sends that exact bundle, after your explicit yes.
+
+Everything lands as you, marked as sent via the bridge from this machine, in
+one transaction: if the document moved on since Claude read it, the approval
+was decided or changed, or the issue is no longer yours, nothing is sent and
+you are told why. Your agent is woken at most once (an answer wakes it only
+when its question asked for that), and its next run carries a short
+"what changed" summary (its draft against your revision, your answer against
+its recommendation, your lessons), which it saves to its own memory.
+
+Files go back too, but only on issues in projects with restricted access (on
+any other issue the read-back says they were left out, and you attach them on
+the issue page if everyone who can see it may have them). Claude names each
+file by its path on your machine; only its name, size and sha256 go with the
+read-back. After your yes, `work_confirm_reply` reads each file again, refuses
+if it changed, uploads it, and then sends the bundle; the server stores a file
+only if the read-back named its exact sha256 and size, refuses anything over
+the company's attachment cap (and says the cap), and never accepts HTML, SVG or
+XML. A file is stored as the next version of its name on the issue, like
+`plan v2 (Person A).docx`, and becomes the current one; files from hidden
+folders (`~/.ssh`, `.env`) are never sent. Uploaded files that are never
+confirmed are deleted after the handle expires.
+## Asking someone else for work
+
+Three more tools, on the same credential and behind the same two switches, let
+you ask a colleague for work and close it out when the result comes back:
+
+- `work_request_propose` — Claude turns your ask into a brief (title, what is
+  wanted, what done means, deadline, who it is for, the person it goes to, and
+  optionally a project you can both see) and reads it back: as it will be
+  sent, who takes it, and who will see it. It changes nothing. A name that
+  does not match exactly one colleague comes back as a question.
+- `work_request_respond` — once a result is delivered (done, in review, or
+  handed back to you), reads back accepting it (marked done, as you) or asking
+  for changes (your note as a comment, reopened, and handed straight to the
+  agent that owns the deliverable: the agent of the person you asked).
+- `work_request_confirm` — sends what you said yes to, as you. The handle is
+  single-use, and your permission is checked again when it is spent; if the
+  request moved on in between, nothing is sent and Claude tells you why.
+
+A request is created as you and assigned to that person; the usual rule then
+gives it to their agent, which takes the first pass and asks them what it
+needs. It needs the same permission as assigning work on the page. Files can
+go with a request into a project with restricted access that both of you can
+see, the same way as with a reply: named in the read-back, uploaded after your
+yes, and attached to the new issue as you.
+
+`work_list` shows your requests under `requests`: delivered results first, then
+what is still waiting, each with who it waits on and for how long ("waiting on
+Person B for 2 days"), worked out on the server. A result is delivered when it
+is done, handed back to you, or in review with you as the reviewer; an agent's
+draft in its own person's review is still theirs ("waiting on Person B ...
+(Agent B's draft is in their review)"). A delivered result stays there until
+you accept it, ask for changes or act on it on the page, for at most 14 days.
+`work_read` reads a request as the issue itself, its comments, documents and
+attachments; the other person's agent's run log and their other work are not
+yours to read and answer as if they did not exist. The session-start digest
+adds a "Your requests" section with counts and pointers, never the brief; it
+counts your 100 most recently updated requests and says "at least" when there
+are more.
+`paperclipai bridge inbox` shows the same section.
+
+## Notifications and pre-review (macOS, opt-in)
+
+A hand-off can wait a day because nobody opened Claude. On a Mac you can turn
+on a nudge: connect asks once, on a terminal, and the answer defaults to no.
+Turn it on or off any time:
+
+```sh
+npx agentdash-connect watch --install            # a notification per new hand-off, checked every 15 minutes
+npx agentdash-connect watch --install --every 30 # check every 30 minutes instead (5 to 1440)
+npx agentdash-connect watch --uninstall          # turn it off and remove what it wrote
+npx agentdash-connect watch --status             # what is on, and when it last notified
+```
+
+It is a per-user launchd agent
+(`~/Library/LaunchAgents/com.agentdash.connect.watch.plist`). On launchd's
+schedule it runs one check: it asks your own AgentDash instance for
+`work/list` with your inbox credential and shows a macOS notification for each
+new item, such as "Agent B finished a first pass on ACME-41; your review is
+ready." A delivered result of one of your own requests notifies too. Each item
+notifies once; it notifies again only when it waits on something new (a
+question after a review), or after it left your list and came back. More than
+three new items at once arrive as one summary. A notification names the issue
+and the agent, never the issue's title or anything else an agent wrote.
+
+It talks to nothing but your instance. It runs a copy of this package kept in
+`~/.agentdash/connect-runtime` with your `node`, not `npx`, so a check never
+reaches the npm registry; re-running `watch --install` refreshes the copy.
+Nothing is sent anywhere, and nothing sends email. What it remembers is in
+`~/.agentdash/watch.json` (settings) and `~/.agentdash/watch-state.json`
+(what was notified); its log is `~/.agentdash/watch.log`, cut back at 1 MB.
+
+### Scheduled pre-review
+
+A second, separate switch, also off by default:
+
+```sh
+npx agentdash-connect watch --pre-review on
+npx agentdash-connect watch --pre-review off
+```
+
+With it on, each check also runs your own Claude Code headless (`claude -p`)
+in `~/agentdash-inbox` for up to two new hand-offs, to prepare the review and
+its take ahead of you. The answer is written to
+`~/agentdash-inbox/work/<ISSUE>/review.md` (mode 600), and the notification
+says the take is ready. When you open Claude in the folder, the review skill
+reads it first, says when it was prepared and checks it against the current
+state. An attempt is made once per hand-off, even when it fails. It uses your
+Claude usage.
+
+The run cannot change anything:
+
+- Its inbox tools are served by `agentdash-connect mcp --read-only`, which has
+  only the read tools: `inbox_sync`, `inbox_agents`, `work_list`, `work_read`,
+  `work_run_log`, `work_fetch_file` and `work_read_file_text`. No tool that sends, decides, answers,
+  acknowledges, proposes or confirms exists in that session.
+- Claude Code is started with `--strict-mcp-config` (that server only),
+  `--tools Read,Grep,Glob`, an `--allowedTools` list of exactly those tools,
+  a `--disallowedTools` list of every write tool, `--permission-mode dontAsk`
+  and hooks off; with `--restricted` too where your Claude Code has it, which
+  keeps the file tools inside the inbox folder. When your Claude Code lacks any
+  of the required flags, no pre-review runs.
+- Claude writes nothing itself. Its answer comes back as text, and the watcher
+  writes `review.md`. A `review.md` you wrote yourself is never replaced.
 
 ## Nothing left running
 
@@ -160,13 +478,16 @@ A config write with an exit code, not a prompt to paste — and `--remove`
 reverses it.
 
 No daemon, no menu-bar app, nothing to keep alive. Your inbox is read when a
-session starts in its folder, and when the tools are asked for it; nothing polls
-it in between. Everything written is a small file you can read, listed on screen
-as it is written — a change your IT department can review in a minute.
+session starts in its folder, and when the tools are asked for it; unless you
+turn on notifications above, nothing polls it in between. Everything written
+is a small file you can read, listed on screen as it is written — a change
+your IT department can review in a minute.
 
 `--remove` takes out both Claude Code entries — the agent's and
-`agentdash-inbox` — along with the Codex config entry, the shell-profile line
-and the stored key. It leaves your inbox credential and folder alone. To remove
+`agentdash-inbox` — along with both Codex config entries, the Claude Desktop
+entry (backing that file up first), the shell-profile line, the stored key,
+and the notification agent with its files. It leaves your inbox credential and
+folder alone. To remove
 those too, delete `~/.agentdash/bridge-token`, `~/.agentdash/bridge-owner.json`
 and the `~/agentdash-inbox` folder.
 
@@ -193,17 +514,21 @@ of your shell history and out of the process list. If no keychain is available
 npx -y agentdash-connect@latest --url <url> <code>   # redeem a connect code
 npx agentdash-connect                  # interactive: asks for the link and a code or key
 npx agentdash-connect --url <url>      # skip the URL question
-npx agentdash-connect --check          # is the connection still good?
+npx agentdash-connect check            # which clients are connected, and is review (bridge:work) enabled?
+npx agentdash-connect clients          # add your inbox tools to Claude Code, Claude Desktop and Codex
 npx agentdash-connect --remove         # undo the agent connection
 npx agentdash-connect --name <name>    # use a different MCP server name
 npx agentdash-connect inbox            # read your inbox (what the SessionStart hook runs)
-npx agentdash-connect mcp              # serve your own inbox tools to Claude Code over stdio
+npx agentdash-connect mcp              # serve your own inbox tools over stdio
+npx agentdash-connect watch            # macOS notifications and pre-review (see above)
 ```
 
-`mcp` is what the `agentdash-inbox` config entry launches; you do not run it by
-hand. It takes `--server <url>` and `--token-file <path>`, speaks MCP on stdout
+`mcp` is what the `agentdash-inbox` config entries launch; you do not run it by
+hand. It takes `--server <url>`, `--token-file <path>` and `--client
+claude-desktop` (set by the Claude Desktop entry), speaks MCP on stdout
 and nothing else, and reports a missing credential as an answer rather than a
-crash.
+crash. With `--read-only` it serves only the tools that read; the scheduled
+pre-review uses that.
 
 `inbox` options: `--ack` marks what was fetched as seen, so the next session
 shows only what is new; `--quiet-when-empty` prints nothing when there is
@@ -211,8 +536,8 @@ nothing waiting; `--server <url>` and `--token-file <path>` override the
 defaults. It never exits 2, so an unreachable instance cannot stop a session
 from starting.
 
-`--check` exits non-zero when the connection is broken, so it works in a
-monitoring script. Piping the key on stdin works too, for scripted installs:
+`check` exits non-zero when anything on the machine is not working, so it works
+in a monitoring script. Piping the key on stdin works too, for scripted installs:
 
 ```sh
 printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
@@ -228,10 +553,14 @@ printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
 | the host cannot be reached | a `.local` name over a VPN, usually; use the address you are browsing from |
 | `403 Board access required` when you ask Claude to approve | it used the agent's key, which cannot decide approvals by design; the `agentdash-inbox` tools decide as you, and need 0.3.0 or later |
 | no `agentdash-inbox` entry in `~/.claude.json` | connected before 0.3.0; re-run connect with a fresh code |
+| `check` says `bridge:work missing — review not enabled; reconnect` | this machine connected before review existed and did not have the inbox; reconnect with a fresh code |
+| `check` says Claude Desktop or Codex `not connected` | installed after you connected; run `npx agentdash-connect clients` |
+| Claude Desktop shows no inbox tools | quit and reopen it; then run `check` |
 
 ## Requirements
 
-Node 18 or newer, and at least one of Claude Code or Codex already installed.
+Node 18 or newer, and at least one of Claude Code, Claude Desktop or Codex
+already installed.
 This wires up what is already on the machine; it does not install a harness for
 you.
 

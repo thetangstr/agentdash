@@ -349,6 +349,13 @@ export interface ServerAdapterModule {
   sessionCodec?: AdapterSessionCodec;
   sessionManagement?: import("./session-compaction.js").AdapterSessionManagement;
   supportsLocalAgentJwt?: boolean;
+  /**
+   * AgentDash (learning loop): true when this adapter puts the wake payload's
+   * corrections (the "What changed" section) into the prompt it sends. The
+   * heartbeat hands an agent its waiting corrections only for such an
+   * adapter, so a run that cannot show them never uses them up.
+   */
+  rendersAgentCorrections?: boolean;
   models?: AdapterModel[];
   listModels?: () => Promise<AdapterModel[]>;
   modelProfiles?: AdapterModelProfileDefinition[];

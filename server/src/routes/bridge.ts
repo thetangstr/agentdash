@@ -1,5 +1,6 @@
 import { Router } from "express";
-import type { Request } from "express";
+import type { Request, Response } from "express";
+import multer from "multer";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
@@ -11,6 +12,12 @@ import { stewardInboxService } from "../services/steward-inbox.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
 import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
 import { stewardInboxAnswerService } from "../services/steward-inbox-answers.js";
+import { stewardWorkService } from "../services/steward-work.js";
+import { stewardWorkReplyService } from "../services/steward-work-reply.js";
+import { stewardRequestsService } from "../services/steward-requests.js";
+import { BRIDGE_HANDLE_HEADER, bridgeStagedFilesService } from "../services/bridge-staged-files.js";
+import { bridgeEndpointSelfService } from "../services/bridge-endpoint-self.js";
+import type { StorageService } from "../storage/types.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { BRIDGE_TASK_CLASSES, bridgeService } from "../services/bridge.js";
@@ -66,6 +73,13 @@ export function bridgeRoutes(
     autoDispatchQueuedRuns?: boolean;
     /** Substituted in tests to observe the wake an answer queues. */
     heartbeat?: Pick<ReturnType<typeof heartbeatService>, "wakeup">;
+    /** Where attachment bytes live; `/bridge/work/file` reads through it. */
+    storage?: StorageService;
+    /**
+     * Substituted in tests to observe the wakes and run effects of a request
+     * created or closed out from the bridge (steward-requests.ts).
+     */
+    issueRuntime?: Pick<ReturnType<typeof heartbeatService>, "wakeup" | "cancelRun" | "reportRunActivity">;
   } = {},
 ) {
   const router = Router();
@@ -80,6 +94,28 @@ export function bridgeRoutes(
   });
   const inboxActions = stewardInboxActionsService(db, { heartbeat });
   const inboxAnswers = stewardInboxAnswerService(db, { heartbeat: options.heartbeat ?? heartbeat });
+  const work = stewardWorkService(db, {
+    storage: options.storage,
+    readRunLog: (run, opts) => heartbeat.readLog(run, opts),
+  });
+  const workReply = stewardWorkReplyService(db, {
+    heartbeat: options.heartbeat ?? heartbeat,
+    storage: options.storage,
+    pluginWorkerManager: options.pluginWorkerManager,
+    autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
+  });
+  const requests = stewardRequestsService(db, { runtime: options.issueRuntime ?? heartbeat });
+  const stagedFiles = bridgeStagedFilesService(db, { storage: options.storage });
+  const endpointSelf = bridgeEndpointSelfService(db);
+
+  /** One multipart file into memory, at most `limit` bytes; the existing upload path's shape. */
+  async function singleFile(req: Request, res: Response, limit: number) {
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: limit, files: 1, fields: 4 } });
+    await new Promise<void>((resolve, reject) => {
+      upload.single("file")(req, res, (err: unknown) => (err ? reject(err) : resolve()));
+    });
+    return (req as Request & { file?: { buffer: Buffer } }).file ?? null;
+  }
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -142,6 +178,17 @@ export function bridgeRoutes(
   });
 
   /**
+   * This machine, described to itself: whose inbox it reads, its label and
+   * capabilities, and whether the company has co-worker review on. What
+   * `agentdash-connect check` asks. Moves no cursor and mints no handle,
+   * unlike a sync, so a check never changes anything.
+   */
+  router.post("/bridge/whoami", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    res.json(await endpointSelf.describe(endpointId));
+  });
+
+  /**
    * Read everything this machine has not acknowledged.
    *
    * Separate from `/bridge/poll` on purpose. A poll CLAIMS one task and hands
@@ -166,6 +213,15 @@ export function bridgeRoutes(
     // making it the default would spend most of its cost on nobody looking.
     const includeDigest = req.body?.includeDigest === true;
     const result = await inbox.syncForEndpoint(endpointId, { limit, includeDigest });
+    // The person's requests of others, as counts and pointers: only for an
+    // endpoint with `bridge:work` in a company with the co-worker flag on.
+    if (result.digest) {
+      const yourRequests = await requests.digestSection(endpointId);
+      if (yourRequests) {
+        res.json({ ...result, digest: { ...result.digest, requests: yourRequests } });
+        return;
+      }
+    }
     res.json(result);
   });
 
@@ -289,6 +345,261 @@ export function bridgeRoutes(
         ...(answers ? { answers } : {}),
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Endpoint-facing: the person's own Claude reviews their agents' work.
+  // Needs `bridge:work` and the company's coworker_bridge_enabled flag; reads
+  // exactly what the owner sees on the page, narrowed to their own work, with
+  // every agent-written field framed. See services/steward-work.ts.
+  // -------------------------------------------------------------------------
+
+  /**
+   * What the owner's agents handed them: decisions, questions, blockers,
+   * reviews. Beside them, `requests`: the work the owner asked other people
+   * for, delivered results first (steward-requests.ts).
+   */
+  router.post("/bridge/work/list", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const handoffs = await work.list(endpointId, { limit: req.body?.limit });
+    if (handoffs.ok === false) {
+      res.json(handoffs);
+      return;
+    }
+    const yourRequests = await requests.list(endpointId, { limit: req.body?.limit });
+    res.json(yourRequests && "ok" in yourRequests ? handoffs : { ...handoffs, requests: yourRequests });
+  });
+
+  /**
+   * One hand-off: the issue, its parent and the request it came from,
+   * comments, documents, attachment metadata, and child issues, each body
+   * cut to its start inside one size budget. One body in full is a focused
+   * read: `documentKey`, `commentId` or `section: "description"`, paged by
+   * `offset`.
+   */
+  router.post("/bridge/work/read", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(
+      await work.read(endpointId, {
+        issueId: body.issueId,
+        documentKey: body.documentKey,
+        commentId: body.commentId,
+        section: body.section,
+        offset: body.offset,
+        commentLimit: body.commentLimit,
+      }),
+    );
+  });
+
+  /**
+   * The agent's run log for runs on that issue, newest run unless `runId` is
+   * given, paged by byte `offset`. Redacted for secrets and framed: the
+   * highest-volume injection surface the bridge carries.
+   */
+  router.post("/bridge/work/run-log", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(await work.runLog(endpointId, { issueId: body.issueId, runId: body.runId, offset: body.offset }));
+  });
+
+  /**
+   * One attachment's bytes. Allowlisted types only, never HTML or SVG, at
+   * most the company attachment cap, `nosniff`, and always as a download.
+   * A refusal is JSON `{ ok: false, reason }`; the bytes carry
+   * `x-agentdash-file: attachment`, which is how a client tells them apart.
+   */
+  router.post("/bridge/work/file", async (req, res, next) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const attachmentId = req.body?.attachmentId;
+    if (typeof attachmentId !== "string" || !attachmentId.trim()) throw badRequest("attachmentId is required");
+    const result = await work.file(endpointId, { attachmentId });
+    if (!result.ok) {
+      res.json(result);
+      return;
+    }
+    const filename = result.filename.replace(/[\u0000-\u001f\u007f"\\/]/g, "_") || "attachment";
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Content-Length", String(result.byteSize));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader("x-agentdash-file", "attachment");
+    res.setHeader("x-agentdash-attachment-id", result.attachmentId);
+    res.setHeader("x-agentdash-sha256", result.sha256);
+    if (result.identifier) res.setHeader("x-agentdash-issue", result.identifier);
+    // Versioned files (co-worker slice 5): which version this is, and whether
+    // it is the issue's current file for its name.
+    if (result.version !== null) res.setHeader("x-agentdash-version", String(result.version));
+    res.setHeader("x-agentdash-current", result.isCurrent ? "true" : "false");
+    if (!result.isCurrent) res.setHeader("x-agentdash-current-attachment-id", result.currentAttachmentId);
+    result.stream.on("error", (err) => next(err));
+    result.stream.pipe(res);
+  });
+
+  /**
+   * One page of an attachment's text, extracted on the server: how the
+   * person's own session reads a .docx, .pptx or text deliverable. Same scope
+   * and markup refusal as `/bridge/work/file`; the text is framed as untrusted
+   * agent material and paged by character `offset` (pass `nextOffset` back).
+   * A file whose text is not read answers `{ ok: false, code, reason, file }`
+   * (`spreadsheet_not_supported`, `content_unsupported`, `file_refused`, ...).
+   */
+  router.post("/bridge/work/file-text", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.attachmentId !== "string" || !body.attachmentId.trim()) throw badRequest("attachmentId is required");
+    if (body.offset !== undefined && !(Number.isSafeInteger(body.offset) && body.offset >= 0)) {
+      throw badRequest("offset must be a whole number of characters, 0 or more");
+    }
+    res.json(await work.fileText(endpointId, { attachmentId: body.attachmentId, offset: body.offset }));
+  });
+
+  // -------------------------------------------------------------------------
+  // Endpoint-facing: the send-back. What the person approved goes back to
+  // their agent as one bundle, as them. Same gates as the reads, plus a
+  // single-use `reply` handle over the exact bundle. See
+  // services/steward-work-reply.ts.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read the bundle back and mint a handle for it. Nothing is written: the
+   * answer is the read-back the person says yes to, and who will see it.
+   * Refusals answer 200 `{ ok: false, code, reason }`.
+   */
+  router.post("/bridge/work/propose", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(
+      await workReply.propose(endpointId, {
+        issueId: body.issueId,
+        answer: body.answer,
+        decision: body.decision,
+        document: body.document,
+        comment: body.comment,
+        lessons: body.lessons,
+        files: body.files,
+      }),
+    );
+  });
+
+  /**
+   * Spend the handle and apply the bundle in one transaction, as the person.
+   * The handle authorises exactly the bundle it was minted over; the issue,
+   * the question, the document revision and the decision authority are
+   * re-checked now. Refusals answer 200 `{ ok: false, code, reason }` and
+   * write nothing.
+   */
+  router.post("/bridge/work/confirm", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const token = typeof req.body?.token === "string" ? req.body.token : null;
+    if (!token) throw badRequest("token is required");
+    res.json(await workReply.confirm(endpointId, token));
+  });
+
+  /**
+   * One file for a send-back or a request, after the person's yes and before
+   * the confirm (co-worker slice 5). The handle from work/propose or
+   * work/request goes in the `X-Bridge-Handle` header, and the multipart body
+   * carries `file`. The handle is checked before any bytes are read, and the
+   * body may be no larger than the largest file the handle names (never more
+   * than the company attachment cap). Stored only when the handle names this
+   * file's exact sha256 and size. Nothing is attached until the handle is
+   * confirmed, and what is never confirmed is swept after the handle expires.
+   * Refusals answer 200 `{ ok: false, code, reason }`.
+   */
+  router.post("/bridge/work/upload", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const token = req.get(BRIDGE_HANDLE_HEADER);
+    if (!token) throw badRequest(`the ${BRIDGE_HANDLE_HEADER} header is required`);
+    // The gates first (bridge:work, the flag, membership, a live handle), before any bytes are read.
+    const gate = await work.resolveOwner(endpointId);
+    if (work.isRefusal(gate)) {
+      res.json(gate);
+      return;
+    }
+    const limit = await stagedFiles.uploadLimit(endpointId, gate, token);
+    if (!limit.ok) {
+      res.json(limit);
+      return;
+    }
+    let file: { buffer: Buffer } | null;
+    try {
+      file = await singleFile(req, res, limit.maxBytes);
+    } catch (err) {
+      if (err instanceof multer.MulterError) {
+        res.json(
+          err.code !== "LIMIT_FILE_SIZE"
+            ? { ok: false, code: "bad_upload", reason: `The upload could not be read (${err.code}). Nothing was stored.` }
+            : limit.maxBytes < limit.cap
+              ? {
+                  ok: false,
+                  code: "file_not_in_handle",
+                  reason: `The file is larger than any file the read-back named (${limit.maxBytes.toLocaleString("en-US")} bytes at most). Only the exact files the person said yes to can be sent; if a file changed, propose again. Nothing was stored.`,
+                }
+              : {
+                  ok: false,
+                  code: "file_too_large",
+                  reason: `The file is over this company's attachment cap of ${limit.cap.toLocaleString("en-US")} bytes. Nothing was stored.`,
+                },
+        );
+        return;
+      }
+      throw err;
+    }
+    res.json(await stagedFiles.stage(endpointId, { token, file }));
+  });
+
+  // -------------------------------------------------------------------------
+  // Endpoint-facing: asking someone else for work, and closing it out.
+  // Same gates as the reads above. Each write is a single-use handle over
+  // the exact read-back, spent by `request/confirm` with the owner's
+  // authority re-checked. See services/steward-requests.ts.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read back a request for another person: the brief as it will be sent,
+   * who takes it (their agent, by the routing rule), and who will see it.
+   * Creates nothing. An unknown or ambiguous name mints no handle.
+   */
+  router.post("/bridge/work/request", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    res.json(await requests.propose(endpointId, req.body ?? {}));
+  });
+
+  /**
+   * Read back accepting a delivered result, or asking for changes (a comment
+   * as the owner, handed straight to the deliverable owner's agent). Changes
+   * nothing.
+   */
+  router.post("/bridge/work/request/respond", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const body = req.body ?? {};
+    if (typeof body.issueId !== "string" || !body.issueId.trim()) throw badRequest("issueId is required");
+    res.json(await requests.respond(endpointId, body));
+  });
+
+  /** Spend a request handle: create the request, accept the result, or send the changes. */
+  router.post("/bridge/work/request/confirm", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const token = typeof req.body?.token === "string" ? req.body.token : null;
+    if (!token) throw badRequest("token is required");
+    res.json(await requests.confirm(endpointId, token));
   });
 
   router.post("/bridge/result", async (req, res) => {

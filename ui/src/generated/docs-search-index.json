@@ -47,6 +47,8 @@
         "Run it",
         "What it does",
         "What it writes, and why there are two credentials",
+        "Claude Desktop",
+        "Installed a client later?",
         "Check it",
         "Undo"
       ],
@@ -192,7 +194,12 @@
       "headings": [
         "Acting on it",
         "Three rules",
+        "Claude reviews with you",
         "Questions from your agents",
+        "Reviewing what your agent did",
+        "Sending your reply back",
+        "Asking a colleague for work",
+        "A notification when work is handed to you (macOS)",
         "Email",
         "Optional: have your agent keep watch"
       ],
@@ -309,6 +316,7 @@
       "summary": "When agents hand work to each other, how the Chief of Staff triages, and what to check when work stalls",
       "headings": [
         "How work moves",
+        "Agents handing work to each other",
         "What you do",
         "When work stalls",
         "A task seems stuck"
@@ -437,6 +445,7 @@
         "Work and update",
         "Blocked",
         "Delegate",
+        "Handing work to another agent",
         "Confirmation pattern",
         "Plan approval",
         "Release",
@@ -1229,7 +1238,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 615 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 640e5dacbd9e; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 629 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 005c026bc571; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
@@ -1311,6 +1320,7 @@
         "getcomment",
         "listissueapprovals",
         "attachfile",
+        "readattachmenttext",
         "listdocuments",
         "getdocument",
         "listdocumentrevisions",
@@ -1373,7 +1383,7 @@
         "agentdashNarrowAgentCeilings",
         "agentdashGetAgentPolicy"
       ],
-      "firstParagraph": "76 tools — measured: the length of the tools/list response. Source: buildToolSurface(client, config, \"agent\") in packages/mcp-server/src/index.ts; the tools are defined in src/tools.ts, src/journey.ts and src/harness.ts, in that order."
+      "firstParagraph": "77 tools — measured: the length of the tools/list response. Source: buildToolSurface(client, config, \"agent\") in packages/mcp-server/src/index.ts; the tools are defined in src/tools.ts, src/journey.ts and src/harness.ts, in that order."
     },
     {
       "slug": "mcp/tools/setup",
@@ -1467,15 +1477,23 @@
         "Before you run it",
         "What it actually does",
         "The inbox",
+        "Claude Desktop and Codex",
+        "Checking a machine",
         "Deciding from your own session",
         "Answering your agents",
+        "The review skill",
+        "Reviewing your agents' work",
+        "Sending your reply back",
+        "Asking someone else for work",
+        "Notifications and pre-review (macOS, opt-in)",
+        "Scheduled pre-review",
         "Nothing left running",
         "Where the key goes",
         "Commands",
         "If it does not work",
         "Requirements"
       ],
-      "firstParagraph": "Connect the coding agent on your machine — Claude Code or Codex — to your AgentDash agent."
+      "firstParagraph": "Connect the coding agent on your machine — Claude Code or Codex — to your AgentDash agent, and put your own AgentDash inbox in Claude Code, Claude Desktop and Codex."
     },
     {
       "slug": "cli/agentdash-mcp",
