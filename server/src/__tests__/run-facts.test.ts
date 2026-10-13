@@ -7,6 +7,7 @@ import {
   normalizeWakeReason,
   resolveMeteringStatus,
   TOKEN_CEILING_PAUSED_WAKE_CLASSES,
+  WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
 } from "../services/run-facts.js";
 
 /**
@@ -69,15 +70,29 @@ describe("normalizeWakeReason", () => {
       normalizeWakeReason({
         invocationSource: "automation",
         triggerDetail: "system",
-        contextSnapshot: { wakeReason: "bridge_reply", source: "bridge.work.reply" },
+        contextSnapshot: { wakeReason: "bridge_reply", source: "bridge.work.reply", [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" },
       }),
     ).toBe("approval");
     for (const reason of ["bridge_reply", "changes_requested", "interaction_resolved"]) {
-      const wakeClass = normalizeWakeReason({ invocationSource: "automation", contextSnapshot: { wakeReason: reason } });
+      const wakeClass = normalizeWakeReason({
+        invocationSource: "automation",
+        contextSnapshot: { wakeReason: reason, [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" },
+      });
       expect(wakeClass, reason).toBe("approval");
       expect(TOKEN_CEILING_PAUSED_WAKE_CLASSES.has(wakeClass), reason).toBe(false);
     }
     expect(Object.values(DELIBERATE_PERSON_WAKE_REASONS).sort()).toEqual(["bridge_reply", "changes_requested", "interaction_resolved"]);
+  });
+
+  it("classes a person-only reason as a comment unless a person requested the wake", () => {
+    // POST /agents/:id/wakeup lets an agent pass any reason for its own wake.
+    for (const reason of ["bridge_reply", "changes_requested", "interaction_resolved"]) {
+      for (const requester of ["agent", "system", undefined]) {
+        const contextSnapshot: Record<string, unknown> = { wakeReason: reason };
+        if (requester) contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = requester;
+        expect(normalizeWakeReason({ invocationSource: "on_demand", contextSnapshot }), `${reason}/${requester}`).toBe("comment");
+      }
+    }
   });
 
   it("keeps plain comments, from people and agents alike, as comment wakes the ceiling pauses", () => {

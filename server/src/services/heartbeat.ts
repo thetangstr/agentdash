@@ -135,6 +135,7 @@ import {
   livenessStateToOutcome,
   normalizeWakeReason,
   TOKEN_CEILING_PAUSED_WAKE_CLASSES,
+  WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
   resolveMeteringStatus,
 } from "./run-facts.js";
 import {
@@ -9245,6 +9246,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // the exhausted recovery budget treats it as automatic, not as a person.
     // Never trusted from the caller's context: only the wake's own actor.
     delete contextSnapshot[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
+    // Who asked for this wake, from the wake's own actor only — run-facts.ts
+    // reads it so a person-only wake reason claimed by an agent is not
+    // classed as a person's (and so is not let past the token ceiling).
+    delete contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY];
+    if (opts.requestedByActorType) {
+      contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = opts.requestedByActorType;
+    }
     if (opts.requestedByActorType === "user") {
       const actorSource = opts.requestedByActorSource !== undefined
         ? opts.requestedByActorSource

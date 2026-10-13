@@ -40,6 +40,18 @@ export const DELIBERATE_PERSON_WAKE_REASONS = {
 } as const;
 
 /**
+ * Server-written `contextSnapshot` key naming who requested the wake ("user",
+ * "agent", "system"). enqueueWakeup stamps it from the wake's own actor and
+ * never takes it from the caller's context, so a reason in
+ * DELIBERATE_PERSON_WAKE_REASONS only counts as a person's when a person
+ * actually asked for the wake (POST /agents/:id/wakeup lets an agent pass
+ * any `reason` for its own wake).
+ */
+export const WAKE_REQUESTED_BY_ACTOR_TYPE_KEY = "wakeRequestedByActorType";
+
+const DELIBERATE_PERSON_WAKE_REASON_SET: ReadonlySet<string> = new Set(Object.values(DELIBERATE_PERSON_WAKE_REASONS));
+
+/**
  * The wake classes the daily token ceiling pauses: the unattended spend
  * (routine timer wakes and comment wakes). Everything else a person aimed at
  * the agent, plus retries and automation, still runs (heartbeat.ts).
@@ -106,6 +118,15 @@ export function normalizeWakeReason(input: {
   contextSnapshot?: Record<string, unknown> | null;
 }): RunFactWakeReason {
   const contextReason = readString(input.contextSnapshot?.wakeReason);
+  if (contextReason && DELIBERATE_PERSON_WAKE_REASON_SET.has(contextReason)) {
+    // A person's own answer to the agent — only when a person asked for the
+    // wake. Anyone else claiming the reason (an agent waking itself, or a
+    // run with no recorded requester) is read as the comment wake these
+    // replaced, which the ceiling pauses: fail closed.
+    return readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]) === "user"
+      ? WAKE_REASON_BY_CONTEXT_REASON[contextReason]!
+      : "comment";
+  }
   if (contextReason) {
     const mapped = WAKE_REASON_BY_CONTEXT_REASON[contextReason];
     if (mapped) return mapped;

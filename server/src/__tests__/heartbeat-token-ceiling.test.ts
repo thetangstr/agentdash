@@ -282,6 +282,42 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     expect(await skippedRequestsToday(agentId)).toHaveLength(0);
   });
 
+  it("skips an agent's self-wake that claims a person's reason over the ceiling", async () => {
+    const { companyId, agentId } = await seedAgent();
+    await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+    // POST /agents/:id/wakeup as the agent itself, verbatim from the route:
+    // the body's `reason` passes straight through.
+    const run = await heartbeat.wakeup(agentId, {
+      source: "on_demand",
+      triggerDetail: "manual",
+      reason: "bridge_reply",
+      payload: null,
+      requestedByActorType: "agent",
+      requestedByActorId: agentId,
+      contextSnapshot: { triggeredBy: "agent", actorId: agentId, forceFreshSession: false },
+    });
+    expect(run).toBeNull();
+    const skips = await skippedRequestsToday(agentId);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]!.reason).toBe("token_ceiling");
+
+    // Claiming a person as the requester in the context does not help: the
+    // heartbeat stamps the wake's own actor over it.
+    for (const reason of ["changes_requested", "interaction_resolved"]) {
+      const forged = await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason,
+        requestedByActorType: "agent",
+        requestedByActorId: agentId,
+        contextSnapshot: { wakeReason: reason, wakeRequestedByActorType: "user" },
+      });
+      expect(forged, reason).toBeNull();
+    }
+    expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+  });
+
   it("wakes the agent with a person's change request over the ceiling", async () => {
     const { companyId, agentId } = await seedAgent();
     await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
