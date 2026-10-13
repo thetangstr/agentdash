@@ -84,6 +84,8 @@ export AUTH="-H 'Cookie: <name>=<value>'"
 
 The DoD-guard is opt-in per-company via the `feature_flags` table (Phase A multi-tenant rollout — Architect-required revision).
 
+Changing a flag needs a company owner or admin session (or an instance admin). An agent key or a plain member gets `403`, and every change writes a `feature_flag.updated` activity row with the old and new value.
+
 ```sh
 curl -X PUT "$AGENTDASH_BASE/api/companies/$COMPANY_ID/feature-flags/dod_guard_enabled" \
   -H 'Content-Type: application/json' \

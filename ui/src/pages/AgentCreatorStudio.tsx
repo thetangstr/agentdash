@@ -309,7 +309,7 @@ function AvatarFlagsEmptyState() {
       </div>
       <p style={{ color: "var(--text-tertiary)", fontSize: "var(--text-xs)", marginTop: "var(--space-3)" }}>
         PUT /api/companies/&lt;companyId&gt;/feature-flags/&lt;flagKey&gt; with{" "}
-        <code>{`{ "enabled": true }`}</code>
+        <code>{`{ "enabled": true }`}</code> as a company owner or admin.
       </p>
     </div>
   );

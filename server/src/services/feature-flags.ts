@@ -16,18 +16,47 @@ export type FeatureFlagRow = typeof featureFlags.$inferSelect;
  * query directly rather than plumbing per-request memoization. Callers that
  * need batched lookups can wrap their own cache.
  *
- * Audit logging is intentionally skipped here: the activity_log action set
- * for goals-eval-hitl is enumerated in shared/constants.ts and does not
- * include a feature-flag-mutation action. Audit logging for flag changes
- * can be added under a future `feature_flag_changed` action.
+ * Writes from the HTTP route go through `change`, which returns the value it
+ * replaced so the route can record a `feature_flag.updated` activity row in
+ * the same transaction. `set` stays for internal callers that compose their
+ * own transaction.
  */
 export function featureFlagsService(db: Db) {
-  async function get(companyId: string, flagKey: string): Promise<FeatureFlagRow | null> {
-    return db
+  async function readFlag(executor: Db, companyId: string, flagKey: string): Promise<FeatureFlagRow | null> {
+    return executor
       .select()
       .from(featureFlags)
       .where(and(eq(featureFlags.companyId, companyId), eq(featureFlags.flagKey, flagKey)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function get(companyId: string, flagKey: string): Promise<FeatureFlagRow | null> {
+    return readFlag(db, companyId, flagKey);
+  }
+
+  async function upsert(executor: Db, companyId: string, flagKey: string, enabled: boolean): Promise<FeatureFlagRow> {
+    const now = new Date();
+    const inserted = await executor
+      .insert(featureFlags)
+      .values({
+        companyId,
+        flagKey,
+        enabled,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [featureFlags.companyId, featureFlags.flagKey],
+        set: {
+          enabled,
+          updatedAt: now,
+        },
+      })
+      .returning();
+    return inserted[0]!;
+  }
+
+  function lockCompany(executor: Db, companyId: string) {
+    return executor.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
   }
 
   return {
@@ -46,29 +75,33 @@ export function featureFlagsService(db: Db) {
     ): Promise<FeatureFlagRow> => {
       const write = async (executor: Db) => {
         if (flagKey === "dod_guard_enabled") {
-          await executor.select({ id: companies.id }).from(companies).where(eq(companies.id, companyId)).for("no key update");
+          await lockCompany(executor, companyId);
         }
-        const now = new Date();
-        const inserted = await executor
-          .insert(featureFlags)
-          .values({
-            companyId,
-            flagKey,
-            enabled,
-            updatedAt: now,
-          })
-          .onConflictDoUpdate({
-            target: [featureFlags.companyId, featureFlags.flagKey],
-            set: {
-              enabled,
-              updatedAt: now,
-            },
-          })
-          .returning();
-        return inserted[0]!;
+        return upsert(executor, companyId, flagKey, enabled);
       };
       if (acceptance !== undefined) { assertActivityAcceptance(acceptance); return write(acceptance.executor); }
       return flagKey === "dod_guard_enabled" ? db.transaction(tx => write(tx as unknown as Db)) : write(db);
+    },
+
+    /**
+     * Upsert on the caller's transaction and return the value it replaced
+     * (`null` when the flag had never been set). The company row is locked
+     * first — the same per-company lock `set` takes for the DoD guard — so two
+     * concurrent changes to one company's flags serialize and each records the
+     * value it actually replaced.
+     */
+    change: async (
+      companyId: string,
+      flagKey: string,
+      enabled: boolean,
+      acceptance: ActivityAcceptance,
+    ): Promise<{ row: FeatureFlagRow; previousEnabled: boolean | null }> => {
+      assertActivityAcceptance(acceptance);
+      const executor = acceptance.executor;
+      await lockCompany(executor, companyId);
+      const previous = await readFlag(executor, companyId, flagKey);
+      const row = await upsert(executor, companyId, flagKey, enabled);
+      return { row, previousEnabled: previous ? previous.enabled : null };
     },
 
     listForCompany: async (companyId: string): Promise<FeatureFlagRow[]> => {
