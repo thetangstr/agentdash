@@ -360,6 +360,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "execution_workspace.runtime_start",
   "execution_workspace.runtime_stop",
   "execution_workspace.updated",
+  "feature_flag.updated",
   "finance_event.reported",
   "github_connection.connected",
   "github_connection.credential_issued",
@@ -793,6 +794,16 @@ describe("hosted activity gaps", () => {
     };
     expect(formatActivityVerb("issue.updated", details)).toBe("updated references on");
     expect(formatIssueActivityAction("issue.updated", details)).toContain("updated the references");
+  });
+
+  it("names the feature flag and which way it was turned", () => {
+    expect(formatActivityVerb("feature_flag.updated", { flagKey: "coworker_bridge_enabled", enabled: true, previousEnabled: false })).toBe(
+      "turned on the coworker bridge enabled feature flag",
+    );
+    expect(formatActivityVerb("feature_flag.updated", { flagKey: "dod_guard_enabled", enabled: false, previousEnabled: null })).toBe(
+      "turned off the dod guard enabled feature flag",
+    );
+    expect(formatActivityVerb("feature_flag.updated", null)).toBe("changed a feature flag");
   });
 
   it("says what changed on the company, not just 'updated company'", () => {

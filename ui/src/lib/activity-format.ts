@@ -175,6 +175,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "execution_workspace.runtime_start": "started a workspace command on",
   "execution_workspace.runtime_stop": "stopped a workspace command on",
   "execution_workspace.updated": "updated a workspace",
+  "feature_flag.updated": "changed a feature flag",
   "finance_event.reported": "recorded a charge",
   "github_connection.connected": "connected GitHub",
   "github_connection.credential_issued": "issued a GitHub credential",
@@ -653,6 +654,13 @@ function formatCompanyUpdatedVerb(details: ActivityDetails): string {
   return "updated the company";
 }
 
+function formatFeatureFlagUpdatedVerb(details: ActivityDetails): string | null {
+  const flagKey = typeof details?.flagKey === "string" ? details.flagKey : null;
+  const enabled = typeof details?.enabled === "boolean" ? details.enabled : null;
+  if (!flagKey || enabled === null) return null;
+  return `turned ${enabled ? "on" : "off"} the ${humanizeValue(flagKey)} feature flag`;
+}
+
 function formatInviteCreatedVerb(details: ActivityDetails): string {
   const inviteType = typeof details?.inviteType === "string" ? details.inviteType : null;
   if (inviteType === "agent") return "created an agent invite";
@@ -690,6 +698,7 @@ function formatDetailAwareVerb(
   if (approvalVerb) return approvalVerb(approvalObject(details));
   if (action === "company.updated") return formatCompanyUpdatedVerb(details);
   if (action === "invite.created") return formatInviteCreatedVerb(details);
+  if (action === "feature_flag.updated") return formatFeatureFlagUpdatedVerb(details);
   if (action === "join.approved" || action === "join.rejected" || action === "join.auto_approved") {
     return formatJoinVerb(action, details);
   }
