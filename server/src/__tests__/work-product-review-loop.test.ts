@@ -240,7 +240,12 @@ describeEmbeddedPostgres('review loop: deliverables, request changes, shipped me
     const body = await response.json();
     expect(body.issue.status).toBe('in_progress');
     expect(body.comment?.body).toBe('Add Kyoto hotel prices.');
-    expect(wakeup).toHaveBeenCalledWith(f.agent.id, expect.objectContaining({ reason: 'issue_commented' }));
+    // The person's change request, not a plain comment: the daily token
+    // ceiling, which pauses comment wakes, does not hold it back.
+    expect(wakeup).toHaveBeenCalledWith(
+      f.agent.id,
+      expect.objectContaining({ reason: 'changes_requested', contextSnapshot: expect.objectContaining({ wakeReason: 'changes_requested' }) }),
+    );
 
     const [sentBack] = await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.id, waiting!.id));
     expect(sentBack).toMatchObject({ status: 'changes_requested', reviewState: 'changes_requested' });

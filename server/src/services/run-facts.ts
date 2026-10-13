@@ -30,6 +30,38 @@ function parseObject(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * The context wake reasons for wakes a person deliberately aimed at an agent
+ * by answering what the agent put in front of them. See the map below.
+ */
+export const DELIBERATE_PERSON_WAKE_REASONS = {
+  bridgeReply: "bridge_reply",
+  changesRequested: "changes_requested",
+  interactionResolved: "interaction_resolved",
+} as const;
+
+/**
+ * Server-written `contextSnapshot` key naming who requested the wake ("user",
+ * "agent", "system"). enqueueWakeup stamps it from the wake's own actor and
+ * never takes it from the caller's context, so a reason in
+ * DELIBERATE_PERSON_WAKE_REASONS only counts as a person's when a person
+ * actually asked for the wake (POST /agents/:id/wakeup lets an agent pass
+ * any `reason` for its own wake).
+ */
+export const WAKE_REQUESTED_BY_ACTOR_TYPE_KEY = "wakeRequestedByActorType";
+
+const DELIBERATE_PERSON_WAKE_REASON_SET: ReadonlySet<string> = new Set(Object.values(DELIBERATE_PERSON_WAKE_REASONS));
+
+/**
+ * The wake classes the daily token ceiling pauses: the unattended spend
+ * (routine timer wakes and comment wakes). Everything else a person aimed at
+ * the agent, plus retries and automation, still runs (heartbeat.ts).
+ */
+export const TOKEN_CEILING_PAUSED_WAKE_CLASSES: ReadonlySet<RunFactWakeReason> = new Set<RunFactWakeReason>([
+  "timer",
+  "comment",
+]);
+
+/**
  * Fine-grained `contextSnapshot.wakeReason` → the coarse label a founder reads.
  * Anything recognized here outranks `invocation_source`, which is coarse enough
  * that a comment wake and a retry both arrive as "automation".
@@ -55,6 +87,24 @@ const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
   execution_review_requested: "approval",
   execution_changes_requested: "approval",
   issue_assigned: "assignment",
+  // A person's own answer to work the agent put in front of them, sent from
+  // the bridge or the web. Each is that person's decision on the agent's
+  // hand-off, so it buckets with the approval wakes above (an approval
+  // decision and an execution-stage "changes requested" are the same kind of
+  // act) rather than with a comment: the token ceiling pauses comment wakes
+  // as unattended spend, and none of these is unattended. A plain comment,
+  // from an agent or a person, stays "comment".
+  //   bridge_reply          - the send-back bundle (POST /bridge/work/confirm)
+  //   changes_requested     - a person asks for changes on a delivered result
+  //                           (POST /issues/:id/request-changes, and the
+  //                           requester's change request from the bridge)
+  //   interaction_resolved  - a person answers, accepts, rejects or withdraws
+  //                           an interaction the agent opened (its questions,
+  //                           a confirmation, suggested tasks), from the web,
+  //                           the inbox or the bridge
+  [DELIBERATE_PERSON_WAKE_REASONS.bridgeReply]: "approval",
+  [DELIBERATE_PERSON_WAKE_REASONS.changesRequested]: "approval",
+  [DELIBERATE_PERSON_WAKE_REASONS.interactionResolved]: "approval",
   // A human restored a held issue tree — an operator action, not automation.
   issue_tree_restored: "manual",
   process_lost_retry: "retry",
@@ -68,6 +118,15 @@ export function normalizeWakeReason(input: {
   contextSnapshot?: Record<string, unknown> | null;
 }): RunFactWakeReason {
   const contextReason = readString(input.contextSnapshot?.wakeReason);
+  if (contextReason && DELIBERATE_PERSON_WAKE_REASON_SET.has(contextReason)) {
+    // A person's own answer to the agent — only when a person asked for the
+    // wake. Anyone else claiming the reason (an agent waking itself, or a
+    // run with no recorded requester) is read as the comment wake these
+    // replaced, which the ceiling pauses: fail closed.
+    return readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]) === "user"
+      ? WAKE_REASON_BY_CONTEXT_REASON[contextReason]!
+      : "comment";
+  }
   if (contextReason) {
     const mapped = WAKE_REASON_BY_CONTEXT_REASON[contextReason];
     if (mapped) return mapped;

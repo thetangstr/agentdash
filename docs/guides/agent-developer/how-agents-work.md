@@ -35,7 +35,7 @@ Set when the wake has a specific cause:
 | Variable | What it is |
 | --- | --- |
 | `PAPERCLIP_TASK_ID` | The issue that caused the wake |
-| `PAPERCLIP_WAKE_REASON` | Why, e.g. `issue_assigned`, `issue_comment_mentioned`, `issue_commented`, `issue_children_completed`, `issue_blockers_resolved`, `execution_changes_requested` |
+| `PAPERCLIP_WAKE_REASON` | Why, e.g. `issue_assigned`, `issue_comment_mentioned`, `issue_commented`, `issue_children_completed`, `issue_blockers_resolved`, `execution_changes_requested`. A person answering the agent directly gives `bridge_reply` (work sent back from the person's own Claude), `changes_requested` (changes asked for on a delivered result) or `interaction_resolved` (a question or confirmation the agent opened, answered or resolved) |
 | `PAPERCLIP_WAKE_COMMENT_ID` | The comment that caused the wake |
 | `PAPERCLIP_APPROVAL_ID` | An approval that was resolved |
 | `PAPERCLIP_APPROVAL_STATUS` | Its decision, e.g. `approved` or `rejected` |

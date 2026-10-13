@@ -2,6 +2,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_DAILY_TOKENS, type AgentTokenCeilingStatus } from "@paperclipai/shared";
 import { parseObject } from "../adapters/utils.js";
+import { TOKEN_CEILING_PAUSED_WAKE_CLASSES } from "./run-facts.js";
 
 /**
  * AgentDash (OBS-2 / GH #695): the per-agent daily token ceiling.
@@ -144,13 +145,19 @@ export function tokenCeilingService(db: Db) {
       + coalesce((${runFacts} ->> 'outputTokens')::numeric, 0)
     )`;
 
+    // The same classes the wake gate pauses (heartbeat.ts): only unattended
+    // runs count toward the runaway guard.
+    const pausableClasses = sql.join(
+      [...TOKEN_CEILING_PAUSED_WAKE_CLASSES].map((wakeClass) => sql`${wakeClass}`),
+      sql`, `,
+    );
     const [row] = await db
       .select({
         totalTokens: sql<number>`coalesce(sum(${tokens}) filter (where ${metered}), 0)::bigint`,
         noOpTokens: sql<number>`coalesce(sum(${tokens}) filter (where ${metered} and ${runFacts} ->> 'outcome' = 'no_op'), 0)::bigint`,
         meteredRuns: sql<number>`count(*) filter (where ${metered})::int`,
         unmeteredRuns: sql<number>`count(*) filter (where ${unmetered})::int`,
-        unmeteredPausableRuns: sql<number>`count(*) filter (where ${unmetered} and ${runFacts} ->> 'wakeReason' in ('timer', 'comment') and ${meteringExpected})::int`,
+        unmeteredPausableRuns: sql<number>`count(*) filter (where ${unmetered} and ${runFacts} ->> 'wakeReason' in (${pausableClasses}) and ${meteringExpected})::int`,
       })
       .from(heartbeatRuns)
       .where(

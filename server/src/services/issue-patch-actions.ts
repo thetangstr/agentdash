@@ -23,6 +23,7 @@ import {
   summarizeIssueReferenceActivityDetails, summarizeIssueRelationForActivity, type IssueCommentExecutor, type IssueCommentContext
 } from "./issue-mutation-actions.js";
 import type { heartbeatService } from "./heartbeat.js";
+import { DELIBERATE_PERSON_WAKE_REASONS } from "./run-facts.js";
 
 // The route schema is shared so the API contract can name it; re-exported for existing importers.
 export { updateIssueRouteSchema };
@@ -1181,7 +1182,10 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
           ? await reads.getWakeableParentAfterChildCompletion(issue.parentId) : null;
         readyToCommit = true;
         return { status: "committed" as const, mutationId, publications, plan, actor, issue, comment, issueResponse, reopened, reopenFromStatus, dependents, parent,
-          routedToStewardedAgent: context.routedToStewardedAgent ?? null };
+          routedToStewardedAgent: context.routedToStewardedAgent ?? null,
+          // A person asking for changes on a delivered result: its comment
+          // wake is that person's decision, not a plain comment.
+          personRequestedChanges: context.requestChanges === true && humanBoardActor };
       });
     } catch (error) {
       if (readyToCommit) throw new IssuePatchAcceptanceUncertain({
@@ -1200,7 +1204,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
     outcomes: Array<{ effect: string; targetId?: string; status: "confirmed" | "withheld" | "unknown" }>
   };
   async function runEffects(accepted: Awaited<ReturnType<typeof accept>>): Promise<PatchEffects> {
-    const { plan, actor, issue, comment, reopened, reopenFromStatus, routedToStewardedAgent } = accepted;
+    const { plan, actor, issue, comment, reopened, reopenFromStatus, routedToStewardedAgent, personRequestedChanges } = accepted;
     const { existing, intent, commentBody, resumeRequested, isClosed, mentionedIds } = plan;
     const id = issue.id;
     const outcomes: PatchEffects["outcomes"] = [];
@@ -1365,10 +1369,17 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       const skipAssigneeCommentWake = selfComment || isClosed;
 
       if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
+        // A person's change request rides on this comment wake under its own
+        // reason (run-facts.ts classes it with approvals), so the daily token
+        // ceiling, which pauses comment wakes, does not hold it back. The
+        // source stays the comment's: it is still that person's comment.
+        const commentWakeReason = personRequestedChanges
+          ? DELIBERATE_PERSON_WAKE_REASONS.changesRequested
+          : reopened ? "issue_reopened_via_comment" : "issue_commented";
         addWakeup(assigneeId, {
           source: "automation",
           triggerDetail: "system",
-          reason: reopened ? "issue_reopened_via_comment" : "issue_commented",
+          reason: commentWakeReason,
           payload: {
             issueId: id,
             commentId: comment.id,
@@ -1385,7 +1396,7 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
             commentId: comment.id,
             wakeCommentId: comment.id,
             source: reopened ? "issue.comment.reopen" : "issue.comment",
-            wakeReason: reopened ? "issue_reopened_via_comment" : "issue_commented",
+            wakeReason: commentWakeReason,
             ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
             ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),

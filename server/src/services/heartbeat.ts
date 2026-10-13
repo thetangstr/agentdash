@@ -134,6 +134,8 @@ import {
   buildRunFacts,
   livenessStateToOutcome,
   normalizeWakeReason,
+  TOKEN_CEILING_PAUSED_WAKE_CLASSES,
+  WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
   resolveMeteringStatus,
 } from "./run-facts.js";
 import {
@@ -226,6 +228,7 @@ import {
   boardAssignmentOnlyEnvironmentRefusal,
   boardAssignmentOnlyIssueRefusal,
   boardAssignmentOnlyWakeRefusal,
+  heartbeatWakeOnDemandEnabled,
   isBoardAssignmentOnlyAgent,
 } from "./agent-wake-policy.js";
 import type { AgentWakePolicyRefusalCode } from "@paperclipai/shared";
@@ -4986,7 +4989,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return {
       enabled: asBoolean(heartbeat.enabled, false),
       intervalSec: Math.max(0, asNumber(heartbeat.intervalSec, 0)),
-      wakeOnDemand: asBoolean(heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation, true),
+      wakeOnDemand: heartbeatWakeOnDemandEnabled(agent),
       maxConcurrentRuns: normalizeMaxConcurrentRuns(heartbeat.maxConcurrentRuns),
       /**
        * Only spend a run when there is something to spend it on.
@@ -9243,6 +9246,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // the exhausted recovery budget treats it as automatic, not as a person.
     // Never trusted from the caller's context: only the wake's own actor.
     delete contextSnapshot[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
+    // Who asked for this wake, from the wake's own actor only — run-facts.ts
+    // reads it so a person-only wake reason claimed by an agent is not
+    // classed as a person's (and so is not let past the token ceiling).
+    delete contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY];
+    if (opts.requestedByActorType) {
+      contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = opts.requestedByActorType;
+    }
     if (opts.requestedByActorType === "user") {
       const actorSource = opts.requestedByActorSource !== undefined
         ? opts.requestedByActorSource
@@ -9413,7 +9423,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * keep their honest reasons, and before the issue/tree work below so an
      * over-ceiling wake never reaches a lock. Only timer and comment wakes
      * pause — a wake a person deliberately aimed at the agent (assignment,
-     * mention, approval, manual) still runs, as do retries and automation:
+     * mention, approval, manual — and a person's answer to the agent through
+     * the bridge or the web: a send-back, a change request, an answered
+     * question, which run-facts.ts classes as "approval") still runs, as do
+     * retries and automation:
      * the ceiling exists to stop unattended spend, not to take a working
      * agent off its queue. Unmetered runs never count toward the sum, so a
      * ledger outage cannot trip the ceiling — but a flood of unmetered
@@ -9428,7 +9441,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       triggerDetail,
       contextSnapshot: enrichedContextSnapshot,
     });
-    if (ceilingWakeClass === "timer" || ceilingWakeClass === "comment") {
+    if (TOKEN_CEILING_PAUSED_WAKE_CLASSES.has(ceilingWakeClass)) {
       const ceiling = await tokenCeiling.evaluate(agent);
       if (ceiling.paused) {
         // The skipped request records which guard fired — "token_ceiling" or

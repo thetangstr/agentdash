@@ -8,6 +8,7 @@ import {
   agentCorrections,
   agentRuns,
   agents,
+  agentWakeupRequests,
   authUsers,
   bridgeEndpoints,
   companies,
@@ -23,7 +24,7 @@ import {
   projectAccess,
   projects,
 } from "@paperclipai/db";
-import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_DAILY_TOKENS, FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -852,6 +853,61 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
     expect(change?.summary).toBe(
       `Person A, who requested this work, asked for changes to the result on ${issue.identifier}.\nWhat they asked for: "Add the third vendor's pricing."`,
     );
+  }, 60_000);
+
+  it("wakes the owning agent with the requester's change request even over its daily token ceiling", async () => {
+    const { company, personA, agentB } = await seed();
+    const endpoint = await endpointFor(company.id, personA);
+    const { issue } = await requestOfPersonB(app(endpoint).server);
+    // Agent B delivered it and is still the assignee; today it is at the default ceiling.
+    await db.update(issues).set({ status: "done", completedAt: new Date() }).where(eq(issues.id, issue.id));
+    await db.update(agents).set({ adapterType: RENDERING_ADAPTER, adapterConfig: {} }).where(eq(agents.id, agentB.id));
+    const now = new Date();
+    await db.insert(heartbeatRuns).values({
+      companyId: company.id,
+      agentId: agentB.id,
+      invocationSource: "timer",
+      triggerDetail: "system",
+      status: "succeeded",
+      resultJson: {
+        runFacts: { meteringStatus: "metered", inputTokens: AGENT_DEFAULT_MAX_DAILY_TOKENS, outputTokens: 0, outcome: "no_op", wakeReason: "timer" },
+      },
+      createdAt: now,
+      startedAt: now,
+      finishedAt: now,
+    });
+
+    // The real heartbeat decides this wake.
+    const { server } = app(endpoint, heartbeatService(db, { autoDispatchQueuedRuns: false }) as never);
+    const proposed = await request(server)
+      .post("/api/bridge/work/request/respond")
+      .send({ issueId: issue.identifier, action: "changes", note: "Add the third vendor's pricing." });
+    expect(proposed.body.ok).toBe(true);
+    const confirmed = await request(server).post("/api/bridge/work/request/confirm").send({ token: proposed.body.handle });
+    expect(confirmed.body).toMatchObject({ ok: true, kind: "request_changes", handedTo: { kind: "agent", name: "Agent B" } });
+
+    const requests = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentB.id));
+    expect(requests.filter((row) => row.status === "skipped")).toEqual([]);
+    const woken = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.agentId, agentB.id), eq(heartbeatRuns.invocationSource, "automation")));
+    expect(woken).toHaveLength(1);
+    expect(woken[0]!.contextSnapshot).toMatchObject({ wakeReason: "changes_requested", source: "issue.comment.reopen", issueId: issue.id });
+
+    // Let the run finish before the tables are truncated.
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const [row] = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns).where(eq(heartbeatRuns.id, woken[0]!.id));
+      if (!row || !["queued", "running"].includes(row.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const meterDeadline = Date.now() + 10_000;
+    while (Date.now() < meterDeadline) {
+      const metered = await db.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.heartbeatRunId, woken[0]!.id));
+      if (metered.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }, 60_000);
 
   it("records no correction for a change request while the co-worker loop is off for the agent's company", async () => {

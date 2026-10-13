@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { interactionContinuationWakeReason } from "../services/issue-interaction-continuation.js";
 import {
   buildRunFacts,
+  DELIBERATE_PERSON_WAKE_REASONS,
   livenessStateToOutcome,
   normalizeWakeReason,
   resolveMeteringStatus,
+  TOKEN_CEILING_PAUSED_WAKE_CLASSES,
+  WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
 } from "../services/run-facts.js";
 
 /**
@@ -56,6 +60,54 @@ describe("normalizeWakeReason", () => {
         contextSnapshot: { wakeReason: "issue_assigned" },
       }),
     ).toBe("assignment");
+  });
+
+  it("classes a person's answer to the agent through the bridge or the web with approvals, which the ceiling never pauses", () => {
+    // The send-back exactly as the confirm route enqueues it (source
+    // "automation", trigger "system"): before this it was "issue_commented",
+    // a comment wake, and the daily token ceiling skipped it.
+    expect(
+      normalizeWakeReason({
+        invocationSource: "automation",
+        triggerDetail: "system",
+        contextSnapshot: { wakeReason: "bridge_reply", source: "bridge.work.reply", [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" },
+      }),
+    ).toBe("approval");
+    for (const reason of ["bridge_reply", "changes_requested", "interaction_resolved"]) {
+      const wakeClass = normalizeWakeReason({
+        invocationSource: "automation",
+        contextSnapshot: { wakeReason: reason, [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" },
+      });
+      expect(wakeClass, reason).toBe("approval");
+      expect(TOKEN_CEILING_PAUSED_WAKE_CLASSES.has(wakeClass), reason).toBe(false);
+    }
+    expect(Object.values(DELIBERATE_PERSON_WAKE_REASONS).sort()).toEqual(["bridge_reply", "changes_requested", "interaction_resolved"]);
+  });
+
+  it("classes a person-only reason as a comment unless a person requested the wake", () => {
+    // POST /agents/:id/wakeup lets an agent pass any reason for its own wake.
+    for (const reason of ["bridge_reply", "changes_requested", "interaction_resolved"]) {
+      for (const requester of ["agent", "system", undefined]) {
+        const contextSnapshot: Record<string, unknown> = { wakeReason: reason };
+        if (requester) contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = requester;
+        expect(normalizeWakeReason({ invocationSource: "on_demand", contextSnapshot }), `${reason}/${requester}`).toBe("comment");
+      }
+    }
+  });
+
+  it("keeps plain comments, from people and agents alike, as comment wakes the ceiling pauses", () => {
+    for (const reason of ["issue_commented", "issue_reopened_via_comment"]) {
+      const wakeClass = normalizeWakeReason({ invocationSource: "automation", contextSnapshot: { wakeReason: reason } });
+      expect(wakeClass, reason).toBe("comment");
+      expect(TOKEN_CEILING_PAUSED_WAKE_CLASSES.has(wakeClass), reason).toBe(true);
+    }
+    expect(TOKEN_CEILING_PAUSED_WAKE_CLASSES.has("timer")).toBe(true);
+    expect([...TOKEN_CEILING_PAUSED_WAKE_CLASSES].sort()).toEqual(["comment", "timer"]);
+  });
+
+  it("gives an interaction's continuation the deliberate reason only when a person resolved it", () => {
+    expect(interactionContinuationWakeReason("user")).toBe("interaction_resolved");
+    expect(interactionContinuationWakeReason("agent")).toBe("issue_commented");
   });
 
   it("classifies the scheduler's real timer wake as timer, not automation", () => {
