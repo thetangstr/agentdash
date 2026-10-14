@@ -136,12 +136,12 @@ describe("TokenCeilingStatusLine", () => {
   it("announces the pause with the UTC lift time and what still runs", () => {
     render(statusFixture({ paused: true, tokensToday: 5_200_000 }));
     const text = container!.textContent ?? "";
-    expect(text).toContain("Timer and comment wakes are paused until");
+    expect(text).toContain("Timer, comment and agent-requested wakes are paused until");
     // liftsAt is midnight UTC at the END of the Sep 21 window: it lifts on
     // Sep 22 UTC, whatever zone the viewer is in.
     expect(text).toContain("paused until 00:00 UTC on Sep 22, 2026");
     expect(text).not.toContain("Sep 21, 2026 UTC");
-    expect(text).toContain("assigned work and manual wakes still run");
+    expect(text).toContain("assigned work and a person's manual wakes still run");
     // The paused affordance is the recovery path, not a bare Edit.
     expect(text).toContain("Raise or clear");
   });
@@ -158,7 +158,7 @@ describe("TokenCeilingStatusLine", () => {
     const text = container!.textContent ?? "";
     expect(text).toContain("unmetered runaway guard");
     expect(text).toContain("49 unmetered unattended runs");
-    expect(text).toContain("assigned work and manual wakes still run");
+    expect(text).toContain("assigned work and a person's manual wakes still run");
   });
 
   it("says off when the ceiling is disabled", () => {
@@ -417,7 +417,7 @@ describe("AgentRunHealthSummary", () => {
       />,
     );
     const text = container!.textContent ?? "";
-    expect(text).toContain("Timer and comment wakes are paused until 00:00 UTC on Oct 14, 2026");
+    expect(text).toContain("Timer, comment and agent-requested wakes are paused until 00:00 UTC on Oct 14, 2026");
     expect(text).not.toContain("Oct 13, 2026 UTC");
     expect(text).toContain("daily token ceiling");
   });

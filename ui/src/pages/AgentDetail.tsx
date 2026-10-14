@@ -1161,7 +1161,7 @@ export function AgentDetail() {
 
       {/*
         OBS-2: the daily token ceiling, said out loud. When it is pausing this
-        agent's timer/comment wakes the line turns into a banner with the
+        agent's timer, comment and agent-requested wakes the line turns into a banner with the
         reason and when the pause lifts; either way the steward can raise or
         clear the ceiling right here.
       */}
@@ -1618,12 +1618,12 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
               agent went quiet. */}
           {runHealth.tokenCeilingPause ? (
             <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">
-              Timer and comment wakes are paused until{" "}
+              Timer, comment and agent-requested wakes are paused until{" "}
               {formatTokenCeilingLift(runHealth.tokenCeilingPause.liftsAt)}
               {runHealth.tokenCeilingPause.reason === "unmetered runaway guard"
                 ? " — unmetered runaway guard (spend cannot be verified)"
                 : " — daily token ceiling"}
-              . Assigned work and manual wakes still run.
+              . Assigned work and a person's manual wakes still run.
             </p>
           ) : null}
         </>
@@ -2164,8 +2164,8 @@ export function TokenCeilingStatusLine({
       {status.paused ? (
         <span className="font-medium">
           {" "}
-          Timer and comment wakes are paused until {formatTokenCeilingLift(status.liftsAt)} — assigned
-          work and manual wakes still run.
+          Timer, comment and agent-requested wakes are paused until {formatTokenCeilingLift(status.liftsAt)} — assigned
+          work and a person's manual wakes still run.
           {status.pauseReason === "unmetered runaway guard"
             ? ` Paused by the unmetered runaway guard: ${status.unmeteredPausableRuns} unmetered unattended runs today that should have metered, so spend cannot be verified.`
             : ""}

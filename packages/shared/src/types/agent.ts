@@ -44,7 +44,7 @@ export interface AgentRuntimeConfig extends Record<string, unknown> {
 /**
  * OBS-2: the daily token ceiling as it stands for one agent right now.
  * `paused` means today's metered total is at or over the effective ceiling, so
- * timer and comment wakes are being skipped until `liftsAt` — or until a
+ * timer, comment and agent-requested wakes are being skipped until `liftsAt` — or until a
  * steward raises the ceiling. `meteredRuns`/`unmeteredRuns` let a reader tell
  * "metering is off" apart from "nothing ran".
  */
@@ -57,7 +57,7 @@ export interface AgentTokenCeilingStatus {
   meteredRuns: number;
   unmeteredRuns: number;
   /**
-   * Unmetered timer/comment runs today where metering was expected (a
+   * Unmetered timer/comment/agent-requested runs today where metering was expected (a
    * certain ledger, or an adapter that normally reports usage) — the
    * runaway guard's input.
    */

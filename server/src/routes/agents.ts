@@ -2,6 +2,7 @@ import { publishActivity, type ActivityPublication } from "../services/activity-
 import { isBillingDisabled } from "../services/tier-policy.js";
 import { agentConfigurationAuthority, resolveAccountabilityPatch, recordAccountabilityChange } from "../services/human-control/ownership.js";
 import { workforceService } from "../services/workforce.js";
+import type { WakeupSkip } from "../services/heartbeat.js";
 import { type ActivityAcceptance } from "../services/activity-log.js";
 import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
@@ -20,6 +21,7 @@ import {
   resetAgentSessionSchema,
   testAdapterEnvironmentSchema,
   type AgentRunHealth,
+  type AgentTokenCeilingStatus,
   type AgentSkillSnapshot,
   type InstanceSchedulerHeartbeatAgent,
   upsertAgentInstructionsFileSchema,
@@ -1197,10 +1199,45 @@ export function agentRoutes(
     return allowedByGrant || canCreateAgents(actorAgent);
   }
 
+  /**
+   * AgentDash (OBS-2): the answer to a wake the daily token ceiling (or the
+   * unmetered runaway guard) refused. An agent asking for its own run must
+   * be told it is paused and until when, not handed a bare "skipped" it may
+   * retry at the end of every run. Reason and liftsAt only: the ceiling's
+   * figures are configuration an agent does not read (buildAgentDetail).
+   */
+  function buildTokenCeilingSkippedResponse(
+    agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
+    status: AgentTokenCeilingStatus,
+    payload: Record<string, unknown> | null | undefined,
+  ) {
+    const reason = status.pauseReason ?? "token_ceiling";
+    const pausedBy = reason === "token_ceiling"
+      ? `${agent.name} is over its daily token ceiling`
+      : `the unmetered runaway guard paused ${agent.name}`;
+    return {
+      status: "skipped" as const,
+      reason,
+      message:
+        `Wakeup was skipped: ${pausedBy}. Wakes nobody aimed at it — timer, comment, and runs an agent asks for ` +
+        `(this endpoint, called with an agent key) — are paused until ${status.liftsAt}, or until its steward ` +
+        `raises the ceiling. Assigned work, a person's own wake, and answers to its questions still wake it.`,
+      liftsAt: status.liftsAt,
+      issueId: typeof payload?.issueId === "string" && payload.issueId.trim() ? payload.issueId : null,
+      executionRunId: null,
+      executionAgentId: null,
+      executionAgentName: null,
+    };
+  }
+
   async function buildSkippedWakeupResponse(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     payload: Record<string, unknown> | null | undefined,
+    skip: WakeupSkip | null = null,
   ) {
+    if (skip?.tokenCeiling?.paused) {
+      return buildTokenCeilingSkippedResponse(agent, skip.tokenCeiling, payload);
+    }
     const issueId = typeof payload?.issueId === "string" && payload.issueId.trim() ? payload.issueId : null;
     if (!issueId) {
       return {
@@ -4850,6 +4887,7 @@ export function agentRoutes(
       }
     }
 
+    let skip: WakeupSkip | null = null;
     const run = await heartbeat.wakeup(id, {
       source: req.body.source,
       triggerDetail: req.body.triggerDetail ?? "manual",
@@ -4858,6 +4896,13 @@ export function agentRoutes(
       idempotencyKey: req.body.idempotencyKey ?? null,
       requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
       requestedByActorId: req.actor.type === "agent" ? req.actor.agentId ?? null : req.actor.userId ?? null,
+      // The caller picks `reason` and `source` here, so this is a direct
+      // request whatever they claim: from an agent key it is the
+      // "agent_requested" wake class the daily token ceiling pauses.
+      requestedDirectly: true,
+      onSkipped: (skipped) => {
+        skip = skipped;
+      },
       contextSnapshot: {
         triggeredBy: req.actor.type,
         actorId: req.actor.type === "agent" ? req.actor.agentId : req.actor.userId,
@@ -4866,7 +4911,7 @@ export function agentRoutes(
     });
 
     if (!run) {
-      res.status(202).json(await buildSkippedWakeupResponse(agent, req.body.payload ?? null));
+      res.status(202).json(await buildSkippedWakeupResponse(agent, req.body.payload ?? null, skip));
       return;
     }
 
@@ -4907,6 +4952,7 @@ export function agentRoutes(
 
     assertAgentHarnessPreflightReadyForLaunch(agent);
 
+    let skip: WakeupSkip | null = null;
     const run = await heartbeat.invoke(
       id,
       "on_demand",
@@ -4919,10 +4965,20 @@ export function agentRoutes(
         actorType: req.actor.type === "agent" ? "agent" : "user",
         actorId: req.actor.type === "agent" ? req.actor.agentId ?? null : req.actor.userId ?? null,
       },
+      {
+        onSkipped: (skipped) => {
+          skip = skipped;
+        },
+      },
     );
 
     if (!run) {
-      res.status(202).json({ status: "skipped" });
+      const skipped = skip as WakeupSkip | null;
+      res.status(202).json(
+        skipped?.tokenCeiling?.paused
+          ? buildTokenCeilingSkippedResponse(agent, skipped.tokenCeiling, null)
+          : { status: "skipped" },
+      );
       return;
     }
 

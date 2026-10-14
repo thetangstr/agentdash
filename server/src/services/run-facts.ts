@@ -49,16 +49,32 @@ export const DELIBERATE_PERSON_WAKE_REASONS = {
  */
 export const WAKE_REQUESTED_BY_ACTOR_TYPE_KEY = "wakeRequestedByActorType";
 
+/**
+ * Server-written `contextSnapshot` key: `true` when the requester asked for
+ * this run directly — `POST /agents/:id/wakeup` or `/heartbeat/invoke` —
+ * rather than the wake following from a change to work (an assignment, a
+ * comment, a finished child). On those two routes the caller picks the
+ * `reason` and `source`, so neither says anything the server vouches for.
+ * enqueueWakeup stamps it from `WakeupOptions.requestedDirectly` only and
+ * never takes it from the caller's context; coalescing keeps the value of
+ * the wake that started the run.
+ */
+export const WAKE_REQUESTED_DIRECTLY_KEY = "wakeRequestedDirectly";
+
 const DELIBERATE_PERSON_WAKE_REASON_SET: ReadonlySet<string> = new Set(Object.values(DELIBERATE_PERSON_WAKE_REASONS));
 
 /**
  * The wake classes the daily token ceiling pauses: the unattended spend
- * (routine timer wakes and comment wakes). Everything else a person aimed at
- * the agent, plus retries and automation, still runs (heartbeat.ts).
+ * (routine timer wakes, comment wakes, and runs an agent asked for itself —
+ * see "agent_requested" in normalizeWakeReason). Everything else a person
+ * aimed at the agent, plus work routing, retries and system automation,
+ * still runs (heartbeat.ts). The unmetered runaway guard counts the same set
+ * (token-ceiling.ts).
  */
 export const TOKEN_CEILING_PAUSED_WAKE_CLASSES: ReadonlySet<RunFactWakeReason> = new Set<RunFactWakeReason>([
   "timer",
   "comment",
+  "agent_requested",
 ]);
 
 /**
@@ -118,12 +134,29 @@ export function normalizeWakeReason(input: {
   contextSnapshot?: Record<string, unknown> | null;
 }): RunFactWakeReason {
   const contextReason = readString(input.contextSnapshot?.wakeReason);
+  const requestedByActorType = readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]);
+  if (requestedByActorType === "agent") {
+    // An agent asking for a run — of itself or of another agent — is
+    // unattended spend: nobody aimed it, and an agent that asks at the end of
+    // every run would otherwise keep itself going past its ceiling forever.
+    //  - A direct request (the wakeup/invoke routes): the reason and source
+    //    are the caller's own words, so a claimed "issue_assigned" or
+    //    "process_lost_retry" does not make it one.
+    //  - No reason at all: nothing server-side says why this run exists
+    //    (the route's default, kept here as a fail-closed backstop).
+    // Wakes that follow from an agent's work keep their class: handing an
+    // issue to another agent ("issue_assigned"), checkout, finished children
+    // and blockers, execution-stage hand-offs — work routing keeps flowing.
+    if (input.contextSnapshot?.[WAKE_REQUESTED_DIRECTLY_KEY] === true || !contextReason) {
+      return "agent_requested";
+    }
+  }
   if (contextReason && DELIBERATE_PERSON_WAKE_REASON_SET.has(contextReason)) {
     // A person's own answer to the agent — only when a person asked for the
-    // wake. Anyone else claiming the reason (an agent waking itself, or a
-    // run with no recorded requester) is read as the comment wake these
-    // replaced, which the ceiling pauses: fail closed.
-    return readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]) === "user"
+    // wake. Anyone else claiming the reason (an agent's wake that was not a
+    // direct request, or a run with no recorded requester) is read as the
+    // comment wake these replaced, which the ceiling pauses: fail closed.
+    return requestedByActorType === "user"
       ? WAKE_REASON_BY_CONTEXT_REASON[contextReason]!
       : "comment";
   }
@@ -143,7 +176,8 @@ export function normalizeWakeReason(input: {
       return "automation";
     case "on_demand":
     default:
-      // on_demand is a person or an API client asking for the run directly.
+      // on_demand is a person or an API client asking for the run directly
+      // (an agent asking for one is "agent_requested", above).
       return "manual";
   }
 }
