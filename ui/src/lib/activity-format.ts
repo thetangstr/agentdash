@@ -1,5 +1,5 @@
 import type { Agent } from "@paperclipai/shared";
-import { HIDDEN_FEED_ACTIVITY_ACTIONS, IMPORTANT_SYSTEM_ACTIVITY_ACTIONS } from "@paperclipai/shared";
+import { FEATURE_FLAG_KEYS, HIDDEN_FEED_ACTIVITY_ACTIONS, IMPORTANT_SYSTEM_ACTIVITY_ACTIONS } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "./company-members";
 import { issueStatusLabel } from "./issue-status-label";
 
@@ -654,11 +654,29 @@ function formatCompanyUpdatedVerb(details: ActivityDetails): string {
   return "updated the company";
 }
 
+/**
+ * Readable names for the known feature flags, so the feed says "turned on the
+ * co-worker bridge feature" rather than echoing the stored key.
+ */
+const FEATURE_FLAG_LABELS: Record<string, string> = {
+  [FEATURE_FLAG_KEYS.DOD_GUARD]: "definition-of-done guard",
+  [FEATURE_FLAG_KEYS.DOCUMENT_ACCESS]: "document access",
+  [FEATURE_FLAG_KEYS.COWORKER_BRIDGE]: "co-worker bridge",
+};
+
+/** A flag key as words: a known label, else the key without its `_enabled` suffix. */
+function featureFlagLabel(flagKey: string): string {
+  const known = FEATURE_FLAG_LABELS[flagKey];
+  if (known) return known;
+  const stripped = flagKey.replace(/_enabled$/, "");
+  return humanizeValue(stripped || flagKey);
+}
+
 function formatFeatureFlagUpdatedVerb(details: ActivityDetails): string | null {
   const flagKey = typeof details?.flagKey === "string" ? details.flagKey : null;
   const enabled = typeof details?.enabled === "boolean" ? details.enabled : null;
   if (!flagKey || enabled === null) return null;
-  return `turned ${enabled ? "on" : "off"} the ${humanizeValue(flagKey)} feature flag`;
+  return `turned ${enabled ? "on" : "off"} the ${featureFlagLabel(flagKey)} feature`;
 }
 
 function formatInviteCreatedVerb(details: ActivityDetails): string {

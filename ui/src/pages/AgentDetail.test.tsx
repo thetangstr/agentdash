@@ -137,7 +137,10 @@ describe("TokenCeilingStatusLine", () => {
     render(statusFixture({ paused: true, tokensToday: 5_200_000 }));
     const text = container!.textContent ?? "";
     expect(text).toContain("Timer and comment wakes are paused until");
-    expect(text).toContain("UTC");
+    // liftsAt is midnight UTC at the END of the Sep 21 window: it lifts on
+    // Sep 22 UTC, whatever zone the viewer is in.
+    expect(text).toContain("paused until 00:00 UTC on Sep 22, 2026");
+    expect(text).not.toContain("Sep 21, 2026 UTC");
     expect(text).toContain("assigned work and manual wakes still run");
     // The paused affordance is the recovery path, not a bare Edit.
     expect(text).toContain("Raise or clear");
@@ -402,6 +405,23 @@ describe("monthCountedTokens + AgentSpendFigure", () => {
 // Batch 2 canary: "This agent has never run" + "$0.00" sat on a Chief of Staff
 // that had run the whole chat; chat turns count as activity.
 describe("AgentRunHealthSummary", () => {
+  it("dates the token-ceiling pause by when it actually lifts in UTC", () => {
+    renderNode(
+      <AgentRunHealthSummary
+        runHealth={runHealthFixture({
+          neverRan: false,
+          total: 4,
+          succeeded: 4,
+          tokenCeilingPause: { reason: "token_ceiling", liftsAt: "2026-10-14T00:00:00.000Z" },
+        })}
+      />,
+    );
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Timer and comment wakes are paused until 00:00 UTC on Oct 14, 2026");
+    expect(text).not.toContain("Oct 13, 2026 UTC");
+    expect(text).toContain("daily token ceiling");
+  });
+
   // c4-hire-ux: a never-run agent reads as ready, not broken-and-useless.
   it("reads a never-run agent as ready for its first task", () => {
     renderNode(<AgentRunHealthSummary runHealth={runHealthFixture()} />);
