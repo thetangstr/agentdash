@@ -63,6 +63,10 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
  * adapter; a plain `process` agent leaves them waiting.
  */
 const RENDERING_ADAPTER = "corrections_rendering_test";
+/** The context each run's adapter was invoked with, by run id. */
+const adapterContexts = new Map<string, Record<string, any>>();
+/** Agents whose next run the adapter fails, as a crash before the work is done would. */
+const failNextRun = new Set<string>();
 
 const framingQuestion = {
   id: "framing",
@@ -140,7 +144,13 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
     registerServerAdapter({
       type: RENDERING_ADAPTER,
       rendersAgentCorrections: true,
-      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      execute: async (ctx: { runId: string; agent: { id: string }; context: Record<string, unknown> }) => {
+        adapterContexts.set(ctx.runId, JSON.parse(JSON.stringify(ctx.context)));
+        if (failNextRun.delete(ctx.agent.id)) {
+          return { exitCode: 1, signal: null, timedOut: false, errorMessage: "adapter crashed" };
+        }
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
       testEnvironment: async () => ({ adapterType: RENDERING_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
     } as never);
   }, 30_000);
@@ -238,7 +248,15 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await db.update(agents).set({ runtimeConfig: quietRuntime }).where(eq(agents.id, agentId));
-    return { run: finished, context: (finished?.contextSnapshot ?? {}) as Record<string, any> };
+    // What the agent received, and what the run row kept. The saved snapshot
+    // never holds corrections: they are private to the agent, its steward and
+    // admins, and nothing reads them back from it (delivery state lives on
+    // agent_corrections).
+    const saved = (finished?.contextSnapshot ?? {}) as Record<string, any>;
+    expect(saved).not.toHaveProperty("paperclipAgentCorrections");
+    expect(saved).not.toHaveProperty("paperclipAgentCorrectionsRemaining");
+    expect(saved.paperclipWake ?? {}).not.toHaveProperty("corrections");
+    return { run: finished, context: adapterContexts.get(queued!.id) ?? saved, saved };
   }
 
   it("records nothing while the company has not switched the co-worker loop on", async () => {
@@ -397,6 +415,40 @@ describeEmbeddedPostgres("what changed: recorded per signal, delivered on the ne
     const next = await runAgent(agentA.id);
     expect(next.context).not.toHaveProperty("paperclipAgentCorrections");
     expect(next.context.paperclipWake?.corrections ?? []).toHaveLength(0);
+  }, 60_000);
+
+  it("delivers a correction once, again only when the run that carried it fails, and never keeps it on the run row", async () => {
+    const { company, agentA, steward } = await seed();
+    await recordAgentCorrection(db, {
+      companyId: company.id,
+      agentId: agentA.id,
+      issueId: null,
+      kind: "task_reopened",
+      summary: "Person A reopened the note. Their reason: \"check the totals\".",
+      details: { lessons: ["Check the totals before closing."] },
+      sourceActorType: "user",
+      sourceActorId: steward,
+    });
+
+    // The first run carries it, then fails before finishing its work.
+    failNextRun.add(agentA.id);
+    const failed = await runAgent(agentA.id);
+    expect(failed.run?.status).toBe("failed");
+    expect(failed.context.paperclipWake?.corrections).toHaveLength(1);
+    expect(JSON.stringify(failed.saved)).not.toContain("check the totals");
+
+    // So the next run carries it again, and succeeds.
+    const retried = await runAgent(agentA.id);
+    expect(retried.run?.status).toBe("succeeded");
+    expect(retried.context.paperclipWake?.corrections).toHaveLength(1);
+    expect(retried.context.paperclipWake.corrections[0].lessons).toEqual(["Check the totals before closing."]);
+    const [row] = await db.select().from(agentCorrections).where(eq(agentCorrections.agentId, agentA.id));
+    expect(row).toMatchObject({ deliveredRunId: retried.run!.id, deliveryAttempts: 2 });
+
+    // Delivered: the run after that does not carry it.
+    const after = await runAgent(agentA.id);
+    expect(after.context.paperclipWake?.corrections ?? []).toHaveLength(0);
+    expect(after.context).not.toHaveProperty("paperclipAgentCorrections");
   }, 60_000);
 
   it("is not a correction when the person took the recommendation, or an agent reopened its own work", async () => {

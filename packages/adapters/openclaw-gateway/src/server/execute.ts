@@ -294,6 +294,32 @@ function redactForLog(value: unknown, keyPath: string[] = [], depth = 0): unknow
   return String(value);
 }
 
+const CORRECTIONS_WITHHELD_FOR_LOG = "[corrections withheld: readable only by the agent, its steward and admins]";
+const CORRECTIONS_SECTION_RE = /## What changed \(corrections to your work\)|"corrections":\[\{/;
+
+/**
+ * AgentDash: the copy of the outbound agent params that goes to the run log.
+ * The gateway still receives everything; the log, which the whole company can
+ * read, does not carry the agent's corrections (readable only by the agent,
+ * its steward and admins): `paperclip.wake.corrections` / `correctionsRemaining`
+ * are dropped, and the message is cut where its What changed section or the
+ * wake JSON's corrections begin.
+ */
+export function agentParamsForLog(agentParams: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...agentParams };
+  const paperclip = asRecord(copy.paperclip);
+  const wake = paperclip ? asRecord(paperclip.wake) : null;
+  if (paperclip && wake && ("corrections" in wake || "correctionsRemaining" in wake)) {
+    const { corrections: _corrections, correctionsRemaining: _remaining, ...rest } = wake;
+    copy.paperclip = { ...paperclip, wake: rest };
+  }
+  if (typeof copy.message === "string") {
+    const match = CORRECTIONS_SECTION_RE.exec(copy.message);
+    if (match) copy.message = `${copy.message.slice(0, match.index)}${CORRECTIONS_WITHHELD_FOR_LOG}`;
+  }
+  return copy;
+}
+
 function stringifyForLog(value: unknown, maxChars: number): string {
   const text = JSON.stringify(value);
   if (text.length <= maxChars) return text;
@@ -1172,7 +1198,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   await ctx.onLog(
     "stdout",
-    `[openclaw-gateway] outbound payload (redacted): ${stringifyForLog(redactForLog(agentParams), 12_000)}\n`,
+    `[openclaw-gateway] outbound payload (redacted): ${stringifyForLog(redactForLog(agentParamsForLog(agentParams)), 12_000)}\n`,
   );
   await ctx.onLog("stdout", `[openclaw-gateway] outbound header keys: ${outboundHeaderKeys.join(", ")}\n`);
   if (transportHint) {

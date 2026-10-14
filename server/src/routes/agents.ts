@@ -150,6 +150,15 @@ import {
 import { redactApprovalForReader, redactEventPayload, redactMonthlySpendForReader } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
+import {
+  withholdPrivateContentFromRunEvents,
+  withoutPrivateRunContext,
+} from "../services/run-private-content.js";
+import {
+  loadAgentPrivateLogState,
+  runLogWasStripped,
+  withholdPrivateContentFromValue,
+} from "../services/run-log-private-content.js";
 import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
 import { resolveAgentWakePolicy } from "../services/agent-wake-policy.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -5161,9 +5170,25 @@ export function agentRoutes(
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
     // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
     // excerpts — provider 401s can echo credentials into all of them.
+    // Memory and corrections are withheld from run records (see
+    // services/run-private-content.ts and run-log-private-content.ts); this
+    // covers a row written before that: its context, and the output excerpts
+    // and result that can carry memory tool traffic or a lesson echo.
+    const outputFields = runLogWasStripped(run.contextSnapshot)
+      ? {}
+      : withholdPrivateContentFromValue(
+          { stdoutExcerpt: run.stdoutExcerpt, stderrExcerpt: run.stderrExcerpt, resultJson: run.resultJson, error: run.error },
+          await loadAgentPrivateLogState(db, run.agentId),
+        );
     res.json(
       redactRunLogValue(redactCurrentUserValue(
-        { ...run, retryExhaustedReason, outputSilence: await heartbeat.buildRunOutputSilence(run) },
+        {
+          ...run,
+          ...outputFields,
+          contextSnapshot: withoutPrivateRunContext(run.contextSnapshot),
+          retryExhaustedReason,
+          outputSilence: await heartbeat.buildRunOutputSilence(run),
+        },
         await getCurrentUserRedactionOptions(),
       )),
     );
@@ -5250,7 +5275,11 @@ export function agentRoutes(
 
     const afterSeq = Number(req.query.afterSeq ?? 0);
     const limit = Number(req.query.limit ?? 200);
-    const events = await heartbeat.listEvents(runId, Number.isFinite(afterSeq) ? afterSeq : 0, Number.isFinite(limit) ? limit : 200);
+    // Memory and corrections are withheld from `adapter.invoke` events at
+    // write time; this covers an event written before that.
+    const events = withholdPrivateContentFromRunEvents(
+      await heartbeat.listEvents(runId, Number.isFinite(afterSeq) ? afterSeq : 0, Number.isFinite(limit) ? limit : 200),
+    );
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
     const redactedEvents = events.map((event) =>
       redactCurrentUserValue({

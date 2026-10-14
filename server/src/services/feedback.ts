@@ -3,6 +3,8 @@ import path from "node:path";
 import { and, asc, desc, eq, getTableColumns, gte, lte, ne, or, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agentCorrections,
+  agentMemory,
   agents,
   companies,
   companySkills,
@@ -38,6 +40,12 @@ import {
 } from "@paperclipai/shared";
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { notFound, unprocessable } from "../errors.js";
+import { withholdPrivateContentFromRunEvents, withoutPrivateRunContext } from "./run-private-content.js";
+import {
+  loadAgentPrivateLogState,
+  runLogWasStripped,
+  withholdPrivateContentFromRunLogNdjson,
+} from "./run-log-private-content.js";
 import { agentInstructionsService } from "./agent-instructions.js";
 import {
   createFeedbackRedactionState,
@@ -82,6 +90,30 @@ const FEEDBACK_EXPORT_DOCUMENT_ACCESS_REFUSED =
 
 function documentAccessEnabledFor(db: Pick<Db, "select">, companyId: string): Promise<boolean> {
   return featureFlagsService(db as Db).isEnabled(companyId, FEATURE_FLAG_KEYS.DOCUMENT_ACCESS);
+}
+
+/**
+ * Whether the agent has memory or has been sent corrections. Both are readable
+ * only by the agent, its steward and admins, and an adapter-native transcript
+ * holds the prompt they were rendered into — with no reliable way to find them
+ * again in a vendor's session format — so such an agent's transcripts are left
+ * out.
+ */
+async function agentHasPrivateLessons(db: Pick<Db, "select">, agentId: string): Promise<boolean> {
+  const memory = await db
+    .select({ id: agentMemory.id })
+    .from(agentMemory)
+    .where(eq(agentMemory.agentId, agentId))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (memory) return true;
+  const correction = await db
+    .select({ id: agentCorrections.id })
+    .from(agentCorrections)
+    .where(eq(agentCorrections.agentId, agentId))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  return correction !== null;
 }
 
 type FeedbackTraceRow = typeof feedbackExports.$inferSelect & {
@@ -1499,7 +1531,12 @@ async function buildFeedbackTraceBundleFromRow(
         .from(heartbeatRunEvents)
         .where(eq(heartbeatRunEvents.runId, run.id))
         .orderBy(asc(heartbeatRunEvents.seq));
-      const logText = await readFullRunLog(run);
+      // Memory tool traffic and lesson echoes are withheld from the log, as
+      // when it is served (run-log-private-content.ts).
+      const rawLogText = await readFullRunLog(run);
+      const logText = rawLogText && !runLogWasStripped(run.contextSnapshot)
+        ? await withholdPrivateContentFromRunLogNdjson(rawLogText, await loadAgentPrivateLogState(db, run.agentId))
+        : rawLogText;
       const logEntries = parseRunLogEntries(logText);
       const stdoutText = logEntries
         .filter((entry) => entry.stream === "stdout")
@@ -1528,7 +1565,7 @@ async function buildFeedbackTraceBundleFromRow(
           sessionIdBefore: run.sessionIdBefore,
           sessionIdAfter: run.sessionIdAfter,
           externalRunId: run.externalRunId,
-          contextSnapshot: asRecord(run.contextSnapshot),
+          contextSnapshot: withoutPrivateRunContext(asRecord(run.contextSnapshot)),
           logStore: run.logStore,
           logRef: run.logRef,
           logBytes: run.logBytes,
@@ -1548,7 +1585,7 @@ async function buildFeedbackTraceBundleFromRow(
       }));
 
       const sanitizedEvents = await sanitizeFeedbackValueAsync(
-        events,
+        withholdPrivateContentFromRunEvents(events),
         state,
         "bundle.paperclipRun.events",
         MAX_TRACE_FILE_CHARS,
@@ -1575,6 +1612,8 @@ async function buildFeedbackTraceBundleFromRow(
         // Adapter-native transcripts (session files, debug logs, raw stdout)
         // never pass the document-text strip pass: left out.
         appendNote(notes, "adapter_trace_withheld_document_access");
+      } else if (await agentHasPrivateLessons(db, run.agentId)) {
+        appendNote(notes, "adapter_trace_withheld_agent_lessons");
       } else if (run.adapterType === "codex_local") {
         const adapter = await buildCodexTraceFiles({
           companyId: row.companyId,

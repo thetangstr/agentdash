@@ -16,6 +16,13 @@ import { featureFlagsService } from "./feature-flags.js";
  * (managed block `agent-learning-loop`) tells it to save the lessons into its
  * own memory.
  *
+ * Like that memory, a correction is readable only by the agent, its steward
+ * and admins: it reaches the agent's run in memory and is withheld from the
+ * run's saved context, its `adapter.invoke` event and everything served from
+ * them (run-private-content.ts). Delivery state lives here, on the row
+ * (`deliveredRunId`, `deliveryAttempts`, and the carrying run's status) —
+ * never read back from a saved run.
+ *
  * The signals, and who emits them:
  *
  * - `steward_send_back`: the steward sent work back through their own Claude

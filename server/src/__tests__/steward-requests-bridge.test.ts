@@ -73,6 +73,8 @@ const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
  * Corrections are handed only to an adapter that renders them.
  */
 const RENDERING_ADAPTER = "requests_rendering_test";
+/** The context each run's adapter was invoked with, by run id. */
+const adapterContexts = new Map<string, Record<string, any>>();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
 type TestDb = ReturnType<typeof createDb>;
@@ -155,7 +157,10 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
     registerServerAdapter({
       type: RENDERING_ADAPTER,
       rendersAgentCorrections: true,
-      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      execute: async (ctx: { runId: string; context: Record<string, unknown> }) => {
+        adapterContexts.set(ctx.runId, JSON.parse(JSON.stringify(ctx.context)));
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
       testEnvironment: async () => ({ adapterType: RENDERING_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
     } as never);
   }, 30_000);
@@ -188,7 +193,9 @@ describeEmbeddedPostgres("bridge requests: asking another person for work, and c
       if (metered.length > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    return { run: finished, context: (finished?.contextSnapshot ?? {}) as Record<string, any> };
+    // The context the agent received: corrections are withheld from the
+    // saved run snapshot (services/run-private-content.ts).
+    return { run: finished, context: adapterContexts.get(queued!.id) ?? ((finished?.contextSnapshot ?? {}) as Record<string, any>) };
   }
 
   /** A member; every member role carries tasks:assign, a membership with no role carries nothing. */

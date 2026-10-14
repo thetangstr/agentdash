@@ -17,8 +17,17 @@ vi.mock("../services/run-log-store.ts", async () => {
   };
 });
 
-// readLog with a lookup row never touches the database.
-const heartbeat = heartbeatService({} as Db, { autoDispatchQueuedRuns: false });
+// readLog with a lookup row touches the database only to learn the agent's
+// memory and corrections, which it withholds from the page
+// (run-log-private-content.ts). This stub answers every query with no rows.
+function emptyQuery(): unknown {
+  const query: Record<string, unknown> = {};
+  for (const method of ["from", "where", "orderBy", "limit", "innerJoin", "leftJoin"]) query[method] = () => query;
+  query.then = (resolve: (rows: unknown[]) => unknown, reject?: (err: unknown) => unknown) =>
+    Promise.resolve([]).then(resolve, reject);
+  return query;
+}
+const heartbeat = heartbeatService({ select: () => emptyQuery() } as unknown as Db, { autoDispatchQueuedRuns: false });
 
 describe("heartbeat readLog", () => {
   it("returns an empty, missing log for a run that never started", async () => {

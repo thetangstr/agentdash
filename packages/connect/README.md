@@ -348,7 +348,9 @@ was decided or changed, or the issue is no longer yours, nothing is sent and
 you are told why. Your agent is woken at most once (an answer wakes it only
 when its question asked for that), and its next run carries a short
 "what changed" summary (its draft against your revision, your answer against
-its recommendation, your lessons), which it saves to its own memory.
+its recommendation, your lessons), which it saves to its own memory. Only
+you, the agent and your company's admins can read that memory (on the agent's
+page, under Memory); it is kept out of the agent's run log.
 
 Files go back too, but only on issues in projects with restricted access (on
 any other issue the read-back says they were left out, and you attach them on
