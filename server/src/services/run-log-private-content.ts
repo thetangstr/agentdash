@@ -21,13 +21,19 @@
 //          `arguments`, `result`) or a `command_execution` item (`command`,
 //          `aggregated_output`); also the `tool_use` / `tool_result` item
 //          shapes the codex transcript parser accepts.
-//   2. Echoes, by content: the agent's memory and its delivered corrections
-//      (summaries and lessons), whole and line by line, raw and JSON-escaped
-//      once or twice, wherever they appear in a line. A memory the agent
-//      writes during the run is added as it is seen.
+//   2. Echoes, by content: the agent's memory and its delivered corrections,
+//      whole, and by line, lesson and quote when those have at least four
+//      words; raw and JSON-escaped up to three times, wherever they appear in
+//      a line. Memory seen during the run is learned as it goes by: what a
+//      write sends (tool input, `body.content`, a curl `-d` body) and what a
+//      memory read returns (any `{ version, content, authorKind }` row).
+//
+// Live output is line-buffered per stream (a JSON line split across writes
+// is still recognised), so a partial line without a newline reaches the live
+// view only when its newline (or the end of the run) arrives.
 //
 // Both are replaced by the same withheld markers the run records use.
-import { desc, eq } from "drizzle-orm";
+import { inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentCorrections, agentMemory } from "@paperclipai/db";
 import { AGENT_CORRECTIONS_WITHHELD_TEXT, AGENT_MEMORY_WITHHELD_TEXT } from "./run-private-content.js";
@@ -35,11 +41,20 @@ import { AGENT_CORRECTIONS_WITHHELD_TEXT, AGENT_MEMORY_WITHHELD_TEXT } from "./r
 const MEMORY_TOOL_RE = /(?:^|__|\.|\/)agentdash(?:Get|Update)MyMemory$/;
 const MEMORY_ROUTE_RE = /\/agents\/[^/\s"'\\]+\/memory(?:\/history)?(?![\w-])/;
 /** A line can only be memory traffic if it mentions one of these. */
-const MEMORY_HINT_RE = /MyMemory|\/memory/;
+const MEMORY_HINT_RE = /MyMemory|\/memory|authorKind/;
 /** Lines longer than this without a newline are passed on unparsed. */
 const MAX_BUFFERED_LINE_CHARS = 1_000_000;
-const MIN_MEMORY_LINE_CHARS = 16;
-const MIN_LESSON_CHARS = 12;
+/**
+ * A memory line, lesson, summary line or quote is matched on its own only when
+ * it has at least this many words: a short line ("git status --short") is too
+ * likely to be ordinary output. The whole memory and each whole summary are
+ * always matched.
+ */
+const MIN_PIECE_WORDS = 4;
+
+function hasEnoughWords(text: string): boolean {
+  return text.trim().split(/\s+/).filter(Boolean).length >= MIN_PIECE_WORDS;
+}
 
 export interface PrivateLogPiece {
   text: string;
@@ -74,7 +89,7 @@ function memoryLines(content: string): string[] {
   const lines = trimmed
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, "").trim())
-    .filter((line) => line.length >= MIN_MEMORY_LINE_CHARS);
+    .filter((line) => hasEnoughWords(line));
   return [trimmed, ...lines];
 }
 
@@ -103,15 +118,17 @@ export function createPrivateLogState(input: {
       const summary = correction.summary.trim();
       correctionTexts.push(summary);
       for (const line of summary.split(/\r?\n/)) {
-        if (line.trim().length >= MIN_MEMORY_LINE_CHARS) correctionTexts.push(line.trim());
+        if (hasEnoughWords(line)) correctionTexts.push(line.trim());
       }
       // What the person wrote is quoted inside the server's sentence; the
       // agent is likelier to repeat the quote than the sentence around it.
-      for (const match of summary.matchAll(/"([^"\n]{12,})"/g)) correctionTexts.push(match[1]!.trim());
+      for (const match of summary.matchAll(/"([^"\n]+)"/g)) {
+        if (hasEnoughWords(match[1]!)) correctionTexts.push(match[1]!.trim());
+      }
     }
     if (Array.isArray(correction.lessons)) {
       for (const lesson of correction.lessons) {
-        if (typeof lesson === "string" && lesson.trim().length >= MIN_LESSON_CHARS) correctionTexts.push(lesson.trim());
+        if (typeof lesson === "string" && hasEnoughWords(lesson)) correctionTexts.push(lesson.trim());
       }
     }
   }
@@ -148,12 +165,72 @@ function isMemoryCall(name: unknown, input: unknown): boolean {
   return isMemoryToolName(name) || mentionsMemoryRoute(input);
 }
 
+function parseJson(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Memory documents in a value: anything shaped like the memory route's rows
+ * (`{ version, content, authorKind }`), at any depth, including inside text that is
+ * itself JSON (a tool result's text block, a command's output).
+ */
+function memoryDocuments(value: unknown, depth = 0): string[] {
+  if (depth > 6 || value === null || value === undefined) return [];
+  if (typeof value === "string") return depth > 0 && value.length > 2 ? memoryDocuments(parseJson(value), depth + 1) : [];
+  if (Array.isArray(value)) return value.flatMap((entry) => memoryDocuments(entry, depth + 1));
+  if (!isRecord(value)) return [];
+  const found: string[] = [];
+  if (
+    typeof value.content === "string" &&
+    typeof value.version === "number" &&
+    (value.authorKind === "agent" || value.authorKind === "steward" || value.authorKind === "admin")
+  ) {
+    found.push(value.content);
+  }
+  for (const entry of Object.values(value)) found.push(...memoryDocuments(entry, depth + 1));
+  return found;
+}
+
+/** Learn every memory version a result carries; true when it carried one. */
+function learnFromResult(state: PrivateLogState, value: unknown): boolean {
+  const docs = memoryDocuments(value, 1);
+  if (docs.length > 0) addMemoryContent(state, ...docs);
+  return docs.length > 0;
+}
+
+/** The JSON bodies of `curl -d/--data/--data-raw/--data-binary '...'` in a command. */
+function curlBodies(command: string): unknown[] {
+  const bodies: unknown[] = [];
+  const re = /(?:^|\s)(?:-d|--data(?:-raw|-binary|-ascii)?)(?:=|\s+)(?:'([^']*)'|"((?:[^"\\]|\\.)*)")/g;
+  for (const match of command.matchAll(re)) {
+    const raw = match[1] ?? (match[2] ?? "").replace(/\\(["\\$`])/g, "$1");
+    const parsed = parseJson(raw);
+    if (parsed !== null) bodies.push(parsed);
+  }
+  return bodies;
+}
+
+/** Learn the memory a call writes: tool input `content`, `body.content`, or a curl body. */
 function rememberWrittenMemory(state: PrivateLogState, input: unknown) {
   const record = isRecord(input) ? input : null;
-  if (!record) return;
+  if (!record) {
+    if (typeof input === "string") rememberWrittenMemory(state, { command: input });
+    return;
+  }
   if (typeof record.content === "string") addMemoryContent(state, record.content);
   const body = isRecord(record.body) ? record.body : null;
   if (body && typeof body.content === "string") addMemoryContent(state, body.content);
+  if (typeof record.command === "string") {
+    for (const parsed of curlBodies(record.command)) {
+      if (isRecord(parsed) && typeof parsed.content === "string") addMemoryContent(state, parsed.content);
+    }
+  }
 }
 
 const WITHHELD_INPUT = { withheld: AGENT_MEMORY_WITHHELD_TEXT };
@@ -172,10 +249,18 @@ function withholdClaudeLine(obj: Record<string, unknown>, state: PrivateLogState
       rememberWrittenMemory(state, block.input);
       block.input = WITHHELD_INPUT;
       changed = true;
-    } else if (block.type === "tool_result" && typeof block.tool_use_id === "string" && state.memoryCallIds.has(block.tool_use_id)) {
-      block.content = AGENT_MEMORY_WITHHELD_TEXT;
-      changed = true;
-      resultWithheld = true;
+    } else if (block.type === "tool_result") {
+      const known = typeof block.tool_use_id === "string" && state.memoryCallIds.has(block.tool_use_id);
+      // Learn the memory the result carries before withholding it, so a later
+      // echo is caught. A result shaped like a memory row is memory traffic
+      // even when its call is not known (it was on an earlier log page).
+      const carriesMemory = learnFromResult(state, block.content);
+      if (known || carriesMemory) {
+        if ("tool_use_result" in obj) learnFromResult(state, obj.tool_use_result);
+        block.content = AGENT_MEMORY_WITHHELD_TEXT;
+        changed = true;
+        resultWithheld = true;
+      }
     }
   }
   if (resultWithheld && "tool_use_result" in obj) obj.tool_use_result = AGENT_MEMORY_WITHHELD_TEXT;
@@ -189,9 +274,10 @@ function withholdCodexLine(obj: Record<string, unknown>, state: PrivateLogState)
   if (!item) return false;
   const id = typeof item.id === "string" ? item.id : null;
   const known = id !== null && state.memoryCallIds.has(id);
-  if (item.type === "mcp_tool_call" && (known || isMemoryCall(item.tool, item.arguments))) {
+  if (item.type === "mcp_tool_call" && (known || isMemoryCall(item.tool, item.arguments) || learnFromResult(state, item.result))) {
     if (id) state.memoryCallIds.add(id);
     rememberWrittenMemory(state, item.arguments);
+    learnFromResult(state, item.result);
     if ("arguments" in item) item.arguments = WITHHELD_INPUT;
     if (item.result !== null && item.result !== undefined) {
       item.result = { content: [{ type: "text", text: AGENT_MEMORY_WITHHELD_TEXT }] };
@@ -200,6 +286,8 @@ function withholdCodexLine(obj: Record<string, unknown>, state: PrivateLogState)
   }
   if (item.type === "command_execution" && (known || mentionsMemoryRoute(item.command))) {
     if (id) state.memoryCallIds.add(id);
+    rememberWrittenMemory(state, item.command);
+    learnFromResult(state, item.aggregated_output);
     item.command = AGENT_MEMORY_WITHHELD_TEXT;
     if (typeof item.aggregated_output === "string") item.aggregated_output = AGENT_MEMORY_WITHHELD_TEXT;
     return true;
@@ -207,13 +295,19 @@ function withholdCodexLine(obj: Record<string, unknown>, state: PrivateLogState)
   if (item.type === "tool_use" && (known || isMemoryCall(item.name, item.input))) {
     if (id) state.memoryCallIds.add(id);
     rememberWrittenMemory(state, item.input);
+    for (const key of ["content", "output", "result"]) learnFromResult(state, item[key]);
     if ("input" in item) item.input = WITHHELD_INPUT;
     for (const key of ["content", "output", "result"]) {
       if (key in item && item[key] !== null) item[key] = AGENT_MEMORY_WITHHELD_TEXT;
     }
     return true;
   }
-  if (item.type === "tool_result" && typeof item.tool_use_id === "string" && state.memoryCallIds.has(item.tool_use_id)) {
+  if (
+    item.type === "tool_result" &&
+    ((typeof item.tool_use_id === "string" && state.memoryCallIds.has(item.tool_use_id)) ||
+      ["content", "output", "result"].some((key) => memoryDocuments(item[key], 1).length > 0))
+  ) {
+    for (const key of ["content", "output", "result"]) learnFromResult(state, item[key]);
     for (const key of ["content", "output", "result"]) {
       if (key in item && item[key] !== null) item[key] = AGENT_MEMORY_WITHHELD_TEXT;
     }
@@ -305,56 +399,150 @@ export function createPrivateLogStripper(state: PrivateLogState) {
   };
 }
 
-/**
- * A stored run log page (NDJSON of `{ ts, stream, chunk }`), for logs written
- * before the live stripper existed. Each entry's chunk gets the line pass;
- * call ids carry across entries of the page. A line that is not an entry
- * (a page boundary cut it) gets the content pass only.
- */
-export function withholdPrivateContentFromRunLogNdjson(content: string, state: PrivateLogState): string {
-  if (!content) return content;
-  return content
-    .split("\n")
-    .map((line) => {
-      if (!line.trim()) return line;
-      let entry: unknown;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        return withholdPieces(line, state);
-      }
-      if (!isRecord(entry) || typeof entry.chunk !== "string") return withholdPieces(line, state);
-      const chunk = withholdPrivateContentFromLogText(entry.chunk, state);
-      return chunk === entry.chunk ? line : JSON.stringify({ ...entry, chunk });
-    })
-    .join("\n");
+const YIELD_SLICE_MS = 8;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Lines of text cleaned one by one, yielding to the event loop every few ms. */
+async function withholdLinesAsync(lines: string[], state: PrivateLogState, signal?: AbortSignal): Promise<string[]> {
+  let sliceStart = performance.now();
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    const crlf = line.endsWith("\r");
+    const body = crlf ? line.slice(0, -1) : line;
+    out.push(`${withholdPrivateContentFromLogLine(body, state)}${crlf ? "\r" : ""}`);
+    if (performance.now() - sliceStart >= YIELD_SLICE_MS && i + 1 < lines.length) {
+      await yieldToEventLoop();
+      signal?.throwIfAborted();
+      sliceStart = performance.now();
+    }
+  }
+  return out;
 }
 
 /**
- * The state for reading a stored log or excerpt of this agent's runs, from
- * every recent memory version and correction it has had: a stored log does not
- * say which version its run saw.
+ * A stored run log page (NDJSON of `{ ts, stream, chunk }`), for logs written
+ * before the live stripper existed.
+ *
+ * A process write is not a line: one JSON line can be split across two or
+ * more entries, so each stream's chunks are joined in order, cleaned line by
+ * line (call ids carry across the whole page), and re-framed: every cleaned
+ * line goes to the entry where the original line ended, and an entry left
+ * with nothing is dropped. A line that is not an entry (a page boundary cut
+ * it) gets the content pass only; so does a split line whose other half is on
+ * another page, where matching against every recent memory version and
+ * correction of the agent is what catches it.
  */
-export async function loadAgentPrivateLogState(db: Pick<Db, "select">, agentId: string): Promise<PrivateLogState> {
+export async function withholdPrivateContentFromRunLogNdjson(
+  content: string,
+  state: PrivateLogState,
+  opts?: { signal?: AbortSignal },
+): Promise<string> {
+  if (!content) return content;
+  const lines = content.split("\n");
+  type Entry = { index: number; entry: Record<string, unknown>; chunk: string };
+  const byStream = new Map<string, Entry[]>();
+  const output: Array<string | null> = lines.map((line) => line);
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      parsed = null;
+    }
+    if (!isRecord(parsed) || typeof parsed.chunk !== "string") {
+      output[index] = withholdPieces(line, state);
+      continue;
+    }
+    const stream = typeof parsed.stream === "string" ? parsed.stream : "";
+    const entries = byStream.get(stream) ?? [];
+    entries.push({ index, entry: parsed, chunk: parsed.chunk });
+    byStream.set(stream, entries);
+  }
+  for (const entries of byStream.values()) {
+    const joined = entries.map((item) => item.chunk).join("");
+    const cleanedLines = await withholdLinesAsync(joined.split("\n"), state, opts?.signal);
+    if (cleanedLines.join("\n") === joined) continue;
+    let cursor = 0;
+    for (const [position, item] of entries.entries()) {
+      const ended = item.chunk.split("\n").length - 1;
+      let chunk = cleanedLines.slice(cursor, cursor + ended).map((line) => `${line}\n`).join("");
+      cursor += ended;
+      if (position === entries.length - 1) chunk += cleanedLines.slice(cursor).join("\n");
+      output[item.index] = chunk ? JSON.stringify({ ...item.entry, chunk }) : null;
+    }
+  }
+  return output.filter((line): line is string => line !== null).join("\n");
+}
+
+/**
+ * Context key set on a run whose log was written through the live stripper
+ * (heartbeat.ts). Its log, excerpts, result and error are already clean, so
+ * reads skip the read-time pass (and its queries) for it.
+ */
+export const PRIVATE_LOG_STRIPPED_CONTEXT_KEY = "paperclipPrivateLogStripped";
+
+export function runLogWasStripped(contextSnapshot: unknown): boolean {
+  return isRecord(contextSnapshot) && contextSnapshot[PRIVATE_LOG_STRIPPED_CONTEXT_KEY] === true;
+}
+
+const MEMORY_VERSIONS_PER_AGENT = 50;
+const CORRECTIONS_PER_AGENT = 200;
+
+/**
+ * The read-time state per agent, for stored logs or excerpts of its runs, from
+ * every recent memory version and correction it has had: a stored log does not
+ * say which version its run saw. Two queries for any number of agents.
+ */
+export async function loadAgentsPrivateLogStates(
+  db: Pick<Db, "select">,
+  agentIds: Iterable<string>,
+): Promise<Map<string, PrivateLogState>> {
+  const ids = [...new Set(agentIds)];
+  const states = new Map<string, PrivateLogState>();
+  if (ids.length === 0) return states;
+  const rankedMemory = db
+    .select({
+      agentId: agentMemory.agentId,
+      content: agentMemory.content,
+      rank: sql<number>`row_number() over (partition by ${agentMemory.agentId} order by ${agentMemory.version} desc)`.as("rank"),
+    })
+    .from(agentMemory)
+    .where(inArray(agentMemory.agentId, ids))
+    .as("ranked_memory");
+  const rankedCorrections = db
+    .select({
+      agentId: agentCorrections.agentId,
+      summary: agentCorrections.summary,
+      details: agentCorrections.details,
+      rank: sql<number>`row_number() over (partition by ${agentCorrections.agentId} order by ${agentCorrections.createdAt} desc)`.as("rank"),
+    })
+    .from(agentCorrections)
+    .where(inArray(agentCorrections.agentId, ids))
+    .as("ranked_corrections");
   const [memories, corrections] = await Promise.all([
-    db
-      .select({ content: agentMemory.content })
-      .from(agentMemory)
-      .where(eq(agentMemory.agentId, agentId))
-      .orderBy(desc(agentMemory.version))
-      .limit(50),
-    db
-      .select({ summary: agentCorrections.summary, details: agentCorrections.details })
-      .from(agentCorrections)
-      .where(eq(agentCorrections.agentId, agentId))
-      .orderBy(desc(agentCorrections.createdAt))
-      .limit(200),
+    db.select().from(rankedMemory).where(lte(rankedMemory.rank, MEMORY_VERSIONS_PER_AGENT)),
+    db.select().from(rankedCorrections).where(lte(rankedCorrections.rank, CORRECTIONS_PER_AGENT)),
   ]);
-  return createPrivateLogState({
-    memoryContents: memories.map((row) => row.content),
-    corrections: corrections.map((row) => ({
-      summary: row.summary,
-      lessons: isRecord(row.details) ? row.details.lessons : undefined,
-    })),
-  });
+  for (const id of ids) {
+    states.set(
+      id,
+      createPrivateLogState({
+        memoryContents: memories.filter((row) => row.agentId === id).map((row) => row.content),
+        corrections: corrections
+          .filter((row) => row.agentId === id)
+          .map((row) => ({ summary: row.summary, lessons: isRecord(row.details) ? row.details.lessons : undefined })),
+      }),
+    );
+  }
+  return states;
+}
+
+/** {@link loadAgentsPrivateLogStates} for one agent. */
+export async function loadAgentPrivateLogState(db: Pick<Db, "select">, agentId: string): Promise<PrivateLogState> {
+  return (await loadAgentsPrivateLogStates(db, [agentId])).get(agentId)!;
 }

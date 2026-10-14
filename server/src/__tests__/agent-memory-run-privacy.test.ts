@@ -167,6 +167,8 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
   const ADMIN = "memory-admin-user";
   let receivedMemory: unknown = null;
   let receivedCorrections: unknown = null;
+  /** When set, the next run fails with an error message that repeats a lesson. */
+  let failNextWithLesson = false;
 
   beforeAll(async () => {
     for (const key of ["PAPERCLIP_HOME", "PAPERCLIP_INSTANCE_ID", "PAPERCLIP_SECRETS_MASTER_KEY", "RUN_LOG_BASE_PATH"]) {
@@ -224,7 +226,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       issueId: null,
       kind: "task_reopened",
       summary: `Person A reopened the note. Their reason: "${CORRECTION_SECRET} totals are off".`,
-      details: { lessons: [`Check totals ${CORRECTION_SECRET}`] },
+      details: { lessons: [`Check the totals twice ${CORRECTION_SECRET}`] },
       sourceActorType: "user",
       sourceActorId: STEWARD,
     });
@@ -247,13 +249,17 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
         const env = { PAPERCLIP_WAKE_PAYLOAD_JSON: stringifyPaperclipWakePayload(ctx.context.paperclipWake) ?? "" };
         await ctx.onMeta?.({ adapterType: FAKE_ADAPTER, command: "fake", prompt, context: ctx.context, env });
         const memoryContent = String((ctx.context[AGENT_MEMORY_CONTEXT_KEY] as { content?: string } | undefined)?.content ?? "");
-        const lines = memoryTrafficLines(memoryContent, `Check totals ${CORRECTION_SECRET}`);
+        const lines = memoryTrafficLines(memoryContent, `Check the totals twice ${CORRECTION_SECRET}`);
         // Split mid-line across writes, as a pipe can.
         const text = `${lines.join("\n")}\n`;
         const cut = Math.floor(text.length / 2);
         await ctx.onLog("stdout", text.slice(0, cut));
         await ctx.onLog("stdout", text.slice(cut));
-        return { exitCode: 0, signal: null, timedOut: false, summary: `Kept the lesson: Check totals ${CORRECTION_SECRET}` };
+        if (failNextWithLesson) {
+          failNextWithLesson = false;
+          return { exitCode: 1, signal: null, timedOut: false, errorMessage: `Stopped before: Check the totals twice ${CORRECTION_SECRET}` };
+        }
+        return { exitCode: 0, signal: null, timedOut: false, summary: `Kept the lesson: Check the totals twice ${CORRECTION_SECRET}` };
       },
       testEnvironment: async () => ({ adapterType: FAKE_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
     } as never);
@@ -313,6 +319,8 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       for (const secret of [SECRET, CORRECTION_SECRET]) expect(JSON.stringify(row)).not.toContain(secret);
       expect(row!.contextSnapshot).not.toHaveProperty(AGENT_MEMORY_CONTEXT_KEY);
       expect(row!.contextSnapshot).not.toHaveProperty("paperclipAgentCorrections");
+      // Marked as written through the live stripper, so reads skip their pass.
+      expect(row!.contextSnapshot).toMatchObject({ paperclipPrivateLogStripped: true });
 
       const events = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, queued!.id));
       const invoke = events.find((event) => event.eventType === "adapter.invoke");
@@ -376,7 +384,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     const store = getRunLogStore();
     const handle = await store.begin({ companyId: COMPANY, agentId: AGENT, runId });
     const currentMemory = (await agentMemoryService(db).active(COMPANY, AGENT))!.content;
-    const lines = memoryTrafficLines(currentMemory, `Check totals ${CORRECTION_SECRET}`);
+    const lines = memoryTrafficLines(currentMemory, `Check the totals twice ${CORRECTION_SECRET}`);
     for (const [index, line] of lines.entries()) {
       await store.append(handle, { stream: "stdout", chunk: `${line}\n`, ts: new Date().toISOString(), seq: index + 1 });
     }
@@ -403,6 +411,48 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     }
     expect(log.body.content).toContain("mcp__agentdash__get_issue");
     expect(detail.body.stdoutExcerpt).toContain(OTHER_TOOL_LINE);
+  });
+
+  it("a failed run's error is stored without a lesson echo", async () => {
+    // The correction was delivered and spent by the first run; queue another.
+    await recordAgentCorrection(db, {
+      companyId: COMPANY, agentId: AGENT, issueId: null, kind: "task_reopened",
+      summary: `Reopened again. Their reason: "${CORRECTION_SECRET} still off".`,
+      details: { lessons: [`Check the totals twice ${CORRECTION_SECRET}`] }, sourceActorType: "user", sourceActorId: STEWARD,
+    });
+    failNextWithLesson = true;
+    const heartbeat = heartbeatService(db);
+    const queued = await heartbeat.invoke(AGENT, "on_demand", {}, "manual");
+    const finished = await waitForRunToFinish(heartbeat, queued!.id);
+    expect(finished?.status).toBe("failed");
+    const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued!.id));
+    expect(row!.error).toBeTruthy();
+    expect(row!.error).not.toContain(CORRECTION_SECRET);
+  }, 30_000);
+
+  it("the run list cleans the summary and error of runs written before the fix, and leaves marked runs as stored", async () => {
+    const oldRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: oldRunId, companyId: COMPANY, agentId: AGENT, invocationSource: "on_demand", status: "failed",
+      contextSnapshot: { wakeReason: "manual" },
+      resultJson: { summary: `Kept: Check the totals twice ${CORRECTION_SECRET}` },
+      error: `Failed after: Check the totals twice ${CORRECTION_SECRET}`,
+    });
+    const markedRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: markedRunId, companyId: COMPANY, agentId: AGENT, invocationSource: "on_demand", status: "succeeded",
+      contextSnapshot: { wakeReason: "manual", paperclipPrivateLogStripped: true },
+      resultJson: { summary: "Clean summary, written through the stripper" },
+    });
+    const member = appAs(asUser(MEMBER, "member"));
+    const list = await request(member).get(`/api/companies/${COMPANY}/heartbeat-runs`).query({ agentId: AGENT, limit: 200 });
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(list.body)).not.toContain(CORRECTION_SECRET);
+    const old = (list.body as Array<{ id: string; resultJson: { summary?: string } | null; error: string | null }>).find((r) => r.id === oldRunId);
+    expect(old?.resultJson?.summary).toContain(AGENT_CORRECTIONS_WITHHELD_TEXT);
+    expect(old?.error).toContain(AGENT_CORRECTIONS_WITHHELD_TEXT);
+    const marked = (list.body as Array<{ id: string; resultJson: { summary?: string } | null }>).find((r) => r.id === markedRunId);
+    expect(marked?.resultJson?.summary).toBe("Clean summary, written through the stripper");
   });
 
   it("migration 0152 removes memory and corrections from runs recorded before the fix, once, keeping the rest", async () => {
@@ -554,7 +604,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       // Its run log holds the memory traffic too (an old log: written raw).
       const store = getRunLogStore();
       const handle = await store.begin({ companyId: COMPANY, agentId, runId });
-      for (const [index, line] of memoryTrafficLines(memory.content, `Check totals ${CORRECTION_SECRET}`).entries()) {
+      for (const [index, line] of memoryTrafficLines(memory.content, `Check the totals twice ${CORRECTION_SECRET}`).entries()) {
         await store.append(handle, { stream: "stdout", chunk: `${line}\n`, ts: new Date().toISOString(), seq: index + 1 });
       }
       const finalized = await store.finalize(handle);

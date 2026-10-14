@@ -218,15 +218,121 @@ describe("run log: memory tool traffic and lesson echoes are withheld", () => {
     expect(out.endsWith("\n")).toBe(true);
   });
 
-  it("stored NDJSON pages: chunk by chunk, call ids carried across entries", () => {
+  it("stored NDJSON pages: chunk by chunk, call ids carried across entries", async () => {
     const entries = [claudeGetCall, claudeGetResult, codexOtherCommand].map((chunk, index) =>
       JSON.stringify({ ts: `2026-10-0${index + 1}T00:00:00.000Z`, stream: "stdout", chunk: `${chunk}\n` }),
     );
-    const out = withholdPrivateContentFromRunLogNdjson(entries.join("\n"), freshState());
+    const out = await withholdPrivateContentFromRunLogNdjson(entries.join("\n"), freshState());
     expect(out).not.toContain("SENTINEL");
     expect(out.split("\n")[2]).toBe(entries[2]);
     // A page boundary that cut an entry: content pass only, still no echo.
     const cutLine = entries[1]!.slice(10);
-    expect(withholdPrivateContentFromRunLogNdjson(cutLine, freshState())).not.toContain("SENTINEL");
+    expect(await withholdPrivateContentFromRunLogNdjson(cutLine, freshState())).not.toContain("SENTINEL");
+  });
+
+  it("learns memory written by a curl PUT body, so the agent's later echo is withheld", () => {
+    const state = freshState();
+    const lesson = "SENTINEL-curl-lesson ask the steward before quoting any rate";
+    const body = JSON.stringify({ content: `${MEMORY}\n- ${lesson}`, expectedVersion: 3 });
+    const claudePut = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_curl_put",
+            name: "Bash",
+            input: { command: `curl -s -X PUT "$PAPERCLIP_API_URL/api/companies/${COMPANY_ID}/agents/${AGENT_ID}/memory" -H 'Content-Type: application/json' -d '${body}'` },
+          },
+        ],
+      },
+    });
+    const echo = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `Noted: ${lesson}.` }] } });
+    const out = [claudePut, echo].map((line) => withholdPrivateContentFromLogLine(line, state)).join("\n");
+    expect(out).not.toContain("SENTINEL");
+
+    const codexState = freshState();
+    const codexPut = JSON.stringify({
+      type: "item.completed",
+      item: {
+        id: "item_11",
+        type: "command_execution",
+        command: `bash -lc "curl -s -X PUT $PAPERCLIP_API_URL/api/companies/${COMPANY_ID}/agents/${AGENT_ID}/memory --data '${body}'"`,
+        aggregated_output: "{}",
+        exit_code: 0,
+        status: "completed",
+      },
+    });
+    const codexEcho = JSON.stringify({ type: "item.completed", item: { id: "item_12", type: "agent_message", text: `Saved ${lesson}` } });
+    expect([codexPut, codexEcho].map((line) => withholdPrivateContentFromLogLine(line, codexState)).join("\n")).not.toContain("SENTINEL");
+  });
+
+  it("learns memory from a memory-route result before withholding it", () => {
+    const fresh = "SENTINEL-fresh-lesson label every figure as estimated";
+    const resultJson = JSON.stringify({ memory: { id: "m", version: 5, content: `Notes\n- ${fresh}`, authorKind: "steward" } });
+    // A state that has never seen this version (a steward edit after the run began).
+    const claudeState = createPrivateLogState({});
+    const lines = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_get2", name: "mcp__agentdash__agentdashGetMyMemory", input: {} }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ tool_use_id: "toolu_get2", type: "tool_result", content: [{ type: "text", text: resultJson }] }] } }),
+      JSON.stringify({ type: "result", result: `Done; remember: ${fresh}.` }),
+    ];
+    expect(lines.map((line) => withholdPrivateContentFromLogLine(line, claudeState)).join("\n")).not.toContain("SENTINEL");
+
+    const codexState = createPrivateLogState({});
+    const codexLines = [
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_13", type: "command_execution", command: `curl -s $PAPERCLIP_API_URL/api/companies/${COMPANY_ID}/agents/${AGENT_ID}/memory`, aggregated_output: resultJson, exit_code: 0, status: "completed" },
+      }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_14", type: "agent_message", text: fresh } }),
+    ];
+    expect(codexLines.map((line) => withholdPrivateContentFromLogLine(line, codexState)).join("\n")).not.toContain("SENTINEL");
+  });
+
+  it("does not withhold short common lines that happen to be in memory", () => {
+    const state = createPrivateLogState({ memoryContents: ["- git status --short\n- Run the full test suite before closing"] });
+    expect(withholdPrivateContentFromLogLine("$ git status --short", state)).toBe("$ git status --short");
+    expect(withholdPrivateContentFromLogLine("next: Run the full test suite before closing", state)).toBe(
+      `next: ${AGENT_MEMORY_WITHHELD_TEXT}`,
+    );
+  });
+
+  it("stored NDJSON: joins a stream's chunks, so a line split across entries is caught and re-framed", async () => {
+    const echoLine = "Ask the steward before quoting any rate.";
+    const state = createPrivateLogState({ corrections: [{ summary: "Sent back.", lessons: [echoLine] }] });
+    // No stored copy at all: an update whose version never landed.
+    const unstored = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "toolu_lost", name: "mcp__agentdash__agentdashUpdateMyMemory", input: { content: "SENTINEL-unstored never stored anywhere" } }] },
+    });
+    const entry = (stream: string, chunk: string, ts: string) => JSON.stringify({ ts, stream, chunk });
+    const page = [
+      entry("stdout", "Ask t", "t1"),
+      entry("stderr", "warning: slow\n", "t2"),
+      entry("stdout", "he steward before quoting any rate.\n", "t3"),
+      entry("stdout", unstored.slice(0, 50), "t4"),
+      entry("stdout", `${unstored.slice(50)}\n`, "t5"),
+      entry("stdout", "plain tail\n", "t6"),
+    ].join("\n");
+    const out = await withholdPrivateContentFromRunLogNdjson(page, state);
+    expect(out).not.toContain("SENTINEL");
+    expect(out).not.toContain("he steward before quoting");
+    const entries = out.split("\n").map((line) => JSON.parse(line) as { ts: string; stream: string; chunk: string });
+    // Re-framed: each cleaned line sits in the entry where it ended; the
+    // stderr entry and the untouched tail keep their place.
+    expect(entries.map((e) => e.ts)).toEqual(["t2", "t3", "t5", "t6"]);
+    expect(entries[1]!.chunk).toBe(`${AGENT_CORRECTIONS_WITHHELD_TEXT}\n`);
+    expect(JSON.parse(entries[2]!.chunk).message.content[0].input).toEqual({ withheld: AGENT_MEMORY_WITHHELD_TEXT });
+    expect(entries[3]!.chunk).toBe("plain tail\n");
+  });
+
+  it("stored NDJSON: a memory result whose call was on an earlier page is still recognised by its shape", async () => {
+    const resultJson = JSON.stringify({ memory: { id: "m", version: 2, content: "SENTINEL-nextpage lead with the total", authorKind: "agent" } });
+    const resultLine = JSON.stringify({ type: "user", message: { content: [{ tool_use_id: "toolu_prev_page", type: "tool_result", content: [{ type: "text", text: resultJson }] }] } });
+    const page = JSON.stringify({ ts: "t9", stream: "stdout", chunk: `${resultLine}\n` });
+    const out = await withholdPrivateContentFromRunLogNdjson(page, createPrivateLogState({}));
+    expect(out).not.toContain("SENTINEL");
+    expect(out).toContain("toolu_prev_page");
   });
 });

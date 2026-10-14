@@ -93,11 +93,14 @@ import {
   withoutPrivateRunContext,
 } from "./run-private-content.js";
 import {
+  PRIVATE_LOG_STRIPPED_CONTEXT_KEY,
   createPrivateLogState,
   createPrivateLogStripper,
   loadAgentPrivateLogState,
+  loadAgentsPrivateLogStates,
   withholdPrivateContentFromRunLogNdjson,
   withholdPrivateContentFromValue,
+  type PrivateLogState,
 } from "./run-log-private-content.js";
 import { claimCorrectionsForRun } from "./agent-corrections.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
@@ -837,6 +840,7 @@ const heartbeatRunListContextColumns = {
   contextWakeReason: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'wakeReason'`.as("contextWakeReason"),
   contextWakeSource: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'wakeSource'`.as("contextWakeSource"),
   contextWakeTriggerDetail: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'wakeTriggerDetail'`.as("contextWakeTriggerDetail"),
+  contextPrivateLogStripped: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'paperclipPrivateLogStripped'`.as("contextPrivateLogStripped"),
 } as const;
 
 const heartbeatRunListResultColumns = {
@@ -916,6 +920,7 @@ const heartbeatRunLogAccessColumns = {
   id: heartbeatRuns.id,
   companyId: heartbeatRuns.companyId,
   agentId: heartbeatRuns.agentId,
+  privateLogStripped: sql<boolean>`coalesce((${heartbeatRuns.contextSnapshot} ->> 'paperclipPrivateLogStripped') = 'true', false)`.as("privateLogStripped"),
   logStore: heartbeatRuns.logStore,
   logRef: heartbeatRuns.logRef,
 } as const;
@@ -3427,6 +3432,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       else ${incoming}::jsonb end`;
   }
 
+  // AgentDash: the private-content state of each run this process executes,
+  // so its result and error are cleaned like its log. Bounded: the oldest
+  // entries go first (a run's state is only needed while it finishes).
+  const privateLogStatesByRun = new Map<string, PrivateLogState>();
+  function rememberPrivateLogState(runId: string, state: PrivateLogState) {
+    privateLogStatesByRun.delete(runId);
+    privateLogStatesByRun.set(runId, state);
+    while (privateLogStatesByRun.size > 500) {
+      const oldest = privateLogStatesByRun.keys().next().value;
+      if (oldest === undefined) break;
+      privateLogStatesByRun.delete(oldest);
+    }
+  }
+  function withholdRunPrivateContent<T>(runId: string, value: T): T {
+    const state = privateLogStatesByRun.get(runId);
+    return state ? withholdPrivateContentFromValue(value, state) : value;
+  }
+
   async function setRunStatus(
     runId: string,
     status: string,
@@ -3451,10 +3474,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // AgentDash (document access, slice 6b): adapters copy stdout into
         // the result (and errors can quote it); framed document text is
         // withheld from the stored row as it is from the log.
+        // AgentDash: and so are the run's memory tool traffic and any echo of
+        // its memory or corrections (run-log-private-content.ts), for a run
+        // this process is executing.
         ...(patch?.resultJson !== undefined
-          ? { resultJson: preserveWorkspaceAttempt(stripFramedDocumentTextInValue(patch.resultJson, documentStripOptions(runId, "run_row"))) }
+          ? { resultJson: preserveWorkspaceAttempt(withholdRunPrivateContent(runId, stripFramedDocumentTextInValue(patch.resultJson, documentStripOptions(runId, "run_row")))) }
           : {}),
-        ...(typeof patch?.error === "string" ? { error: stripFramedDocumentText(patch.error, documentStripOptions(runId, "run_row")) } : {}),
+        ...(typeof patch?.error === "string" ? { error: withholdRunPrivateContent(runId, stripFramedDocumentText(patch.error, documentStripOptions(runId, "run_row"))) } : {}),
         ...(patch?.usageJson !== undefined ? { usageJson: preserveWorkspaceAttemptProvenance(patch.usageJson) } : {}),
         errorCode: sql`case when ${workspacePersistenceHasProvenance} and ${heartbeatRuns.resultJson}->'workspacePersistence'->>'recoveryRequired' = 'true' then ${WORKSPACE_PERSISTENCE_RECOVERY_CODE} else ${patch?.errorCode === undefined ? heartbeatRuns.errorCode : patch.errorCode} end`,
         updatedAt: new Date() })
@@ -4148,10 +4174,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
    * for older ones, and costs two small queries per page.
    */
   async function withholdPrivateContentFromServedLog<T extends { content: string }>(
-    run: { id: string; agentId?: string | null },
+    run: { id: string; agentId?: string | null; privateLogStripped?: boolean | null },
     page: T,
+    signal?: AbortSignal,
   ): Promise<T> {
-    if (!page.content) return page;
+    if (!page.content || run.privateLogStripped === true) return page;
     const agentId =
       run.agentId ??
       (await db
@@ -4161,7 +4188,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .then((rows) => rows[0]?.agentId ?? null));
     if (!agentId) return page;
     const state = await loadAgentPrivateLogState(db, agentId);
-    return { ...page, content: withholdPrivateContentFromRunLogNdjson(page.content, state) };
+    return { ...page, content: await withholdPrivateContentFromRunLogNdjson(page.content, state, { signal }) };
   }
 
   async function appendRunEvent(
@@ -7474,6 +7501,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       stdout: createPrivateLogStripper(privateLogState),
       stderr: createPrivateLogStripper(privateLogState),
     };
+    // Marks the run (persisted with its context below, before any output) so
+    // reads skip the read-time pass; setRunStatus cleans the result and error.
+    context[PRIVATE_LOG_STRIPPED_CONTEXT_KEY] = true;
+    rememberPrivateLogState(run.id, privateLogState);
     // Numbers only, for the run's result: null when nothing was withheld or
     // went wrong, so ordinary runs carry no extra key.
     const documentFrameAnomaliesForResult = (): Record<string, number> | null => {
@@ -8001,8 +8032,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         adapterResult.summary ?? null,
         agent.adapterType,
       ), documentStripOptions(run.id, "run_row")), documentFrameAnomalies);
-      // The result (final summary, result text) is served with the run row:
-      // no memory tool traffic or lesson echo in it either.
+      // Cleaned here as well as in setRunStatus: later writes (run facts)
+      // reuse this object directly.
       persistedResultJson = withholdPrivateContentFromValue(persistedResultJson, privateLogState);
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
@@ -10709,6 +10740,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const rows = limit
         ? await query.limit(limit).offset(safeOffset)
         : await query.offset(safeOffset);
+      // AgentDash: rows of runs written before the live stripper existed get
+      // their summary and error cleaned of memory traffic and lesson echoes
+      // (run-log-private-content.ts); two queries for the whole page.
+      const unstripped = rows.filter(
+        (row) => (row as { contextPrivateLogStripped?: string | null }).contextPrivateLogStripped !== "true",
+      );
+      const privateStates = await loadAgentsPrivateLogStates(db, unstripped.map((row) => row.agentId));
       return rows.map((row) => {
         const {
           contextIssueId,
@@ -10719,6 +10757,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           contextWakeReason,
           contextWakeSource,
           contextWakeTriggerDetail,
+          contextPrivateLogStripped,
           resultSummary,
           resultResult,
           resultMessage,
@@ -10735,13 +10774,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           resultTotalCostUsd?: string | null;
           resultCostUsd?: string | null;
           resultCostUsdCamel?: string | null;
+          contextPrivateLogStripped?: string | null;
         };
+        const privateState = contextPrivateLogStripped === "true" ? undefined : privateStates.get(row.agentId);
+        const clean = <V,>(value: V): V => (privateState ? withholdPrivateContentFromValue(value, privateState) : value);
 
         // AgentDash (GH #992): `error` and the projected resultJson text
         // fields can carry a credential a provider echoed back; rows written
         // before persist-time redaction get the serve-time pass here.
         return redactRunLogValue({
           ...rest,
+          ...("error" in rest ? { error: clean((rest as { error?: string | null }).error ?? null) } : {}),
           contextSnapshot: summarizeHeartbeatRunContextSnapshot({
             issueId: contextIssueId,
             taskId: contextTaskId,
@@ -10754,7 +10797,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           }),
           resultJson: safeForLegacyEncoding
             ? null
-            : summarizeHeartbeatRunListResultJson({
+            : clean(summarizeHeartbeatRunListResultJson({
                 summary: resultSummary,
                 result: resultResult,
                 message: resultMessage,
@@ -10762,7 +10805,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 totalCostUsd: resultTotalCostUsd,
                 costUsd: resultCostUsd,
                 costUsdCamel: resultCostUsdCamel,
-              }),
+              })),
         });
       });
     },
@@ -10878,6 +10921,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         id: string;
         companyId: string;
         agentId?: string | null;
+        privateLogStripped?: boolean | null;
         logStore: string | null;
         logRef: string | null;
       },
@@ -10913,7 +10957,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // truncated first/last lines handled as plain text. Bytes the store
         // marks as written-redacted skip the pass; the rest is redacted in
         // event-loop-yielding slices and capped per request (nextOffset pages).
-        ...(await withholdPrivateContentFromServedLog(run, await redactRunLogReadForServe(result, { signal: opts?.signal }))),
+        ...(await withholdPrivateContentFromServedLog(
+          run,
+          await redactRunLogReadForServe(result, { signal: opts?.signal }),
+          opts?.signal,
+        )),
       };
     },
 

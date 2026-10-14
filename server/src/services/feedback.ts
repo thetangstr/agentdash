@@ -41,7 +41,11 @@ import {
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { notFound, unprocessable } from "../errors.js";
 import { withholdPrivateContentFromRunEvents, withoutPrivateRunContext } from "./run-private-content.js";
-import { loadAgentPrivateLogState, withholdPrivateContentFromRunLogNdjson } from "./run-log-private-content.js";
+import {
+  loadAgentPrivateLogState,
+  runLogWasStripped,
+  withholdPrivateContentFromRunLogNdjson,
+} from "./run-log-private-content.js";
 import { agentInstructionsService } from "./agent-instructions.js";
 import {
   createFeedbackRedactionState,
@@ -1530,8 +1534,8 @@ async function buildFeedbackTraceBundleFromRow(
       // Memory tool traffic and lesson echoes are withheld from the log, as
       // when it is served (run-log-private-content.ts).
       const rawLogText = await readFullRunLog(run);
-      const logText = rawLogText
-        ? withholdPrivateContentFromRunLogNdjson(rawLogText, await loadAgentPrivateLogState(db, run.agentId))
+      const logText = rawLogText && !runLogWasStripped(run.contextSnapshot)
+        ? await withholdPrivateContentFromRunLogNdjson(rawLogText, await loadAgentPrivateLogState(db, run.agentId))
         : rawLogText;
       const logEntries = parseRunLogEntries(logText);
       const stdoutText = logEntries

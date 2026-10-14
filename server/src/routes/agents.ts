@@ -154,7 +154,11 @@ import {
   withholdPrivateContentFromRunEvents,
   withoutPrivateRunContext,
 } from "../services/run-private-content.js";
-import { loadAgentPrivateLogState, withholdPrivateContentFromValue } from "../services/run-log-private-content.js";
+import {
+  loadAgentPrivateLogState,
+  runLogWasStripped,
+  withholdPrivateContentFromValue,
+} from "../services/run-log-private-content.js";
 import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
 import { resolveAgentWakePolicy } from "../services/agent-wake-policy.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -5170,11 +5174,12 @@ export function agentRoutes(
     // services/run-private-content.ts and run-log-private-content.ts); this
     // covers a row written before that: its context, and the output excerpts
     // and result that can carry memory tool traffic or a lesson echo.
-    const privateLog = await loadAgentPrivateLogState(db, run.agentId);
-    const outputFields = withholdPrivateContentFromValue(
-      { stdoutExcerpt: run.stdoutExcerpt, stderrExcerpt: run.stderrExcerpt, resultJson: run.resultJson, error: run.error },
-      privateLog,
-    );
+    const outputFields = runLogWasStripped(run.contextSnapshot)
+      ? {}
+      : withholdPrivateContentFromValue(
+          { stdoutExcerpt: run.stdoutExcerpt, stderrExcerpt: run.stderrExcerpt, resultJson: run.resultJson, error: run.error },
+          await loadAgentPrivateLogState(db, run.agentId),
+        );
     res.json(
       redactRunLogValue(redactCurrentUserValue(
         {
