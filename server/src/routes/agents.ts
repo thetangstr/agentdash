@@ -150,6 +150,10 @@ import {
 import { redactApprovalForReader, redactEventPayload, redactMonthlySpendForReader } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "../services/run-log-redaction.js";
+import {
+  withholdAgentMemoryFromRunEvents,
+  withoutAgentMemoryContext,
+} from "../services/agent-memory-redaction.js";
 import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
 import { resolveAgentWakePolicy } from "../services/agent-wake-policy.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -5161,9 +5165,16 @@ export function agentRoutes(
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
     // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
     // excerpts — provider 401s can echo credentials into all of them.
+    // Runs recorded before memory became private still carry it in their
+    // context snapshot; it is readable only through the memory route.
     res.json(
       redactRunLogValue(redactCurrentUserValue(
-        { ...run, retryExhaustedReason, outputSilence: await heartbeat.buildRunOutputSilence(run) },
+        {
+          ...run,
+          contextSnapshot: withoutAgentMemoryContext(run.contextSnapshot),
+          retryExhaustedReason,
+          outputSilence: await heartbeat.buildRunOutputSilence(run),
+        },
         await getCurrentUserRedactionOptions(),
       )),
     );
@@ -5250,7 +5261,11 @@ export function agentRoutes(
 
     const afterSeq = Number(req.query.afterSeq ?? 0);
     const limit = Number(req.query.limit ?? 200);
-    const events = await heartbeat.listEvents(runId, Number.isFinite(afterSeq) ? afterSeq : 0, Number.isFinite(limit) ? limit : 200);
+    // `adapter.invoke` events recorded before memory became private still
+    // carry it in their prompt and context; withheld here as at write time.
+    const events = withholdAgentMemoryFromRunEvents(
+      await heartbeat.listEvents(runId, Number.isFinite(afterSeq) ? afterSeq : 0, Number.isFinite(limit) ? limit : 200),
+    );
     const currentUserRedactionOptions = await getCurrentUserRedactionOptions();
     const redactedEvents = events.map((event) =>
       redactCurrentUserValue({

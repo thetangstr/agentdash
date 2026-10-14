@@ -2,7 +2,7 @@ import { Router } from "express";
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { writeAgentMemorySchema } from "@paperclipai/shared";
-import { forbidden } from "../errors.js";
+import { forbidden, notFound } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { agentMemoryService } from "../services/agent-memory.js";
@@ -15,13 +15,23 @@ import {
 /**
  * AgentDash: an agent's durable memory.
  *
- * Reading is company-wide on purpose. Memory is org knowledge, not a secret
- * store — an agent's mandate already tells it to keep credentials and personal
- * data out — and a colleague who can see what an agent believes can correct it
- * before it acts on something stale. Anything that must not be readable does not
- * belong in memory at all.
+ * Reading is narrow. Memory is where an agent keeps the lessons it took from
+ * its person's corrections — how that person wants work done — so it reads
+ * like a private working notebook rather than org knowledge. Readers:
  *
- * Writing is narrower, and deliberately wider than `agent-directives`:
+ *   - the agent itself, and only its own memory;
+ *   - its ACTIVE steward, the person those lessons came from;
+ *   - a company administrator (owner/admin), an instance admin, or the local
+ *     implicit board, who answer for every agent on the instance.
+ *
+ * Everyone else, including another agent, gets 404: the memory is nonexistent
+ * to them, the same answer agent visibility gives for a hidden agent. Copies of
+ * memory text outside this route (the run's context snapshot and its
+ * `adapter.invoke` event) are withheld at write and at read; see
+ * `services/agent-memory-redaction.ts`.
+ *
+ * Writing is narrower than reading for agents, and deliberately wider than
+ * `agent-directives`:
  *
  *   - the agent itself, and only its own memory. This is the normal path; memory
  *     is the agent's own belief state and it is the author of record.
@@ -71,17 +81,37 @@ export function agentMemoryRoutes(db: Db) {
     throw forbidden("Only the agent itself, its steward, or a company admin can write its memory");
   }
 
+  /**
+   * The read gate: the agent itself, its active steward, or an administrator.
+   * Anyone else gets the 404 a missing memory would get, never a 403 that
+   * confirms there is something to withhold.
+   */
+  async function requireReader(req: Request, companyId: string, agentId: string): Promise<void> {
+    assertCompanyAccess(req, companyId);
+    if (req.actor.type === "agent") {
+      if (req.actor.agentId === agentId) return;
+      throw notFound("Agent memory not found");
+    }
+    const userId = req.actor.userId ?? null;
+    if (userId) {
+      const steward = await stewardships.activeByAgent(companyId, agentId);
+      if (steward && steward.userId === userId) return;
+    }
+    if (await isCompanyAdministrator(access, req, companyId)) return;
+    throw notFound("Agent memory not found");
+  }
+
   router.get("/companies/:companyId/agents/:agentId/memory", async (req, res) => {
     const companyId = req.params.companyId as string;
     const agentId = req.params.agentId as string;
-    assertCompanyAccess(req, companyId);
+    await requireReader(req, companyId, agentId);
     res.json({ memory: await memory.active(companyId, agentId) });
   });
 
   router.get("/companies/:companyId/agents/:agentId/memory/history", async (req, res) => {
     const companyId = req.params.companyId as string;
     const agentId = req.params.agentId as string;
-    assertCompanyAccess(req, companyId);
+    await requireReader(req, companyId, agentId);
     res.json({
       active: await memory.active(companyId, agentId),
       history: await memory.history(companyId, agentId),

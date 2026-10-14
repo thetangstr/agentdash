@@ -350,4 +350,122 @@ describeEmbeddedPostgres("agent memory", () => {
     expect(await agentMemoryService(db).active(company.id, agent.id)).toBeNull();
     expect(await agentMemoryService(db).activeForRuntime(company.id, agent.id)).toBeNull();
   });
+
+  /**
+   * Readership. Memory holds what an agent learned from its person's
+   * corrections, so it reads like a private working notebook: the agent, the
+   * person who stewards it, and administrators. Everyone else — a colleague in
+   * the same company, another agent — gets 404, as for an agent hidden by
+   * agent visibility: the memory is nonexistent to them.
+   */
+  describe("who may read", () => {
+    const SECRET = "Lesson: the client prefers metric units in every draft.";
+
+    async function seedReadable() {
+      const company = await createCompany(db);
+      const agent = await createAgent(db, company.id, "Forge");
+      const peer = await createAgent(db, company.id, "Beacon");
+      const steward = await createUserMember(db, company.id, "operator");
+      const admin = await createUserMember(db, company.id, "admin");
+      const bystander = await createUserMember(db, company.id, "operator");
+      await agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: steward,
+        assignedByUserId: admin,
+      });
+      await agentMemoryService(db).write(company.id, agent.id, {
+        content: SECRET,
+        authorKind: "agent",
+        authorAgentId: agent.id,
+      });
+      return { company, agent, peer, steward, admin, bystander };
+    }
+
+    const asBoard = (companyId: string, userId: string) => ({
+      type: "board",
+      source: "session",
+      userId,
+      companyId,
+      companyIds: [companyId],
+    });
+    const asAgent = (companyId: string, agentId: string) => ({
+      type: "agent",
+      agentId,
+      companyId,
+      companyIds: [companyId],
+    });
+
+    async function readBoth(actor: Record<string, unknown>, companyId: string, agentId: string) {
+      const app = await createApp(db, actor);
+      const live = await requestApp(app, (baseUrl) =>
+        request(baseUrl).get(`/api/companies/${companyId}/agents/${agentId}/memory`),
+      );
+      const history = await requestApp(app, (baseUrl) =>
+        request(baseUrl).get(`/api/companies/${companyId}/agents/${agentId}/memory/history`),
+      );
+      return { live, history };
+    }
+
+    it("the steward reads it", async () => {
+      const s = await seedReadable();
+      const { live, history } = await readBoth(asBoard(s.company.id, s.steward), s.company.id, s.agent.id);
+      expect(live.status).toBe(200);
+      expect(live.body.memory.content).toBe(SECRET);
+      expect(history.status).toBe(200);
+      expect(history.body.history).toHaveLength(1);
+    });
+
+    it("the agent itself reads it", async () => {
+      const s = await seedReadable();
+      const { live, history } = await readBoth(asAgent(s.company.id, s.agent.id), s.company.id, s.agent.id);
+      expect(live.status).toBe(200);
+      expect(live.body.memory.content).toBe(SECRET);
+      expect(history.status).toBe(200);
+    });
+
+    it("a company admin reads it", async () => {
+      const s = await seedReadable();
+      const { live, history } = await readBoth(asBoard(s.company.id, s.admin), s.company.id, s.agent.id);
+      expect(live.status).toBe(200);
+      expect(live.body.memory.content).toBe(SECRET);
+      expect(history.status).toBe(200);
+    });
+
+    it("an instance admin reads it", async () => {
+      const s = await seedReadable();
+      const actor = { ...asBoard(s.company.id, randomUUID()), isInstanceAdmin: true };
+      const { live, history } = await readBoth(actor, s.company.id, s.agent.id);
+      expect(live.status).toBe(200);
+      expect(history.status).toBe(200);
+    });
+
+    it("a member who is neither its steward nor an admin gets 404 with no content", async () => {
+      const s = await seedReadable();
+      const { live, history } = await readBoth(asBoard(s.company.id, s.bystander), s.company.id, s.agent.id);
+      expect(live.status).toBe(404);
+      expect(history.status).toBe(404);
+      expect(JSON.stringify(live.body)).not.toContain(SECRET);
+      expect(JSON.stringify(history.body)).not.toContain(SECRET);
+    });
+
+    it("another agent in the same company gets 404 with no content", async () => {
+      const s = await seedReadable();
+      const { live, history } = await readBoth(asAgent(s.company.id, s.peer.id), s.company.id, s.agent.id);
+      expect(live.status).toBe(404);
+      expect(history.status).toBe(404);
+      expect(JSON.stringify(live.body)).not.toContain(SECRET);
+    });
+
+    it("a former steward loses read access when the stewardship moves", async () => {
+      const s = await seedReadable();
+      await agentStewardshipService(db).transfer(s.company.id, s.agent.id, {
+        userId: s.bystander,
+        transferredByUserId: s.admin,
+      });
+      const former = await readBoth(asBoard(s.company.id, s.steward), s.company.id, s.agent.id);
+      expect(former.live.status).toBe(404);
+      const current = await readBoth(asBoard(s.company.id, s.bystander), s.company.id, s.agent.id);
+      expect(current.live.status).toBe(200);
+    });
+  });
 });

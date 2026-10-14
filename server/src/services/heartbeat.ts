@@ -88,6 +88,10 @@ import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { agentDirectivesService } from "./agent-directives.js";
 import { agentMemoryService } from "./agent-memory.js";
+import {
+  withholdAgentMemoryFromInvocationPayload,
+  withoutAgentMemoryContext,
+} from "./agent-memory-redaction.js";
 import { claimCorrectionsForRun } from "./agent-corrections.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
@@ -6786,6 +6790,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // It enters as TEXT, like directives, and nothing downstream reads it for an
     // authorization decision. The agent wrote it, so treating it as a capability
     // input would let an agent widen its own reach by describing it.
+    //
+    // It is readable only by the agent, its steward and admins, so it lives in
+    // this in-memory context and nowhere else: every write of the context to
+    // the run row below goes through `withoutAgentMemoryContext`, and the
+    // `adapter.invoke` event drops it from its prompt and context.
     const workforce = await workforceService(db).getRuntimeContext(agent.companyId, agent.id, issueId ?? undefined);
     if (workforce) context.paperclipWorkforce = workforce;
     else delete context.paperclipWorkforce;
@@ -7158,7 +7167,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await db
         .update(heartbeatRuns)
         .set({
-          contextSnapshot: context,
+          contextSnapshot: withoutAgentMemoryContext(context),
           updatedAt: new Date(),
         })
         .where(eq(heartbeatRuns.id, run.id));
@@ -7264,7 +7273,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await db
       .update(heartbeatRuns)
       .set({
-        contextSnapshot: context,
+        contextSnapshot: withoutAgentMemoryContext(context),
         updatedAt: new Date(),
       })
       .where(eq(heartbeatRuns.id, run.id));
@@ -7455,7 +7464,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .set({
           startedAt,
           sessionIdBefore: runtimeForAdapter.sessionDisplayId ?? runtimeForAdapter.sessionId,
-          contextSnapshot: context,
+          contextSnapshot: withoutAgentMemoryContext(context),
           updatedAt: new Date(),
         })
         .where(eq(heartbeatRuns.id, run.id))
@@ -7641,7 +7650,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await db
           .update(heartbeatRuns)
           .set({
-            contextSnapshot: context,
+            contextSnapshot: withoutAgentMemoryContext(context),
             updatedAt: new Date(),
           })
           .where(eq(heartbeatRuns.id, run.id));
@@ -7676,7 +7685,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           level: "info",
           message: "adapter invocation",
           payload: {
-            ...(meta as unknown as Record<string, unknown>),
+            // The agent's memory is in this prompt and context; the event is
+            // readable by the whole company and streamed live, so it is not.
+            ...withholdAgentMemoryFromInvocationPayload(meta as unknown as Record<string, unknown>),
             ...(modelProfileMetadata ? { modelProfile: modelProfileMetadata } : {}),
           },
         });
@@ -7740,7 +7751,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await db
           .update(heartbeatRuns)
           .set({
-            contextSnapshot: context,
+            contextSnapshot: withoutAgentMemoryContext(context),
             updatedAt: new Date(),
           })
           .where(eq(heartbeatRuns.id, run.id));

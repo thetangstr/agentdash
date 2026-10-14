@@ -549,7 +549,7 @@ export function stewardWorkReplyService(
         : null;
     if (stored.lessons.length > 0) {
       readback.push(
-        `lessons for ${agentName ?? "the agent"} (it saves them to its own memory, which you and your company's members can read):`,
+        `lessons for ${agentName ?? "the agent"} (it saves them to its own memory, which only you, the agent and your company's admins can read):`,
         ...stored.lessons.map((lesson) => `  - ${lesson}`),
       );
     }

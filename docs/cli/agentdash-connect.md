@@ -3,7 +3,7 @@ title: "agentdash-connect"
 summary: "Connect Claude Code or Codex on your machine to your AgentDash agent."
 ---
 
-> Generated at commit `e68823397` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `c93b20e08` by `scripts/docs/generate-mcp-reference.mjs`.
 > This page is `packages/connect/README.md`, the README published to npm with the package. Edit the README, then run `pnpm docs:mcp-reference`.
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
@@ -354,7 +354,8 @@ was decided or changed, or the issue is no longer yours, nothing is sent and
 you are told why. Your agent is woken at most once (an answer wakes it only
 when its question asked for that), and its next run carries a short
 "what changed" summary (its draft against your revision, your answer against
-its recommendation, your lessons), which it saves to its own memory.
+its recommendation, your lessons), which it saves to its own memory. Only
+you, the agent and your company's admins can read that memory.
 
 Files go back too, but only on issues in projects with restricted access (on
 any other issue the read-back says they were left out, and you attach them on

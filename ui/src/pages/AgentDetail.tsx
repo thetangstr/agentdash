@@ -54,6 +54,7 @@ import { PageSkeleton } from "../components/PageSkeleton";
 import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { MandatesTab } from "../components/agent/MandatesTab";
+import { AgentMemorySection } from "../components/agent/AgentMemorySection";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
@@ -2111,6 +2112,10 @@ function AgentOverview({
         <h3 className="text-sm font-medium">Costs</h3>
         <CostsSection runtimeState={runtimeState} runs={runs} chatTurns={agent.runHealth?.chatTurns ?? 0} costRow={agentCostRows?.total} />
       </div>
+
+      {/* Memory: shown only to the agent's steward and admins; the server
+          answers everyone else 404 and the section renders nothing. */}
+      <AgentMemorySection companyId={agent.companyId} agentId={agent.id} />
     </div>
   );
 }

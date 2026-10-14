@@ -343,8 +343,9 @@ you. Each comes with the reason, when one was given.
   figures, rates, quotes or document text. A lesson is about how the work is
   done, not what it said.
 - **Your lessons are yours.** They live in your own memory, not in another
-  agent's. Your steward and your company's members can read your memory, and
-  your steward or an admin can correct it.
+  agent's. Only you, your steward and your company's admins can read your
+  memory (other members and other agents cannot), and your steward or an admin
+  can correct it.
 - **When the same lesson comes up the third time, propose a mandate change to
   your steward.** Open a `request_board_approval` linked to the issue, with
   `payload.kind: "mandate_change"`, the exact sentence you propose for your
