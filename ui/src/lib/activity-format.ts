@@ -666,10 +666,10 @@ const FEATURE_FLAG_LABELS: Record<string, string> = {
 
 /** A flag key as words: a known label, else the key without its `_enabled` suffix. */
 function featureFlagLabel(flagKey: string): string {
-  const known = FEATURE_FLAG_LABELS[flagKey];
-  if (known) return known;
-  const stripped = flagKey.replace(/_enabled$/, "");
-  return humanizeValue(stripped || flagKey);
+  // Own keys only: a key such as `constructor` must not pick up a built-in.
+  if (Object.hasOwn(FEATURE_FLAG_LABELS, flagKey)) return FEATURE_FLAG_LABELS[flagKey]!;
+  const words = flagKey.replace(/_enabled$/, "").replace(/_+/g, " ").trim();
+  return words || flagKey;
 }
 
 function formatFeatureFlagUpdatedVerb(details: ActivityDetails): string | null {

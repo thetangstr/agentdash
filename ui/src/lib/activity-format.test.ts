@@ -813,6 +813,20 @@ describe("hosted activity gaps", () => {
     expect(formatActivityVerb("feature_flag.updated", { flagKey: "some_new_thing_enabled", enabled: false })).toBe(
       "turned off the some new thing feature",
     );
+    // Built-in object property names are ordinary unknown keys, not lookups.
+    expect(formatActivityVerb("feature_flag.updated", { flagKey: "constructor", enabled: true })).toBe(
+      "turned on the constructor feature",
+    );
+    expect(formatActivityVerb("feature_flag.updated", { flagKey: "__proto__", enabled: true })).toBe(
+      "turned on the proto feature",
+    );
+    // Stray underscores collapse; a bare suffix falls back to the key itself.
+    expect(formatActivityVerb("feature_flag.updated", { flagKey: "foo__bar_enabled", enabled: true })).toBe(
+      "turned on the foo bar feature",
+    );
+    expect(formatActivityVerb("feature_flag.updated", { flagKey: "_enabled", enabled: false })).toBe(
+      "turned off the _enabled feature",
+    );
     expect(formatActivityVerb("feature_flag.updated", null)).toBe("changed a feature flag");
   });
 
