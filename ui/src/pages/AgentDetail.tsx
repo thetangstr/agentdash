@@ -57,6 +57,7 @@ import { MandatesTab } from "../components/agent/MandatesTab";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
+import { formatTokenCeilingLift } from "../lib/token-ceiling-lift";
 import { BILLED_BY_PROVIDER_NOTE, NOT_MEASURED_TEXT, TOKENS_COUNTED_NOTE, TOKEN_CEILING_COUNT_NOTE, countedTokens, formatCountedTokens } from "../lib/token-figures";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
@@ -1618,7 +1619,7 @@ export function AgentRunHealthSummary({ runHealth }: { runHealth: AgentRunHealth
           {runHealth.tokenCeilingPause ? (
             <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">
               Timer and comment wakes are paused until{" "}
-              {formatDate(runHealth.tokenCeilingPause.liftsAt)} UTC
+              {formatTokenCeilingLift(runHealth.tokenCeilingPause.liftsAt)}
               {runHealth.tokenCeilingPause.reason === "unmetered runaway guard"
                 ? " — unmetered runaway guard (spend cannot be verified)"
                 : " — daily token ceiling"}
@@ -2163,7 +2164,7 @@ export function TokenCeilingStatusLine({
       {status.paused ? (
         <span className="font-medium">
           {" "}
-          Timer and comment wakes are paused until {formatDate(status.liftsAt)} UTC — assigned
+          Timer and comment wakes are paused until {formatTokenCeilingLift(status.liftsAt)} — assigned
           work and manual wakes still run.
           {status.pauseReason === "unmetered runaway guard"
             ? ` Paused by the unmetered runaway guard: ${status.unmeteredPausableRuns} unmetered unattended runs today that should have metered, so spend cannot be verified.`
