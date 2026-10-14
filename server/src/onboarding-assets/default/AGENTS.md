@@ -345,7 +345,9 @@ you. Each comes with the reason, when one was given.
 - **Your lessons are yours.** They live in your own memory, not in another
   agent's. Only you, your steward and your company's admins can read your
   memory (other members and other agents cannot), and your steward or an admin
-  can correct it.
+  can correct it. Do not quote your memory or your lessons verbatim in
+  comments, documents or your final summary: those are read by the whole
+  company.
 - **When the same lesson comes up the third time, propose a mandate change to
   your steward.** Open a `request_board_approval` linked to the issue, with
   `payload.kind: "mandate_change"`, the exact sentence you propose for your

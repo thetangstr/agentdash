@@ -41,6 +41,7 @@ import {
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { notFound, unprocessable } from "../errors.js";
 import { withholdPrivateContentFromRunEvents, withoutPrivateRunContext } from "./run-private-content.js";
+import { loadAgentPrivateLogState, withholdPrivateContentFromRunLogNdjson } from "./run-log-private-content.js";
 import { agentInstructionsService } from "./agent-instructions.js";
 import {
   createFeedbackRedactionState,
@@ -1526,7 +1527,12 @@ async function buildFeedbackTraceBundleFromRow(
         .from(heartbeatRunEvents)
         .where(eq(heartbeatRunEvents.runId, run.id))
         .orderBy(asc(heartbeatRunEvents.seq));
-      const logText = await readFullRunLog(run);
+      // Memory tool traffic and lesson echoes are withheld from the log, as
+      // when it is served (run-log-private-content.ts).
+      const rawLogText = await readFullRunLog(run);
+      const logText = rawLogText
+        ? withholdPrivateContentFromRunLogNdjson(rawLogText, await loadAgentPrivateLogState(db, run.agentId))
+        : rawLogText;
       const logEntries = parseRunLogEntries(logText);
       const stdoutText = logEntries
         .filter((entry) => entry.stream === "stdout")

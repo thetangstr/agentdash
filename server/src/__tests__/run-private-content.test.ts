@@ -109,10 +109,16 @@ describe("private run content", () => {
     expect(withholdPrivateContentFromText(cut, null)).toBe(`before\n${AGENT_CORRECTIONS_WITHHELD_TEXT}`);
   });
 
-  it("leaves a section that was already withheld inside its frame alone", () => {
-    const framed = renderAgentMemoryPrompt(memory).replace(memory.content, AGENT_MEMORY_WITHHELD_TEXT);
-    const prompt = `intro\n\n${framed}\n\n## Task\nwork`;
-    expect(withholdPrivateContentFromText(prompt, null)).toBe(prompt);
+  it("withholds a section whose heading is still there, even when a marker appears elsewhere", () => {
+    const prompt = `${AGENT_MEMORY_WITHHELD_TEXT}\n\nintro\n\n${renderAgentMemoryPrompt(memory)}`;
+    const out = withholdPrivateContentFromText(prompt, null);
+    expect(out).not.toContain(SECRET);
+    expect(out).toBe(`${AGENT_MEMORY_WITHHELD_TEXT}\n\nintro\n\n${AGENT_MEMORY_WITHHELD_TEXT}`);
+  });
+
+  it("leaves a non-JSON string that starts with a brace and mentions corrections as text", () => {
+    const payload = { note: '{ "corrections" were discussed, not a payload' };
+    expect(withholdPrivateContentFromInvocationPayload(payload)).toEqual(payload);
   });
 
   it("finds a section by its heading when no context copy is available", () => {

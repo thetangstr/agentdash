@@ -49,7 +49,7 @@ import { featureFlagsService } from "../services/feature-flags.ts";
 import { feedbackService } from "../services/feedback.ts";
 import { companyPortabilityService } from "../services/company-portability.ts";
 import { subscribeCompanyLiveEvents } from "../services/live-events.ts";
-import { resetRunLogStoreForTests } from "../services/run-log-store.ts";
+import { getRunLogStore, resetRunLogStoreForTests } from "../services/run-log-store.ts";
 import { resetInstanceSecretsCacheForTests } from "../services/run-log-redaction.ts";
 import { registerServerAdapter, unregisterServerAdapter } from "../adapters/registry.ts";
 import { agentRoutes } from "../routes/agents.js";
@@ -62,6 +62,33 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 
 const SECRET = "SENTINEL-agent-memory-5d1c";
 const CORRECTION_SECRET = "SENTINEL-correction-77e0";
+/** A tool line that is not memory traffic; it must reach the log unchanged. */
+const OTHER_TOOL_LINE = JSON.stringify({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", id: "toolu_issue", name: "mcp__agentdash__get_issue", input: { issueId: "AMP-1" } }] },
+  session_id: "sess-1",
+});
+
+/**
+ * What claude_local (stream-json) and codex_local (exec --json) print when the
+ * agent reads and rewrites its memory, plus an echo of a lesson in the
+ * agent's own words and an unrelated tool call.
+ */
+function memoryTrafficLines(memoryContent: string, lesson: string): string[] {
+  const memoryJson = JSON.stringify({ memory: { version: 1, content: memoryContent, authorKind: "agent" } });
+  const rewritten = `${memoryContent}\n- ${lesson}`;
+  return [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_get", name: "mcp__agentdash__agentdashGetMyMemory", input: {} }] }, session_id: "sess-1" }),
+    JSON.stringify({ type: "user", message: { content: [{ tool_use_id: "toolu_get", type: "tool_result", content: [{ type: "text", text: memoryJson }] }] }, session_id: "sess-1", tool_use_result: [{ type: "text", text: memoryJson }] }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_put", name: "mcp__agentdash__agentdashUpdateMyMemory", input: { content: rewritten, expectedVersion: 1 } }] }, session_id: "sess-1" }),
+    JSON.stringify({ type: "user", message: { content: [{ tool_use_id: "toolu_put", type: "tool_result", content: [{ type: "text", text: JSON.stringify({ memory: { version: 2, content: rewritten } }) }] }] }, session_id: "sess-1" }),
+    JSON.stringify({ type: "item.started", item: { id: "item_4", type: "mcp_tool_call", server: "agentdash", tool: "agentdashGetMyMemory", arguments: {}, result: null, error: null, status: "in_progress" } }),
+    JSON.stringify({ type: "item.completed", item: { id: "item_4", type: "mcp_tool_call", server: "agentdash", tool: "agentdashGetMyMemory", arguments: {}, result: { content: [{ type: "text", text: memoryJson }], structured_content: null }, error: null, status: "completed" } }),
+    JSON.stringify({ type: "item.completed", item: { id: "item_5", type: "mcp_tool_call", server: "agentdash", tool: "agentdashUpdateMyMemory", arguments: { content: rewritten, expectedVersion: 1 }, result: { content: [{ type: "text", text: "{\"memory\":{\"version\":2}}" }], structured_content: null }, error: null, status: "completed" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `Done. I will keep: ${lesson}` }] }, session_id: "sess-1" }),
+    OTHER_TOOL_LINE,
+  ];
+}
 const FAKE_ADAPTER = "agent_memory_privacy_test";
 
 async function waitForRunToFinish(heartbeat: ReturnType<typeof heartbeatService>, runId: string, timeoutMs = 15_000) {
@@ -219,7 +246,14 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
         ].join("\n\n");
         const env = { PAPERCLIP_WAKE_PAYLOAD_JSON: stringifyPaperclipWakePayload(ctx.context.paperclipWake) ?? "" };
         await ctx.onMeta?.({ adapterType: FAKE_ADAPTER, command: "fake", prompt, context: ctx.context, env });
-        return { exitCode: 0, signal: null, timedOut: false };
+        const memoryContent = String((ctx.context[AGENT_MEMORY_CONTEXT_KEY] as { content?: string } | undefined)?.content ?? "");
+        const lines = memoryTrafficLines(memoryContent, `Check totals ${CORRECTION_SECRET}`);
+        // Split mid-line across writes, as a pipe can.
+        const text = `${lines.join("\n")}\n`;
+        const cut = Math.floor(text.length / 2);
+        await ctx.onLog("stdout", text.slice(0, cut));
+        await ctx.onLog("stdout", text.slice(cut));
+        return { exitCode: 0, signal: null, timedOut: false, summary: `Kept the lesson: Check totals ${CORRECTION_SECRET}` };
       },
       testEnvironment: async () => ({ adapterType: FAKE_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
     } as never);
@@ -298,10 +332,24 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       expect(detail.status).toBe(200);
       const served = await request(member).get(`/api/heartbeat-runs/${queued!.id}/events`);
       expect(served.status).toBe(200);
+      const log = await request(member).get(`/api/heartbeat-runs/${queued!.id}/log`);
+      expect(log.status).toBe(200);
       for (const secret of [SECRET, CORRECTION_SECRET]) {
         expect(JSON.stringify(detail.body)).not.toContain(secret);
         expect(JSON.stringify(served.body)).not.toContain(secret);
+        expect(JSON.stringify(log.body)).not.toContain(secret);
+        // The stored log file, the excerpt and the result, as written.
+        expect(JSON.stringify(row)).not.toContain(secret);
       }
+      // Members still read the run log: the memory calls are there, their
+      // content is not, and other tool calls are untouched.
+      expect(log.body.content).toContain("agentdashGetMyMemory");
+      expect(log.body.content).toContain(JSON.stringify(OTHER_TOOL_LINE).slice(1, -1));
+      expect(detail.body.stdoutExcerpt).toContain("mcp__agentdash__get_issue");
+      expect(detail.body.stdoutExcerpt).toContain(AGENT_MEMORY_WITHHELD_TEXT);
+      const liveLog = live.filter((entry) => entry.includes("heartbeat.run.log")).join("\n");
+      expect(liveLog).toContain("agentdashUpdateMyMemory");
+      for (const secret of [SECRET, CORRECTION_SECRET]) expect(liveLog).not.toContain(secret);
     } finally {
       unsubscribe();
     }
@@ -323,6 +371,40 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     }
   });
 
+  it("a run log and excerpt written before the fix are served to a member without memory traffic or lessons", async () => {
+    const { runId } = await seedHistoricalRun(db, COMPANY, AGENT);
+    const store = getRunLogStore();
+    const handle = await store.begin({ companyId: COMPANY, agentId: AGENT, runId });
+    const currentMemory = (await agentMemoryService(db).active(COMPANY, AGENT))!.content;
+    const lines = memoryTrafficLines(currentMemory, `Check totals ${CORRECTION_SECRET}`);
+    for (const [index, line] of lines.entries()) {
+      await store.append(handle, { stream: "stdout", chunk: `${line}\n`, ts: new Date().toISOString(), seq: index + 1 });
+    }
+    const finalized = await store.finalize(handle);
+    await db
+      .update(heartbeatRuns)
+      .set({
+        logStore: handle.store,
+        logRef: handle.logRef,
+        logBytes: finalized.bytes,
+        stdoutExcerpt: lines.join("\n"),
+      })
+      .where(eq(heartbeatRuns.id, runId));
+    // The raw file does hold it: this is the old-data case.
+    expect(JSON.stringify(await store.read({ store: handle.store, logRef: handle.logRef }))).toContain(SECRET);
+
+    const member = appAs(asUser(MEMBER, "member"));
+    const log = await request(member).get(`/api/heartbeat-runs/${runId}/log`);
+    expect(log.status).toBe(200);
+    const detail = await request(member).get(`/api/heartbeat-runs/${runId}`);
+    for (const secret of [SECRET, CORRECTION_SECRET]) {
+      expect(JSON.stringify(log.body)).not.toContain(secret);
+      expect(JSON.stringify(detail.body)).not.toContain(secret);
+    }
+    expect(log.body.content).toContain("mcp__agentdash__get_issue");
+    expect(detail.body.stdoutExcerpt).toContain(OTHER_TOOL_LINE);
+  });
+
   it("migration 0152 removes memory and corrections from runs recorded before the fix, once, keeping the rest", async () => {
     const { runId, eventId } = await seedHistoricalRun(db, COMPANY, AGENT);
     // A truncated stored prompt: the exact section cannot be found, so it is
@@ -334,6 +416,18 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
         payload: sql`jsonb_set(${heartbeatRunEvents.payload}, '{prompt}', to_jsonb(left(${heartbeatRunEvents.payload} ->> 'prompt', strpos(${heartbeatRunEvents.payload} ->> 'prompt', ${CORRECTION_SECRET}) + 4)))`,
       })
       .where(eq(heartbeatRunEvents.id, truncated.eventId));
+
+    // Not affected: a run whose wake carried an empty correction list and no
+    // memory is left exactly as it is.
+    const untouchedRunId = randomUUID();
+    const untouchedContext = { wakeReason: "manual", paperclipWake: { reason: "x", corrections: [], correctionsRemaining: 0 } };
+    await db.insert(heartbeatRuns).values({
+      id: untouchedRunId, companyId: COMPANY, agentId: AGENT, invocationSource: "on_demand", status: "succeeded", contextSnapshot: untouchedContext,
+    });
+    const [untouchedEvent] = await db.insert(heartbeatRunEvents).values({
+      companyId: COMPANY, runId: untouchedRunId, agentId: AGENT, seq: 1, eventType: "adapter.invoke", stream: "system", level: "info",
+      message: "adapter invocation", payload: { prompt: "plain prompt", context: untouchedContext },
+    }).returning();
 
     const migration = await readFile(
       new URL("../../../packages/db/src/migrations/0152_withhold_agent_lessons_from_runs.sql", import.meta.url),
@@ -365,6 +459,13 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     expect(payload.env.HOME).toBe("/home/agent");
     expect(payload.context).toEqual({ wakeReason: "manual", paperclipWake: { reason: "issue_reopened" } });
     expect((cut!.payload as { prompt: string }).prompt.endsWith(AGENT_CORRECTIONS_WITHHELD_TEXT)).toBe(true);
+    // Each section goes as a whole, heading included.
+    expect(payload.prompt).not.toContain("## Your Memory");
+    expect(payload.prompt).not.toContain("## What changed");
+    const [untouchedRow] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, untouchedRunId));
+    expect(untouchedRow!.contextSnapshot).toEqual(untouchedContext);
+    const [untouchedAfter] = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.id, untouchedEvent!.id));
+    expect(untouchedAfter!.payload).toEqual(untouchedEvent!.payload);
 
     // Idempotent: a second pass changes nothing.
     await apply();
@@ -450,6 +551,17 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
         message: "adapter invocation",
         payload: { prompt: renderAgentMemoryPrompt(memory), context: { [AGENT_MEMORY_CONTEXT_KEY]: memory } },
       });
+      // Its run log holds the memory traffic too (an old log: written raw).
+      const store = getRunLogStore();
+      const handle = await store.begin({ companyId: COMPANY, agentId, runId });
+      for (const [index, line] of memoryTrafficLines(memory.content, `Check totals ${CORRECTION_SECRET}`).entries()) {
+        await store.append(handle, { stream: "stdout", chunk: `${line}\n`, ts: new Date().toISOString(), seq: index + 1 });
+      }
+      const finalized = await store.finalize(handle);
+      await db
+        .update(heartbeatRuns)
+        .set({ logStore: handle.store, logRef: handle.logRef, logBytes: finalized.bytes })
+        .where(eq(heartbeatRuns.id, runId));
       const issueId = randomUUID();
       await db.insert(issues).values({ id: issueId, companyId: COMPANY, title: "Feedback target", status: "todo" });
       const [comment] = await db.insert(issueComments).values({
@@ -465,6 +577,8 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       expect(JSON.stringify(bundle.body)).not.toContain(SECRET);
       expect(JSON.stringify(bundle.body)).not.toContain(CORRECTION_SECRET);
       expect((bundle.body.files as Array<{ path: string }>).some((f) => f.path === "paperclip/run.json")).toBe(true);
+      const runLog = (bundle.body.files as Array<{ path: string; contents: string }>).find((f) => f.path === "paperclip/run-log.ndjson");
+      expect(runLog?.contents).toContain("agentdashGetMyMemory");
       expect((bundle.body.files as Array<{ path: string }>).some((f) => f.path.startsWith("adapter/"))).toBe(false);
     } finally {
       if (previousClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;

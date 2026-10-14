@@ -154,6 +154,7 @@ import {
   withholdPrivateContentFromRunEvents,
   withoutPrivateRunContext,
 } from "../services/run-private-content.js";
+import { loadAgentPrivateLogState, withholdPrivateContentFromValue } from "../services/run-log-private-content.js";
 import { parseRunWindowBounds, readAgentRunWindow } from "../services/agent-run-window.js";
 import { resolveAgentWakePolicy } from "../services/agent-wake-policy.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -5166,11 +5167,19 @@ export function agentRoutes(
     // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
     // excerpts — provider 401s can echo credentials into all of them.
     // Memory and corrections are withheld from run records (see
-    // services/run-private-content.ts); this covers a row written before that.
+    // services/run-private-content.ts and run-log-private-content.ts); this
+    // covers a row written before that: its context, and the output excerpts
+    // and result that can carry memory tool traffic or a lesson echo.
+    const privateLog = await loadAgentPrivateLogState(db, run.agentId);
+    const outputFields = withholdPrivateContentFromValue(
+      { stdoutExcerpt: run.stdoutExcerpt, stderrExcerpt: run.stderrExcerpt, resultJson: run.resultJson, error: run.error },
+      privateLog,
+    );
     res.json(
       redactRunLogValue(redactCurrentUserValue(
         {
           ...run,
+          ...outputFields,
           contextSnapshot: withoutPrivateRunContext(run.contextSnapshot),
           retryExhaustedReason,
           outputSilence: await heartbeat.buildRunOutputSilence(run),

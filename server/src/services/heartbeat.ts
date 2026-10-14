@@ -92,6 +92,13 @@ import {
   withholdPrivateContentFromInvocationPayload,
   withoutPrivateRunContext,
 } from "./run-private-content.js";
+import {
+  createPrivateLogState,
+  createPrivateLogStripper,
+  loadAgentPrivateLogState,
+  withholdPrivateContentFromRunLogNdjson,
+  withholdPrivateContentFromValue,
+} from "./run-log-private-content.js";
 import { claimCorrectionsForRun } from "./agent-corrections.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
@@ -4134,6 +4141,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
   }
 
+  /**
+   * AgentDash: a stored log page with the agent's memory tool traffic and
+   * lesson echoes withheld (run-log-private-content.ts). Logs written since
+   * the live stripper existed are already clean and pass unchanged; this is
+   * for older ones, and costs two small queries per page.
+   */
+  async function withholdPrivateContentFromServedLog<T extends { content: string }>(
+    run: { id: string; agentId?: string | null },
+    page: T,
+  ): Promise<T> {
+    if (!page.content) return page;
+    const agentId =
+      run.agentId ??
+      (await db
+        .select({ agentId: heartbeatRuns.agentId })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, run.id))
+        .then((rows) => rows[0]?.agentId ?? null));
+    if (!agentId) return page;
+    const state = await loadAgentPrivateLogState(db, agentId);
+    return { ...page, content: withholdPrivateContentFromRunLogNdjson(page.content, state) };
+  }
+
   async function appendRunEvent(
     run: typeof heartbeatRuns.$inferSelect,
     seq: number,
@@ -7426,6 +7456,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       stdout: createDocumentTextStripper(documentStripOptions(run.id, "stdout")),
       stderr: createDocumentTextStripper(documentStripOptions(run.id, "stderr")),
     };
+    // AgentDash: the agent's memory and corrections are readable only by the
+    // agent, its steward and admins, but this log is readable by the company.
+    // Memory tool traffic and any echo of this run's memory or corrections are
+    // withheld before anything stores or streams a chunk (log file, excerpts,
+    // live events); see run-log-private-content.ts. Line-buffered per stream,
+    // so a JSON line split across chunks is still recognised.
+    const privateLogState = createPrivateLogState({
+      memoryContents: [
+        (parseObject(context[AGENT_MEMORY_CONTEXT_KEY]) as { content?: unknown }).content as string | undefined,
+      ],
+      corrections: Array.isArray(context[AGENT_CORRECTIONS_CONTEXT_KEY])
+        ? (context[AGENT_CORRECTIONS_CONTEXT_KEY] as Array<{ summary?: unknown; lessons?: unknown }>)
+        : [],
+    });
+    const privateLogStrippers = {
+      stdout: createPrivateLogStripper(privateLogState),
+      stderr: createPrivateLogStripper(privateLogState),
+    };
     // Numbers only, for the run's result: null when nothing was withheld or
     // went wrong, so ordinary runs carry no extra key.
     const documentFrameAnomaliesForResult = (): Record<string, number> | null => {
@@ -7551,7 +7599,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
       const onLog = async (stream: "stdout" | "stderr", chunk: string) => {
         if (chunk.length > 0) await noteRawOutput(stream);
-        const documentSafeChunk = documentTextStrippers[stream].push(chunk);
+        const documentSafeChunk = privateLogStrippers[stream].push(documentTextStrippers[stream].push(chunk));
         const githubSafeChunk = githubTokenRedactors[stream].push(
           redactCurrentUserText(documentSafeChunk, currentUserRedactionOptions),
         );
@@ -7561,7 +7609,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
       const flushLogRedactors = async () => {
         for (const stream of ["stdout", "stderr"] as const) {
-          const documentRest = redactCurrentUserText(documentTextStrippers[stream].flush(), currentUserRedactionOptions);
+          const privateRest =
+            privateLogStrippers[stream].push(documentTextStrippers[stream].flush()) + privateLogStrippers[stream].flush();
+          const documentRest = redactCurrentUserText(privateRest, currentUserRedactionOptions);
           const rest = githubTokenRedactors[stream].push(documentRest) + githubTokenRedactors[stream].flush();
           const pending =
             secretLogRedactors[stream].push(rest) + secretLogRedactors[stream].flush();
@@ -7951,6 +8001,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         adapterResult.summary ?? null,
         agent.adapterType,
       ), documentStripOptions(run.id, "run_row")), documentFrameAnomalies);
+      // The result (final summary, result text) is served with the run row:
+      // no memory tool traffic or lesson echo in it either.
+      persistedResultJson = withholdPrivateContentFromValue(persistedResultJson, privateLogState);
 
       // AgentDash (c3 review): an adopted outcome belongs to the actor that
       // owns the terminal write — the cancel path commits "cancelled" with
@@ -10824,6 +10877,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       runOrLookup: string | {
         id: string;
         companyId: string;
+        agentId?: string | null;
         logStore: string | null;
         logRef: string | null;
       },
@@ -10859,7 +10913,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // truncated first/last lines handled as plain text. Bytes the store
         // marks as written-redacted skip the pass; the rest is redacted in
         // event-loop-yielding slices and capped per request (nextOffset pages).
-        ...(await redactRunLogReadForServe(result, { signal: opts?.signal })),
+        ...(await withholdPrivateContentFromServedLog(run, await redactRunLogReadForServe(result, { signal: opts?.signal }))),
       };
     },
 

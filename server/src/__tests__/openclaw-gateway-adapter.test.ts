@@ -515,6 +515,57 @@ describe("openclaw gateway adapter execute", () => {
     }
   });
 
+  it("forwards corrections to the gateway but keeps them out of the run log", async () => {
+    const gateway = await createMockGatewayServer();
+    const logs: string[] = [];
+    const LESSON = "SENTINEL-openclaw-lesson lead with the total";
+    const SUMMARY = 'Person A reopened PAP-9. Their reason: "SENTINEL-openclaw-reason totals are off".';
+    try {
+      const result = await execute(
+        buildContext(
+          { url: gateway.url, headers: { "x-openclaw-token": "gateway-token" }, waitTimeoutMs: 2000 },
+          {
+            onLog: async (_stream, chunk) => {
+              logs.push(chunk);
+            },
+            context: {
+              issueId: "issue-123",
+              wakeReason: "issue_reopened",
+              paperclipWake: {
+                reason: "issue_reopened",
+                issue: { id: "issue-123", identifier: "PAP-9", title: "Note", status: "todo", priority: "medium" },
+                corrections: [
+                  {
+                    id: "c-1",
+                    kind: "task_reopened",
+                    issueId: "issue-123",
+                    issueIdentifier: "PAP-9",
+                    summary: SUMMARY,
+                    lessons: [LESSON],
+                    createdAt: "2026-10-01T00:00:00.000Z",
+                  },
+                ],
+                correctionsRemaining: 1,
+              },
+            },
+          },
+        ),
+      );
+      expect(result.exitCode).toBe(0);
+      // The agent still gets them.
+      const payload = gateway.getAgentPayload();
+      expect(JSON.stringify(payload)).toContain(LESSON);
+      expect((payload?.paperclip as { wake?: { corrections?: unknown[] } }).wake?.corrections).toHaveLength(1);
+      // The log does not.
+      const outbound = logs.find((entry) => entry.includes("outbound payload"));
+      expect(outbound).toBeTruthy();
+      expect(logs.join("")).not.toContain("SENTINEL-openclaw");
+      expect(outbound).not.toContain("correctionsRemaining");
+    } finally {
+      await gateway.close();
+    }
+  });
+
   it("fails fast when url is missing", async () => {
     const result = await execute(buildContext({}));
     expect(result.exitCode).toBe(1);

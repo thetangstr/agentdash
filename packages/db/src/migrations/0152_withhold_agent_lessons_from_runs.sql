@@ -4,19 +4,40 @@
 -- could read them:
 --
 --   heartbeat_runs.context_snapshot: paperclipAgentMemory,
---     paperclipAgentCorrections, paperclipAgentCorrectionsRemaining, and
---     paperclipWake.corrections / paperclipWake.correctionsRemaining;
+--     paperclipAgentCorrections(Remaining), paperclipWake.corrections(Remaining);
 --   heartbeat_run_events (adapter.invoke) payload: the same keys under
 --     `context`, the rendered `## Your Memory` and
 --     `## What changed (corrections to your work)` sections in `prompt`, and
 --     the wake payload JSON in env.PAPERCLIP_WAKE_PAYLOAD_JSON.
 --
 -- The server stops writing them (server/src/services/run-private-content.ts);
--- this removes the old copies once. Bounded: only rows that still carry a
--- private key, and only adapter.invoke events. Safe to re-run: a cleaned row
--- is left as it is. Memory is replaced exactly by its content; corrections by
--- their rendered summary and lesson lines. A section that cannot be found
--- exactly (a truncated stored prompt) is withheld from its heading to the end.
+-- this removes the old copies once.
+--
+-- Kept cheap. Only runs created since memory existed (2026-08-20) whose saved
+-- context actually holds memory or a non-empty correction list are touched
+-- (every wake payload carries `corrections: []`, which holds nothing); their
+-- events are found through the run_id index, adapter.invoke only. Run logs
+-- and output excerpts are not rewritten here: they are withheld when read
+-- (server/src/services/run-log-private-content.ts).
+--
+-- Each section is replaced as a whole, heading included, and only inside
+-- that section: memory from its heading through its content, corrections
+-- from their heading through the last of their lines. A section that cannot
+-- be matched exactly (a truncated stored prompt) is withheld from its heading
+-- to the end. Safe to re-run: a cleaned row no longer matches.
+CREATE FUNCTION pg_temp.agentdash_lessons_affected(ctx jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(ctx) = 'object' AND (
+    ctx ? 'paperclipAgentMemory'
+    OR CASE WHEN jsonb_typeof(ctx -> 'paperclipAgentCorrections') = 'array'
+      THEN jsonb_array_length(ctx -> 'paperclipAgentCorrections') > 0 ELSE false END
+    OR CASE WHEN jsonb_typeof(ctx #> '{paperclipWake,corrections}') = 'array'
+      THEN jsonb_array_length(ctx #> '{paperclipWake,corrections}') > 0 ELSE false END
+    OR CASE WHEN jsonb_typeof(ctx #> '{paperclipWake,correctionsRemaining}') = 'number'
+      THEN (ctx #>> '{paperclipWake,correctionsRemaining}')::numeric > 0 ELSE false END
+  )
+$$;
+--> statement-breakpoint
 CREATE FUNCTION pg_temp.agentdash_withhold_lessons_text(body text, ctx jsonb) RETURNS text
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -25,27 +46,43 @@ DECLARE
   corrections_marker constant text := '[corrections withheld: readable only by the agent, its steward and admins]';
   memory_content text;
   heading text;
+  section_start int;
+  section text;
+  found_at int;
+  section_end int;
   item jsonb;
   lesson jsonb;
   piece text;
-  pieces text[];
-  done text[] := '{}';
+  pieces text[] := '{}';
   all_found boolean := true;
-  any_items boolean := false;
+  more_line text;
 BEGIN
   IF out_text IS NULL THEN
     RETURN NULL;
   END IF;
 
-  memory_content := regexp_replace(coalesce(ctx #>> '{paperclipAgentMemory,content}', ''), E'^\\s+|\\s+$', '', 'g');
-  IF memory_content <> '' AND strpos(out_text, memory_content) > 0 THEN
-    out_text := replace(out_text, memory_content, memory_marker);
-  ELSIF strpos(out_text, memory_marker) = 0 THEN
-    heading := (regexp_match(out_text, E'(?:^|\\n)(## Your Memory[^\\n]*\\n\\nThis is what you chose to remember)'))[1];
-    IF heading IS NOT NULL THEN
-      out_text := left(out_text, strpos(out_text, heading) - 1) || memory_marker;
+  -- Memory: from its heading through its content.
+  heading := (regexp_match(out_text, E'(?:^|\\n)(## Your Memory[^\\n]*\\n\\nThis is what you chose to remember)'))[1];
+  IF heading IS NOT NULL THEN
+    section_start := strpos(out_text, heading);
+    section := substr(out_text, section_start);
+    memory_content := regexp_replace(coalesce(ctx #>> '{paperclipAgentMemory,content}', ''), E'^\\s+|\\s+$', '', 'g');
+    found_at := CASE WHEN memory_content <> '' THEN strpos(section, memory_content) ELSE 0 END;
+    IF found_at > 0 THEN
+      out_text := left(out_text, section_start - 1) || memory_marker
+        || substr(section, found_at + length(memory_content));
+    ELSE
+      out_text := left(out_text, section_start - 1) || memory_marker;
     END IF;
   END IF;
+
+  -- Corrections: from their heading through the last of their lines.
+  heading := (regexp_match(out_text, E'(?:^|\\n)(## What changed \\(corrections to your work\\)\\n\\nA person or another agent changed)'))[1];
+  IF heading IS NULL THEN
+    RETURN out_text;
+  END IF;
+  section_start := strpos(out_text, heading);
+  section := substr(out_text, section_start);
 
   FOR item IN
     SELECT value FROM jsonb_array_elements(
@@ -53,8 +90,6 @@ BEGIN
       || CASE WHEN jsonb_typeof(ctx -> 'paperclipAgentCorrections') = 'array' THEN ctx -> 'paperclipAgentCorrections' ELSE '[]'::jsonb END
     )
   LOOP
-    any_items := true;
-    pieces := '{}';
     IF coalesce(item ->> 'summary', '') <> '' THEN
       pieces := pieces || ('   ' || replace(item ->> 'summary', E'\n', E'\n   '));
     END IF;
@@ -65,33 +100,34 @@ BEGIN
         END IF;
       END LOOP;
     END IF;
-    -- Each rendered line is replaced where it appears, as rendered or
-    -- Hermes-escaped. The same item can be listed twice (the wake payload
-    -- and the context key); a line handled once counts as found.
-    FOREACH piece IN ARRAY pieces LOOP
-      IF piece = ANY(done) THEN
-        CONTINUE;
-      ELSIF strpos(out_text, piece) > 0 THEN
-        out_text := replace(out_text, piece, CASE WHEN left(piece, 5) = '   - ' THEN '   - ' ELSE '   ' END || corrections_marker);
-      ELSIF strpos(out_text, replace(piece, '{{', '{ {')) > 0 THEN
-        out_text := replace(out_text, replace(piece, '{{', '{ {'), CASE WHEN left(piece, 5) = '   - ' THEN '   - ' ELSE '   ' END || corrections_marker);
-      ELSE
-        all_found := false;
-      END IF;
-      done := done || piece;
-    END LOOP;
   END LOOP;
 
-  -- The section, when this pass could not withhold every line of it (a
-  -- truncated stored prompt), or when there is no context copy to match and
-  -- it has not been withheld before.
-  heading := (regexp_match(out_text, E'(?:^|\\n)(## What changed \\(corrections to your work\\)\\n\\nA person or another agent changed)'))[1];
-  IF heading IS NOT NULL
-    AND ((any_items AND NOT all_found) OR (NOT any_items AND strpos(out_text, corrections_marker) = 0)) THEN
-    out_text := left(out_text, strpos(out_text, heading) - 1) || corrections_marker;
+  section_end := 0;
+  IF cardinality(pieces) = 0 THEN
+    all_found := false;
   END IF;
+  FOREACH piece IN ARRAY pieces LOOP
+    found_at := strpos(section, piece);
+    IF found_at = 0 THEN
+      -- Hermes renders the section template-escaped.
+      piece := replace(piece, '{{', '{ {');
+      found_at := strpos(section, piece);
+    END IF;
+    IF found_at = 0 THEN
+      all_found := false;
+      EXIT;
+    END IF;
+    section_end := greatest(section_end, found_at + length(piece) - 1);
+  END LOOP;
 
-  RETURN out_text;
+  IF NOT all_found THEN
+    RETURN left(out_text, section_start - 1) || corrections_marker;
+  END IF;
+  more_line := substring(substr(section, section_end + 1) from E'^\\n\\n\\d+ more corrections? (?:is|are) waiting and will come with your next run\\.');
+  IF more_line IS NOT NULL THEN
+    section_end := section_end + length(more_line);
+  END IF;
+  RETURN left(out_text, section_start - 1) || corrections_marker || substr(section, section_end + 1);
 END;
 $$;
 --> statement-breakpoint
@@ -113,7 +149,12 @@ BEGIN
   BEGIN
     RETURN ((value::jsonb) - 'corrections' - 'correctionsRemaining')::text;
   EXCEPTION WHEN others THEN
-    RETURN '[corrections withheld: readable only by the agent, its steward and admins]';
+    -- This key only ever holds the wake payload; a copy that no longer
+    -- parses (cut short) still holds its corrections.
+    IF strpos(value, '"corrections":[{') > 0 THEN
+      RETURN '[corrections withheld: readable only by the agent, its steward and admins]';
+    END IF;
+    RETURN value;
   END;
 END;
 $$;
@@ -142,26 +183,22 @@ SET "payload" = (
   END
   FROM prompted
 )
-WHERE e."event_type" = 'adapter.invoke'
-  AND jsonb_typeof(e."payload") = 'object'
-  AND (
-    e."payload" -> 'context' ?| array['paperclipAgentMemory', 'paperclipAgentCorrections', 'paperclipAgentCorrectionsRemaining']
-    OR e."payload" #> '{context,paperclipWake}' ?| array['corrections', 'correctionsRemaining']
-    OR strpos(coalesce(e."payload" ->> 'prompt', ''), '## Your Memory') > 0
-    OR strpos(coalesce(e."payload" ->> 'prompt', ''), '## What changed (corrections to your work)') > 0
-    OR strpos(coalesce(e."payload" #>> '{env,PAPERCLIP_WAKE_PAYLOAD_JSON}', ''), '"corrections":[{') > 0
-  );
+FROM "heartbeat_runs" r
+WHERE r."created_at" >= '2026-08-20'
+  AND pg_temp.agentdash_lessons_affected(r."context_snapshot")
+  AND e."run_id" = r."id"
+  AND e."event_type" = 'adapter.invoke'
+  AND jsonb_typeof(e."payload") = 'object';
 --> statement-breakpoint
 UPDATE "heartbeat_runs"
 SET "context_snapshot" = pg_temp.agentdash_withhold_lessons_context("context_snapshot")
-WHERE jsonb_typeof("context_snapshot") = 'object'
-  AND (
-    "context_snapshot" ?| array['paperclipAgentMemory', 'paperclipAgentCorrections', 'paperclipAgentCorrectionsRemaining']
-    OR "context_snapshot" -> 'paperclipWake' ?| array['corrections', 'correctionsRemaining']
-  );
+WHERE "created_at" >= '2026-08-20'
+  AND pg_temp.agentdash_lessons_affected("context_snapshot");
 --> statement-breakpoint
 DROP FUNCTION pg_temp.agentdash_withhold_lessons_text(text, jsonb);
 --> statement-breakpoint
 DROP FUNCTION pg_temp.agentdash_withhold_lessons_context(jsonb);
 --> statement-breakpoint
 DROP FUNCTION pg_temp.agentdash_withhold_lessons_wake_json(text);
+--> statement-breakpoint
+DROP FUNCTION pg_temp.agentdash_lessons_affected(jsonb);

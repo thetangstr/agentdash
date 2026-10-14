@@ -28,7 +28,9 @@ import {
  * to them, the same answer agent visibility gives for a hidden agent. Copies of
  * memory text outside this route (the run's context snapshot and its
  * `adapter.invoke` event), and of the corrections memory is built from, are
- * withheld at write and at read; see `services/run-private-content.ts`.
+ * withheld at write and at read; see `services/run-private-content.ts`. The
+ * run log keeps the agent's memory tool calls but withholds their content and
+ * any echo of its memory or corrections; see `services/run-log-private-content.ts`.
  *
  * Writing is narrower than reading for agents, and deliberately wider than
  * `agent-directives`:

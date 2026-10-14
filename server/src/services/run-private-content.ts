@@ -104,11 +104,10 @@ function withholdText(text: string, sections: Array<{ text: string; withheld: st
   }
   // A section the exact pass missed (a truncated stored prompt, or no context
   // copy to render from) is withheld from its heading to the end of the text:
-  // losing the tail of an old record is the safe direction.
+  // losing the tail of an old record is the safe direction. A withheld
+  // section never keeps its heading (here, or in migration 0152), so a
+  // heading that is still there always means content that is still there.
   for (const start of SECTION_STARTS) {
-    // Already withheld (the exact pass above, or migration 0152, which keeps
-    // the section's fixed frame and withholds only what was in it).
-    if (out.includes(start.withheld)) continue;
     const match = start.re.exec(out);
     if (!match) continue;
     out = `${out.slice(0, match.index + match[1]!.length)}${start.withheld}`;
@@ -121,25 +120,29 @@ export function withholdPrivateContentFromText(text: string, context: unknown): 
   return withholdText(text, renderedPrivateSections(context));
 }
 
-/** A JSON-encoded wake payload (`PAPERCLIP_WAKE_PAYLOAD_JSON`) without its corrections. */
-function withholdFromWakePayloadJson(value: string): string {
-  if (!value.includes('"corrections"')) return value;
+/**
+ * A JSON-encoded wake payload (`PAPERCLIP_WAKE_PAYLOAD_JSON`) without its
+ * corrections, or null when the string is not a JSON object carrying them.
+ */
+function withholdFromWakePayloadJson(value: string): string | null {
+  if (!value.trimStart().startsWith("{") || !value.includes('"corrections"')) return null;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!isRecord(parsed)) return value;
-    const next = { ...parsed };
-    for (const key of PRIVATE_WAKE_KEYS) delete next[key];
-    return JSON.stringify(next);
+    parsed = JSON.parse(value);
   } catch {
-    return AGENT_CORRECTIONS_WITHHELD_TEXT;
+    return null;
   }
+  if (!isRecord(parsed) || !PRIVATE_WAKE_KEYS.some((key) => key in parsed)) return null;
+  const next = { ...parsed };
+  for (const key of PRIVATE_WAKE_KEYS) delete next[key];
+  return JSON.stringify(next);
 }
 
 function withholdDeep(value: unknown, sections: Array<{ text: string; withheld: string }>, depth: number): unknown {
   if (typeof value === "string") {
-    const trimmed = value.trimStart();
-    if (trimmed.startsWith("{") && value.includes('"corrections"')) return withholdFromWakePayloadJson(value);
-    return withholdText(value, sections);
+    // Parse or leave: a string that is not a wake payload object gets the
+    // section pass like any other text.
+    return withholdFromWakePayloadJson(value) ?? withholdText(value, sections);
   }
   if (depth > 8) return value;
   if (Array.isArray(value)) return value.map((entry) => withholdDeep(entry, sections, depth + 1));
