@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1014.0](v2026.1014.0.md) | 2026-10-14 | Agent self-wakes, agent mentions and agent review hand-offs pause at the daily token ceiling; correct ceiling lift time; plain feature-flag wording; no migrations | Pending stable publication |
 | [v2026.1013.1](v2026.1013.1.md) | 2026-10-13 | A person's send-back, change request or answer wakes the agent over its token ceiling; only administrators change feature flags; no migrations | Pending stable publication |
 | [v2026.1013.0](v2026.1013.0.md) | 2026-10-13 | The person's own Claude as co-worker on the request loop: intake, review and send-back as the person, close-out to the requester; direct agent hand-offs capped at three rounds; corrections reach the agent; agentdash-connect 0.5.0; inbox email pointers off by default; three migrations (0149 to 0151) | Pending stable publication |
 | [v2026.1010.0](v2026.1010.0.md) | 2026-10-10 | Assigning a person assigns their agent, which takes a first pass and asks; agent questions answered from the person's own Claude or Codex session; email pointers; gpt-6 Codex models; My agent in the sidebar; steward-only document connections; document text kept out of stored runs; two migrations (0147, 0148) | Pending stable publication |
