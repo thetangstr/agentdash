@@ -89,9 +89,9 @@ import { companySkillService } from "./company-skills.js";
 import { agentDirectivesService } from "./agent-directives.js";
 import { agentMemoryService } from "./agent-memory.js";
 import {
-  withholdAgentMemoryFromInvocationPayload,
-  withoutAgentMemoryContext,
-} from "./agent-memory-redaction.js";
+  withholdPrivateContentFromInvocationPayload,
+  withoutPrivateRunContext,
+} from "./run-private-content.js";
 import { claimCorrectionsForRun } from "./agent-corrections.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
@@ -6793,8 +6793,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     //
     // It is readable only by the agent, its steward and admins, so it lives in
     // this in-memory context and nowhere else: every write of the context to
-    // the run row below goes through `withoutAgentMemoryContext`, and the
-    // `adapter.invoke` event drops it from its prompt and context.
+    // the run row below goes through `withoutPrivateRunContext`, and the
+    // `adapter.invoke` event drops it from its prompt and context. The same
+    // holds for the corrections claimed above.
     const workforce = await workforceService(db).getRuntimeContext(agent.companyId, agent.id, issueId ?? undefined);
     if (workforce) context.paperclipWorkforce = workforce;
     else delete context.paperclipWorkforce;
@@ -7167,7 +7168,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await db
         .update(heartbeatRuns)
         .set({
-          contextSnapshot: withoutAgentMemoryContext(context),
+          contextSnapshot: withoutPrivateRunContext(context),
           updatedAt: new Date(),
         })
         .where(eq(heartbeatRuns.id, run.id));
@@ -7273,7 +7274,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await db
       .update(heartbeatRuns)
       .set({
-        contextSnapshot: withoutAgentMemoryContext(context),
+        contextSnapshot: withoutPrivateRunContext(context),
         updatedAt: new Date(),
       })
       .where(eq(heartbeatRuns.id, run.id));
@@ -7464,7 +7465,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .set({
           startedAt,
           sessionIdBefore: runtimeForAdapter.sessionDisplayId ?? runtimeForAdapter.sessionId,
-          contextSnapshot: withoutAgentMemoryContext(context),
+          contextSnapshot: withoutPrivateRunContext(context),
           updatedAt: new Date(),
         })
         .where(eq(heartbeatRuns.id, run.id))
@@ -7650,7 +7651,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await db
           .update(heartbeatRuns)
           .set({
-            contextSnapshot: withoutAgentMemoryContext(context),
+            contextSnapshot: withoutPrivateRunContext(context),
             updatedAt: new Date(),
           })
           .where(eq(heartbeatRuns.id, run.id));
@@ -7685,9 +7686,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           level: "info",
           message: "adapter invocation",
           payload: {
-            // The agent's memory is in this prompt and context; the event is
-            // readable by the whole company and streamed live, so it is not.
-            ...withholdAgentMemoryFromInvocationPayload(meta as unknown as Record<string, unknown>),
+            // The agent's memory and its corrections are in this prompt,
+            // context and env; the event is readable by the whole company and
+            // streamed live, so they are not (services/run-private-content.ts).
+            ...withholdPrivateContentFromInvocationPayload(meta as unknown as Record<string, unknown>),
             ...(modelProfileMetadata ? { modelProfile: modelProfileMetadata } : {}),
           },
         });
@@ -7751,7 +7753,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await db
           .update(heartbeatRuns)
           .set({
-            contextSnapshot: withoutAgentMemoryContext(context),
+            contextSnapshot: withoutPrivateRunContext(context),
             updatedAt: new Date(),
           })
           .where(eq(heartbeatRuns.id, run.id));

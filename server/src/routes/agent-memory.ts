@@ -27,8 +27,8 @@ import {
  * Everyone else, including another agent, gets 404: the memory is nonexistent
  * to them, the same answer agent visibility gives for a hidden agent. Copies of
  * memory text outside this route (the run's context snapshot and its
- * `adapter.invoke` event) are withheld at write and at read; see
- * `services/agent-memory-redaction.ts`.
+ * `adapter.invoke` event), and of the corrections memory is built from, are
+ * withheld at write and at read; see `services/run-private-content.ts`.
  *
  * Writing is narrower than reading for agents, and deliberately wider than
  * `agent-directives`:

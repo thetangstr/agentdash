@@ -3,6 +3,7 @@ import path from "node:path";
 import { and, asc, desc, eq, getTableColumns, gte, lte, ne, or, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agentCorrections,
   agentMemory,
   agents,
   companies,
@@ -39,7 +40,7 @@ import {
 } from "@paperclipai/shared";
 import { resolveHomeAwarePath, resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { notFound, unprocessable } from "../errors.js";
-import { withholdAgentMemoryFromRunEvents, withoutAgentMemoryContext } from "./agent-memory-redaction.js";
+import { withholdPrivateContentFromRunEvents, withoutPrivateRunContext } from "./run-private-content.js";
 import { agentInstructionsService } from "./agent-instructions.js";
 import {
   createFeedbackRedactionState,
@@ -87,19 +88,27 @@ function documentAccessEnabledFor(db: Pick<Db, "select">, companyId: string): Pr
 }
 
 /**
- * Whether the agent has ever had memory. Its memory is readable only by the
- * agent, its steward and admins, and an adapter-native transcript holds the
- * prompt the memory was rendered into — with no reliable way to find it again
- * in a vendor's session format — so such an agent's transcripts are left out.
+ * Whether the agent has memory or has been sent corrections. Both are readable
+ * only by the agent, its steward and admins, and an adapter-native transcript
+ * holds the prompt they were rendered into — with no reliable way to find them
+ * again in a vendor's session format — so such an agent's transcripts are left
+ * out.
  */
-async function agentHasMemory(db: Pick<Db, "select">, agentId: string): Promise<boolean> {
-  const row = await db
+async function agentHasPrivateLessons(db: Pick<Db, "select">, agentId: string): Promise<boolean> {
+  const memory = await db
     .select({ id: agentMemory.id })
     .from(agentMemory)
     .where(eq(agentMemory.agentId, agentId))
     .limit(1)
     .then((rows) => rows[0] ?? null);
-  return row !== null;
+  if (memory) return true;
+  const correction = await db
+    .select({ id: agentCorrections.id })
+    .from(agentCorrections)
+    .where(eq(agentCorrections.agentId, agentId))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  return correction !== null;
 }
 
 type FeedbackTraceRow = typeof feedbackExports.$inferSelect & {
@@ -1546,7 +1555,7 @@ async function buildFeedbackTraceBundleFromRow(
           sessionIdBefore: run.sessionIdBefore,
           sessionIdAfter: run.sessionIdAfter,
           externalRunId: run.externalRunId,
-          contextSnapshot: withoutAgentMemoryContext(asRecord(run.contextSnapshot)),
+          contextSnapshot: withoutPrivateRunContext(asRecord(run.contextSnapshot)),
           logStore: run.logStore,
           logRef: run.logRef,
           logBytes: run.logBytes,
@@ -1566,7 +1575,7 @@ async function buildFeedbackTraceBundleFromRow(
       }));
 
       const sanitizedEvents = await sanitizeFeedbackValueAsync(
-        withholdAgentMemoryFromRunEvents(events),
+        withholdPrivateContentFromRunEvents(events),
         state,
         "bundle.paperclipRun.events",
         MAX_TRACE_FILE_CHARS,
@@ -1593,8 +1602,8 @@ async function buildFeedbackTraceBundleFromRow(
         // Adapter-native transcripts (session files, debug logs, raw stdout)
         // never pass the document-text strip pass: left out.
         appendNote(notes, "adapter_trace_withheld_document_access");
-      } else if (await agentHasMemory(db, run.agentId)) {
-        appendNote(notes, "adapter_trace_withheld_agent_memory");
+      } else if (await agentHasPrivateLessons(db, run.agentId)) {
+        appendNote(notes, "adapter_trace_withheld_agent_lessons");
       } else if (run.adapterType === "codex_local") {
         const adapter = await buildCodexTraceFiles({
           companyId: row.companyId,

@@ -1,8 +1,9 @@
-// AgentDash: an agent's memory is readable only by the agent, its steward and
-// administrators. These tests guard the copies of it that live OUTSIDE the
-// memory route — the run's context snapshot, the `adapter.invoke` event (its
-// prompt and context), the live bus, feedback trace bundles — plus the agent,
-// activity and export payloads a company member can read.
+// AgentDash: an agent's memory, and the corrections ("What changed") it is
+// built from, are readable only by the agent, its steward and administrators.
+// These tests guard the copies that live OUTSIDE the memory route — the run's
+// context snapshot, the `adapter.invoke` event (prompt, context, wake payload
+// env), the live bus, feedback trace bundles — plus the agent, activity and
+// export payloads a company member can read.
 import express from "express";
 // These fixtures inject req.actor without running the auth middleware, so no
 // verified credential exists (same arrangement as document-run-protection).
@@ -12,10 +13,10 @@ vi.mock("../services/issue-current-authority.js", async (importOriginal) => ({
 }));
 import request from "supertest";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agentStewardships,
@@ -30,15 +31,21 @@ import {
   issues,
 } from "@paperclipai/db";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
-import { renderAgentMemoryPrompt } from "@paperclipai/adapter-utils/server-utils";
-import { AGENT_MEMORY_CONTEXT_KEY } from "@paperclipai/shared";
+import {
+  renderAgentMemoryPrompt,
+  renderPaperclipWakePrompt,
+  stringifyPaperclipWakePayload,
+} from "@paperclipai/adapter-utils/server-utils";
+import { AGENT_MEMORY_CONTEXT_KEY, FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { heartbeatService } from "../services/heartbeat.ts";
 import { agentMemoryService } from "../services/agent-memory.ts";
-import { AGENT_MEMORY_WITHHELD_TEXT } from "../services/agent-memory-redaction.ts";
+import { AGENT_CORRECTIONS_WITHHELD_TEXT, AGENT_MEMORY_WITHHELD_TEXT } from "../services/run-private-content.ts";
+import { recordAgentCorrection } from "../services/agent-corrections.ts";
+import { featureFlagsService } from "../services/feature-flags.ts";
 import { feedbackService } from "../services/feedback.ts";
 import { companyPortabilityService } from "../services/company-portability.ts";
 import { subscribeCompanyLiveEvents } from "../services/live-events.ts";
@@ -54,6 +61,7 @@ const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
 const SECRET = "SENTINEL-agent-memory-5d1c";
+const CORRECTION_SECRET = "SENTINEL-correction-77e0";
 const FAKE_ADAPTER = "agent_memory_privacy_test";
 
 async function waitForRunToFinish(heartbeat: ReturnType<typeof heartbeatService>, runId: string, timeoutMs = 15_000) {
@@ -64,6 +72,59 @@ async function waitForRunToFinish(heartbeat: ReturnType<typeof heartbeatService>
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return heartbeat.getRun(runId);
+}
+
+/**
+ * A run as it was recorded before memory and corrections were withheld: both
+ * in the context snapshot, and in the adapter.invoke event's prompt, context
+ * and wake payload env.
+ */
+async function seedHistoricalRun(db: ReturnType<typeof createDb>, companyId: string, agentId: string) {
+  const runId = randomUUID();
+  const memory = { version: 1, content: `old ${SECRET} note`, writtenAt: "2026-09-01T00:00:00.000Z", authorKind: "agent" };
+  const corrections = [
+    {
+      id: randomUUID(),
+      kind: "task_reopened",
+      issueId: null,
+      issueIdentifier: null,
+      summary: `Reopened. Their reason: "${CORRECTION_SECRET}".`,
+      lessons: [`lesson ${CORRECTION_SECRET}`],
+      createdAt: "2026-09-01T00:00:00.000Z",
+    },
+  ];
+  const wake = { reason: "issue_reopened", corrections, correctionsRemaining: 0 };
+  const context = {
+    wakeReason: "manual",
+    [AGENT_MEMORY_CONTEXT_KEY]: memory,
+    paperclipAgentCorrections: corrections,
+    paperclipAgentCorrectionsRemaining: 0,
+    paperclipWake: wake,
+  };
+  await db.insert(heartbeatRuns).values({
+    id: runId,
+    companyId,
+    agentId,
+    invocationSource: "on_demand",
+    status: "succeeded",
+    contextSnapshot: context,
+  });
+  const [event] = await db.insert(heartbeatRunEvents).values({
+    companyId,
+    runId,
+    agentId,
+    seq: 1,
+    eventType: "adapter.invoke",
+    stream: "system",
+    level: "info",
+    message: "adapter invocation",
+    payload: {
+      prompt: `intro\n\n${renderAgentMemoryPrompt(memory)}\n\n${renderPaperclipWakePrompt(wake)}\n\n## Task\nwork`,
+      context,
+      env: { PAPERCLIP_WAKE_PAYLOAD_JSON: stringifyPaperclipWakePayload(wake) ?? "", HOME: "/home/agent" },
+    },
+  }).returning();
+  return { runId, eventId: event!.id };
 }
 
 describeEmbeddedPostgres("agent memory stays out of run records and shared payloads", () => {
@@ -78,6 +139,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
   const MEMBER = "memory-member-user";
   const ADMIN = "memory-admin-user";
   let receivedMemory: unknown = null;
+  let receivedCorrections: unknown = null;
 
   beforeAll(async () => {
     for (const key of ["PAPERCLIP_HOME", "PAPERCLIP_INSTANCE_ID", "PAPERCLIP_SECRETS_MASTER_KEY", "RUN_LOG_BASE_PATH"]) {
@@ -93,7 +155,14 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     tempDb = await startEmbeddedPostgresTestDatabase("agent-memory-run-privacy-");
     db = createDb(tempDb.connectionString);
 
-    await db.insert(companies).values({ id: COMPANY, name: "Memory Co", issuePrefix: "AMP", requireBoardApprovalForNewAgents: false });
+    await db.insert(companies).values({
+      id: COMPANY,
+      name: "Memory Co",
+      issuePrefix: "AMP",
+      requireBoardApprovalForNewAgents: false,
+      productProfile: "agentdash_mk",
+    });
+    await featureFlagsService(db).set(COMPANY, FEATURE_FLAG_KEYS.COWORKER_BRIDGE, true);
     for (const [userId, role] of [[STEWARD, "member"], [MEMBER, "member"], [ADMIN, "admin"]] as const) {
       await db.insert(companyMemberships).values({
         companyId: COMPANY,
@@ -122,14 +191,34 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       { actorType: "agent", actorId: AGENT, agentId: AGENT },
     );
 
-    // Renders memory into its prompt the way claude_local / codex_local do,
-    // and reports the invocation the way they do.
+    await recordAgentCorrection(db, {
+      companyId: COMPANY,
+      agentId: AGENT,
+      issueId: null,
+      kind: "task_reopened",
+      summary: `Person A reopened the note. Their reason: "${CORRECTION_SECRET} totals are off".`,
+      details: { lessons: [`Check totals ${CORRECTION_SECRET}`] },
+      sourceActorType: "user",
+      sourceActorId: STEWARD,
+    });
+
+    // Renders memory and the wake (with its What changed section) into its
+    // prompt and the wake payload into its env, the way claude_local and
+    // codex_local do, and reports the invocation the way they do.
     registerServerAdapter({
       type: FAKE_ADAPTER,
+      rendersAgentCorrections: true,
       execute: async (ctx: AdapterExecutionContext) => {
         receivedMemory = ctx.context[AGENT_MEMORY_CONTEXT_KEY] ?? null;
-        const prompt = ["## Directives\nbe brief", renderAgentMemoryPrompt(ctx.context[AGENT_MEMORY_CONTEXT_KEY]), "## Wake\nwork"].join("\n\n");
-        await ctx.onMeta?.({ adapterType: FAKE_ADAPTER, command: "fake", prompt, context: ctx.context });
+        receivedCorrections = (ctx.context.paperclipWake as { corrections?: unknown } | undefined)?.corrections ?? null;
+        const prompt = [
+          "## Directives\nbe brief",
+          renderAgentMemoryPrompt(ctx.context[AGENT_MEMORY_CONTEXT_KEY]),
+          renderPaperclipWakePrompt(ctx.context.paperclipWake),
+          "## Task\nwork",
+        ].join("\n\n");
+        const env = { PAPERCLIP_WAKE_PAYLOAD_JSON: stringifyPaperclipWakePayload(ctx.context.paperclipWake) ?? "" };
+        await ctx.onMeta?.({ adapterType: FAKE_ADAPTER, command: "fake", prompt, context: ctx.context, env });
         return { exitCode: 0, signal: null, timedOut: false };
       },
       testEnvironment: async () => ({ adapterType: FAKE_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
@@ -170,7 +259,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     memberships: [{ companyId: COMPANY, membershipRole: role, status: "active" }],
   });
 
-  it("the agent gets its memory; the run row, its events and the live bus do not keep it", async () => {
+  it("the agent gets its memory and corrections; the run row, its events and the live bus keep neither", async () => {
     const live: string[] = [];
     const unsubscribe = subscribeCompanyLiveEvents(COMPANY, (event) => {
       live.push(JSON.stringify(event));
@@ -182,69 +271,105 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       const finished = await waitForRunToFinish(heartbeat, queued!.id);
       expect(finished?.status).toBe("succeeded");
 
-      // The agent itself still wakes with its memory.
+      // The agent itself still wakes with its memory and its corrections.
       expect(JSON.stringify(receivedMemory)).toContain(SECRET);
+      expect(JSON.stringify(receivedCorrections)).toContain(CORRECTION_SECRET);
 
       const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queued!.id));
-      expect(JSON.stringify(row)).not.toContain(SECRET);
+      for (const secret of [SECRET, CORRECTION_SECRET]) expect(JSON.stringify(row)).not.toContain(secret);
       expect(row!.contextSnapshot).not.toHaveProperty(AGENT_MEMORY_CONTEXT_KEY);
+      expect(row!.contextSnapshot).not.toHaveProperty("paperclipAgentCorrections");
 
       const events = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, queued!.id));
       const invoke = events.find((event) => event.eventType === "adapter.invoke");
       expect(invoke).toBeTruthy();
-      expect(JSON.stringify(events)).not.toContain(SECRET);
+      for (const secret of [SECRET, CORRECTION_SECRET]) expect(JSON.stringify(events)).not.toContain(secret);
       const prompt = (invoke!.payload as { prompt: string }).prompt;
       expect(prompt).toContain(AGENT_MEMORY_WITHHELD_TEXT);
-      expect(prompt).toContain("## Wake\nwork");
+      expect(prompt).toContain(AGENT_CORRECTIONS_WITHHELD_TEXT);
+      expect(prompt).toContain("## Task\nwork");
 
       expect(live.length).toBeGreaterThan(0);
-      expect(live.join("\n")).not.toContain(SECRET);
+      for (const secret of [SECRET, CORRECTION_SECRET]) expect(live.join("\n")).not.toContain(secret);
 
       // And through the routes a member reads.
       const member = appAs(asUser(MEMBER, "member"));
       const detail = await request(member).get(`/api/heartbeat-runs/${queued!.id}`);
       expect(detail.status).toBe(200);
-      expect(JSON.stringify(detail.body)).not.toContain(SECRET);
       const served = await request(member).get(`/api/heartbeat-runs/${queued!.id}/events`);
       expect(served.status).toBe(200);
-      expect(JSON.stringify(served.body)).not.toContain(SECRET);
+      for (const secret of [SECRET, CORRECTION_SECRET]) {
+        expect(JSON.stringify(detail.body)).not.toContain(secret);
+        expect(JSON.stringify(served.body)).not.toContain(secret);
+      }
     } finally {
       unsubscribe();
     }
   }, 30_000);
 
-  it("a run recorded before the fix serves no memory to a member", async () => {
-    const runId = randomUUID();
-    const memory = { version: 1, content: `old ${SECRET} note`, writtenAt: "2026-09-01T00:00:00.000Z", authorKind: "agent" };
-    await db.insert(heartbeatRuns).values({
-      id: runId,
-      companyId: COMPANY,
-      agentId: AGENT,
-      invocationSource: "on_demand",
-      status: "succeeded",
-      contextSnapshot: { wakeReason: "manual", [AGENT_MEMORY_CONTEXT_KEY]: memory },
-    });
-    await db.insert(heartbeatRunEvents).values({
-      companyId: COMPANY,
-      runId,
-      agentId: AGENT,
-      seq: 1,
-      eventType: "adapter.invoke",
-      stream: "system",
-      level: "info",
-      message: "adapter invocation",
-      payload: { prompt: `intro\n\n${renderAgentMemoryPrompt(memory)}\n\n## Wake\nwork`, context: { [AGENT_MEMORY_CONTEXT_KEY]: memory } },
-    });
+  it("a run recorded before the fix serves no memory or corrections to a member", async () => {
+    const { runId } = await seedHistoricalRun(db, COMPANY, AGENT);
 
     const member = appAs(asUser(MEMBER, "member"));
     const detail = await request(member).get(`/api/heartbeat-runs/${runId}`);
     expect(detail.status).toBe(200);
-    expect(JSON.stringify(detail.body)).not.toContain(SECRET);
     expect(detail.body.contextSnapshot.wakeReason).toBe("manual");
     const served = await request(member).get(`/api/heartbeat-runs/${runId}/events`);
     expect(served.status).toBe(200);
-    expect(JSON.stringify(served.body)).not.toContain(SECRET);
-    expect(served.body[0].payload.prompt).toContain("## Wake\nwork");
+    expect(served.body[0].payload.prompt).toContain("## Task\nwork");
+    for (const secret of [SECRET, CORRECTION_SECRET]) {
+      expect(JSON.stringify(detail.body)).not.toContain(secret);
+      expect(JSON.stringify(served.body)).not.toContain(secret);
+    }
+  });
+
+  it("migration 0152 removes memory and corrections from runs recorded before the fix, once, keeping the rest", async () => {
+    const { runId, eventId } = await seedHistoricalRun(db, COMPANY, AGENT);
+    // A truncated stored prompt: the exact section cannot be found, so it is
+    // withheld from its heading on.
+    const truncated = await seedHistoricalRun(db, COMPANY, AGENT);
+    await db
+      .update(heartbeatRunEvents)
+      .set({
+        payload: sql`jsonb_set(${heartbeatRunEvents.payload}, '{prompt}', to_jsonb(left(${heartbeatRunEvents.payload} ->> 'prompt', strpos(${heartbeatRunEvents.payload} ->> 'prompt', ${CORRECTION_SECRET}) + 4)))`,
+      })
+      .where(eq(heartbeatRunEvents.id, truncated.eventId));
+
+    const migration = await readFile(
+      new URL("../../../packages/db/src/migrations/0152_withhold_agent_lessons_from_runs.sql", import.meta.url),
+      "utf8",
+    );
+    const statements = migration.split("--> statement-breakpoint").map((part) => part.trim()).filter(Boolean);
+    const apply = () =>
+      db.transaction(async (tx) => {
+        for (const statement of statements) await tx.execute(sql.raw(statement));
+      });
+    await apply();
+
+    const [row] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    const [event] = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.id, eventId));
+    const [cut] = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.id, truncated.eventId));
+    for (const secret of [SECRET, CORRECTION_SECRET]) {
+      expect(JSON.stringify(row)).not.toContain(secret);
+      expect(JSON.stringify(event)).not.toContain(secret);
+      expect(JSON.stringify(cut)).not.toContain(secret);
+    }
+    expect(row!.contextSnapshot).toEqual({ wakeReason: "manual", paperclipWake: { reason: "issue_reopened" } });
+    const payload = event!.payload as { prompt: string; env: Record<string, string>; context: Record<string, unknown> };
+    // Exact replacement keeps the prompt around the withheld sections.
+    expect(payload.prompt.startsWith("intro\n\n")).toBe(true);
+    expect(payload.prompt).toContain(AGENT_MEMORY_WITHHELD_TEXT);
+    expect(payload.prompt).toContain(AGENT_CORRECTIONS_WITHHELD_TEXT);
+    expect(payload.prompt).toContain("## Task\nwork");
+    expect(JSON.parse(payload.env.PAPERCLIP_WAKE_PAYLOAD_JSON).reason).toBe("issue_reopened");
+    expect(payload.env.HOME).toBe("/home/agent");
+    expect(payload.context).toEqual({ wakeReason: "manual", paperclipWake: { reason: "issue_reopened" } });
+    expect((cut!.payload as { prompt: string }).prompt.endsWith(AGENT_CORRECTIONS_WITHHELD_TEXT)).toBe(true);
+
+    // Idempotent: a second pass changes nothing.
+    await apply();
+    const [again] = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.id, eventId));
+    expect(again!.payload).toEqual(event!.payload);
   });
 
   it("a member's agent detail, agent list and activity feed carry no memory content", async () => {
@@ -270,7 +395,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
     expect(JSON.stringify(exported)).not.toContain(SECRET);
   });
 
-  it("a feedback trace bundle carries no memory, and withholds adapter transcripts of an agent that has memory", async () => {
+  it("a feedback trace bundle carries no memory or corrections, and withholds adapter transcripts of an agent that has either", async () => {
     const claudeDir = await mkdtemp(join(home, "claude-config-"));
     const previousClaudeDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = claudeDir;
@@ -309,7 +434,10 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
         invocationSource: "on_demand",
         status: "succeeded",
         sessionIdAfter: sessionId,
-        contextSnapshot: { [AGENT_MEMORY_CONTEXT_KEY]: { version: memory.version, content: memory.content } },
+        contextSnapshot: {
+          [AGENT_MEMORY_CONTEXT_KEY]: { version: memory.version, content: memory.content },
+          paperclipWake: { corrections: [{ kind: "task_reopened", summary: `x ${CORRECTION_SECRET}`, lessons: [] }] },
+        },
       });
       await db.insert(heartbeatRunEvents).values({
         companyId: COMPANY,
@@ -335,6 +463,7 @@ describeEmbeddedPostgres("agent memory stays out of run records and shared paylo
       const bundle = await request(appAs(asUser(MEMBER, "member"))).get(`/api/feedback-traces/${exported!.id}/bundle`);
       expect(bundle.status).toBe(200);
       expect(JSON.stringify(bundle.body)).not.toContain(SECRET);
+      expect(JSON.stringify(bundle.body)).not.toContain(CORRECTION_SECRET);
       expect((bundle.body.files as Array<{ path: string }>).some((f) => f.path === "paperclip/run.json")).toBe(true);
       expect((bundle.body.files as Array<{ path: string }>).some((f) => f.path.startsWith("adapter/"))).toBe(false);
     } finally {
