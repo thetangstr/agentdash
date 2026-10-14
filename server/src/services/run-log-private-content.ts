@@ -22,8 +22,8 @@
 //          `aggregated_output`); also the `tool_use` / `tool_result` item
 //          shapes the codex transcript parser accepts.
 //   2. Echoes, by content: the agent's memory and its delivered corrections,
-//      whole, and by line, lesson and quote when those have at least four
-//      words; raw and JSON-escaped up to three times, wherever they appear in
+//      whole, and by line, lesson and quote, each only when it has at least
+//      four words; raw and JSON-escaped up to three times, wherever they appear in
 //      a line. Memory seen during the run is learned as it goes by: what a
 //      write sends (tool input, `body.content`, a curl `-d` body) and what a
 //      memory read returns (any `{ version, content, authorKind }` row).
@@ -45,10 +45,10 @@ const MEMORY_HINT_RE = /MyMemory|\/memory|authorKind/;
 /** Lines longer than this without a newline are passed on unparsed. */
 const MAX_BUFFERED_LINE_CHARS = 1_000_000;
 /**
- * A memory line, lesson, summary line or quote is matched on its own only when
- * it has at least this many words: a short line ("git status --short") is too
- * likely to be ordinary output. The whole memory and each whole summary are
- * always matched.
+ * Any piece (the whole memory, a memory line, a whole summary, a summary line,
+ * a lesson or a quote) is matched on its own only when it has at least this
+ * many words: a short one ("git status --short", "done") is too likely to be
+ * ordinary output or JSON syntax.
  */
 const MIN_PIECE_WORDS = 4;
 
@@ -90,7 +90,10 @@ function memoryLines(content: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, "").trim())
     .filter((line) => hasEnoughWords(line));
-  return [trimmed, ...lines];
+  // The whole document too, under the same floor: a tiny memory ("done",
+  // "text", '"}') would otherwise rewrite ordinary words and JSON keys. Its
+  // memory calls and results are withheld by shape regardless.
+  return [...(hasEnoughWords(trimmed) ? [trimmed] : []), ...lines];
 }
 
 function addPieces(state: PrivateLogState, texts: string[], withheld: string) {
@@ -116,7 +119,7 @@ export function createPrivateLogState(input: {
   for (const correction of input.corrections ?? []) {
     if (typeof correction.summary === "string" && correction.summary.trim()) {
       const summary = correction.summary.trim();
-      correctionTexts.push(summary);
+      if (hasEnoughWords(summary)) correctionTexts.push(summary);
       for (const line of summary.split(/\r?\n/)) {
         if (hasEnoughWords(line)) correctionTexts.push(line.trim());
       }

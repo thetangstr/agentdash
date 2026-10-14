@@ -335,4 +335,18 @@ describe("run log: memory tool traffic and lesson echoes are withheld", () => {
     expect(out).not.toContain("SENTINEL");
     expect(out).toContain("toolu_prev_page");
   });
+
+  it("never matches a tiny whole memory or summary on its own: log lines stay valid and untouched", () => {
+    const lines = [claudeOtherTool, codexOtherCommand, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } })];
+    for (const tiny of ["assistant", "text", '"}', "done"]) {
+      const state = createPrivateLogState({ memoryContents: [tiny], corrections: [{ summary: tiny, lessons: [] }] });
+      for (const line of lines) {
+        const out = withholdPrivateContentFromLogLine(line, state);
+        expect(out).toBe(line);
+        expect(() => JSON.parse(out)).not.toThrow();
+      }
+      // Its memory calls are still withheld by shape.
+      expect(withholdPrivateContentFromLogLine(claudeGetCall, state)).toContain(AGENT_MEMORY_WITHHELD_TEXT);
+    }
+  });
 });
