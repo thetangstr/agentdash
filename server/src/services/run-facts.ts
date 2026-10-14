@@ -49,16 +49,49 @@ export const DELIBERATE_PERSON_WAKE_REASONS = {
  */
 export const WAKE_REQUESTED_BY_ACTOR_TYPE_KEY = "wakeRequestedByActorType";
 
-const DELIBERATE_PERSON_WAKE_REASON_SET: ReadonlySet<string> = new Set(Object.values(DELIBERATE_PERSON_WAKE_REASONS));
+/**
+ * Server-written `contextSnapshot` key: `true` when the requester asked for
+ * this run itself rather than the wake following from someone else's change
+ * to work. Set for
+ *  - a direct request: `POST /agents/:id/wakeup` or `/heartbeat/invoke`,
+ *    where the caller picks `reason` and `source`, so neither says anything
+ *    the server vouches for; and
+ *  - a self-wake: an agent whose own action wakes itself (it moves, creates
+ *    or reassigns its own issue, finishes its own child), whatever reason
+ *    the action carries.
+ * enqueueWakeup stamps it from `WakeupOptions.requestedDirectly` and the
+ * wake's own actor only, never from the caller's context. Coalescing keeps it
+ * paired with WAKE_REQUESTED_BY_ACTOR_TYPE_KEY from the same wake.
+ */
+export const WAKE_REQUESTED_DIRECTLY_KEY = "wakeRequestedDirectly";
+
+/**
+ * Context wake reasons that only mean a person's decision when a person
+ * requested the wake: a person's answer to the agent (above), and an
+ * execution-stage hand-off (review, approval, changes requested). From
+ * anyone else they read as the comment wake the ceiling pauses — an agent
+ * handing review to another agent is agent-to-agent traffic, not a person
+ * aiming work at it.
+ */
+const PERSON_ONLY_WAKE_REASON_SET: ReadonlySet<string> = new Set([
+  ...Object.values(DELIBERATE_PERSON_WAKE_REASONS),
+  "execution_review_requested",
+  "execution_approval_requested",
+  "execution_changes_requested",
+]);
 
 /**
  * The wake classes the daily token ceiling pauses: the unattended spend
- * (routine timer wakes and comment wakes). Everything else a person aimed at
- * the agent, plus retries and automation, still runs (heartbeat.ts).
+ * (routine timer wakes, comment wakes, and runs an agent asked for itself —
+ * see "agent_requested" in normalizeWakeReason). Everything else a person
+ * aimed at the agent, plus work routing, retries and system automation,
+ * still runs (heartbeat.ts). The unmetered runaway guard counts the same set
+ * (token-ceiling.ts).
  */
 export const TOKEN_CEILING_PAUSED_WAKE_CLASSES: ReadonlySet<RunFactWakeReason> = new Set<RunFactWakeReason>([
   "timer",
   "comment",
+  "agent_requested",
 ]);
 
 /**
@@ -82,7 +115,8 @@ const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
   connector_send_failed: "approval",
   connector_send_outcome_unknown: "approval",
   // Issue-tree gate transitions are human decisions, so they bucket with the
-  // approval wake rather than generic automation.
+  // approval wake rather than generic automation — when a person made them
+  // (PERSON_ONLY_WAKE_REASON_SET; from an agent they read as a comment).
   execution_approval_requested: "approval",
   execution_review_requested: "approval",
   execution_changes_requested: "approval",
@@ -118,12 +152,35 @@ export function normalizeWakeReason(input: {
   contextSnapshot?: Record<string, unknown> | null;
 }): RunFactWakeReason {
   const contextReason = readString(input.contextSnapshot?.wakeReason);
-  if (contextReason && DELIBERATE_PERSON_WAKE_REASON_SET.has(contextReason)) {
-    // A person's own answer to the agent — only when a person asked for the
-    // wake. Anyone else claiming the reason (an agent waking itself, or a
-    // run with no recorded requester) is read as the comment wake these
-    // replaced, which the ceiling pauses: fail closed.
-    return readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]) === "user"
+  const requestedByActorType = readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]);
+  if (requestedByActorType === "agent") {
+    // An agent asking for a run of its own is unattended spend: nobody aimed
+    // it, and an agent that asks at the end of every run would otherwise keep
+    // itself going past its ceiling forever.
+    //  - A direct request (the wakeup/invoke routes): the reason and source
+    //    are the caller's own words, so a claimed "issue_assigned" or
+    //    "process_lost_retry" does not make it one.
+    //  - A self-wake: the agent's own action woke the agent itself (moving,
+    //    creating or reassigning its own issue, finishing its own child).
+    //  - No reason at all: nothing server-side says why this run exists
+    //    (a fail-closed backstop).
+    // An agent handing an issue to a DIFFERENT agent ("issue_assigned"),
+    // checkout, and finished children or blockers of another agent's issue
+    // keep their class: work routing between agents keeps flowing.
+    if (input.contextSnapshot?.[WAKE_REQUESTED_DIRECTLY_KEY] === true || !contextReason) {
+      return "agent_requested";
+    }
+    // One agent @-mentioning another is agent-to-agent chatter: two chatty
+    // agents would keep each other running past both ceilings. A person's
+    // mention stays "mention".
+    if (contextReason === "issue_comment_mentioned") return "comment";
+  }
+  if (contextReason && PERSON_ONLY_WAKE_REASON_SET.has(contextReason)) {
+    // A person's decision — only when a person asked for the wake. Anyone
+    // else claiming the reason (an agent, or a run with no recorded
+    // requester) is read as a comment wake, which the ceiling pauses: fail
+    // closed.
+    return requestedByActorType === "user"
       ? WAKE_REASON_BY_CONTEXT_REASON[contextReason]!
       : "comment";
   }
@@ -143,7 +200,8 @@ export function normalizeWakeReason(input: {
       return "automation";
     case "on_demand":
     default:
-      // on_demand is a person or an API client asking for the run directly.
+      // on_demand is a person or an API client asking for the run directly
+      // (an agent asking for one is "agent_requested", above).
       return "manual";
   }
 }

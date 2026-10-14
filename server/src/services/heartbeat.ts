@@ -136,6 +136,7 @@ import {
   normalizeWakeReason,
   TOKEN_CEILING_PAUSED_WAKE_CLASSES,
   WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
+  WAKE_REQUESTED_DIRECTLY_KEY,
   resolveMeteringStatus,
 } from "./run-facts.js";
 import {
@@ -231,7 +232,7 @@ import {
   heartbeatWakeOnDemandEnabled,
   isBoardAssignmentOnlyAgent,
 } from "./agent-wake-policy.js";
-import type { AgentWakePolicyRefusalCode } from "@paperclipai/shared";
+import type { AgentTokenCeilingStatus, AgentWakePolicyRefusalCode } from "@paperclipai/shared";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 
@@ -1047,7 +1048,28 @@ interface WakeupOptions {
    * to the current request's actor source (see lib/request-actor-source.ts).
    */
   requestedByActorSource?: string | null;
+  /**
+   * AgentDash: the requester asked for this run directly (POST
+   * /agents/:id/wakeup, /heartbeat/invoke) — its reason and source are the
+   * caller's own words. Stamped into the run context under
+   * WAKE_REQUESTED_DIRECTLY_KEY (as is every wake an agent requests for
+   * itself, without this option); an agent's direct request is the
+   * "agent_requested" wake class the daily token ceiling pauses.
+   */
+  requestedDirectly?: boolean;
+  /**
+   * Told why a wake was skipped (the reason persisted on the skipped request,
+   * plus the ceiling status when the token ceiling or the unmetered runaway
+   * guard refused it), so a route can answer the requester instead of
+   * returning a bare "skipped".
+   */
+  onSkipped?: (skip: WakeupSkip) => void;
   contextSnapshot?: Record<string, unknown>;
+}
+
+export interface WakeupSkip {
+  reason: string;
+  tokenCeiling: AgentTokenCeilingStatus | null;
 }
 
 /**
@@ -2082,6 +2104,16 @@ export function mergeCoalescedContextSnapshot(
     merged[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY] = existing[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
   } else {
     delete merged[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
+  }
+  // The run's wake class is read from the wake reason, the requester type and
+  // the direct/self flag together (run-facts.ts normalizeWakeReason), so all
+  // three come from the same wake: the incoming one when it names a reason
+  // (it replaces wakeReason above), otherwise the wake that is already there.
+  // Mixing them would label, say, a person's manual run with an agent's flag.
+  const labelSource = readNonEmptyString(incoming.wakeReason) ? incoming : existing;
+  for (const key of ["wakeReason", WAKE_REQUESTED_BY_ACTOR_TYPE_KEY, WAKE_REQUESTED_DIRECTLY_KEY]) {
+    if (labelSource[key] !== undefined) merged[key] = labelSource[key];
+    else delete merged[key];
   }
   if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
     merged.forceFreshSession = true;
@@ -8976,7 +9008,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         : "";
     const message = runawayPause
       ? `${agent.name} paused: unmetered runaway guard — ${ceiling.unmeteredPausableRuns} ` +
-        `unmetered timer/comment runs today that should have metered, so spend can't be verified. ` +
+        `unmetered unattended runs (timer, comment, agent-requested) today that should have metered, so spend can't be verified. ` +
         `Assigned work still runs.`
       : `${agent.name} paused: ${tokensMillions}M tokens today` +
         `, ${noOpPercent}% on runs that produced nothing.` +
@@ -9253,6 +9285,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (opts.requestedByActorType) {
       contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = opts.requestedByActorType;
     }
+    // Whether the requester asked for this run itself — a direct request on
+    // the wakeup/invoke routes, or an agent whose own action wakes itself
+    // (it moved, created or reassigned its own issue). Server-written the same
+    // way, so a caller's context cannot claim or shed it. Either is the
+    // "agent_requested" class the daily token ceiling pauses (run-facts.ts).
+    delete contextSnapshot[WAKE_REQUESTED_DIRECTLY_KEY];
+    const selfWake =
+      opts.requestedByActorType === "agent" && opts.requestedByActorId != null && opts.requestedByActorId === agentId;
+    if (opts.requestedDirectly === true || selfWake) {
+      contextSnapshot[WAKE_REQUESTED_DIRECTLY_KEY] = true;
+    }
     if (opts.requestedByActorType === "user") {
       const actorSource = opts.requestedByActorSource !== undefined
         ? opts.requestedByActorSource
@@ -9316,7 +9359,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await resolveSessionBeforeForWakeup(agent, effectiveTaskKey);
     const continuationAttempt = readContinuationAttempt(enrichedContextSnapshot.livenessContinuationAttempt);
 
-    const writeSkippedRequest = async (skipReason: string) => {
+    const writeSkippedRequest = async (
+      skipReason: string,
+      tokenCeilingStatus: AgentTokenCeilingStatus | null = null,
+    ) => {
       await db.insert(agentWakeupRequests).values({
         companyId: agent.companyId,
         agentId,
@@ -9330,6 +9376,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         idempotencyKey: opts.idempotencyKey ?? null,
         finishedAt: new Date(),
       });
+      opts.onSkipped?.({ reason: skipReason, tokenCeiling: tokenCeilingStatus });
     };
 
     let projectId = readNonEmptyString(enrichedContextSnapshot.projectId);
@@ -9421,8 +9468,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      *
      * Positioned deliberately after the disabled/wakeOnDemand skips so those
      * keep their honest reasons, and before the issue/tree work below so an
-     * over-ceiling wake never reaches a lock. Only timer and comment wakes
-     * pause — a wake a person deliberately aimed at the agent (assignment,
+     * over-ceiling wake never reaches a lock. Only timer, comment and
+     * agent-requested wakes pause (an agent's direct request on the
+     * wakeup/invoke routes, a wake an agent's own action sends to itself, or
+     * an agent's wake with no reason; agent-to-agent mentions and
+     * execution-stage hand-offs read as comments — run-facts.ts) — a wake a
+     * person deliberately aimed at the agent (assignment,
      * mention, approval, manual — and a person's answer to the agent through
      * the bridge or the web: a send-back, a change request, an answered
      * question, which run-facts.ts classes as "approval") still runs, as do
@@ -9446,7 +9497,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (ceiling.paused) {
         // The skipped request records which guard fired — "token_ceiling" or
         // "unmetered runaway guard" — so the wake log stays honest about why.
-        await writeSkippedRequest(ceiling.pauseReason ?? TOKEN_CEILING_SKIP_REASON);
+        await writeSkippedRequest(ceiling.pauseReason ?? TOKEN_CEILING_SKIP_REASON, ceiling);
         await announceTokenCeilingPause(agent, ceiling).catch((err) => {
           // The notification is best-effort — the pause itself is already
           // recorded on the skipped wakeup request and never depends on it.
@@ -10805,6 +10856,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       contextSnapshot: Record<string, unknown> = {},
       triggerDetail: "manual" | "ping" | "callback" | "system" = "manual",
       actor?: { actorType?: "user" | "agent" | "system"; actorId?: string | null },
+      opts?: Pick<WakeupOptions, "onSkipped">,
     ) =>
       enqueueWakeup(agentId, {
         source,
@@ -10812,6 +10864,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         contextSnapshot,
         requestedByActorType: actor?.actorType,
         requestedByActorId: actor?.actorId ?? null,
+        // An invoke is always someone asking for the run directly.
+        requestedDirectly: true,
+        onSkipped: opts?.onSkipped,
       }),
 
     wakeup: enqueueWakeup,

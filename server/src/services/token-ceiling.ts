@@ -27,7 +27,7 @@ export const TOKEN_CEILING_SKIP_REASON = "token_ceiling";
 export const UNMETERED_RUNAWAY_GUARD_REASON = "unmetered runaway guard";
 
 /**
- * How many unmetered timer/comment runs in one UTC day trip the fallback
+ * How many unmetered unattended runs (TOKEN_CEILING_PAUSED_WAKE_CLASSES) in one UTC day trip the fallback
  * guard. Unmetered runs can never trip the token ceiling — their spend is
  * unknown, not zero — so the guard bounds the COUNT instead: 48 unattended
  * wakes is roughly one full day of a 30-minute heartbeat, which is also the
@@ -112,7 +112,7 @@ export interface AgentDailyTokenUsage {
   meteredRuns: number;
   unmeteredRuns: number;
   /**
-   * Unmetered timer/comment runs where metering was expected — the runaway
+   * Unmetered timer/comment/agent-requested runs where metering was expected — the runaway
    * guard's input. See `meteringExpected` in `dailyUsage`.
    */
   unmeteredPausableRuns: number;

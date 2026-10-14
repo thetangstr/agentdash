@@ -50,6 +50,13 @@ export const RUN_FACT_WAKE_REASONS = [
   "automation",
   "retry",
   "manual",
+  /**
+   * An agent asked for this run directly (`POST /agents/:id/wakeup` or
+   * `/heartbeat/invoke` with an agent key), or an agent requested a wake and
+   * the server recorded no reason of its own. Unattended spend: the daily
+   * token ceiling pauses it like a timer wake.
+   */
+  "agent_requested",
 ] as const;
 export type RunFactWakeReason = (typeof RUN_FACT_WAKE_REASONS)[number];
 

@@ -14,8 +14,14 @@ import {
   stewardInboxEvents,
 } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_DAILY_TOKENS } from "@paperclipai/shared";
-import { heartbeatService } from "../services/heartbeat.js";
+import { heartbeatService, mergeCoalescedContextSnapshot } from "../services/heartbeat.js";
 import { dispatchResolvedInteractionContinuation } from "../services/issue-interaction-continuation.js";
+import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import {
+  normalizeWakeReason,
+  WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
+  WAKE_REQUESTED_DIRECTLY_KEY,
+} from "../services/run-facts.js";
 import {
   TOKEN_CEILING_SKIP_REASON,
   UNMETERED_RUNAWAY_GUARD_LIMIT,
@@ -62,21 +68,26 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     maxDailyTokens?: number | null;
     productProfile?: string;
     adapterType?: string;
+    /** Seed a second agent into an existing company. */
+    companyId?: string;
+    name?: string;
   }) {
-    const companyId = randomUUID();
+    const companyId = input?.companyId ?? randomUUID();
     const agentId = randomUUID();
-    await db.insert(companies).values({
-      id: companyId,
-      name: `Ceil Co ${companyId.slice(0, 6)}`,
-      issuePrefix: `K${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
-      productProfile: input?.productProfile ?? "default",
-    });
+    if (!input?.companyId) {
+      await db.insert(companies).values({
+        id: companyId,
+        name: `Ceil Co ${companyId.slice(0, 6)}`,
+        issuePrefix: `K${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        productProfile: input?.productProfile ?? "default",
+      });
+    }
     const heartbeat: Record<string, unknown> = { enabled: true, wakeOnDemand: true };
     if (input && "maxDailyTokens" in input) heartbeat.maxDailyTokens = input.maxDailyTokens;
     await db.insert(agents).values({
       id: agentId,
       companyId,
-      name: "Spendy",
+      name: input?.name ?? "Spendy",
       role: "engineer",
       status: "active",
       adapterType: input?.adapterType ?? "process",
@@ -383,6 +394,254 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
     expect(await skippedRequestsToday(agentId)).toHaveLength(1);
   });
 
+  describe("wakes an agent requested", () => {
+    /**
+     * POST /agents/:id/wakeup with an agent key, verbatim from the route: the
+     * body's reason and source pass straight through, and the route marks
+     * the wake as a direct request.
+     */
+    function agentWakeupRoute(requesterAgentId: string, body: { reason?: string | null; source?: "on_demand" | "automation" | "assignment" | "timer" } = {}) {
+      return {
+        source: body.source ?? "on_demand",
+        triggerDetail: "manual",
+        reason: body.reason ?? null,
+        payload: null,
+        idempotencyKey: null,
+        requestedByActorType: "agent",
+        requestedByActorId: requesterAgentId,
+        requestedDirectly: true,
+        contextSnapshot: { triggeredBy: "agent", actorId: requesterAgentId, forceFreshSession: false },
+      } as const;
+    }
+
+    it("skips an agent's self-wake with no reason over the ceiling, and says why and until when", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      const skips: Array<{ reason: string; tokenCeiling: { paused: boolean; liftsAt: string } | null }> = [];
+      const run = await heartbeat.wakeup(agentId, { ...agentWakeupRoute(agentId), onSkipped: (skip) => skips.push(skip) });
+      expect(run).toBeNull();
+      const rows = await skippedRequestsToday(agentId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.source).toBe("on_demand");
+      expect(rows[0]!.requestedByActorType).toBe("agent");
+      expect(skips).toHaveLength(1);
+      expect(skips[0]!.reason).toBe(TOKEN_CEILING_SKIP_REASON);
+      expect(skips[0]!.tokenCeiling?.paused).toBe(true);
+      expect(Date.parse(skips[0]!.tokenCeiling!.liftsAt)).toBeGreaterThan(Date.now());
+    });
+
+    it("skips it with an arbitrary reason, or one that claims assignment, a retry or a person", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      const claims = [
+        { reason: "keep_going" },
+        { reason: "keep_going", source: "automation" },
+        { reason: "issue_assigned", source: "assignment" },
+        { reason: "process_lost_retry", source: "automation" },
+        { reason: "issue_execution_promoted", source: "automation" },
+        { reason: "approval_approved" },
+        { reason: "bridge_reply" },
+      ] as const;
+      for (const claim of claims) {
+        expect(await heartbeat.wakeup(agentId, agentWakeupRoute(agentId, claim)), claim.reason).toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(claims.length);
+      // A forged direct flag in the caller's context is discarded too.
+      const forged = await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        requestedByActorType: "user",
+        requestedByActorId: "person-1",
+        contextSnapshot: { [WAKE_REQUESTED_DIRECTLY_KEY]: false, wakeRequestedByActorType: "agent" },
+      });
+      expect(forged, "a person's manual wake still runs").not.toBeNull();
+    });
+
+    it("skips an agent waking another agent that is over its own ceiling", async () => {
+      const { companyId, agentId: targetId } = await seedAgent();
+      const { agentId: requesterId } = await seedAgent({ companyId, name: "Requester" });
+      await seedMeteredRun(companyId, targetId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      expect(await heartbeat.wakeup(targetId, agentWakeupRoute(requesterId))).toBeNull();
+      expect(await heartbeat.wakeup(targetId, agentWakeupRoute(requesterId, { reason: "please_look" }))).toBeNull();
+      // Not marked direct, no reason: still nothing server-side says why.
+      expect(
+        await heartbeat.wakeup(targetId, {
+          source: "on_demand",
+          requestedByActorType: "agent",
+          requestedByActorId: requesterId,
+        }),
+      ).toBeNull();
+      expect(await skippedRequestsToday(targetId)).toHaveLength(3);
+      // The requester is under its own ceiling and is not touched.
+      expect(await heartbeat.wakeup(requesterId, agentWakeupRoute(requesterId))).not.toBeNull();
+    });
+
+    it("lets a person's manual wake through the same route run over the ceiling", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      const run = await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason: null,
+        requestedByActorType: "user",
+        requestedByActorId: "person-1",
+        requestedDirectly: true,
+        contextSnapshot: { triggeredBy: "board", actorId: "person-1", forceFreshSession: false },
+      });
+      expect(run).not.toBeNull();
+      expect(run?.status).toBe("queued");
+      expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+    });
+
+    it("still wakes an agent another agent assigned an issue to, over the ceiling", async () => {
+      const { companyId, agentId: assigneeId } = await seedAgent();
+      const { agentId: assignerId } = await seedAgent({ companyId, name: "Assigner" });
+      await seedMeteredRun(companyId, assigneeId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+      const issueId = randomUUID();
+      await db.insert(issues).values({ id: issueId, companyId, title: "Handed over", status: "todo", assigneeAgentId: assigneeId });
+
+      // The hand-off every issue create/update path sends.
+      const run = await queueIssueAssignmentWakeup({
+        heartbeat,
+        issue: { id: issueId, assigneeAgentId: assigneeId, status: "todo" },
+        reason: "issue_assigned",
+        mutation: "update",
+        contextSource: "issue.update",
+        requestedByActorType: "agent",
+        requestedByActorId: assignerId,
+      });
+      expect(run).not.toBeNull();
+      expect(await skippedRequestsToday(assigneeId)).toHaveLength(0);
+    });
+
+    it("still runs retries, execution promotion, and work routing an agent set off, over the ceiling", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const { agentId: otherAgentId } = await seedAgent({ companyId, name: "Finisher" });
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      const wakes = [
+        { source: "automation", reason: "process_lost_retry", requestedByActorType: "system", requestedByActorId: "heartbeat" },
+        { source: "automation", reason: "transient_failure_retry", requestedByActorType: "system", requestedByActorId: "heartbeat" },
+        { source: "automation", reason: "run_liveness_continuation", requestedByActorType: "system", requestedByActorId: "heartbeat" },
+        { source: "automation", reason: "issue_execution_promoted", requestedByActorType: "system", requestedByActorId: null },
+        { source: "automation", reason: "issue_children_completed", requestedByActorType: "agent", requestedByActorId: otherAgentId },
+        { source: "automation", reason: "issue_blockers_resolved", requestedByActorType: "agent", requestedByActorId: otherAgentId },
+      ] as const;
+      for (const wake of wakes) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: wake.reason, status: "in_progress", assigneeAgentId: agentId });
+        const run = await heartbeat.wakeup(agentId, {
+          ...wake,
+          triggerDetail: "system",
+          payload: { issueId },
+          contextSnapshot: { issueId },
+        });
+        expect(run, wake.reason).not.toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+    });
+
+    it("skips the wakes an agent's own work sends to itself — finished children, resolved blockers", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      for (const reason of ["issue_children_completed", "issue_blockers_resolved", "issue_status_changed"]) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: reason, status: "todo", assigneeAgentId: agentId });
+        // issue-patch-actions' wake, verbatim, with the agent as the actor.
+        const run = await heartbeat.wakeup(agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason,
+          payload: { issueId },
+          requestedByActorType: "agent",
+          requestedByActorId: agentId,
+          contextSnapshot: { issueId },
+        });
+        expect(run, reason).toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+    });
+
+    /** buildExecutionStageWakeup's wake (issue-patch-actions.ts), verbatim. */
+    function executionStageWake(reason: string, issueId: string, requester: { type: "user" | "agent"; id: string }) {
+      return {
+        source: "assignment",
+        triggerDetail: "system",
+        reason,
+        payload: { issueId, mutation: "update", executionStage: {} },
+        requestedByActorType: requester.type,
+        requestedByActorId: requester.id,
+        contextSnapshot: { issueId, taskId: issueId, wakeReason: reason, source: "issue.execution_stage", executionStage: {} },
+      } as const;
+    }
+
+    it("skips an agent-requested review or changes wake over the ceiling, and runs a person's", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const { agentId: otherAgentId } = await seedAgent({ companyId, name: "Submitter" });
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      for (const reason of ["execution_review_requested", "execution_approval_requested", "execution_changes_requested"]) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: reason, status: "in_review", assigneeAgentId: otherAgentId });
+        const byAgent = await heartbeat.wakeup(agentId, executionStageWake(reason, issueId, { type: "agent", id: otherAgentId }));
+        expect(byAgent, `${reason} from an agent`).toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+
+      for (const reason of ["execution_review_requested", "execution_changes_requested"]) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: reason, status: "in_review", assigneeAgentId: otherAgentId });
+        const byPerson = await heartbeat.wakeup(agentId, executionStageWake(reason, issueId, { type: "user", id: "person-1" }));
+        expect(byPerson, `${reason} from a person`).not.toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+    });
+
+    it("keeps the wake reason, requester and direct/self flag of one wake together when wakes merge", () => {
+      const label = (context: Record<string, unknown>) => normalizeWakeReason({ invocationSource: "on_demand", contextSnapshot: context });
+      const personManual = { [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user", [WAKE_REQUESTED_DIRECTLY_KEY]: true };
+      const agentSelfWake = { [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "agent", [WAKE_REQUESTED_DIRECTLY_KEY]: true };
+      const agentAssigns = { wakeReason: "issue_assigned", [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "agent" };
+      const personComment = { wakeReason: "issue_commented", [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" };
+
+      // An agent's self-wake (no reason) merging into a person's manual run
+      // does not relabel it, and the reverse does not lift the agent's run.
+      expect(label(mergeCoalescedContextSnapshot(personManual, agentSelfWake))).toBe("manual");
+      expect(label(mergeCoalescedContextSnapshot(agentSelfWake, personManual))).toBe("agent_requested");
+      // A wake that names a reason brings its own requester and flag.
+      const assigned = mergeCoalescedContextSnapshot(agentSelfWake, agentAssigns);
+      expect(assigned[WAKE_REQUESTED_DIRECTLY_KEY]).toBeUndefined();
+      expect(label(assigned)).toBe("assignment");
+      const selfAssigned = mergeCoalescedContextSnapshot(personComment, { ...agentAssigns, [WAKE_REQUESTED_DIRECTLY_KEY]: true });
+      expect(label(selfAssigned)).toBe("agent_requested");
+      // An agent self-wake with no reason merging into an assignment run
+      // leaves the assignment label (requester and flag of the assignment).
+      const kept = mergeCoalescedContextSnapshot(agentAssigns, agentSelfWake);
+      expect(kept[WAKE_REQUESTED_DIRECTLY_KEY]).toBeUndefined();
+      expect(label(kept)).toBe("assignment");
+    });
+
+    it("runs every one of them under the ceiling, and labels the agent's own run agent_requested", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const { agentId: otherAgentId } = await seedAgent({ companyId, name: "Other" });
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS - 1);
+
+      const selfWake = await heartbeat.wakeup(agentId, agentWakeupRoute(agentId, { reason: "keep_going" }));
+      expect(selfWake).not.toBeNull();
+      const context = (selfWake!.contextSnapshot ?? {}) as Record<string, unknown>;
+      expect(context[WAKE_REQUESTED_DIRECTLY_KEY]).toBe(true);
+      expect(normalizeWakeReason({ invocationSource: selfWake!.invocationSource, contextSnapshot: context })).toBe("agent_requested");
+
+      expect(await heartbeat.wakeup(agentId, agentWakeupRoute(otherAgentId))).not.toBeNull();
+      expect(await heartbeat.wakeup(agentId, SCHEDULER_TIMER_WAKE)).not.toBeNull();
+      expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+    });
+  });
+
   it("lets a manual wake run even over the ceiling", async () => {
     const { companyId, agentId } = await seedAgent();
     await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
@@ -542,6 +801,31 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
       expect(skips).toHaveLength(1);
       expect(skips[0]!.reason).toBe("unmetered runaway guard");
       expect(skips[0]!.source).toBe("timer");
+    });
+
+    it("counts unmetered agent-requested runs toward the guard — an agent waking itself is unattended spend", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedUnmeteredRuns(companyId, agentId, UNMETERED_RUNAWAY_GUARD_LIMIT + 1, "agent_requested");
+
+      const selfWake = await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        requestedByActorType: "agent",
+        requestedByActorId: agentId,
+        requestedDirectly: true,
+      });
+      expect(selfWake).toBeNull();
+      expect(await skippedRequestsToday(agentId, UNMETERED_RUNAWAY_GUARD_REASON)).toHaveLength(1);
+
+      // A person's manual wake is not paused by the guard.
+      const manual = await heartbeat.wakeup(agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        requestedByActorType: "user",
+        requestedByActorId: "person-1",
+        requestedDirectly: true,
+      });
+      expect(manual).not.toBeNull();
     });
 
     it("counts unmetered comment runs toward the guard — comments are unattended spend too", async () => {
