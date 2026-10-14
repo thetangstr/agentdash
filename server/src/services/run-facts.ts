@@ -51,17 +51,34 @@ export const WAKE_REQUESTED_BY_ACTOR_TYPE_KEY = "wakeRequestedByActorType";
 
 /**
  * Server-written `contextSnapshot` key: `true` when the requester asked for
- * this run directly — `POST /agents/:id/wakeup` or `/heartbeat/invoke` —
- * rather than the wake following from a change to work (an assignment, a
- * comment, a finished child). On those two routes the caller picks the
- * `reason` and `source`, so neither says anything the server vouches for.
- * enqueueWakeup stamps it from `WakeupOptions.requestedDirectly` only and
- * never takes it from the caller's context; coalescing keeps the value of
- * the wake that started the run.
+ * this run itself rather than the wake following from someone else's change
+ * to work. Set for
+ *  - a direct request: `POST /agents/:id/wakeup` or `/heartbeat/invoke`,
+ *    where the caller picks `reason` and `source`, so neither says anything
+ *    the server vouches for; and
+ *  - a self-wake: an agent whose own action wakes itself (it moves, creates
+ *    or reassigns its own issue, finishes its own child), whatever reason
+ *    the action carries.
+ * enqueueWakeup stamps it from `WakeupOptions.requestedDirectly` and the
+ * wake's own actor only, never from the caller's context. Coalescing keeps it
+ * paired with WAKE_REQUESTED_BY_ACTOR_TYPE_KEY from the same wake.
  */
 export const WAKE_REQUESTED_DIRECTLY_KEY = "wakeRequestedDirectly";
 
-const DELIBERATE_PERSON_WAKE_REASON_SET: ReadonlySet<string> = new Set(Object.values(DELIBERATE_PERSON_WAKE_REASONS));
+/**
+ * Context wake reasons that only mean a person's decision when a person
+ * requested the wake: a person's answer to the agent (above), and an
+ * execution-stage hand-off (review, approval, changes requested). From
+ * anyone else they read as the comment wake the ceiling pauses — an agent
+ * handing review to another agent is agent-to-agent traffic, not a person
+ * aiming work at it.
+ */
+const PERSON_ONLY_WAKE_REASON_SET: ReadonlySet<string> = new Set([
+  ...Object.values(DELIBERATE_PERSON_WAKE_REASONS),
+  "execution_review_requested",
+  "execution_approval_requested",
+  "execution_changes_requested",
+]);
 
 /**
  * The wake classes the daily token ceiling pauses: the unattended spend
@@ -98,7 +115,8 @@ const WAKE_REASON_BY_CONTEXT_REASON: Record<string, RunFactWakeReason> = {
   connector_send_failed: "approval",
   connector_send_outcome_unknown: "approval",
   // Issue-tree gate transitions are human decisions, so they bucket with the
-  // approval wake rather than generic automation.
+  // approval wake rather than generic automation — when a person made them
+  // (PERSON_ONLY_WAKE_REASON_SET; from an agent they read as a comment).
   execution_approval_requested: "approval",
   execution_review_requested: "approval",
   execution_changes_requested: "approval",
@@ -136,26 +154,32 @@ export function normalizeWakeReason(input: {
   const contextReason = readString(input.contextSnapshot?.wakeReason);
   const requestedByActorType = readString(input.contextSnapshot?.[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]);
   if (requestedByActorType === "agent") {
-    // An agent asking for a run — of itself or of another agent — is
-    // unattended spend: nobody aimed it, and an agent that asks at the end of
-    // every run would otherwise keep itself going past its ceiling forever.
+    // An agent asking for a run of its own is unattended spend: nobody aimed
+    // it, and an agent that asks at the end of every run would otherwise keep
+    // itself going past its ceiling forever.
     //  - A direct request (the wakeup/invoke routes): the reason and source
     //    are the caller's own words, so a claimed "issue_assigned" or
     //    "process_lost_retry" does not make it one.
+    //  - A self-wake: the agent's own action woke the agent itself (moving,
+    //    creating or reassigning its own issue, finishing its own child).
     //  - No reason at all: nothing server-side says why this run exists
-    //    (the route's default, kept here as a fail-closed backstop).
-    // Wakes that follow from an agent's work keep their class: handing an
-    // issue to another agent ("issue_assigned"), checkout, finished children
-    // and blockers, execution-stage hand-offs — work routing keeps flowing.
+    //    (a fail-closed backstop).
+    // An agent handing an issue to a DIFFERENT agent ("issue_assigned"),
+    // checkout, and finished children or blockers of another agent's issue
+    // keep their class: work routing between agents keeps flowing.
     if (input.contextSnapshot?.[WAKE_REQUESTED_DIRECTLY_KEY] === true || !contextReason) {
       return "agent_requested";
     }
+    // One agent @-mentioning another is agent-to-agent chatter: two chatty
+    // agents would keep each other running past both ceilings. A person's
+    // mention stays "mention".
+    if (contextReason === "issue_comment_mentioned") return "comment";
   }
-  if (contextReason && DELIBERATE_PERSON_WAKE_REASON_SET.has(contextReason)) {
-    // A person's own answer to the agent — only when a person asked for the
-    // wake. Anyone else claiming the reason (an agent's wake that was not a
-    // direct request, or a run with no recorded requester) is read as the
-    // comment wake these replaced, which the ceiling pauses: fail closed.
+  if (contextReason && PERSON_ONLY_WAKE_REASON_SET.has(contextReason)) {
+    // A person's decision — only when a person asked for the wake. Anyone
+    // else claiming the reason (an agent, or a run with no recorded
+    // requester) is read as a comment wake, which the ceiling pauses: fail
+    // closed.
     return requestedByActorType === "user"
       ? WAKE_REASON_BY_CONTEXT_REASON[contextReason]!
       : "comment";

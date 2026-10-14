@@ -14,10 +14,14 @@ import {
   stewardInboxEvents,
 } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_DAILY_TOKENS } from "@paperclipai/shared";
-import { heartbeatService } from "../services/heartbeat.js";
+import { heartbeatService, mergeCoalescedContextSnapshot } from "../services/heartbeat.js";
 import { dispatchResolvedInteractionContinuation } from "../services/issue-interaction-continuation.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
-import { normalizeWakeReason, WAKE_REQUESTED_DIRECTLY_KEY } from "../services/run-facts.js";
+import {
+  normalizeWakeReason,
+  WAKE_REQUESTED_BY_ACTOR_TYPE_KEY,
+  WAKE_REQUESTED_DIRECTLY_KEY,
+} from "../services/run-facts.js";
 import {
   TOKEN_CEILING_SKIP_REASON,
   UNMETERED_RUNAWAY_GUARD_LIMIT,
@@ -538,6 +542,87 @@ describeEmbeddedPostgres("heartbeat token ceiling", () => {
         expect(run, wake.reason).not.toBeNull();
       }
       expect(await skippedRequestsToday(agentId)).toHaveLength(0);
+    });
+
+    it("skips the wakes an agent's own work sends to itself — finished children, resolved blockers", async () => {
+      const { companyId, agentId } = await seedAgent();
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      for (const reason of ["issue_children_completed", "issue_blockers_resolved", "issue_status_changed"]) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: reason, status: "todo", assigneeAgentId: agentId });
+        // issue-patch-actions' wake, verbatim, with the agent as the actor.
+        const run = await heartbeat.wakeup(agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason,
+          payload: { issueId },
+          requestedByActorType: "agent",
+          requestedByActorId: agentId,
+          contextSnapshot: { issueId },
+        });
+        expect(run, reason).toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+    });
+
+    /** buildExecutionStageWakeup's wake (issue-patch-actions.ts), verbatim. */
+    function executionStageWake(reason: string, issueId: string, requester: { type: "user" | "agent"; id: string }) {
+      return {
+        source: "assignment",
+        triggerDetail: "system",
+        reason,
+        payload: { issueId, mutation: "update", executionStage: {} },
+        requestedByActorType: requester.type,
+        requestedByActorId: requester.id,
+        contextSnapshot: { issueId, taskId: issueId, wakeReason: reason, source: "issue.execution_stage", executionStage: {} },
+      } as const;
+    }
+
+    it("skips an agent-requested review or changes wake over the ceiling, and runs a person's", async () => {
+      const { companyId, agentId } = await seedAgent();
+      const { agentId: otherAgentId } = await seedAgent({ companyId, name: "Submitter" });
+      await seedMeteredRun(companyId, agentId, AGENT_DEFAULT_MAX_DAILY_TOKENS);
+
+      for (const reason of ["execution_review_requested", "execution_approval_requested", "execution_changes_requested"]) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: reason, status: "in_review", assigneeAgentId: otherAgentId });
+        const byAgent = await heartbeat.wakeup(agentId, executionStageWake(reason, issueId, { type: "agent", id: otherAgentId }));
+        expect(byAgent, `${reason} from an agent`).toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+
+      for (const reason of ["execution_review_requested", "execution_changes_requested"]) {
+        const issueId = randomUUID();
+        await db.insert(issues).values({ id: issueId, companyId, title: reason, status: "in_review", assigneeAgentId: otherAgentId });
+        const byPerson = await heartbeat.wakeup(agentId, executionStageWake(reason, issueId, { type: "user", id: "person-1" }));
+        expect(byPerson, `${reason} from a person`).not.toBeNull();
+      }
+      expect(await skippedRequestsToday(agentId)).toHaveLength(3);
+    });
+
+    it("keeps the wake reason, requester and direct/self flag of one wake together when wakes merge", () => {
+      const label = (context: Record<string, unknown>) => normalizeWakeReason({ invocationSource: "on_demand", contextSnapshot: context });
+      const personManual = { [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user", [WAKE_REQUESTED_DIRECTLY_KEY]: true };
+      const agentSelfWake = { [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "agent", [WAKE_REQUESTED_DIRECTLY_KEY]: true };
+      const agentAssigns = { wakeReason: "issue_assigned", [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "agent" };
+      const personComment = { wakeReason: "issue_commented", [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" };
+
+      // An agent's self-wake (no reason) merging into a person's manual run
+      // does not relabel it, and the reverse does not lift the agent's run.
+      expect(label(mergeCoalescedContextSnapshot(personManual, agentSelfWake))).toBe("manual");
+      expect(label(mergeCoalescedContextSnapshot(agentSelfWake, personManual))).toBe("agent_requested");
+      // A wake that names a reason brings its own requester and flag.
+      const assigned = mergeCoalescedContextSnapshot(agentSelfWake, agentAssigns);
+      expect(assigned[WAKE_REQUESTED_DIRECTLY_KEY]).toBeUndefined();
+      expect(label(assigned)).toBe("assignment");
+      const selfAssigned = mergeCoalescedContextSnapshot(personComment, { ...agentAssigns, [WAKE_REQUESTED_DIRECTLY_KEY]: true });
+      expect(label(selfAssigned)).toBe("agent_requested");
+      // An agent self-wake with no reason merging into an assignment run
+      // leaves the assignment label (requester and flag of the assignment).
+      const kept = mergeCoalescedContextSnapshot(agentAssigns, agentSelfWake);
+      expect(kept[WAKE_REQUESTED_DIRECTLY_KEY]).toBeUndefined();
+      expect(label(kept)).toBe("assignment");
     });
 
     it("runs every one of them under the ceiling, and labels the agent's own run agent_requested", async () => {

@@ -22,6 +22,7 @@ import {
   testAdapterEnvironmentSchema,
   type AgentRunHealth,
   type AgentTokenCeilingStatus,
+  type AgentWakeupSkipped,
   type AgentSkillSnapshot,
   type InstanceSchedulerHeartbeatAgent,
   upsertAgentInstructionsFileSchema,
@@ -1212,22 +1213,17 @@ export function agentRoutes(
     payload: Record<string, unknown> | null | undefined,
   ) {
     const reason = status.pauseReason ?? "token_ceiling";
-    const pausedBy = reason === "token_ceiling"
-      ? `${agent.name} is over its daily token ceiling`
-      : `the unmetered runaway guard paused ${agent.name}`;
+    const pausedBy = reason === "token_ceiling" ? "its daily token ceiling" : "the unmetered runaway guard";
     return {
       status: "skipped" as const,
       reason,
-      message:
-        `Wakeup was skipped: ${pausedBy}. Wakes nobody aimed at it — timer, comment, and runs an agent asks for ` +
-        `(this endpoint, called with an agent key) — are paused until ${status.liftsAt}, or until its steward ` +
-        `raises the ceiling. Assigned work, a person's own wake, and answers to its questions still wake it.`,
+      message: `${agent.name} is paused by ${pausedBy} until ${status.liftsAt}; its steward can raise the ceiling.`,
       liftsAt: status.liftsAt,
       issueId: typeof payload?.issueId === "string" && payload.issueId.trim() ? payload.issueId : null,
       executionRunId: null,
       executionAgentId: null,
       executionAgentName: null,
-    };
+    } satisfies AgentWakeupSkipped;
   }
 
   async function buildSkippedWakeupResponse(

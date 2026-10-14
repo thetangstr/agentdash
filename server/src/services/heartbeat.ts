@@ -1052,7 +1052,8 @@ interface WakeupOptions {
    * AgentDash: the requester asked for this run directly (POST
    * /agents/:id/wakeup, /heartbeat/invoke) — its reason and source are the
    * caller's own words. Stamped into the run context under
-   * WAKE_REQUESTED_DIRECTLY_KEY; an agent's direct request is the
+   * WAKE_REQUESTED_DIRECTLY_KEY (as is every wake an agent requests for
+   * itself, without this option); an agent's direct request is the
    * "agent_requested" wake class the daily token ceiling pauses.
    */
   requestedDirectly?: boolean;
@@ -2104,12 +2105,15 @@ export function mergeCoalescedContextSnapshot(
   } else {
     delete merged[WAKE_REQUESTED_BY_ACTOR_SOURCE_KEY];
   }
-  // Nor does whether it was asked for directly: an agent's direct request
-  // coalescing into an assignment run does not relabel that run.
-  if (existing[WAKE_REQUESTED_DIRECTLY_KEY] === true) {
-    merged[WAKE_REQUESTED_DIRECTLY_KEY] = true;
-  } else {
-    delete merged[WAKE_REQUESTED_DIRECTLY_KEY];
+  // The run's wake class is read from the wake reason, the requester type and
+  // the direct/self flag together (run-facts.ts normalizeWakeReason), so all
+  // three come from the same wake: the incoming one when it names a reason
+  // (it replaces wakeReason above), otherwise the wake that is already there.
+  // Mixing them would label, say, a person's manual run with an agent's flag.
+  const labelSource = readNonEmptyString(incoming.wakeReason) ? incoming : existing;
+  for (const key of ["wakeReason", WAKE_REQUESTED_BY_ACTOR_TYPE_KEY, WAKE_REQUESTED_DIRECTLY_KEY]) {
+    if (labelSource[key] !== undefined) merged[key] = labelSource[key];
+    else delete merged[key];
   }
   if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
     merged.forceFreshSession = true;
@@ -9281,10 +9285,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (opts.requestedByActorType) {
       contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = opts.requestedByActorType;
     }
-    // Whether the requester asked for this run directly — server-written the
-    // same way, so a caller's context cannot claim or shed it.
+    // Whether the requester asked for this run itself — a direct request on
+    // the wakeup/invoke routes, or an agent whose own action wakes itself
+    // (it moved, created or reassigned its own issue). Server-written the same
+    // way, so a caller's context cannot claim or shed it. Either is the
+    // "agent_requested" class the daily token ceiling pauses (run-facts.ts).
     delete contextSnapshot[WAKE_REQUESTED_DIRECTLY_KEY];
-    if (opts.requestedDirectly === true) {
+    const selfWake =
+      opts.requestedByActorType === "agent" && opts.requestedByActorId != null && opts.requestedByActorId === agentId;
+    if (opts.requestedDirectly === true || selfWake) {
       contextSnapshot[WAKE_REQUESTED_DIRECTLY_KEY] = true;
     }
     if (opts.requestedByActorType === "user") {
@@ -9460,9 +9469,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
      * Positioned deliberately after the disabled/wakeOnDemand skips so those
      * keep their honest reasons, and before the issue/tree work below so an
      * over-ceiling wake never reaches a lock. Only timer, comment and
-     * agent-requested wakes pause (an agent asking for a run of itself or
-     * another agent through the wakeup/invoke routes, or with no reason —
-     * run-facts.ts) — a wake a person deliberately aimed at the agent (assignment,
+     * agent-requested wakes pause (an agent's direct request on the
+     * wakeup/invoke routes, a wake an agent's own action sends to itself, or
+     * an agent's wake with no reason; agent-to-agent mentions and
+     * execution-stage hand-offs read as comments — run-facts.ts) — a wake a
+     * person deliberately aimed at the agent (assignment,
      * mention, approval, manual — and a person's answer to the agent through
      * the bridge or the web: a send-back, a change request, an answered
      * question, which run-facts.ts classes as "approval") still runs, as do

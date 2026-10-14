@@ -84,6 +84,12 @@ export interface AgentWakeupSkipped {
   status: "skipped";
   reason: string;
   message: string | null;
+  /**
+   * AgentDash (OBS-2): when the daily token ceiling or the unmetered runaway
+   * guard refused the wake, the UTC instant the pause lifts. Absent or null
+   * for every other skip.
+   */
+  liftsAt?: string | null;
   issueId: string | null;
   executionRunId: string | null;
   executionAgentId: string | null;

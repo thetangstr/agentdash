@@ -173,18 +173,19 @@ describe("normalizeWakeReason", () => {
       ).toBe("manual");
     });
 
-    it("keeps wakes that follow from an agent's work in their own class", () => {
-      // Work routing an agent sets off — not a run it asked for — keeps
-      // flowing over the ceiling.
+    it("keeps work routing an agent sets off for a different agent in its own class", () => {
+      // Not a run it asked for itself (no direct/self flag): it keeps flowing
+      // over the ceiling. Agent-to-agent chatter (mentions, comments,
+      // execution-stage hand-offs) reads as a comment, which pauses.
       for (const [invocationSource, wakeReason, expected] of [
         ["assignment", "issue_assigned", "assignment"],
         ["assignment", "issue_checked_out", "automation"],
-        ["assignment", "execution_review_requested", "approval"],
         ["automation", "issue_children_completed", "automation"],
         ["automation", "issue_blockers_resolved", "automation"],
         ["automation", "issue_status_changed", "automation"],
         ["automation", "issue_execution_promoted", "automation"],
-        ["automation", "issue_comment_mentioned", "mention"],
+        ["assignment", "execution_review_requested", "comment"],
+        ["automation", "issue_comment_mentioned", "comment"],
         ["automation", "issue_commented", "comment"],
       ] as const) {
         const wakeClass = normalizeWakeReason({ invocationSource, contextSnapshot: byAgent({ wakeReason }) });
@@ -216,19 +217,46 @@ describe("normalizeWakeReason", () => {
     ).toBe("timer");
   });
 
-  it("maps issue-tree gate transitions to the human buckets", () => {
+  it("maps issue-tree gate transitions to the human buckets when a person made them", () => {
     for (const [contextReason, expected] of [
       ["execution_review_requested", "approval"],
+      ["execution_approval_requested", "approval"],
       ["execution_changes_requested", "approval"],
       ["issue_tree_restored", "manual"],
     ] as const) {
       expect(
         normalizeWakeReason({
           invocationSource: "automation",
-          contextSnapshot: { wakeReason: contextReason },
+          contextSnapshot: { wakeReason: contextReason, [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: "user" },
         }),
       ).toBe(expected);
     }
+  });
+
+  it("reads an execution-stage hand-off from anyone but a person as a comment the ceiling pauses", () => {
+    for (const reason of ["execution_review_requested", "execution_approval_requested", "execution_changes_requested"]) {
+      for (const requester of ["agent", "system", undefined]) {
+        const contextSnapshot: Record<string, unknown> = { wakeReason: reason };
+        if (requester) contextSnapshot[WAKE_REQUESTED_BY_ACTOR_TYPE_KEY] = requester;
+        const wakeClass = normalizeWakeReason({ invocationSource: "assignment", contextSnapshot });
+        expect(wakeClass, `${reason}/${requester}`).toBe("comment");
+        expect(TOKEN_CEILING_PAUSED_WAKE_CLASSES.has(wakeClass)).toBe(true);
+      }
+    }
+  });
+
+  it("reads one agent @-mentioning another as a comment, and a person's mention as a mention", () => {
+    const mention = (requester?: string) =>
+      normalizeWakeReason({
+        invocationSource: "automation",
+        contextSnapshot: {
+          wakeReason: "issue_comment_mentioned",
+          ...(requester ? { [WAKE_REQUESTED_BY_ACTOR_TYPE_KEY]: requester } : {}),
+        },
+      });
+    expect(mention("agent")).toBe("comment");
+    expect(mention("user")).toBe("mention");
+    expect(TOKEN_CEILING_PAUSED_WAKE_CLASSES.has("mention")).toBe(false);
   });
 
   it("reads unrecognized context reasons as automation, not manual", () => {
