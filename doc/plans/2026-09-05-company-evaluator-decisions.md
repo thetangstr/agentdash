@@ -804,3 +804,57 @@ human to them on the agent row and is audited as
   founder directive in prose; until authority has a record the rule keeps raising them, and the
   human disposition is the calibration signal.
 
+
+## APM gate 3 (P3.2): milestone inputs change, `m2-score/9` (2026-10-29)
+
+Agent Performance Management gate 3 adds ingest sources and fixes three gaps in
+what the ledger records (evaluation LLD §9.2,
+`doc/plans/2026-10-29-agent-evaluation-lld.md`). The milestone formulas, rules
+and card shape are unchanged; their inputs are not, so `FORMULA_VERSION` is
+`m2-score/9`. `METRICS_FORMULA_VERSION` (`metrics/5`) and
+`COMPOSITE_FORMULA_VERSION` (`composite/6`) stay, because no arithmetic moved.
+Cards stored under `m2-score/8` keep verifying as `formula_changed`; they stay
+immutable records. The ledger `schemaVersion` is 3 for events written from now
+on.
+
+What changes in a milestone card, and only this:
+- **Checkout.** `issue.checked_out` used to land as `activity.other`. It now
+  mints `issue.assignment_changed` (to the checking-out agent, previous assignee
+  unknown) and `issue.transition` (`from` unknown, to `in_progress`, source
+  `checkout`) from the one activity row. So an item checked out without any
+  other start record now has a start time (P7, E10), the checkout counts toward
+  the assignee-at-time rules, and P6 counts a checkout by a non-owner under
+  `insufficient.unknownFrom` (rule 6a), never as a breach. The digest's
+  `byType` and `eventCount` move with it. Checkouts ingested before this change
+  stay `activity.other`.
+- **Kept, not read.** Runs and costs with no issue are kept in the timeline as
+  `unattributedRuns` / `unattributedCosts`, and project- and goal-level
+  verdicts as `milestoneVerdicts`. No milestone metric reads these lists, and
+  the source-presence flags still come from item-level records only, so
+  today's cards do not change because of them. Agent cards read them (cost and
+  burden, gate 3 P3.3).
+- **Payload additions.** Goal snapshots carry `currentValue` and
+  `lastUpdatedAt`; agent snapshots carry `adapterType` and the explicitly
+  configured `model` (one new agent snapshot per agent the first time its row
+  is read after the upgrade); verdicts carry their own project and goal;
+  `authz.refused` carries the V2 dimension, rule and target when present. No
+  milestone metric reads the new fields.
+
+What does not reach a milestone card: the agent-side sources
+(`EVALUATION_AGENT_SOURCE_EVENT_TYPES`: harness assessments, corrections,
+routine and trigger snapshots, routine runs, deliverable runs, responsibility
+intervals, profile revisions and applications, execution decisions). Milestone
+scoring drops them before it folds a window (`isMilestoneInput`), so
+backfilling their history cannot add an ingest-lag marker, shift `asOf`, add a
+human actor or an emission count. `access.policy_changed`,
+`access.would_refuse` and `routine.trigger_deleted` used to be `activity.other`
+with no item; they now have their own types and are scored exactly as before.
+
+Proof in `server/src/__tests__/evaluation-gate3-ingest-classes.test.ts`: the
+agent-side events leave a card byte-identical at the same cut, the typed
+activity scores exactly like the `activity.other` rows it replaced, and the
+checkout difference is the declared one. The existing milestone expectations
+that moved are the two `FORMULA_VERSION` pins (`evaluation-scoring.test.ts`,
+`evaluation-scoring-round1.test.ts`) and the `formulaVersion` line of the card
+contract fixture (`ui/src/pages/evaluation/__fixtures__/scored-card.json`,
+regenerate with `EVALUATION_CARD_FIXTURE_WRITE=1`); no other card byte moved.
