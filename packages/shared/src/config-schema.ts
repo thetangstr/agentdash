@@ -99,9 +99,12 @@ export const secretsConfigSchema = z.object({
   }),
 });
 
+// `.prefault`, not `.default`: zod 4's `.default()` returns its value without
+// parsing it, so `{}` would no longer fill `enabled`. `.prefault` parses it,
+// as zod 3's `.default()` did.
 export const telemetryConfigSchema = z.object({
   enabled: z.boolean().default(true),
-}).default({});
+}).prefault({});
 
 export const paperclipConfigSchema = z
   .object({

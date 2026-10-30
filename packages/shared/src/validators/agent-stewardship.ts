@@ -12,7 +12,7 @@ const transferReasonSchema = z.string().trim().min(1).max(500);
 const releaseReasonSchema = z.string().trim().min(1).max(500);
 
 export const assignAgentStewardshipSchema = z.object({
-  agentId: z.string().uuid(),
+  agentId: z.guid(),
   userId: z.string().trim().min(1).max(256),
 }).strict();
 

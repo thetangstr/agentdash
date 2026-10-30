@@ -31,7 +31,7 @@ export const createDeliverableSchema = z
     key,
     name: z.string().trim().min(1).max(200),
     cadence: z.enum(DELIVERABLE_CADENCES),
-    assemblerAgentId: z.string().uuid(),
+    assemblerAgentId: z.guid(),
     /**
      * Two approvers, and they must be two people. One human in both seats is
      * one approval with extra ceremony, and G7's "nothing ships without both
@@ -61,9 +61,9 @@ export const createDeliverableFactSchema = z
     label: z.string().trim().min(1).max(200),
     sourceType: z.enum(DELIVERABLE_FACT_SOURCE_TYPES),
     derivation: z.string().trim().min(1).max(4000),
-    ownerAgentId: z.string().uuid(),
+    ownerAgentId: z.guid(),
     connectorProvider: z.string().trim().min(1).max(60).optional(),
-    connectorConfig: z.record(z.unknown()).optional(),
+    connectorConfig: z.record(z.string(), z.unknown()).optional(),
     orderIndex: z.number().int().min(0).max(10_000).optional(),
   })
   .strict()
@@ -92,7 +92,7 @@ export const createDeliverableCheckSchema = z
   .object({
     key,
     kind: z.enum(AUTHORABLE_DELIVERABLE_CHECK_KINDS),
-    config: z.record(z.unknown()),
+    config: z.record(z.string(), z.unknown()),
     severity: z.enum(DELIVERABLE_CHECK_SEVERITIES).optional(),
   })
   .strict();

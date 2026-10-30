@@ -8,7 +8,7 @@ export const envBindingPlainSchema = z.object({
 
 export const envBindingSecretRefSchema = z.object({
   type: z.literal("secret_ref"),
-  secretId: z.string().uuid(),
+  secretId: z.guid(),
   version: z.union([z.literal("latest"), z.number().int().positive()]).optional(),
 });
 
@@ -19,7 +19,7 @@ export const envBindingSchema = z.union([
   envBindingSecretRefSchema,
 ]);
 
-export const envConfigSchema = z.record(envBindingSchema);
+export const envConfigSchema = z.record(z.string(), envBindingSchema);
 
 export const createSecretSchema = z.object({
   name: z.string().min(1),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partialWithoutDefaults } from "./zod-object.js";
 import { DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE } from "../types/feedback.js";
 import {
   DAILY_RETENTION_PRESETS,
@@ -33,7 +34,7 @@ export const instanceGeneralSettingsSchema = z.object({
   backupRetention: backupRetentionPolicySchema.default(DEFAULT_BACKUP_RETENTION),
 }).strict();
 
-export const patchInstanceGeneralSettingsSchema = instanceGeneralSettingsSchema.partial();
+export const patchInstanceGeneralSettingsSchema = partialWithoutDefaults(instanceGeneralSettingsSchema);
 
 export const instanceExperimentalSettingsSchema = z.object({
   enableEnvironments: z.boolean().default(false),
@@ -48,7 +49,7 @@ export const instanceExperimentalSettingsSchema = z.object({
     .default(DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS),
 }).strict();
 
-export const patchInstanceExperimentalSettingsSchema = instanceExperimentalSettingsSchema.partial();
+export const patchInstanceExperimentalSettingsSchema = partialWithoutDefaults(instanceExperimentalSettingsSchema);
 
 export const issueGraphLivenessAutoRecoveryRequestSchema = z.object({
   lookbackHours: z

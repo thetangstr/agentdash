@@ -2,11 +2,11 @@ import { z } from "zod";
 import { BILLING_TYPES } from "../constants.js";
 
 export const createCostEventSchema = z.object({
-  agentId: z.string().uuid(),
-  issueId: z.string().uuid().optional().nullable(),
-  projectId: z.string().uuid().optional().nullable(),
-  goalId: z.string().uuid().optional().nullable(),
-  heartbeatRunId: z.string().uuid().optional().nullable(),
+  agentId: z.guid(),
+  issueId: z.guid().optional().nullable(),
+  projectId: z.guid().optional().nullable(),
+  goalId: z.guid().optional().nullable(),
+  heartbeatRunId: z.guid().optional().nullable(),
   billingCode: z.string().optional().nullable(),
   provider: z.string().min(1),
   biller: z.string().min(1).optional(),

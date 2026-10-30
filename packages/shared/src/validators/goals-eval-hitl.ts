@@ -79,12 +79,12 @@ export type VerdictRubricScores = z.infer<typeof verdictRubricScoresSchema>;
 
 export const createVerdictInputSchema = z
   .object({
-    companyId: z.string().uuid(),
+    companyId: z.guid(),
     entityType: verdictEntityTypeSchema,
-    goalId: z.string().uuid().optional(),
-    projectId: z.string().uuid().optional(),
-    issueId: z.string().uuid().optional(),
-    reviewerAgentId: z.string().uuid().optional(),
+    goalId: z.guid().optional(),
+    projectId: z.guid().optional(),
+    issueId: z.guid().optional(),
+    reviewerAgentId: z.guid().optional(),
     reviewerUserId: z.string().optional(),
     outcome: verdictOutcomeSchema,
     rubricScores: verdictRubricScoresSchema.optional(),
@@ -121,16 +121,16 @@ export type CreateVerdictInput = z.infer<typeof createVerdictInputSchema>;
 // ---------------------------------------------------------------------------
 
 export const verdictReviewCardPayloadSchema = z.object({
-  verdictId: z.string().uuid(),
+  verdictId: z.guid(),
   /** Discriminated by entityType — exactly one of goalId/projectId/issueId is non-null. */
-  issueId: z.string().uuid().optional(),
-  projectId: z.string().uuid().optional(),
-  goalId: z.string().uuid().optional(),
+  issueId: z.guid().optional(),
+  projectId: z.guid().optional(),
+  goalId: z.guid().optional(),
   entityType: verdictEntityTypeSchema,
   outcome: verdictOutcomeSchema,
   rubricScores: verdictRubricScoresSchema.optional(),
   justification: z.string().optional(),
-  reviewerAgentId: z.string().uuid().optional(),
+  reviewerAgentId: z.guid().optional(),
   reviewerUserId: z.string().optional(),
 });
 
@@ -141,12 +141,12 @@ export type VerdictReviewCardPayload = z.infer<typeof verdictReviewCardPayloadSc
 // ---------------------------------------------------------------------------
 
 export const humanTasteGateCardPayloadSchema = z.object({
-  approvalId: z.string().uuid(),
+  approvalId: z.guid(),
   /** The original escalated_to_human verdict that triggered this gate. */
-  verdictId: z.string().uuid(),
-  issueId: z.string().uuid().optional(),
-  projectId: z.string().uuid().optional(),
-  goalId: z.string().uuid().optional(),
+  verdictId: z.guid(),
+  issueId: z.guid().optional(),
+  projectId: z.guid().optional(),
+  goalId: z.guid().optional(),
   entityType: verdictEntityTypeSchema,
   /** Human-readable summary of what needs review. */
   summary: z.string(),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partialWithoutDefaults } from "./zod-object.js";
 import {
   AGENT_VISIBILITIES,
   COMPANY_PRODUCT_PROFILES,
@@ -6,7 +7,7 @@ import {
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "../constants.js";
 
-const logoAssetIdSchema = z.string().uuid().nullable().optional();
+const logoAssetIdSchema = z.guid().nullable().optional();
 const brandColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional();
 const feedbackDataSharingTermsVersionSchema = z.string().min(1).nullable().optional();
 const attachmentMaxBytesSchema = z
@@ -32,8 +33,7 @@ export const createCompanySchema = z.object({
 
 export type CreateCompany = z.infer<typeof createCompanySchema>;
 
-export const updateCompanySchema = createCompanySchema
-  .partial()
+export const updateCompanySchema = partialWithoutDefaults(createCompanySchema)
   .extend({
     status: z.enum(COMPANY_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),

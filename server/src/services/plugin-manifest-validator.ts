@@ -128,8 +128,9 @@ export function pluginManifestValidator(): PluginManifestValidator {
         };
       }
 
-      const details = result.error.errors.map((issue) => ({
-        path: issue.path,
+      const details = result.error.issues.map((issue) => ({
+        // zod 4 types paths as PropertyKey[]; a JSON manifest has no symbol keys.
+        path: issue.path.map((segment) => (typeof segment === "symbol" ? String(segment) : segment)),
         message: issue.message,
       }));
 

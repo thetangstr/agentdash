@@ -13,7 +13,7 @@ import {
 /** `PATCH /api/companies/:companyId/performance-manager`: an agent id, or null for the Chief of Staff default. */
 export const updatePerformanceManagerSchema = z
   .object({
-    agentId: z.string().uuid().nullable(),
+    agentId: z.guid().nullable(),
   })
   .strict();
 export type UpdatePerformanceManager = z.infer<typeof updatePerformanceManagerSchema>;
@@ -31,7 +31,7 @@ export const createAgentRecommendationSchema = z
     kind: z.enum(AGENT_RECOMMENDATION_KINDS),
     reason: z.string().trim().min(1).max(4000),
     evidence: z.array(agentRecommendationEvidenceSchema).min(1).max(50),
-    proposalApprovalId: z.string().uuid().nullable().optional(),
+    proposalApprovalId: z.guid().nullable().optional(),
   })
   .strict();
 export type CreateAgentRecommendation = z.infer<typeof createAgentRecommendationSchema>;

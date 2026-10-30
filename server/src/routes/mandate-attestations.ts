@@ -7,7 +7,7 @@ import { HttpError } from "../errors.js";
 import { assertCanSetCompanyDirection, assertCompanyAccess } from "./authz.js";
 
 const runDemoAttestationSchema = z.object({
-  mandateId: z.string().uuid(),
+  mandateId: z.guid(),
   action: z.string().min(1),
 });
 

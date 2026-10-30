@@ -15,9 +15,9 @@ import { foundationAuthority } from './human-control/authority.js';
 import { verifiedBoardCredential } from '../middleware/auth.js';
 
 const recoveryReferenceSchema = z.object({
-  issueId: z.string().uuid().optional(),
-  interactionId: z.string().uuid().optional(),
-  enrollmentId: z.string().uuid().optional(),
+  issueId: z.guid().optional(),
+  interactionId: z.guid().optional(),
+  enrollmentId: z.guid().optional(),
 }).strict().refine(value => Object.keys(value).length > 0);
 export type HumanRecoveryReference = z.infer<typeof recoveryReferenceSchema>;
 
@@ -26,8 +26,10 @@ export interface HumanOperation {
   descriptor: HumanOperationDescriptor;
   // Omitted policy always retains canonical membership access.
   companyAccess?: 'canonical' | 'instance_admin_stewardship';
-  input: z.ZodTypeAny;
-  output: z.ZodTypeAny;
+  // zod 3's ZodTypeAny parsed to `any`; zod 4's parses to `unknown`. The
+  // registry's handlers take records, so keep the zod 3 typing here.
+  input: z.ZodType<any, any>;
+  output: z.ZodType<any, any>;
   authorize(context: HumanOperationContext): void | Promise<void>;
   resolve(context: HumanOperationContext, input: Record<string, unknown>): Promise<{ payload: Record<string, unknown>; preconditions: Record<string, unknown>; readback?: Record<string, unknown> }>;
   read?(context: HumanOperationContext, input: Record<string, unknown>): Promise<unknown>;

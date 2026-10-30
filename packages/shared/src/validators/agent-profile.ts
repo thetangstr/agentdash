@@ -64,9 +64,9 @@ export type AgentProfileObligationKind = (typeof AGENT_PROFILE_OBLIGATION_KINDS)
 export const agentProfileObligationSchema = z
   .object({
     kind: z.enum(AGENT_PROFILE_OBLIGATION_KINDS),
-    routineTriggerId: z.string().uuid().optional(),
-    deliverableId: z.string().uuid().optional(),
-    goalId: z.string().uuid().optional(),
+    routineTriggerId: z.guid().optional(),
+    deliverableId: z.guid().optional(),
+    goalId: z.guid().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -84,7 +84,7 @@ export const agentProfileObligationSchema = z
 
 const principalRefShape = {
   userId: z.string().min(1).optional(),
-  agentId: z.string().uuid().optional(),
+  agentId: z.guid().optional(),
 };
 
 /** Re-exported under the profile's name; the canonical schema lives with the evaluation vocabulary. */
@@ -105,7 +105,7 @@ export const agentProfileResponsibilitySchema = z
     escalation: z
       .object({
         toUserId: z.string().min(1).optional(),
-        toAgentId: z.string().uuid().optional(),
+        toAgentId: z.guid().optional(),
         when: longText,
       })
       .strict(),
@@ -139,7 +139,7 @@ export const agentProfileRuntimeSchema = z
   .object({
     adapterType: shortText.min(1).optional(),
     model: shortText.min(1).optional(),
-    environmentId: z.string().uuid().optional(),
+    environmentId: z.guid().optional(),
     heartbeat: z
       .object({
         intervalSec: z.number().int().nonnegative().max(7 * 24 * 60 * 60).optional(),
@@ -565,7 +565,7 @@ export type WithdrawAgentProfileRevision = z.infer<typeof withdrawAgentProfileRe
 /** `POST /api/companies/:companyId/issues/:issueId/responsibility`. */
 export const mapIssueResponsibilitySchema = z
   .object({
-    agentId: z.string().uuid(),
+    agentId: z.guid(),
     responsibilityKey: responsibilityKeySchema,
     reason: longText.optional(),
   })
@@ -599,16 +599,16 @@ const v2DimensionOrV1Field = z.union([
  */
 export const agentProfileChangePayloadSchema = z
   .object({
-    agentId: z.string().uuid(),
-    profileId: z.string().uuid(),
-    revisionId: z.string().uuid(),
+    agentId: z.guid(),
+    profileId: z.guid(),
+    revisionId: z.guid(),
     revisionNumber: z.number().int().positive(),
-    basedOnRevisionId: z.string().uuid().nullable(),
+    basedOnRevisionId: z.guid().nullable(),
     bases: z
       .object({
-        basedOnRevisionId: z.string().uuid().nullable(),
+        basedOnRevisionId: z.guid().nullable(),
         governanceRevision: z.number().int().positive().nullable(),
-        configRevisionId: z.string().uuid().nullable(),
+        configRevisionId: z.guid().nullable(),
       })
       .strict(),
     bodyHash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -658,7 +658,7 @@ export const agentProfileChangePayloadSchema = z
       z
         .object({
           kind: z.literal("agent"),
-          agentId: z.string().uuid(),
+          agentId: z.guid(),
           runId: z.string().nullable().optional(),
           // AgentDash (APM gate 4): the performance manager filed it; a label, never an authority.
           capacity: z.literal("performance_manager").optional(),

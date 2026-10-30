@@ -13,6 +13,7 @@ import {
   updateIssueSchema,
   upsertIssueDocumentSchema,
   linkIssueApprovalSchema,
+  withoutRefinements,
 } from "@paperclipai/shared";
 import { PaperclipApiClient } from "./client.js";
 import { formatErrorResponse, formatTextResponse } from "./format.js";
@@ -20,7 +21,7 @@ import { formatErrorResponse, formatTextResponse } from "./format.js";
 export interface ToolDefinition {
   name: string;
   description: string;
-  schema: z.AnyZodObject;
+  schema: z.ZodObject;
   /** MCP tool annotations (e.g. readOnlyHint on the assistant reads). */
   annotations?: Record<string, unknown>;
   /** Declared output schema — required when execute returns structuredContent. */
@@ -58,26 +59,26 @@ function parseOptionalJson(raw: string | undefined | null): unknown {
   return JSON.parse(raw);
 }
 
-const companyIdOptional = z.string().uuid().optional().nullable();
-const agentIdOptional = z.string().uuid().optional().nullable();
+const companyIdOptional = z.guid().optional().nullable();
+const agentIdOptional = z.guid().optional().nullable();
 const issueIdSchema = z.string().min(1);
 const projectIdSchema = z.string().min(1);
-const goalIdSchema = z.string().uuid();
-const approvalIdSchema = z.string().uuid();
+const goalIdSchema = z.guid();
+const approvalIdSchema = z.guid();
 const documentKeySchema = z.string().trim().min(1).max(64);
 
 const listIssuesSchema = z.object({
   companyId: companyIdOptional,
   status: z.string().optional(),
-  projectId: z.string().uuid().optional(),
-  assigneeAgentId: z.string().uuid().optional(),
-  participantAgentId: z.string().uuid().optional(),
+  projectId: z.guid().optional(),
+  assigneeAgentId: z.guid().optional(),
+  participantAgentId: z.guid().optional(),
   assigneeUserId: z.string().optional(),
   touchedByUserId: z.string().optional(),
   inboxArchivedByUserId: z.string().optional(),
   unreadForUserId: z.string().optional(),
-  labelId: z.string().uuid().optional(),
-  executionWorkspaceId: z.string().uuid().optional(),
+  labelId: z.guid().optional(),
+  executionWorkspaceId: z.guid().optional(),
   originKind: z.string().optional(),
   originId: z.string().optional(),
   includeRoutineExecutions: z.boolean().optional(),
@@ -86,7 +87,7 @@ const listIssuesSchema = z.object({
 
 const listCommentsSchema = z.object({
   issueId: issueIdSchema,
-  after: z.string().uuid().optional(),
+  after: z.guid().optional(),
   order: z.enum(["asc", "desc"]).optional(),
   limit: z.number().int().positive().max(500).optional(),
 });
@@ -98,16 +99,16 @@ const upsertDocumentToolSchema = z.object({
   format: z.enum(["markdown"]).default("markdown"),
   body: z.string().max(524288),
   changeSummary: z.string().trim().max(500).nullable().optional(),
-  baseRevisionId: z.string().uuid().nullable().optional(),
+  baseRevisionId: z.guid().nullable().optional(),
 });
 
 // AgentDash: createIssueSchema carries a refinement (ExecOS origin is both or
-// neither), which makes it a ZodEffects. `makeTool` needs a plain ZodObject to
-// advertise `.shape`, so the tool merges the inner object and the create_issue
-// handler re-runs the canonical schema to keep the invariant.
+// neither). The tool merges the object without it (zod 4 refuses to merge a
+// refined object, and zod 3 needed `.innerType()` for the same reason), and the
+// create_issue handler re-runs the canonical schema to keep the invariant.
 const createIssueToolSchema = z.object({
   companyId: companyIdOptional,
-}).merge(createIssueSchema.innerType());
+}).merge(withoutRefinements(createIssueSchema));
 
 const updateIssueToolSchema = z.object({
   issueId: issueIdSchema,
@@ -126,8 +127,8 @@ const addCommentToolSchema = z.object({
 const createSuggestTasksToolSchema = z.object({
   issueId: issueIdSchema,
   idempotencyKey: z.string().trim().max(255).nullable().optional(),
-  sourceCommentId: z.string().uuid().nullable().optional(),
-  sourceRunId: z.string().uuid().nullable().optional(),
+  sourceCommentId: z.guid().nullable().optional(),
+  sourceRunId: z.guid().nullable().optional(),
   title: z.string().trim().max(240).nullable().optional(),
   summary: z.string().trim().max(1000).nullable().optional(),
   continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("wake_assignee"),
@@ -137,8 +138,8 @@ const createSuggestTasksToolSchema = z.object({
 const createAskUserQuestionsToolSchema = z.object({
   issueId: issueIdSchema,
   idempotencyKey: z.string().trim().max(255).nullable().optional(),
-  sourceCommentId: z.string().uuid().nullable().optional(),
-  sourceRunId: z.string().uuid().nullable().optional(),
+  sourceCommentId: z.guid().nullable().optional(),
+  sourceRunId: z.guid().nullable().optional(),
   title: z.string().trim().max(240).nullable().optional(),
   summary: z.string().trim().max(1000).nullable().optional(),
   continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("wake_assignee"),
@@ -148,8 +149,8 @@ const createAskUserQuestionsToolSchema = z.object({
 const createRequestConfirmationToolSchema = z.object({
   issueId: issueIdSchema,
   idempotencyKey: z.string().trim().max(255).nullable().optional(),
-  sourceCommentId: z.string().uuid().nullable().optional(),
-  sourceRunId: z.string().uuid().nullable().optional(),
+  sourceCommentId: z.guid().nullable().optional(),
+  sourceRunId: z.guid().nullable().optional(),
   title: z.string().trim().max(240).nullable().optional(),
   summary: z.string().trim().max(1000).nullable().optional(),
   continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("none"),
@@ -180,7 +181,7 @@ const cosChatToolSchema = z.object({
 });
 
 const readConversationToolSchema = z.object({
-  conversationId: z.string().uuid(),
+  conversationId: z.guid(),
   limit: z.number().int().positive().max(200).optional(),
 });
 
@@ -198,7 +199,7 @@ const hireAgentToolSchema = z.object({
 
 const workspaceRuntimeControlTargetSchema = z.object({
   workspaceCommandId: z.string().min(1).optional().nullable(),
-  runtimeServiceId: z.string().uuid().optional().nullable(),
+  runtimeServiceId: z.guid().optional().nullable(),
   serviceIndex: z.number().int().nonnegative().optional().nullable(),
 });
 
@@ -209,7 +210,7 @@ const issueWorkspaceRuntimeControlSchema = z.object({
 
 const waitForIssueWorkspaceServiceSchema = z.object({
   issueId: issueIdSchema,
-  runtimeServiceId: z.string().uuid().optional().nullable(),
+  runtimeServiceId: z.guid().optional().nullable(),
   serviceName: z.string().min(1).optional().nullable(),
   timeoutSeconds: z.number().int().positive().max(300).optional(),
 });
@@ -287,7 +288,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       "agentdashGetMyMemory",
       "Read this agent's own durable memory — what it has learned about its work, the traps it has hit, and decisions it made and why. Carries a `version` you must pass back when you update it. This is also injected into every run, so read it only when you intend to revise it.",
       z.object({
-        agentId: z.string().uuid().optional().nullable(),
+        agentId: z.guid().optional().nullable(),
         companyId: companyIdOptional,
       }),
       async ({ agentId, companyId }) =>
@@ -302,7 +303,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       z.object({
         content: z.string().min(1),
         expectedVersion: z.number().int().positive().nullable().optional(),
-        agentId: z.string().uuid().optional().nullable(),
+        agentId: z.guid().optional().nullable(),
         companyId: companyIdOptional,
       }),
       async ({ content, expectedVersion, agentId, companyId }) =>
@@ -328,7 +329,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     makeTool(
       "agentdashGetMyMandate",
       "Read this agent's own mandate (the AGENTS.md entry file of its instruction bundle) — who it is, what it may do unattended, what needs a human first, and what it must never do. Call this before acting.",
-      z.object({ agentId: z.string().uuid().optional().nullable() }),
+      z.object({ agentId: z.guid().optional().nullable() }),
       async ({ agentId }) => {
         const id = client.resolveAgentId(agentId);
         const bundle = (await client.requestJson(
@@ -404,7 +405,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         role: z.string().trim().min(1).optional(),
         title: z.string().trim().optional().nullable(),
         icon: z.string().trim().optional().nullable(),
-        reportsTo: z.string().uuid().optional().nullable(),
+        reportsTo: z.guid().optional().nullable(),
         capabilities: z.string().optional().nullable(),
       }),
       async ({ agentId, companyId, ...changes }) => {
@@ -449,7 +450,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     makeTool(
       "get_heartbeat_context",
       "Get compact heartbeat context for an issue",
-      z.object({ issueId: issueIdSchema, wakeCommentId: z.string().uuid().optional() }),
+      z.object({ issueId: issueIdSchema, wakeCommentId: z.guid().optional() }),
       async ({ issueId, wakeCommentId }) => {
         const qs = wakeCommentId ? `?wakeCommentId=${encodeURIComponent(wakeCommentId)}` : "";
         return client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/heartbeat-context${qs}`);
@@ -471,7 +472,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     makeTool(
       "get_comment",
       "Get a specific issue comment by id",
-      z.object({ issueId: issueIdSchema, commentId: z.string().uuid() }),
+      z.object({ issueId: issueIdSchema, commentId: z.guid() }),
       async ({ issueId, commentId }) =>
         client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/comments/${encodeURIComponent(commentId)}`),
     ),
@@ -556,7 +557,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         + "otherwise; current: true reads the current version of the given file's name, and a read of an older "
         + "version says which one is current (currentAttachmentId).",
       z.object({
-        attachmentId: z.string().uuid(),
+        attachmentId: z.guid(),
         offset: z
           .number()
           .int()
@@ -704,11 +705,11 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       "Perform a mandated action: verify the agent's mandate (in-scope, under-cap, unexpired), KYA the counterparty (valid-at-T), then attest the action. Returns { authorized, reason?, receipt? }. Denied when out-of-scope/over-cap/expired or the counterparty can't be verified.",
       z.object({
         companyId: companyIdOptional,
-        granteeAgentId: z.string().uuid().optional(),
-        mandateId: z.string().uuid(),
+        granteeAgentId: z.guid().optional(),
+        mandateId: z.guid(),
         counterpartyDid: z.string().min(1),
         action: z.string().min(1),
-        payload: z.record(z.unknown()).optional(),
+        payload: z.record(z.string(), z.unknown()).optional(),
       }),
       async ({ companyId, ...body }) =>
         client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/mandated-actions`, { body }),
@@ -826,7 +827,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       z.object({
         issueId: issueIdSchema,
         key: documentKeySchema,
-        revisionId: z.string().uuid(),
+        revisionId: z.guid(),
       }),
       async ({ issueId, key, revisionId }) =>
         client.requestJson(

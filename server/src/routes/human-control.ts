@@ -50,7 +50,7 @@ export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnTyp
     const issueId = req.params.issueId as string, target = await recoveryTarget(req, issueId);
     res.json(await svc.sessionRead(req, { target, operationId: 'human_questions.recovery.list', version: 1, input: { issueId } }));
   });
-  const questionRecoveryInput = z.object({ interactionId: z.string().uuid(), action: z.enum(['cancel', 'replace']) }).strict();
+  const questionRecoveryInput = z.object({ interactionId: z.guid(), action: z.enum(['cancel', 'replace']) }).strict();
   router.post('/issues/:issueId/question-recovery/preview', async (req, res) => {
     const issueId = req.params.issueId as string, target = await recoveryTarget(req, issueId);
     const { action, interactionId } = questionRecoveryInput.parse(req.body);
@@ -58,7 +58,7 @@ export function humanControlRoutes(db: Db, options: { heartbeat?: Pick<ReturnTyp
   });
   router.post('/issues/:issueId/question-recovery/confirm', async (req, res) => {
     const issueId = req.params.issueId as string, target = await recoveryTarget(req, issueId);
-    const { action, interactionId, preconditions } = questionRecoveryInput.extend({ preconditions: z.record(z.unknown()) }).strict().parse(req.body);
+    const { action, interactionId, preconditions } = questionRecoveryInput.extend({ preconditions: z.record(z.string(), z.unknown()) }).strict().parse(req.body);
     res.json(await svc.sessionApply(req, { target, operationId: action === 'cancel' ? 'human_questions.recovery.cancel' : 'human_questions.replace', version: 1, input: { issueId, interactionId }, preconditions }));
   });
   router.post('/issues/:issueId/recovery-run/preview', async (req, res) => {

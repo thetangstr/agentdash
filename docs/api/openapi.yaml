@@ -4027,6 +4027,7 @@ components:
             - operator_branch
             - reuse_existing
             - agent_default
+            - null
         executionWorkspaceSettings:
           type:
             - object
@@ -4347,6 +4348,7 @@ components:
                     - running
                     - stopped
                     - manual
+                    - null
                 serviceStates:
                   type:
                     - object
@@ -7687,6 +7689,7 @@ components:
             - operator_branch
             - reuse_existing
             - agent_default
+            - null
         executionWorkspaceSettings:
           type:
             - object
@@ -7779,7 +7782,6 @@ components:
         budgetMonthlyCents:
           type: integer
           minimum: 0
-          default: 0
         attachmentMaxBytes:
           type: integer
           minimum: 1
@@ -7808,6 +7810,7 @@ components:
           type:
             - string
             - "null"
+          format: date-time
         feedbackDataSharingConsentByUserId:
           type:
             - string
@@ -7845,7 +7848,6 @@ components:
             - team
             - agent
             - task
-          default: task
         status:
           type: string
           enum:
@@ -7853,7 +7855,6 @@ components:
             - active
             - achieved
             - cancelled
-          default: planned
         parentId:
           type:
             - string
@@ -7921,7 +7922,6 @@ components:
             - high
             - medium
             - low
-          default: medium
         assigneeAgentId:
           type:
             - string
@@ -8032,6 +8032,7 @@ components:
             - operator_branch
             - reuse_existing
             - agent_default
+            - null
         executionWorkspaceSettings:
           type:
             - object
@@ -8154,7 +8155,6 @@ components:
             - in_progress
             - completed
             - cancelled
-          default: backlog
         leadAgentId:
           type:
             - string
@@ -8340,27 +8340,23 @@ components:
             - high
             - medium
             - low
-          default: medium
         status:
           type: string
           enum:
             - active
             - paused
             - archived
-          default: active
         concurrencyPolicy:
           type: string
           enum:
             - coalesce_if_active
             - always_enqueue
             - skip_if_active
-          default: coalesce_if_active
         catchUpPolicy:
           type: string
           enum:
             - skip_missed
             - enqueue_missed_with_cap
-          default: skip_missed
         variables:
           type: array
           items:
@@ -8402,7 +8398,6 @@ components:
                 default: []
             required:
               - name
-          default: []
     WorkspaceRuntimeDesiredState:
       type: string
       enum:

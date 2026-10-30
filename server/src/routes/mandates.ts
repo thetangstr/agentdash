@@ -8,7 +8,7 @@ import { mandateTenancy } from "../services/mandate-tenancy.js";
 import { assertCanSetCompanyDirection, assertCompanyAccess } from "./authz.js";
 
 const publishMandateSchema = z.object({
-  counterpartyCompanyId: z.string().uuid(),
+  counterpartyCompanyId: z.guid(),
 });
 
 export function mandateRoutes(db: Db) {

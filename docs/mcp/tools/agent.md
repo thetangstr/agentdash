@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `c625911f5` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `ddd638e5b` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -399,7 +399,7 @@ Patch an issue, optionally including a comment; include resume=true when intenti
 | `title` | string | no |  |
 | `description` | string \| null | no |  |
 | `status` | `"backlog"` \| `"todo"` \| `"in_progress"` \| `"in_review"` \| `"done"` \| `"blocked"` \| `"cancelled"` | no |  |
-| `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no | Default: `"medium"`. |
+| `priority` | `"critical"` \| `"high"` \| `"medium"` \| `"low"` | no |  |
 | `assigneeAgentId` | string \| null | no |  |
 | `assigneeUserId` | string \| null | no |  |
 | `assignToPerson` | boolean | no |  |

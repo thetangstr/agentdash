@@ -4407,7 +4407,7 @@ export function issueRoutes(
         .object({
           path: z.string().min(1).max(1024),
           filename: z.string().min(1).max(255).optional(),
-          issueCommentId: z.string().uuid().optional(),
+          issueCommentId: z.guid().optional(),
         })
         .safeParse(req.body ?? {});
       if (!parsed.success) {

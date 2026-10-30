@@ -9,18 +9,18 @@ export const executionWorkspaceStatusSchema = z.enum([
 ]);
 
 export const executionWorkspaceConfigSchema = z.object({
-  environmentId: z.string().uuid().optional().nullable(),
+  environmentId: z.guid().optional().nullable(),
   provisionCommand: z.string().optional().nullable(),
   teardownCommand: z.string().optional().nullable(),
   cleanupCommand: z.string().optional().nullable(),
-  workspaceRuntime: z.record(z.unknown()).optional().nullable(),
+  workspaceRuntime: z.record(z.string(), z.unknown()).optional().nullable(),
   desiredState: z.enum(["running", "stopped", "manual"]).optional().nullable(),
-  serviceStates: z.record(z.enum(["running", "stopped", "manual"])).optional().nullable(),
+  serviceStates: z.record(z.string(), z.enum(["running", "stopped", "manual"])).optional().nullable(),
 }).strict();
 
 export const workspaceRuntimeControlTargetSchema = z.object({
   workspaceCommandId: z.string().min(1).optional().nullable(),
-  runtimeServiceId: z.string().uuid().optional().nullable(),
+  runtimeServiceId: z.guid().optional().nullable(),
   serviceIndex: z.number().int().nonnegative().optional().nullable(),
 }).strict();
 
@@ -48,7 +48,7 @@ export const executionWorkspaceCloseActionSchema = z.object({
 }).strict();
 
 export const executionWorkspaceCloseLinkedIssueSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   identifier: z.string().nullable(),
   title: z.string(),
   status: z.string(),
@@ -72,11 +72,11 @@ export const executionWorkspaceCloseGitReadinessSchema = z.object({
 
 export const workspaceRuntimeServiceSchema = z.object({
   id: z.string(),
-  companyId: z.string().uuid(),
-  projectId: z.string().uuid().nullable(),
-  projectWorkspaceId: z.string().uuid().nullable(),
-  executionWorkspaceId: z.string().uuid().nullable(),
-  issueId: z.string().uuid().nullable(),
+  companyId: z.guid(),
+  projectId: z.guid().nullable(),
+  projectWorkspaceId: z.guid().nullable(),
+  executionWorkspaceId: z.guid().nullable(),
+  issueId: z.guid().nullable(),
   scopeType: z.enum(["project_workspace", "execution_workspace", "run", "agent"]),
   scopeId: z.string().nullable(),
   serviceName: z.string(),
@@ -89,19 +89,19 @@ export const workspaceRuntimeServiceSchema = z.object({
   url: z.string().nullable(),
   provider: z.enum(["local_process", "adapter_managed"]),
   providerRef: z.string().nullable(),
-  ownerAgentId: z.string().uuid().nullable(),
-  startedByRunId: z.string().uuid().nullable(),
+  ownerAgentId: z.guid().nullable(),
+  startedByRunId: z.guid().nullable(),
   lastUsedAt: z.coerce.date(),
   startedAt: z.coerce.date(),
   stoppedAt: z.coerce.date().nullable(),
-  stopPolicy: z.record(z.unknown()).nullable(),
+  stopPolicy: z.record(z.string(), z.unknown()).nullable(),
   healthStatus: z.enum(["unknown", "healthy", "unhealthy"]),
   configIndex: z.number().int().nonnegative().nullable().optional(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 }).strict();
 export const executionWorkspaceCloseReadinessSchema = z.object({
-  workspaceId: z.string().uuid(),
+  workspaceId: z.guid(),
   state: executionWorkspaceCloseReadinessStateSchema,
   blockingReasons: z.array(z.string()),
   warnings: z.array(z.string()),
@@ -125,7 +125,7 @@ export const updateExecutionWorkspaceSchema = z.object({
   cleanupEligibleAt: z.string().datetime().optional().nullable(),
   cleanupReason: z.string().optional().nullable(),
   config: executionWorkspaceConfigSchema.optional().nullable(),
-  metadata: z.record(z.unknown()).optional().nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional().nullable(),
 }).strict();
 
 export type UpdateExecutionWorkspace = z.infer<typeof updateExecutionWorkspaceSchema>;

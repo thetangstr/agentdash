@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const createMandateSchema = z.object({
-  grantorAgentId: z.string().uuid(),
-  granteeAgentId: z.string().uuid(),
+  grantorAgentId: z.guid(),
+  granteeAgentId: z.guid(),
   scope: z.array(z.string()).default([]),
   permissionKey: z.string().min(1).default("clockchain:attest"),
   spendCapCents: z.number().int().nonnegative().default(0),

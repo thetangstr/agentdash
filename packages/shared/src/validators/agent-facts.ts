@@ -15,7 +15,7 @@ import { AGENT_FACT_SOURCE_KINDS } from "../types/agent-facts.js";
  */
 export const askAgentFactSchema = z
   .object({
-    targetAgentId: z.string().uuid(),
+    targetAgentId: z.guid(),
     factKey: z.string().trim().min(1).max(200),
     runId: z.string().trim().min(1).max(200),
     pipelineId: z.string().trim().min(1).max(200),
