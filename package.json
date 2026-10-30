@@ -101,12 +101,12 @@
       "defu": ">=6.1.5",
       "path-to-regexp": ">=8.4.0",
       "lodash-es": ">=4.18.0",
-      "undici": ">=7.29.1 <8",
+      "undici": ">=7.30.1 <8",
       "hono": ">=4.12.25",
       "form-data": ">=4.0.6",
       "fast-uri": "^3.1.6",
       "tmp": ">=0.2.6",
-      "multer": ">=2.3.0",
+      "multer": ">=2.5.0",
       "ws": ">=8.21.0",
       "underscore": ">=1.13.8",
       "snarkjs": ">=0.7.5",
@@ -121,19 +121,23 @@
       "@paperclipai/adapter-utils": "link:packages/adapter-utils",
       "proxy-addr": ">=2.0.8 <3",
       "source-map-js": ">=1.2.2 <2",
-      "@modelcontextprotocol/sdk": ">=1.31.0 <2"
+      "@modelcontextprotocol/sdk": ">=1.31.0 <2",
+      "follow-redirects": ">=1.16.1 <2",
+      "body-parser": ">=2.4.0 <3",
+      "dompurify": ">=3.4.17 <4",
+      "vite": ">=6.4.4 <7",
+      "@azure/msal-node": ">=7.1.0 <8",
+      "zod@>=4.0.0 <4.6.6": ">=4.6.6 <5"
     },
     "auditConfig": {
-      "_comment": "Allowlist for the BLOCKING `pnpm run audit:deps` gate (.github/workflows/pr.yml dependency-audit). Every entry is a dev/test-tooling advisory that surfaces under --prod ONLY because better-auth declares `vitest` in its optionalDependencies; pnpm walks optionalDependencies as part of the production tree even though vitest (the test runner) and its bundled vite/picomatch are never imported by better-auth's runtime code. None is reachable in the deployed server/UI/CLI. Re-audit and remove entries when better-auth drops the optional vitest dep or ships patched transitives. Do NOT add genuinely production-reachable advisories here. GHSA-5xrq-8626-4rwp=vitest UI arbitrary file read; GHSA-c2c7-rcm5-vvqj=picomatch ReDoS; GHSA-v2wj-q39q-566r / GHSA-p9ff-h696-f583 / GHSA-fx2h-pf6j-xcff=vite dev-server server.fs.deny bypass / arbitrary file read. GHSA-qwww-vcr4-c8h2=react-router RSC-mode CSRF: not reachable — AgentDash is a Vite SPA and does not use React Server Components mode; fixing requires the react-router v8 major, deliberately pinned <8 in overrides. GHSA-5gmw-xhrv-c9v3 / GHSA-85c8-ppgw-ccpr=tinypool prototype pollution: tinypool is reached under --prod ONLY via better-auth > vitest (the same optional/peer vitest path as above); it is vitest's test-worker pool, never imported by any deployed server/UI/CLI code. Patched tinypool is 2.1.2+, a major that vitest 3.x (requires ^1.1.1) cannot use, so an override would break the test runner; remove these when the repo moves to vitest 4.",
+      "_comment": "Allowlist for the BLOCKING `pnpm run audit:deps` gate (.github/workflows/pr.yml dependency-audit). Every entry is a dev/test-tooling advisory that surfaces under --prod ONLY because better-auth declares `vitest` in its optionalDependencies; pnpm walks optionalDependencies as part of the production tree even though vitest (the test runner) and its bundled picomatch are never imported by better-auth's runtime code. None is reachable in the deployed server/UI/CLI. Re-audit and remove entries when better-auth drops the optional vitest dep or ships patched transitives. Do NOT add genuinely production-reachable advisories here. GHSA-5xrq-8626-4rwp=vitest UI arbitrary file read; GHSA-c2c7-rcm5-vvqj=picomatch ReDoS; GHSA-qwww-vcr4-c8h2=react-router RSC-mode CSRF: not reachable — AgentDash is a Vite SPA and does not use React Server Components mode; fixing requires the react-router v8 major, deliberately pinned <8 in overrides. GHSA-5gmw-xhrv-c9v3 / GHSA-85c8-ppgw-ccpr=tinypool prototype pollution: tinypool is reached under --prod ONLY via better-auth > vitest (the same optional/peer vitest path as above); it is vitest's test-worker pool, never imported by any deployed server/UI/CLI code. Patched tinypool is 2.1.2+, a major that vitest 3.x (requires ^1.1.1) cannot use, so an override would break the test runner; remove these when the repo moves to vitest 4. GHSA-mrhx-c7xc-m3w5=zod uncontrolled memory use on oversized arrays: this one IS production-reachable, the sole exception to the rule above. The server, shared validators, CLI, cloud, mcp-server and plugin-sdk validate request bodies with zod 3.x (express.json accepts bodies up to 10mb), so a large array of failing elements can exhaust memory (DoS). Every zod 3.x is in the vulnerable range and no 3.x patch exists (patched only in 4.6.6+). Allowlisted TEMPORARILY with the founder's explicit sign-off on 2026-10-30; the zod 4 migration is the next PR, and this entry MUST be removed when it lands. Transitive zod-4 users are already forced to >=4.6.6 by the `zod@>=4.0.0 <4.6.6` override.",
       "ignoreGhsas": [
         "GHSA-5xrq-8626-4rwp",
         "GHSA-c2c7-rcm5-vvqj",
-        "GHSA-v2wj-q39q-566r",
-        "GHSA-p9ff-h696-f583",
-        "GHSA-fx2h-pf6j-xcff",
         "GHSA-qwww-vcr4-c8h2",
         "GHSA-5gmw-xhrv-c9v3",
-        "GHSA-85c8-ppgw-ccpr"
+        "GHSA-85c8-ppgw-ccpr",
+        "GHSA-mrhx-c7xc-m3w5"
       ]
     }
   }

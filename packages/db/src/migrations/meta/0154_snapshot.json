@@ -1,6 +1,6 @@
 {
-  "id": "e85e5f4a-2030-42cf-a53f-94a277cf0be7",
-  "prevId": "12730144-5112-4401-98e7-3d1f49434f02",
+  "id": "12730144-5112-4401-98e7-3d1f49434f02",
+  "prevId": "ab7ef815-fc36-4fdc-ad80-c5886280094c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -12417,19 +12417,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "access_class": {
-          "name": "access_class",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'company'"
-        },
-        "subject_agent_id": {
-          "name": "subject_agent_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -12564,54 +12551,6 @@
             },
             {
               "expression": "source_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "evaluation_events_company_subject_agent_seq_idx": {
-          "name": "evaluation_events_company_subject_agent_seq_idx",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "subject_agent_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "seq",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "evaluation_events_company_actor_idx": {
-          "name": "evaluation_events_company_actor_idx",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "actor_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -24405,127 +24344,6 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.routine_run_occurrences": {
-      "name": "routine_run_occurrences",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "company_id": {
-          "name": "company_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "routine_run_id": {
-          "name": "routine_run_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "trigger_id": {
-          "name": "trigger_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scheduled_for": {
-          "name": "scheduled_for",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "routine_run_occurrences_routine_run_uq": {
-          "name": "routine_run_occurrences_routine_run_uq",
-          "columns": [
-            {
-              "expression": "routine_run_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "routine_run_occurrences_company_trigger_scheduled_idx": {
-          "name": "routine_run_occurrences_company_trigger_scheduled_idx",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "trigger_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "scheduled_for",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "routine_run_occurrences_company_id_companies_id_fk": {
-          "name": "routine_run_occurrences_company_id_companies_id_fk",
-          "tableFrom": "routine_run_occurrences",
-          "tableTo": "companies",
-          "columnsFrom": [
-            "company_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "routine_run_occurrences_routine_run_id_routine_runs_id_fk": {
-          "name": "routine_run_occurrences_routine_run_id_routine_runs_id_fk",
-          "tableFrom": "routine_run_occurrences",
-          "tableTo": "routine_runs",
-          "columnsFrom": [
-            "routine_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

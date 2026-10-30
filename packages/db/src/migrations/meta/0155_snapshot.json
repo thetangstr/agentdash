@@ -1,6 +1,6 @@
 {
-  "id": "8af982c0-1aaf-4b8a-8010-ccd1a0f89b9d",
-  "prevId": "e85e5f4a-2030-42cf-a53f-94a277cf0be7",
+  "id": "e85e5f4a-2030-42cf-a53f-94a277cf0be7",
+  "prevId": "12730144-5112-4401-98e7-3d1f49434f02",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7710,12 +7710,6 @@
           "notNull": true,
           "default": "'off'"
         },
-        "performance_manager_agent_id": {
-          "name": "performance_manager_agent_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "feedback_data_sharing_enabled": {
           "name": "feedback_data_sharing_enabled",
           "type": "boolean",
@@ -7848,21 +7842,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "companies_performance_manager_agent_id_agents_id_fk": {
-          "name": "companies_performance_manager_agent_id_agents_id_fk",
-          "tableFrom": "companies",
-          "tableTo": "agents",
-          "columnsFrom": [
-            "performance_manager_agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

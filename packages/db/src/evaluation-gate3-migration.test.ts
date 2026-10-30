@@ -14,7 +14,7 @@ import {
 // routine_run_occurrences side table is created. The ledger's no-UPDATE
 // trigger is untouched by the backfill (ADD COLUMN ... DEFAULT is DDL).
 
-const MIGRATION = "0154_glorious_quentin_quire.sql";
+const MIGRATION = "0155_glorious_quentin_quire.sql";
 
 const cleanups: Array<() => Promise<void>> = [];
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();

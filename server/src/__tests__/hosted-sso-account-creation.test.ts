@@ -47,7 +47,9 @@ vi.mock("../auth/social-providers.js", async (importOriginal) => {
               name: "SSO Person",
               emailVerified: true,
             },
-            data: {},
+            // Better Auth 1.7 keys the account on the provider profile's
+            // `sub` (Google's `accountSubject`), not on `user.id`.
+            data: { sub: `google-${token.idToken}` },
           }),
         };
       }
