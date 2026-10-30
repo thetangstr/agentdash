@@ -288,6 +288,9 @@ export const ISSUE_ORIGIN_KINDS = [
   "harness_liveness_escalation",
   "issue_productivity_review",
   "stranded_issue_recovery",
+  // AgentDash (APM gate 5): a planning issue created from an agent-work brief.
+  // Only POST /companies/:companyId/agent-briefs sets it.
+  "agent_work_brief",
 ] as const;
 export type BuiltInIssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 export type PluginIssueOriginKind = `plugin:${string}`;
@@ -437,6 +440,12 @@ export const APPROVAL_TYPES = [
   // parallel decision path, and the decider is the pipeline owner named in the
   // payload — never up the org chart.
   "workflow_recommendation",
+  // AgentDash: Agent Performance Management gate 2 — a proposed operating-profile
+  // revision. Filed by the server when a draft is proposed (never accepted as a
+  // free-form payload); the decider must hold the strongest authority any
+  // changed field needs, and the proposing agent can never decide. Approving
+  // starts the serialized application; it changes nothing by itself.
+  "agent_profile_change",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
@@ -672,11 +681,24 @@ export const PERMISSION_KEYS = [
   "users:invite",
   "users:manage_permissions",
   "tasks:assign",
+  /**
+   * INERT (AgentDash, APM gate 3 P3.4; access LLD §5): no check reads this key
+   * or any grant's `scope`. Who an agent may assign work to is the V2 access
+   * rule `talk.agents` (via `assign`). The key stays so existing grant rows
+   * keep parsing (they are not deleted); UIs must not offer it — filter with
+   * `INERT_PERMISSION_KEYS`.
+   */
   "tasks:assign_scope",
   "tasks:manage_active_checkouts",
   "joins:approve",
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
+
+/**
+ * AgentDash (APM gate 3, P3.4): permission keys that nothing enforces. Kept in
+ * `PERMISSION_KEYS` for existing grants; hidden from any UI that offers grants.
+ */
+export const INERT_PERMISSION_KEYS: readonly PermissionKey[] = ["tasks:assign_scope"];
 
 // ---------------------------------------------------------------------------
 // Plugin System — see doc/plugins/PLUGIN_SPEC.md for the full specification
@@ -1328,6 +1350,51 @@ export const ACTIVITY_LOG_ACTIONS_BILLING = [
   "stripe.invoice_paid",
 ] as const;
 export type ActivityLogActionBilling = (typeof ACTIVITY_LOG_ACTIONS_BILLING)[number];
+
+// AgentDash: Agent Performance Management gate 2 — activity log action names
+// for operating-profile drafts, approval and application, responsibility
+// mapping, and V2 access (doc/plans/2026-10-29-apm-gate2-build-spec.md).
+export const ACTIVITY_LOG_ACTIONS_AGENT_PROFILE = [
+  "agent_profile.draft_saved",
+  "agent_profile.proposed",
+  "agent_profile.withdrawn",
+  "agent_profile.application_started",
+  "agent_profile.application_step",
+  "agent_profile.applied",
+  "agent_profile.application_failed",
+  "agent_profile.application_refused_stale",
+  "issue.responsibility_mapped",
+  // Shadow mode: a V2 rule would have refused; nothing was refused.
+  "access.would_refuse",
+  // A governance side changed outside a profile application (admin ceiling, steward request, harness).
+  "access.policy_changed",
+  "company.agent_access_enforcement_changed",
+  // Run start: the operating-profile block on disk does not match the active revision.
+  "profile.block_drift",
+] as const;
+export type ActivityLogActionAgentProfile = (typeof ACTIVITY_LOG_ACTIONS_AGENT_PROFILE)[number];
+
+// AgentDash: Agent Performance Management gate 4 — activity log action names
+// for the performance manager designation and its advisory recommendations
+// (doc/plans/2026-10-29-apm-gate4-5-build-spec.md, P4.1).
+export const ACTIVITY_LOG_ACTIONS_PERFORMANCE_MANAGER = [
+  "company.performance_manager_changed",
+  "evaluation.agent_recommendation_created",
+  "evaluation.agent_recommendation_decided",
+] as const;
+export type ActivityLogActionPerformanceManager = (typeof ACTIVITY_LOG_ACTIONS_PERFORMANCE_MANAGER)[number];
+
+// AgentDash: Agent Performance Management gate 5 — activity log action names
+// for briefs and hires with a profile (doc/plans/2026-10-29-apm-gate4-5-build-spec.md,
+// P5.1). Unbound drafts reuse `agent_profile.draft_saved` / `.proposed` /
+// `.withdrawn`; the hire path keeps `agent.hire_created` and `approval.*`.
+export const ACTIVITY_LOG_ACTIONS_AGENT_BRIEF = [
+  "agent_brief.created",
+  "agent_brief.submitted",
+  // The approved hire bound an unbound profile to the agent it created.
+  "agent_profile.bound",
+] as const;
+export type ActivityLogActionAgentBrief = (typeof ACTIVITY_LOG_ACTIONS_AGENT_BRIEF)[number];
 
 /** Activity log action values written by the goals-eval-hitl services. */
 export const ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL = [

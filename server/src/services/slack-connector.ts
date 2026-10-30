@@ -2,6 +2,7 @@
 import { WebClient } from "@slack/web-api";
 import type { Db } from "@paperclipai/db";
 import { connectorService } from "./connectors.js";
+import { AccessPolicyRefusedError } from "./agent-access-check.js";
 import { logActivity } from "./activity-log.js";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -307,6 +308,10 @@ export function slackConnectorService(db: Db) {
     if (!resolution.ok) {
       if (resolution.blocked.reason === "not_authorized") {
         throw forbidden(resolution.blocked.message);
+      }
+      // AgentDash (APM gate 3, P3.4): a V2 refusal answers the standard 403 ACCESS_POLICY_REFUSED body.
+      if (resolution.blocked.reason === "access_policy_refused" && resolution.blocked.refusal) {
+        throw new AccessPolicyRefusedError(resolution.blocked.refusal);
       }
       return {
         posted: false,

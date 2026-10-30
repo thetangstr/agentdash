@@ -134,6 +134,44 @@ export function evaluationReviewItems(db: Db) {
 
   return {
     /**
+     * AgentDash (APM gate 3, P3.3): one keyed item outside a milestone digest —
+     * the agent calibration path (`calibration.ts`). Same rules as `sync`: the
+     * review-items project and label, `todo`, assigned only to the named
+     * human, idempotent by key, a closed item never recreated or reopened, an
+     * update in place sends no message. Additive: `sync` is unchanged.
+     */
+    async upsertKeyed(
+      companyId: string,
+      input: { key: string; title: string; priority: "high" | "medium"; assigneeUserId: string; body: string },
+    ): Promise<{ outcome: "created" | "updated" | "unchanged" | "closed" | "unassignable"; issueId: string | null; projectId: string; labelId: string }> {
+      const { projectId, labelId } = await ensureProjectAndLabel(companyId);
+      const existing = await itemByKey(companyId, projectId, input.key);
+      if (existing && CLOSED_STATUSES.has(existing.status)) return { outcome: "closed", issueId: existing.id, projectId, labelId };
+      const body = `${input.body}\n\n${MARKER(input.key)}`;
+      if (existing) {
+        if ((existing.description ?? "") === body) return { outcome: "unchanged", issueId: existing.id, projectId, labelId };
+        await issuesSvc.update(existing.id, { description: body });
+        return { outcome: "updated", issueId: existing.id, projectId, labelId };
+      }
+      try {
+        const created = await issuesSvc.create(companyId, {
+          title: input.title,
+          description: body,
+          status: "todo",
+          priority: input.priority,
+          projectId,
+          assigneeUserId: input.assigneeUserId,
+          assigneeAgentId: null,
+          labelIds: [labelId],
+        });
+        return { outcome: "created", issueId: created.id, projectId, labelId };
+      } catch (err) {
+        if (err instanceof Error && /Assignee user not found/.test(err.message)) return { outcome: "unassignable", issueId: null, projectId, labelId };
+        throw err;
+      }
+    },
+
+    /**
      * Bring the review items for one stored card up to date. `fallbackUserId`
      * is the human who receives exceptions with no accountable owner (the
      * administrator who ran the snapshot, or the company's founder).

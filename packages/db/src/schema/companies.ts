@@ -1,6 +1,9 @@
-import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index, varchar, check } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index, varchar, check, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { CompanyProductProfile } from "@paperclipai/shared";
+import type { AgentAccessEnforcementMode, CompanyProductProfile } from "@paperclipai/shared";
+// AgentDash: APM gate 4 — the designated performance manager references agents
+// (agents.ts imports this file; the lazy reference keeps the cycle safe).
+import { agents } from "./agents.js";
 
 export const companies = pgTable(
   "companies",
@@ -36,6 +39,27 @@ export const companies = pgTable(
      * created, and agents an admin marked 'company'. Admins always see all.
      */
     agentVisibilityDefault: text("agent_visibility_default").notNull().default("company"),
+    /**
+     * AgentDash: Agent Performance Management gate 2 — how V2 access rules run
+     * for this company's agents (access LLD §4, §11). 'off' is the default and
+     * today's behaviour: no V2 check runs. 'shadow' logs would-be refusals and
+     * refuses nothing. 'enforce' refuses (not selectable until gate 3). MK V1
+     * checks run unchanged in every mode.
+     */
+    agentAccessEnforcement: text("agent_access_enforcement")
+      .$type<AgentAccessEnforcementMode>()
+      .notNull()
+      .default("off"),
+    /**
+     * AgentDash: Agent Performance Management gate 4 — the company's designated
+     * performance manager (overview LLD §4.3). Null means the default: the
+     * company's non-terminated Chief of Staff. The manager is advisory only: it
+     * reads agent cards, drafts and proposes profile changes and files
+     * recommendations; it never approves, applies or changes access.
+     */
+    performanceManagerAgentId: uuid("performance_manager_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
     feedbackDataSharingEnabled: boolean("feedback_data_sharing_enabled")
       .notNull()
       .default(false),
@@ -66,6 +90,10 @@ export const companies = pgTable(
     agentVisibilityDefaultCk: check(
       "companies_agent_visibility_default_ck",
       sql`${table.agentVisibilityDefault} in ('company', 'owner')`,
+    ),
+    agentAccessEnforcementCk: check(
+      "companies_agent_access_enforcement_ck",
+      sql`${table.agentAccessEnforcement} in ('off', 'shadow', 'enforce')`,
     ),
   }),
 );

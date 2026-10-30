@@ -6,6 +6,8 @@ import {
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "@paperclipai/shared";
 import { AgentCeilingEditor } from "@/components/settings/AgentCeilingEditor";
+import { AgentAccessEnforcementCard } from "@/components/settings/AgentAccessEnforcementCard";
+import { PerformanceManagerCard } from "@/components/settings/PerformanceManagerCard";
 import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { useCompany } from "../context/CompanyContext";
@@ -618,6 +620,10 @@ export function CompanySettings() {
 
           {selectedCompany?.id ? (
             <>
+              {/* AgentDash: APM gate 2 — admins set off/shadow; members read the mode. */}
+              <AgentAccessEnforcementCard companyId={selectedCompany.id} />
+              {/* AgentDash: APM gate 4 — admins choose the performance manager; members read it. */}
+              <PerformanceManagerCard companyId={selectedCompany.id} />
               <AgentCeilingEditor companyId={selectedCompany.id} />
               {reconciliationCount === 0 ? <NeedsReconciliationPanel companyId={selectedCompany.id} /> : null}
             </>

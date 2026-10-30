@@ -418,4 +418,19 @@ describe("NewAgentDialog self-hosted", () => {
     act(() => mounted.root.unmount());
   });
 
+  // AgentDash (APM gate 5, P5.2): the new-agent flow offers "Start from a brief".
+  it("offers Start from a brief, which closes the dialog and opens the brief page", async () => {
+    const mounted = renderDialog(container);
+    await flush();
+    const link = container.querySelector<HTMLButtonElement>("[data-testid='new-agent-dialog-start-from-brief']");
+    expect(link?.textContent?.trim()).toBe("Start from a brief");
+    expect(link?.getAttribute("type")).toBe("button");
+    const postsBefore = mockConversationsApi.post.mock.calls.length;
+    await act(async () => link!.click());
+    expect(dialogState.closeNewAgent).toHaveBeenCalled();
+    expect(routerState.navigate).toHaveBeenCalledWith("/agents/new/brief");
+    expect(mockConversationsApi.post.mock.calls.length).toBe(postsBefore);
+    act(() => mounted.root.unmount());
+  });
+
 });

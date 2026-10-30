@@ -250,6 +250,13 @@ export function errorHandler(
       // Local error sink (2026-08-16) — persists on the box, alerts by signal.
       recordServerError(err, { method: req.method, url: req.originalUrl, status: err.status });
     }
+    // AgentDash (APM gate 3, P3.4): an enforced V2 access refusal answers its
+    // body at the top level — `{ error, code: "ACCESS_POLICY_REFUSED",
+    // dimension, rule, requested, allowedSummary, howToRequest }` (access LLD §4).
+    if (err.status === 403 && err.code === "ACCESS_POLICY_REFUSED" && err.details && typeof err.details === "object") {
+      res.status(403).json({ error: err.message, ...(err.details as Record<string, unknown>) });
+      return;
+    }
     res.status(err.status).json({
       error: err.message,
       ...(err.details ? { details: err.details } : {}),

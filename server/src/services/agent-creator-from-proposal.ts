@@ -130,6 +130,27 @@ export function agentCreatorFromProposal(deps: Deps) {
 // Update that source for shared behavior; do not duplicate its mandate here.
 // AgentDash: mandate-read-contract is inherited from the canonical default
 // bundle: read the instruction entry file separately from steward directives.
+// AgentDash: access-self-view is inherited from the canonical default bundle:
+// a hire reads its own access at GET /api/agents/me/access and its derived
+// profile at GET /api/agents/me/profile; both are read-only and grant nothing.
+// AgentDash: operating-profile-guidance (APM gate 2) is inherited from the
+// canonical default bundle: the applied `operating-profile` block is the
+// authority for duties and style and is never edited on disk; work is mapped
+// at POST /api/companies/:companyId/issues/:issueId/responsibility;
+// ACCESS_POLICY_REFUSED is never routed around; profile changes are proposed as
+// `agent_profile_change` approvals; feedback is not acceptance. Proposal-created
+// hires add nothing to that, and their per-agent `operating-profile` block is
+// rendered by the server only once a revision is applied.
+// AgentDash: performance-manager-guidance (APM gate 4) is inherited from the
+// canonical default bundle: it applies only when GET /api/agents/me/profile
+// returns `performanceManager: true` — read the cards, propose only with cited
+// evidence, never act on recommendations yourself, never approve, and "pause"
+// means recommend. APM gate 5 adds "plan a brief; never hire": the manager
+// reads a submitted `agent-work-brief`, writes the validated
+// `scenario-manifest` and unbound drafts, and a proposed draft is a
+// `hire_agent` approval a person decides. A proposal-created hire is not the
+// performance manager unless an admin designates it later; the rendered hiring
+// context adds nothing.
 // MCP schema descriptions/bounds advertise existing validation, not capability.
 // The unmarked hire supplement survives named-block refresh. SOUL, HEARTBEAT
 // and TOOLS retain the unified worker baseline without role/persona overrides.

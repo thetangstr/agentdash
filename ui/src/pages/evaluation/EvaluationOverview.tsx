@@ -1,13 +1,15 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Gauge } from "lucide-react";
-import type { EvaluationMilestoneSummary } from "@paperclipai/shared";
+import type { AgentCardSummary, EvaluationMilestoneSummary } from "@paperclipai/shared";
+import { agentPerformanceApi, agentPerformanceQueryKeys } from "@/api/agent-performance";
 import { evaluationApi } from "@/api/evaluation";
 import { ApiError } from "@/api/client";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { queryKeys } from "@/lib/queryKeys";
 import { Link } from "@/lib/router";
+import { agentUrl } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EVALUATION_METRIC_FORMULAS } from "@paperclipai/shared";
@@ -19,6 +21,11 @@ import { ConfidenceBadge, fmtCents, fmtDate, fmtPct, MarkerList, ScoreValue, Spa
  * coverage (or the words for why it is withheld), the trend over versions,
  * exceptions by severity, interventions, metered cost and the card's markers.
  * Milestones are ordered by card recency, never by score.
+ *
+ * AgentDash (APM gate 3, P3.5): beside the projects and goals, an Agents list
+ * — each agent's latest stored card as this viewer may read it (work owed and
+ * delivered per responsibility, potentially fatal flags), in name order. No
+ * score and no ranking; a part the viewer can't read says so.
  */
 export function EvaluationOverviewPage() {
   const { selectedCompany, selectedCompanyId } = useCompany();
@@ -65,6 +72,7 @@ export function EvaluationOverviewPage() {
         </div>
       ) : data ? (
         <div className="space-y-8">
+          <h2 className="text-sm font-medium text-muted-foreground">Projects and goals</h2>
           {withCards.length === 0 ? (
             <p className="text-sm text-muted-foreground">No cards stored yet. Snapshots come from the shadow cadence or from an administrator.</p>
           ) : (
@@ -76,7 +84,7 @@ export function EvaluationOverviewPage() {
           )}
           {withoutCards.length > 0 ? (
             <div className="space-y-2">
-              <h2 className="text-sm font-medium text-muted-foreground">Without a card yet</h2>
+              <h3 className="text-sm font-medium text-muted-foreground">Without a card yet</h3>
               <ul className="flex flex-wrap gap-2">
                 {withoutCards.map((m) => (
                   <li key={`${m.ref.kind}:${m.ref.id}`}>
@@ -90,7 +98,94 @@ export function EvaluationOverviewPage() {
           ) : null}
         </div>
       ) : null}
+
+      <AgentsList companyId={selectedCompanyId} />
     </div>
+  );
+}
+
+const NOT_VISIBLE = "Not visible to you";
+
+function AgentRow({ summary }: { summary: AgentCardSummary }) {
+  const name = summary.agentName ?? "Unnamed agent";
+  const obligations = summary.obligations;
+  return (
+    <li className="space-y-1 rounded-md border border-border px-3 py-2 text-sm" data-testid={`evaluation-agent-${summary.agentId}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Link to={`${agentUrl({ id: summary.agentId, urlKey: summary.urlKey, name: summary.agentName })}/performance`} className="min-w-0 break-words font-medium hover:underline">
+          {name}
+        </Link>
+        <Badge variant="ghost" className="whitespace-normal break-words text-left">
+          {summary.contractSource === "declared" ? "Contract declared" : "No applied profile"}
+        </Badge>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {summary.stored ? `Card v${summary.stored.version} stored ${fmtDate(summary.stored.storedAt)}` : "No stored card yet"}
+      </p>
+      {summary.stored ? (
+        <>
+          <p>
+            <span className="text-muted-foreground">Potentially fatal flags: </span>
+            {summary.fatalFlags === null ? <span className="text-muted-foreground">{NOT_VISIBLE}</span> : <span className="tabular-nums">{summary.fatalFlags}</span>}
+          </p>
+          <div>
+            <span className="text-muted-foreground">Work owed and delivered: </span>
+            {obligations === null ? (
+              <span className="text-muted-foreground">{NOT_VISIBLE}</span>
+            ) : obligations.length === 0 ? (
+              <span className="text-muted-foreground">No responsibilities owed work in the window</span>
+            ) : (
+              <ul className="mt-0.5 space-y-0.5">
+                {obligations.map((row) => (
+                  <li key={row.responsibilityKey}>
+                    {row.responsibilityKey}: <span className="tabular-nums">{row.delivered}</span> delivered of{" "}
+                    {row.owed === null ? "Unknown owed" : <span className="tabular-nums">{row.owed}</span>}
+                    {row.owed === null ? "" : " owed"}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      ) : null}
+    </li>
+  );
+}
+
+function AgentsList({ companyId }: { companyId: string }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: agentPerformanceQueryKeys.cards(companyId),
+    queryFn: () => agentPerformanceApi.cards(companyId),
+    retry: false,
+  });
+  const agents = [...(data?.agents ?? [])].sort((a, b) => (a.agentName ?? "").localeCompare(b.agentName ?? "") || a.agentId.localeCompare(b.agentId));
+  const restricted = agents.some((agent) => agent.restricted);
+  return (
+    <section aria-labelledby="evaluation-agents-heading" className="space-y-2" data-testid="evaluation-agents">
+      <h2 id="evaluation-agents-heading" className="text-sm font-medium text-muted-foreground">
+        Agents
+      </h2>
+      <p className="max-w-3xl text-xs text-muted-foreground">
+        Each agent's latest stored card, in name order. There is no ranking.{restricted ? " Counts include only the records you can read." : ""}
+      </p>
+      {isLoading ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading agents…
+        </p>
+      ) : error ? (
+        <p role="alert" className="text-sm text-destructive">
+          Couldn't load the agents' cards: {error instanceof Error ? error.message : "the server did not say why."}
+        </p>
+      ) : agents.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No agents you can see yet.</p>
+      ) : (
+        <ul className="grid gap-2 md:grid-cols-2">
+          {agents.map((summary) => (
+            <AgentRow key={summary.agentId} summary={summary} />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -18,6 +18,7 @@ import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
 import {
   ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
   HIDDEN_FEED_ACTIVITY_ACTIONS,
+  ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS,
   IMPORTANT_SYSTEM_ACTIVITY_ACTIONS,
 } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
@@ -36,7 +37,10 @@ export interface ActivityFilters {
   /**
    * AgentDash (review #1003): `false` excludes system-actor rows and
    * bookkeeping actions from the company feed — the Activity page's "Show
-   * system events" toggle. Omitted means the full feed (API consumers).
+   * system events" toggle off. `true` is the full feed (the toggle on).
+   * Omitted is the full feed less `ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS`
+   * (AgentDash APM gate 2: shadow would-be refusals and per-step profile
+   * application rows), which only `true` returns.
    */
   includeSystem?: boolean;
   /**
@@ -389,6 +393,12 @@ export function activityService(db: Db) {
       }
       if (filters.visibleWhere) {
         conditions.push(filters.visibleWhere);
+      }
+      if (filters.includeSystem !== true) {
+        // AgentDash: APM gate 2 — out of every default feed, in SQL so the
+        // limit counts the rows a reader sees; "Show system events" (true)
+        // brings them back.
+        conditions.push(notInArray(activityLog.action, [...ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS]));
       }
       if (filters.includeSystem === false) {
         // AgentDash (c4 trust, review #1026): "hide system events" must not

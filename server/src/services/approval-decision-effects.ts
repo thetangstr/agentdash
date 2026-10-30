@@ -30,6 +30,22 @@ import { approvalRejectedCorrectionInput, recordAgentCorrectionAfterCommit } fro
 
 type ApprovalRow = typeof approvals.$inferSelect;
 
+/**
+ * AgentDash: APM gate 2 — the decision record of a profile change (overview
+ * LLD §4.1): the role recorded on the approval and whether a human author
+ * approved their own draft. The application receipt carries the same record
+ * as re-checked at application time.
+ */
+function profileDecisionDetails(approval: ApprovalRow, actorUserId: string) {
+  const proposedBy = (approval.payload as { proposedBy?: { kind?: string; userId?: string } } | null)?.proposedBy;
+  return {
+    decisionActorRole: approval.decisionActorRole ?? null,
+    selfApproval: proposedBy?.kind === "user" && proposedBy.userId === actorUserId,
+    // Not `requiredAuthority`: activity redaction masks keys that look like credentials.
+    requiredLevel: (approval.payload as { requiredAuthority?: string } | null)?.requiredAuthority ?? null,
+  };
+}
+
 export interface DecisionEffectsContext {
   /** The human the decision is attributed to. */
   actorUserId: string;
@@ -50,6 +66,13 @@ export interface DecisionEffectsContext {
    * requester); the caller then uses the returned {@link DecisionWake}.
    */
   wakeRequester?: boolean;
+  /**
+   * AgentDash: APM gate 2 — how the decider authenticated, so the
+   * `agent_profile_change` application can re-check their authority exactly
+   * (the local board and instance admins carry no grant row). Optional:
+   * without it the re-check reads the user's grants.
+   */
+  actor?: { source?: string | null; isInstanceAdmin?: boolean };
 }
 
 /**
@@ -215,7 +238,7 @@ export function approvalDecisionEffectsService(
   async function afterApprove(
     approval: ApprovalRow,
     applied: boolean,
-    { actorUserId, decisionNote, via, wakeRequester = true }: DecisionEffectsContext,
+    { actorUserId, decisionNote, via, wakeRequester = true, actor }: DecisionEffectsContext,
   ): Promise<DecisionWake | null> {
   let requesterWake: DecisionWake | null = null;
   if (applied) {
@@ -235,6 +258,7 @@ export function approvalDecisionEffectsService(
         requestedByAgentId: approval.requestedByAgentId,
         linkedIssueIds,
         ...(via ? { via } : {}),
+        ...(approval.type === "agent_profile_change" ? { profileDecision: profileDecisionDetails(approval, actorUserId) } : {}),
       },
     });
 
@@ -254,6 +278,45 @@ export function approvalDecisionEffectsService(
     // than inside the approval service, so the service stays the decision
     // boundary and nothing else; the executor swallows every failure
     // internally, so an unreachable provider cannot fail this call.
+    // AgentDash: APM gate 2 — an approved profile change starts its
+    // serialized application, before the requester is woken so the wake
+    // follows the outcome. The same function the override route calls.
+    // Never thrown: the decision is committed, and a failed or deferred
+    // application is recorded on its receipt (and can be resumed).
+    if (approval.type === "agent_profile_change") {
+      try {
+        const { applyProfileRevision } = await import("./agent-profile-application.js");
+        await applyProfileRevision(db, approval.id, {
+          userId: actorUserId,
+          path: "approval",
+          source: actor?.source ?? null,
+          isInstanceAdmin: actor?.isInstanceAdmin ?? false,
+          ...(via ? { via } : {}),
+        });
+      } catch (err) {
+        logger.error({ err, approvalId: approval.id }, "profile application did not complete after approval; resume it from the agent's Profile tab");
+      }
+    }
+    // AgentDash: APM gate 5 — a hire filed from an unbound draft: the agent
+    // was just activated by the decision, so bind its profile and apply the
+    // revision through the same application (and receipt). Never thrown.
+    if (approval.type === "hire_agent") {
+      try {
+        const { applyHireProfileRevision, isProfileHireApproval } = await import("./agent-profile-application.js");
+        if (isProfileHireApproval(approval)) {
+          await applyHireProfileRevision(db, approval.id, {
+            userId: actorUserId,
+            path: "approval",
+            source: actor?.source ?? null,
+            isInstanceAdmin: actor?.isInstanceAdmin ?? false,
+            ...(via ? { via } : {}),
+          });
+        }
+      } catch (err) {
+        logger.error({ err, approvalId: approval.id }, "the hire's operating profile was not applied after approval; resume it from the agent's Profile tab");
+      }
+    }
+
     let connectorSendReport: ConnectorSendExecutionReport | null = null;
     if (approval.type === "connector_send") {
       connectorSendReport = await connectorSend.executeForApproval(approval.id);
@@ -423,6 +486,16 @@ export function approvalDecisionEffectsService(
     });
 
     await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");
+    // AgentDash: APM gate 2 — a rejected profile change marks its revision `rejected`.
+    // AgentDash: APM gate 5 — so does a rejected hire filed from an unbound draft (the profile stays unbound).
+    if (approval.type === "agent_profile_change" || approval.type === "hire_agent") {
+      try {
+        const { markProfileRevisionRejected } = await import("./agent-profiles.js");
+        await markProfileRevisionRejected(db, approval, { userId: actorUserId, ...(via ? { via } : {}) });
+      } catch (err) {
+        logger.error({ err, approvalId: approval.id }, "rejected profile revision was not marked rejected");
+      }
+    }
     // A rejected bridge task terminates carrying the steward's reason, so the
     // requesting agent can read WHY rather than watch a request vanish.
     try {

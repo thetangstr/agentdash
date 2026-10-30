@@ -7,6 +7,7 @@ import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { connectorService } from "./connectors.js";
+import { AccessPolicyRefusedError } from "./agent-access-check.js";
 import { entraOnBehalfOfService, GRAPH_READONLY_SCOPES } from "./entra-obo.js";
 import { logActivity } from "./activity-log.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
@@ -319,6 +320,10 @@ export function sharepointConnectorService(db: Db) {
   ): Promise<Authorized | SharepointReadFailure> {
     const acting = await connectors.resolveActingAs(companyId, agentId, "read", PROVIDER);
     if (!acting.ok) {
+      // AgentDash (APM gate 3, P3.4): a V2 refusal answers the standard 403 ACCESS_POLICY_REFUSED body.
+      if (acting.blocked.reason === "access_policy_refused" && acting.blocked.refusal) {
+        throw new AccessPolicyRefusedError(acting.blocked.refusal);
+      }
       return {
         ok: false,
         reason: acting.blocked.reason as SharepointReadFailureReason,

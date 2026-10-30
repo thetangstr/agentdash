@@ -164,6 +164,18 @@ import { agentAccountabilityService } from "./agent-accountability.js";
 import { stewardInboxService } from "./steward-inbox.js";
 import { insertActivity, logActivity, publishActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
 import { agentInstructionRefreshService } from "./agent-instruction-refresh.js";
+// AgentDash: Agent Performance Management gate 2 (P2.3) — V2 access checks in
+// shadow mode, profile-application dispatch deferral, run-start delivery evidence.
+import {
+  agentAccessEnforcementModeCached,
+  checkAgentAccess,
+  checkAgentAccessDetailed,
+  createAgentAccessCheckCache,
+  type AgentAccessCheckCache,
+  type AgentAccessCheckResult,
+} from "./agent-access-check.js";
+import { isProfileApplicationInProgress } from "./agent-profile-application.js";
+import { loadActiveProfileBlockRevision, profileDeliveryEvidence } from "./agent-profile-block.js";
 import {
   buildWorkspaceReadyComment,
   cleanupExecutionWorkspaceArtifacts,
@@ -246,7 +258,7 @@ import {
   heartbeatWakeOnDemandEnabled,
   isBoardAssignmentOnlyAgent,
 } from "./agent-wake-policy.js";
-import type { AgentTokenCeilingStatus, AgentWakePolicyRefusalCode } from "@paperclipai/shared";
+import type { AgentAccessContactVia, AgentAccessRefusalBody, AgentTokenCeilingStatus, AgentWakePolicyRefusalCode } from "@paperclipai/shared";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 
@@ -298,6 +310,30 @@ const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
 const AGENT_CORRECTIONS_CONTEXT_KEY = "paperclipAgentCorrections";
 const AGENT_CORRECTIONS_REMAINING_CONTEXT_KEY = "paperclipAgentCorrectionsRemaining";
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
+/**
+ * AgentDash (APM gate 2, P2.3): run-context key holding the run-start profile
+ * delivery evidence (`profileDeliveryEvidence` plus `checkedAt`). Written only
+ * for agents with an active operating-profile revision.
+ */
+export const AGENT_PROFILE_DELIVERY_CONTEXT_KEY = "agentProfileDelivery";
+
+/**
+ * AgentDash (APM gate 2, P2.3): the wake reasons that are agent contact, and
+ * the `talk.agents.via` channel each one is (access LLD §3.1, §4).
+ */
+const WAKE_CONTACT_VIA_BY_REASON: Record<string, AgentAccessContactVia> = {
+  issue_assigned: "assign",
+  issue_commented: "comment_wake",
+  issue_reopened_via_comment: "comment_wake",
+  issue_comment_mentioned: "mention",
+};
+/**
+ * AgentDash (APM gate 3, P3.4): the run / wake error code for an enforced V2
+ * access refusal (access LLD §4: run claim and context hydration; wake dispatch).
+ */
+export const ACCESS_POLICY_REFUSED_RUN_CODE = "access_policy_refused";
+/** AgentDash (APM gate 3, P3.4): the first words of the blocker note a refused run leaves on its issue. */
+export const ACCESS_POLICY_BLOCKER_NOTE_PREFIX = "Blocked: this issue's project is outside this agent's access";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 /** The liveness reaper's verdict when it can no longer see a run's child process. */
 const PROCESS_LOST_ERROR_CODE = "process_lost";
@@ -5359,6 +5395,143 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
   }
 
+  /**
+   * AgentDash (APM gate 2, P2.3): true while a profile application holds this
+   * agent. Never throws: a failed lookup is logged and does not defer.
+   */
+  async function profileApplicationDefersDispatch(run: typeof heartbeatRuns.$inferSelect): Promise<boolean> {
+    try {
+      if (!(await isProfileApplicationInProgress(db, run.companyId, run.agentId))) return false;
+    } catch (err) {
+      logger.warn({ err: logSafeError(err), runId: run.id, agentId: run.agentId }, "claimQueuedRun: profile application lookup failed; not deferring");
+      return false;
+    }
+    logger.info(
+      { runId: run.id, companyId: run.companyId, agentId: run.agentId },
+      "claimQueuedRun: deferred while a profile application is in progress",
+    );
+    return true;
+  }
+
+  /**
+   * AgentDash (APM gate 2, P2.3; gate 3, P3.4): the V2 `see.projects` check
+   * for the issue a run works on (access LLD §4: run claim and context
+   * hydration). In shadow the caller ignores the answer; in enforce a
+   * `refuse` means the run does not start (`refuseRunForAccessPolicy`). A
+   * no-op answering null when the company's mode is off (one company-row
+   * read, cached for the run). Never throws.
+   */
+  async function checkRunIssueProject(
+    run: { id: string; companyId: string; agentId: string },
+    issueId: string,
+    site: "heartbeat.run_claim" | "heartbeat.context_hydration",
+    cache: AgentAccessCheckCache,
+    knownProjectId?: string | null,
+  ): Promise<AgentAccessCheckResult | null> {
+    try {
+      if ((await agentAccessEnforcementModeCached(db, run.companyId, cache)) === "off") return null;
+      const projectId = knownProjectId !== undefined
+        ? knownProjectId
+        : await db
+            .select({ projectId: issues.projectId })
+            .from(issues)
+            .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)))
+            .then((rows) => (rows[0] ? rows[0].projectId : undefined));
+      if (projectId === undefined) return null;
+      return await checkAgentAccessDetailed(
+        db,
+        { companyId: run.companyId, agentId: run.agentId, dimension: "see.projects", target: { projectId } },
+        { site, runId: run.id, issueId, cache },
+      );
+    } catch (err) {
+      logger.warn({ err: logSafeError(err), runId: run.id, site }, "agent access check failed; continuing");
+      return null;
+    }
+  }
+
+  /**
+   * AgentDash (APM gate 3, P3.4; access LLD §4 see.projects, run claim): the
+   * blocker note a refused run leaves, through the EXISTING owner path: the
+   * note goes on the issue and, when the issue is this agent's own, the issue
+   * moves to `blocked` — which is how an agent that needs its people reaches
+   * them ("Stopped and needs you", stopped-agent-issues.ts: the steward, else
+   * the accountable person, in the web inbox and the bridge digest). One note
+   * per stretch: no second note while the issue's latest comment is already
+   * this agent's note. Never throws.
+   */
+  async function leaveAccessPolicyBlockerNote(
+    run: { id: string; companyId: string; agentId: string },
+    issueId: string,
+    refusal: AgentAccessRefusalBody | null,
+  ) {
+    try {
+      const issue = await db
+        .select({ id: issues.id, status: issues.status, assigneeAgentId: issues.assigneeAgentId })
+        .from(issues)
+        .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!issue || issue.status === "done" || issue.status === "cancelled") return;
+      const latest = await db
+        .select({ body: issueComments.body, authorAgentId: issueComments.authorAgentId })
+        .from(issueComments)
+        .where(and(eq(issueComments.companyId, run.companyId), eq(issueComments.issueId, issueId)))
+        .orderBy(desc(issueComments.createdAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      const alreadyNoted = latest?.authorAgentId === run.agentId && latest.body.startsWith(ACCESS_POLICY_BLOCKER_NOTE_PREFIX);
+      if (!alreadyNoted) {
+        const allowed = refusal?.allowedSummary ? ` This agent may see: ${refusal.allowedSummary}.` : "";
+        await issuesSvc.addComment(
+          issueId,
+          `${ACCESS_POLICY_BLOCKER_NOTE_PREFIX}, so its run did not start.${allowed} ` +
+            "To let it work here, its accountable person or steward can change its access in its operating profile, " +
+            "or the issue can go to an agent that has access to this project.",
+          { agentId: run.agentId, runId: run.id },
+        );
+      }
+      if (issue.assigneeAgentId === run.agentId && issue.status !== "blocked") {
+        await db
+          .update(issues)
+          .set({ status: "blocked", updatedAt: new Date() })
+          .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId), eq(issues.assigneeAgentId, run.agentId)));
+      }
+    } catch (err) {
+      logger.warn({ err: logSafeError(err), runId: run.id, issueId }, "access refusal blocker note not recorded");
+    }
+  }
+
+  /**
+   * AgentDash (APM gate 3, P3.4): an enforced `see.projects` refusal at claim
+   * time — the queued run is cancelled before it starts (it never ran), its
+   * wake skipped, the issue's execution lock released, and the blocker note
+   * left. Claim already owns the per-agent start lock, so this never goes
+   * through cancelRunInternal.
+   */
+  async function cancelQueuedRunForAccessRefusal(
+    run: typeof heartbeatRuns.$inferSelect,
+    issueId: string,
+    refusal: AgentAccessRefusalBody | null,
+  ) {
+    const now = new Date();
+    const reason = "Not started: the issue's project is outside this agent's access (ACCESS_POLICY_REFUSED)";
+    const cancelled = await setRunStatus(run.id, "cancelled", { finishedAt: now, error: reason, errorCode: ACCESS_POLICY_REFUSED_RUN_CODE });
+    await setWakeupStatus(run.wakeupRequestId, "skipped", { finishedAt: now, error: reason });
+    await db
+      .update(issues)
+      .set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null, updatedAt: now })
+      .where(and(eq(issues.companyId, run.companyId), eq(issues.id, issueId), eq(issues.executionRunId, run.id)));
+    if (cancelled) {
+      await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message: reason,
+        payload: { issueId, ...(refusal ? { dimension: refusal.dimension, rule: refusal.rule } : {}) },
+      });
+    }
+    await leaveAccessPolicyBlockerNote(run, issueId, refusal);
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     const claimed = await claimQueuedRunGated(run);
     if (!claimed) {
@@ -5382,6 +5555,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await cancelRunInternal(run.id, "Cancelled because the agent is not invokable");
       return null;
     }
+    // AgentDash (APM gate 2, P2.3): while an approved profile is being applied
+    // to this agent, no run starts with a half-applied configuration. The run
+    // is DEFERRED, not cancelled: it stays queued and the next queue pass
+    // (resumeQueuedRuns, or the next wake) claims it once the application
+    // finishes. An interrupted application (past its lease) does not defer.
+    if (await profileApplicationDefersDispatch(run)) return null;
 
     const context = parseObject(run.contextSnapshot);
     if (await workspacePersistenceHold(db, run.companyId, run.agentId, taskRecoveryRunIssueId(run))) {
@@ -5479,6 +5658,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           { runId: run.id, issueId, errorCode: staleness.errorCode },
           "claimQueuedRun: cancelled stale queued run",
         );
+        return null;
+      }
+
+      // AgentDash (APM gate 2, P2.3; access LLD §4 see.projects, run claim):
+      // the issue's project must be in the agent's V2 project scope at claim
+      // time. Shadow: a would-be refusal is logged and the claim goes on
+      // exactly as before. Enforce (gate 3, P3.4): the run is not started, the
+      // issue gets a blocker note and its owner is told (the existing
+      // stopped-and-needs-you path). Nothing is evaluated when the mode is off.
+      const claimAccess = await checkRunIssueProject(run, issueId, "heartbeat.run_claim", createAgentAccessCheckCache());
+      if (claimAccess?.outcome === "refuse") {
+        await cancelQueuedRunForAccessRefusal(run, issueId, claimAccess.refusal);
+        logger.info({ runId: run.id, issueId }, "claimQueuedRun: not started — issue outside the agent's access");
         return null;
       }
     }
@@ -6547,6 +6739,85 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
   }
 
+  /**
+   * AgentDash (APM gate 2, P2.3; overview LLD §3.4, access LLD §5/§11): the
+   * AGENTS.md profile block is delivered best-effort, so delivery is evidenced
+   * at run start rather than assumed. For an agent with an active profile
+   * revision, `profileDeliveryEvidence` (revision id, the block hash read from
+   * disk, the hash the revision renders to) is written into the run's
+   * `context_snapshot` under `agentProfileDelivery`, and a mismatch is logged
+   * as `profile.block_drift` (once per distinct mismatch). Agents without an
+   * applied profile are untouched. Never throws: evidence must not stop work.
+   */
+  async function recordProfileDeliveryEvidence(
+    agent: { id: string; companyId: string; name: string; adapterType: string; adapterConfig: unknown },
+    run: { id: string },
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const active = await loadActiveProfileBlockRevision(db, agent);
+      if (!active) {
+        delete context[AGENT_PROFILE_DELIVERY_CONTEXT_KEY];
+        return;
+      }
+      const evidence = await profileDeliveryEvidence(db, {
+        id: agent.id,
+        companyId: agent.companyId,
+        name: agent.name,
+        adapterType: agent.adapterType,
+        adapterConfig: parseObject(agent.adapterConfig),
+      });
+      const recorded = { ...evidence, checkedAt: new Date().toISOString() };
+      context[AGENT_PROFILE_DELIVERY_CONTEXT_KEY] = recorded;
+      // Merged into the stored snapshot now: later full writes carry it too,
+      // but not every run path writes the context back before the adapter runs.
+      await db
+        .update(heartbeatRuns)
+        .set({
+          contextSnapshot: sql`coalesce(${heartbeatRuns.contextSnapshot}, '{}'::jsonb) || ${JSON.stringify({ [AGENT_PROFILE_DELIVERY_CONTEXT_KEY]: recorded })}::jsonb`,
+        })
+        .where(eq(heartbeatRuns.id, run.id));
+      if (evidence.expectedHash === null || evidence.blockHashOnDisk === evidence.expectedHash) return;
+      const reason = evidence.blockHashOnDisk === null ? "block_missing" : "hash_mismatch";
+      const previous = await db
+        .select({ details: activityLog.details })
+        .from(activityLog)
+        .where(and(
+          eq(activityLog.companyId, agent.companyId),
+          eq(activityLog.agentId, agent.id),
+          eq(activityLog.action, "profile.block_drift"),
+        ))
+        .orderBy(desc(activityLog.createdAt))
+        .limit(1)
+        .then((rows) => parseObject(rows[0]?.details));
+      if (
+        previous.profileRevisionId === evidence.profileRevisionId &&
+        previous.expectedHash === evidence.expectedHash &&
+        (previous.blockHashOnDisk ?? null) === evidence.blockHashOnDisk
+      ) {
+        return;
+      }
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: "system",
+        actorId: "system",
+        agentId: agent.id,
+        runId: run.id,
+        action: "profile.block_drift",
+        entityType: "agent",
+        entityId: agent.id,
+        details: {
+          profileRevisionId: evidence.profileRevisionId,
+          expectedHash: evidence.expectedHash,
+          blockHashOnDisk: evidence.blockHashOnDisk,
+          reason,
+        },
+      });
+    } catch (err) {
+      logger.warn({ err: logSafeError(err), runId: run.id, agentId: agent.id }, "profile delivery evidence not recorded");
+    }
+  }
+
   async function executeRun(runId: string) {
     let run = await getRun(runId);
     if (!run) return;
@@ -6602,6 +6873,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const runtime = await ensureRuntimeState(agent);
     const context = parseObject(run.contextSnapshot);
+    // AgentDash (APM gate 2, P2.3): one V2 access memo for this run (mode,
+    // stored policy, live context), and the run-start profile delivery
+    // evidence — after the instruction refresh above, so it records what the
+    // adapter will actually read.
+    const accessCheckCache = createAgentAccessCheckCache();
+    await recordProfileDeliveryEvidence(agent, run, context);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(context, null);
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const issueId = readNonEmptyString(context.issueId);
@@ -6650,6 +6927,52 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             ))
             .then((rows) => rows[0] ?? null)
         : null;
+    // AgentDash (APM gate 2, P2.3; access LLD §4 see.projects, context
+    // hydration): the issue, its wake comment and its continuation documents
+    // are loaded into this run's context only from the issue's project, so
+    // the project is checked again here (this also covers a resumed run).
+    // Shadow: the context is hydrated exactly as before. Enforce (gate 3,
+    // P3.4): nothing from the issue reaches the adapter — the run is
+    // cancelled before it starts, with the claim's bookkeeping and blocker note.
+    const hydrationAccess = issueContext
+      ? await checkRunIssueProject(run, issueContext.id, "heartbeat.context_hydration", accessCheckCache, issueContext.projectId ?? null)
+      : null;
+    if (issueContext && hydrationAccess?.outcome === "refuse") {
+      const refusedAt = new Date();
+      const refusalError = "Not started: the issue's project is outside this agent's access (ACCESS_POLICY_REFUSED)";
+      const refusedRun = await setRunStatus(run.id, "cancelled", {
+        finishedAt: refusedAt,
+        error: refusalError,
+        errorCode: ACCESS_POLICY_REFUSED_RUN_CODE,
+      });
+      if (refusedRun) {
+        await appendRunEvent(refusedRun, await nextRunEventSeq(refusedRun.id), {
+          eventType: "lifecycle",
+          stream: "system",
+          level: "warn",
+          message: refusalError,
+          payload: { issueId: issueContext.id, dimension: hydrationAccess.refusal?.dimension ?? "see.projects", rule: hydrationAccess.refusal?.rule ?? null },
+        });
+        // The run never legitimately held the issue: put a run-start
+        // auto-checkout back before the lock release, as the wake-policy refusal does.
+        if (issueStatusBeforeAutoCheckout) {
+          await db
+            .update(issues)
+            .set({ status: issueStatusBeforeAutoCheckout, checkoutRunId: null, updatedAt: refusedAt })
+            .where(and(eq(issues.id, issueContext.id), eq(issues.checkoutRunId, run.id)));
+        }
+        await releaseIssueExecutionAndPromote(refusedRun);
+      }
+      await setWakeupStatus(run.wakeupRequestId, "skipped", {
+        reason: ACCESS_POLICY_REFUSED_RUN_CODE,
+        runId: null,
+        finishedAt: refusedAt,
+        error: refusalError,
+      });
+      await finalizeAgentStatus(run.agentId, "cancelled");
+      await leaveAccessPolicyBlockerNote(run, issueContext.id, hydrationAccess.refusal);
+      return;
+    }
     const issueAssigneeOverrides =
       issueContext && issueContext.assigneeAgentId === agent.id
         ? parseIssueAssigneeAdapterOverrides(
@@ -7023,11 +7346,34 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         "Dropped execution-affecting project env variables from the run environment",
       );
     }
-    const runScopedMentionedSkillKeys = await resolveRunScopedMentionedSkillKeys({
+    const mentionedSkillKeys = await resolveRunScopedMentionedSkillKeys({
       db,
       companyId: agent.companyId,
       issueId,
     });
+    // AgentDash (APM gate 2, P2.3; access LLD §4 do.skills, runtime): skills
+    // named in issue text join the run without skill sync, so each one is
+    // checked against the agent's V2 skill scope. Shadow: every mentioned
+    // skill is still added below. Enforce (gate 3, P3.4): a refused skill is
+    // dropped from the run and logged (`authz.refused` plus a run-log line).
+    const droppedRunScopedSkillKeys: string[] = [];
+    for (const skillKey of mentionedSkillKeys) {
+      const outcome = await checkAgentAccess(
+        db,
+        { companyId: agent.companyId, agentId: agent.id, dimension: "do.skills", target: { skillKey } },
+        { site: "heartbeat.runtime_skills", runId: run.id, issueId, cache: accessCheckCache },
+      );
+      if (outcome === "refuse") droppedRunScopedSkillKeys.push(skillKey);
+    }
+    const runScopedMentionedSkillKeys = droppedRunScopedSkillKeys.length > 0
+      ? mentionedSkillKeys.filter((skillKey) => !droppedRunScopedSkillKeys.includes(skillKey))
+      : mentionedSkillKeys;
+    if (droppedRunScopedSkillKeys.length > 0) {
+      logger.info(
+        { companyId: agent.companyId, agentId: agent.id, runId: run.id, droppedRunScopedSkillKeys },
+        "Dropped run-scoped skills outside the agent's access",
+      );
+    }
     const effectiveResolvedConfig = applyRunScopedMentionedSkillKeys(
       resolvedConfig,
       runScopedMentionedSkillKeys,
@@ -7699,6 +8045,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await onLog(
           "stdout",
           `[paperclip] Enabled run-scoped skills from issue mentions: ${runScopedMentionedSkillKeys.join(", ")}\n`,
+        );
+      }
+      if (droppedRunScopedSkillKeys.length > 0) {
+        await onLog(
+          "stdout",
+          `[paperclip] Dropped run-scoped skills outside this agent's access (ACCESS_POLICY_REFUSED): ${droppedRunScopedSkillKeys.join(", ")}\n`,
         );
       }
       for (const warning of runtimeWorkspaceWarnings) {
@@ -9367,6 +9719,57 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
   }
 
+  /**
+   * AgentDash (APM gate 2, P2.3; gate 3, P3.4): `talk.agents` (on the waking
+   * agent) and `talk.inbound` (on the woken agent) for a wake that is a
+   * contact — an assignment, a comment wake or a mention — from another agent
+   * or a person. Timer, system and self wakes are not contact and are not
+   * checked. Answers the most restrictive outcome; in shadow the caller
+   * ignores it, in enforce a `refuse` withholds the wake (the comment or
+   * record that caused it is already kept). Never throws.
+   */
+  async function checkWakeDispatch(
+    recipient: { id: string; companyId: string },
+    opts: WakeupOptions,
+    reason: string | null,
+    issueId: string | null,
+  ): Promise<"allow" | "would_refuse" | "refuse"> {
+    const via = reason ? WAKE_CONTACT_VIA_BY_REASON[reason] : undefined;
+    if (!via) return "allow";
+    const sourceType = opts.requestedByActorType;
+    const sourceId = opts.requestedByActorId ?? null;
+    if (!sourceId || (sourceType !== "agent" && sourceType !== "user")) return "allow";
+    if (sourceType === "agent" && sourceId === recipient.id) return "allow";
+    try {
+      const cache = createAgentAccessCheckCache();
+      if ((await agentAccessEnforcementModeCached(db, recipient.companyId, cache)) === "off") return "allow";
+      const outcomes: Array<"allow" | "would_refuse" | "refuse"> = [];
+      if (sourceType === "agent") {
+        outcomes.push(await checkAgentAccess(
+          db,
+          { companyId: recipient.companyId, agentId: sourceId, dimension: "talk.agents", target: { agentId: recipient.id }, via },
+          { site: "wake.dispatch", issueId, cache },
+        ));
+      }
+      outcomes.push(await checkAgentAccess(
+        db,
+        {
+          companyId: recipient.companyId,
+          agentId: recipient.id,
+          dimension: "talk.inbound",
+          target: sourceType === "agent" ? { kind: "agent", agentId: sourceId } : { kind: "user", userId: sourceId },
+          via,
+        },
+        { site: "wake.dispatch", issueId, cache },
+      ));
+      if (outcomes.includes("refuse")) return "refuse";
+      return outcomes.includes("would_refuse") ? "would_refuse" : "allow";
+    } catch (err) {
+      logger.warn({ err: logSafeError(err), agentId: recipient.id }, "agent access check failed; continuing");
+      return "allow";
+    }
+  }
+
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
@@ -9447,6 +9850,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueId;
     }
     if (await workspacePersistenceHold(db, agent.companyId, agentId, issueId)) return null;
+    // AgentDash (APM gate 2, P2.3; access LLD §4 talk.agents + talk.inbound):
+    // the ONE wake-dispatch check. Every assignment, comment and mention wake
+    // reaches an agent through here, so the source's outbound scope and the
+    // recipient's inbound scope are checked once, for the channel the wake
+    // came through. Shadow: the wake is queued exactly as before. Enforce
+    // (gate 3, P3.4): the wake is withheld below — recorded as a skipped
+    // request — and the comment or assignment that caused it is kept.
+    const wakeAccessOutcome = await checkWakeDispatch(agent, opts, reason, issueId ?? null);
     // AgentDash: suppress redundant requests before scheduling/accounting.
     // The persisted claim gate repeats this check; wake metadata has no authority.
     if (await workforceDispatchHold(db, agent.companyId, agentId, issueId)) return null;
@@ -9475,6 +9886,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       });
       opts.onSkipped?.({ reason: skipReason, tokenCeiling: tokenCeilingStatus });
     };
+    if (wakeAccessOutcome === "refuse") {
+      await writeSkippedRequest(ACCESS_POLICY_REFUSED_RUN_CODE);
+      return null;
+    }
 
     let projectId = readNonEmptyString(enrichedContextSnapshot.projectId);
     if (!projectId && issueId) {

@@ -318,3 +318,125 @@ export interface AgentGovernancePolicyRecord {
 /** Which side of the policy a mutation targets — used for audit attribution. */
 export const AGENT_GOVERNANCE_TARGETS = ["owner_ceiling", "steward_request"] as const;
 export type AgentGovernanceTarget = (typeof AGENT_GOVERNANCE_TARGETS)[number];
+
+// ---------------------------------------------------------------------------
+// AgentDash: Agent Performance Management gate 2 — access policy V2
+// (doc/plans/2026-10-29-agent-access-lld.md §3).
+//
+// V2 extends the stored governance policy with optional see / do / talk
+// dimensions. The six V1 fields above keep their meaning and their MK
+// consumers (`resolveAgentPolicy`, the credential fallback, bridge approval
+// selection, ceilings). V2 is evaluated by a separate, narrow-only function
+// (`evaluateAccessV2` in `agent-access-v2.ts`): an omitted dimension means
+// "not restricted by V2", and a V2 result can only take access away.
+// ---------------------------------------------------------------------------
+
+export const AGENT_ACCESS_POLICY_VERSION = 2 as const;
+
+/**
+ * Approval mode for a connection action class. Ordered most to least
+ * restrictive: `never` < `approve` < `auto`. `auto` means only that THIS
+ * policy adds no approval; it never removes one another rule requires
+ * (access LLD §3.2 send precedence).
+ */
+export const AGENT_ACCESS_MODES = ["never", "approve", "auto"] as const;
+export type AgentAccessMode = (typeof AGENT_ACCESS_MODES)[number];
+
+export const AGENT_ACCESS_LIST_SCOPE_MODES = ["all", "listed"] as const;
+export type AgentAccessListScopeMode = (typeof AGENT_ACCESS_LIST_SCOPE_MODES)[number];
+
+/** `listed` with an empty `ids` list means nothing. `all` ignores `ids`. */
+export interface AgentAccessListScope {
+  mode: AgentAccessListScopeMode;
+  ids: string[];
+}
+
+/**
+ * Contact modes are predicates evaluated at check time, never flattened into
+ * stored JSON (they cannot be ranked against each other):
+ * - `any`: everyone;
+ * - `listed`: the id is in `agentIds` / `userIds`;
+ * - `reports_chain`: the agent's live `reportsTo` chain and its direct reports;
+ * - `accountable_only`: the agent's accountable user, steward or company admins.
+ */
+export const AGENT_ACCESS_CONTACT_MODES = ["any", "listed", "reports_chain", "accountable_only"] as const;
+export type AgentAccessContactMode = (typeof AGENT_ACCESS_CONTACT_MODES)[number];
+
+export interface AgentAccessContactScope {
+  mode: AgentAccessContactMode;
+  agentIds?: string[];
+  userIds?: string[];
+}
+
+/** The ways one agent reaches another (access LLD §4, the one wake-dispatch check). */
+export const AGENT_ACCESS_CONTACT_VIAS = ["assign", "comment_wake", "mention", "handoff"] as const;
+export type AgentAccessContactVia = (typeof AGENT_ACCESS_CONTACT_VIAS)[number];
+
+export const AGENT_ACCESS_EXTERNAL_TARGET_MODES = ["listed", "domains", "any"] as const;
+export type AgentAccessExternalTargetMode = (typeof AGENT_ACCESS_EXTERNAL_TARGET_MODES)[number];
+
+export interface AgentAccessSee {
+  /** Projects, their issues, comments, documents and attachments. Ids are project ids. */
+  projects?: AgentAccessListScope;
+  /** Connections it may read through, each limited to the listed data scopes (`["*"]` = every scope). */
+  connections?: Array<{ connectionId: string; dataScopes: string[] }>;
+}
+
+export interface AgentAccessDo {
+  /** Per-connection approval mode for drafts and sends. A connection not listed is `never`. */
+  connections?: Array<{ connectionId: string; draft: AgentAccessMode; send: AgentAccessMode }>;
+  /** Company skills (by skill key) it may run with, on every writer and at runtime. */
+  skills?: AgentAccessListScope;
+}
+
+export interface AgentAccessTalk {
+  /** Agents it may reach, and through which channels (`via` is intersected across ceiling and request). */
+  agents?: AgentAccessContactScope & { via: AgentAccessContactVia[] };
+  /** People it may route questions, approvals and bridge tasks to. The escalation path is always open. */
+  people?: AgentAccessContactScope;
+  /** External send targets per connection. A connection not listed admits no external target. */
+  external?: Array<{
+    connectionId: string;
+    targets: { mode: AgentAccessExternalTargetMode; values: string[] };
+  }>;
+  /** Who may assign to, comment-wake or mention THIS agent. People with configuration authority are never blocked. */
+  inbound?: AgentAccessContactScope;
+}
+
+/** The optional V2 dimensions. Omitted = not restricted by V2. */
+export interface AgentAccessPolicyV2Fields {
+  see?: AgentAccessSee;
+  do?: AgentAccessDo;
+  talk?: AgentAccessTalk;
+}
+
+/**
+ * Access policy V2 (access LLD §3.1): the V1 governance policy plus optional
+ * see / do / talk dimensions. This is the PARSED form — `parseAccessPolicy`
+ * upgrades a stored V1 row on read, so `policyVersion` is always 2 here.
+ */
+export interface AgentAccessPolicy extends AgentGovernancePolicy, AgentAccessPolicyV2Fields {
+  policyVersion: typeof AGENT_ACCESS_POLICY_VERSION;
+}
+
+/**
+ * What an `agent_governance_policies` side (owner ceiling or steward request)
+ * may hold in its jsonb: a V1 row, or a V2 row. A row carries `policyVersion`
+ * and V2 dimensions only once some V2 dimension has been written, so MK V1
+ * rows stay byte-identical (`mergeAccessPolicyWrite`: V1 in, V1 out).
+ */
+export type StoredAgentGovernancePolicy = AgentGovernancePolicy &
+  AgentAccessPolicyV2Fields & { policyVersion?: typeof AGENT_ACCESS_POLICY_VERSION };
+
+/** Every V2 dimension, addressed as `<section>.<field>`. The unit of merge, clear and refusal. */
+export const AGENT_ACCESS_V2_DIMENSIONS = [
+  "see.projects",
+  "see.connections",
+  "do.connections",
+  "do.skills",
+  "talk.agents",
+  "talk.people",
+  "talk.external",
+  "talk.inbound",
+] as const;
+export type AgentAccessV2Dimension = (typeof AGENT_ACCESS_V2_DIMENSIONS)[number];

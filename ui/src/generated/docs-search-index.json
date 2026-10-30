@@ -1163,10 +1163,15 @@
         "access",
         "activity",
         "adapters",
+        "agent-access-enforcement",
+        "agent-access",
+        "agent-briefs",
         "agent-directives",
         "agent-fact-requests",
         "agent-governance",
         "agent-memory",
+        "agent-performance",
+        "agent-profiles",
         "agent-research",
         "agent-stewardships",
         "agents",
@@ -1187,6 +1192,7 @@
         "dashboard",
         "deliverables",
         "environments",
+        "evaluation-agents",
         "evaluation",
         "execution-workspaces",
         "feature-flags",
@@ -1204,6 +1210,7 @@
         "instance-settings",
         "invite-codes",
         "issue-reports",
+        "issue-responsibilities",
         "issue-tree-control",
         "issues",
         "llms",
@@ -1218,6 +1225,7 @@
         "onboarding-mcp-signup",
         "onboarding-v2",
         "ota",
+        "performance-manager",
         "plugin-ui-static",
         "plugins",
         "projects",
@@ -1241,7 +1249,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 629 routes in 82 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 005c026bc571; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 674 routes in 90 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest e82ef8e184b1; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

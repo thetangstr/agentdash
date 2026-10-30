@@ -1,9 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Agent } from "@paperclipai/shared";
+import { ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS, type Agent } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
-import { formatActivityVerb, formatIssueActivityAction, isSystemPlumbingActivity } from "./activity-format";
+import {
+  formatActivityVerb,
+  formatIssueActivityAction,
+  isSystemPlumbingActivity,
+} from "./activity-format";
 
 describe("activity formatting", () => {
   const agentMap = new Map<string, Agent>([
@@ -215,6 +219,9 @@ describe("deliverable review reasons", () => {
  * interpolated `action:` expressions.
  */
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
+  // AgentDash: Agent Performance Management gate 2 (written from P2.2–P2.4 on)
+  "access.policy_changed",
+  "access.would_refuse",
   // agent lifecycle and configuration
   "agent.accountability_changed",
   "agent.approved",
@@ -268,6 +275,18 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "agent_fact.asked",
   "agent_fact.declined",
   "agent_fact.escalated",
+  "agent_profile.applied",
+  "agent_profile.application_failed",
+  "agent_profile.application_refused_stale",
+  "agent_profile.application_started",
+  "agent_profile.application_step",
+  "agent_profile.draft_saved",
+  "agent_profile.proposed",
+  "agent_profile.withdrawn",
+  // APM gate 5
+  "agent_profile.bound",
+  "agent_brief.created",
+  "agent_brief.submitted",
   // approvals
   "approval.approved",
   "approval.comment_added",
@@ -300,12 +319,14 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "budget.policy_upserted",
   "budget.soft_threshold_crossed",
   // company
+  "company.agent_access_enforcement_changed",
   "company.archived",
   "company.branding_updated",
   "company.budget_updated",
   "company.created",
   "company.feedback_data_sharing_updated",
   "company.imported",
+  "company.performance_manager_changed", // AgentDash: APM gate 4 (P4.1)
   "company.skill_created",
   "company.skill_deleted",
   "company.skill_file_updated",
@@ -349,6 +370,9 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "evaluation.contract_declared",
   "evaluation.correction_filed",
   "evaluation.correction_noted",
+  "evaluation.agent_card_snapshot",
+  "evaluation.agent_recommendation_created",
+  "evaluation.agent_recommendation_decided",
   "evaluation.disposition_recorded",
   "evaluation.finding_noted",
   "evaluation.ingest_run",
@@ -449,6 +473,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "issue.recovery_budget_exhausted",
   "issue.relations.updated",
   "issue.released",
+  "issue.responsibility_mapped",
   "issue.requester_changes_requested",
   "issue.reviewers_updated",
   "issue.task_recovery_authorized",
@@ -488,6 +513,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "plugin.uninstalled",
   "plugin.upgraded",
   // projects
+  "profile.block_drift",
   "project.access_replaced",
   "project.created",
   "project.deleted",
@@ -921,3 +947,75 @@ describe("plumbing hidden by default", () => {
     }
   });
 });
+
+// AgentDash: Agent Performance Management gate 2 — shadow-mode would-be
+// refusals and per-step application rows stay in the record but out of the
+// default feeds; the outcomes people act on stay visible.
+// The server filters them (`ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS`); the UI
+// only has to keep them out of system plumbing and give them verbs.
+// AgentDash (APM gate 3, P3.4/P3.5): an enforced refusal by the agent's own
+// access rules is `authz.refused` with reasonCode ACCESS_POLICY_REFUSED; the
+// row says what was refused, in plain words, from the V2 dimension.
+describe("APM gate 3 enforced refusals", () => {
+  it("says what the agent's access rules refused, by dimension", () => {
+    const verb = (dimension: string) =>
+      formatActivityVerb("authz.refused", { reasonCode: "ACCESS_POLICY_REFUSED", dimension, rule: `${dimension}.not_listed`, policyMode: "enforce" });
+    expect(verb("talk.agents")).toBe("was refused contact with another agent by the access rules of");
+    expect(verb("see.projects")).toBe("was refused a project by the access rules of");
+    expect(verb("do.skills")).toBe("was refused a skill by the access rules of");
+    expect(verb("do.connections")).toBe("was refused an action through a connection by the access rules of");
+    expect(verb("talk.people")).toBe("was refused contact with a person by the access rules of");
+    expect(verb("talk.external")).toBe("was refused contact outside the company by the access rules of");
+    expect(verb("talk.inbound")).toBe("was refused contact by the access rules of");
+    expect(verb("see.connections")).toBe("was refused a connection by the access rules of");
+    // A dimension this build doesn't know still reads as a sentence, never a raw code.
+    expect(verb("future.dimension")).toBe("was refused by the access rules of");
+  });
+
+  it("keeps the generic wording for other refusals", () => {
+    expect(formatActivityVerb("authz.refused", { reasonCode: "AGENT_CROSS_COMPANY" })).toBe("was denied access");
+    expect(formatActivityVerb("authz.refused", null)).toBe("was denied access");
+  });
+
+  it("words the agent card snapshot", () => {
+    expect(formatActivityVerb("evaluation.agent_card_snapshot", { version: 2 })).toBe("stored a performance card for");
+  });
+});
+
+describe("APM gate 2 default-feed visibility", () => {
+  it("hides would-be refusals and application steps from the default feeds", () => {
+    expect([...ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS].sort()).toEqual(["access.would_refuse", "agent_profile.application_step"]);
+  });
+
+  it("keeps them out of system plumbing, so a shown row keeps its real actor", () => {
+    expect(isSystemPlumbingActivity("access.would_refuse")).toBe(false);
+    expect(isSystemPlumbingActivity("agent_profile.application_step")).toBe(false);
+  });
+
+  it("keeps the profile outcomes and decisions visible", () => {
+    for (const action of [
+      "agent_profile.draft_saved",
+      "agent_profile.proposed",
+      "agent_profile.withdrawn",
+      "agent_profile.application_started",
+      "agent_profile.applied",
+      "agent_profile.application_failed",
+      "agent_profile.application_refused_stale",
+      "access.policy_changed",
+      "company.agent_access_enforcement_changed",
+      "issue.responsibility_mapped",
+      "profile.block_drift",
+    ]) {
+      expect((ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS as readonly string[]).includes(action)).toBe(false);
+      expect(isSystemPlumbingActivity(action)).toBe(false);
+    }
+  });
+
+  it("gives both hidden actions plain verbs for the view that shows everything", () => {
+    expect(formatActivityVerb("access.would_refuse", null)).toBe(
+      "would have been denied access under rules not yet enforced",
+    );
+    expect(formatActivityVerb("agent_profile.application_step", null)).toBe("applied part of a profile change to");
+  });
+});
+

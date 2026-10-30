@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS,
+  INERT_PERMISSION_KEYS,
   PERMISSION_KEYS,
   type Agent,
   type PermissionKey,
@@ -31,6 +32,13 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useToast } from "@/context/ToastContext";
 import { queryKeys } from "@/lib/queryKeys";
+
+/**
+ * AgentDash (APM gate 3, P3.4/P3.5): grants nothing enforces are not offered
+ * (`INERT_PERMISSION_KEYS`, e.g. `tasks:assign_scope`). A member who already
+ * holds one keeps it: it stays in the draft and is saved back unchanged.
+ */
+const OFFERED_PERMISSION_KEYS = PERMISSION_KEYS.filter((key) => !INERT_PERMISSION_KEYS.includes(key));
 
 const permissionLabels: Record<PermissionKey, string> = {
   "agents:create": "Create agents",
@@ -547,7 +555,7 @@ export function CompanyAccess() {
                     ) : null}
                   </div>
                   <div className="grid gap-3 md:grid-cols-2">
-                    {PERMISSION_KEYS.map((permissionKey) => (
+                    {OFFERED_PERMISSION_KEYS.map((permissionKey) => (
                       <label
                         key={permissionKey}
                         className="flex items-start gap-3 rounded-lg border border-border px-3 py-2"

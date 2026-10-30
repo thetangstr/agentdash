@@ -60,6 +60,13 @@ import { HttpError, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertAllowedGitHubSourceUrl, ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import type { StorageService } from "../storage/types.js";
 import { accessService } from "./access.js";
+import {
+  agentAccessEnforcementModeCached,
+  checkAgentAccess,
+  createAgentAccessCheckCache,
+  enforceAgentAccess,
+  type AgentAccessCheckCache,
+} from "./agent-access-check.js";
 import { agentService } from "./agents.js";
 import { agentInstructionsService } from "./agent-instructions.js";
 import { assetService } from "./assets.js";
@@ -591,6 +598,30 @@ type ImportBehaviorOptions = {
    * for internal callers.
    */
   assertCanWriteRoutines?: () => Promise<void>;
+  /**
+   * AgentDash (APM gate 2, P2.3): the importing agent, when an agent imports.
+   * Its V2 `talk.agents` (assign) and `do.skills` scopes are shadow-checked
+   * for the assignments and skills the import writes. Shadow only.
+   */
+  actorAgentId?: string | null;
+};
+
+/**
+ * AgentDash (APM gate 3, P3.4): the start of the `warnings[]` line an agent
+ * export adds for each project it withheld under the agent's enforced V2
+ * project scope (access LLD §4: "omitted and listed as withheld").
+ */
+export const EXPORT_WITHHELD_PROJECT_WARNING_PREFIX = "Withheld project";
+
+/** AgentDash (APM gate 2, P2.3): export options. */
+type ExportBehaviorOptions = {
+  /**
+   * The exporting agent, when an agent exports (a CEO agent). Every project
+   * the export includes is shadow-checked against its V2 project scope
+   * (access LLD §4: export preview and execution for agent actors). Shadow
+   * only: the bundle is built exactly as before.
+   */
+  accessActorAgentId?: string | null;
 };
 
 type AgentLike = {
@@ -3122,6 +3153,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
   async function exportBundle(
     companyId: string,
     input: CompanyPortabilityExport,
+    exportOptions: ExportBehaviorOptions = {},
   ): Promise<CompanyPortabilityExportResult> {
     const include = normalizeInclude({
       ...input.include,
@@ -3291,11 +3323,43 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
       }
     }
 
-    const selectedProjectRows = Array.from(selectedProjects.values())
+    let selectedProjectRows = Array.from(selectedProjects.values())
       .sort((left, right) => left.name.localeCompare(right.name));
-    const selectedIssueRows = Array.from(selectedIssues.values())
+    let selectedIssueRows = Array.from(selectedIssues.values())
       .filter((issue): issue is NonNullable<typeof issue> => issue != null)
       .sort((left, right) => (left.identifier ?? left.title).localeCompare(right.identifier ?? right.title));
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4 see.projects,
+    // export): for an agent actor, every project whose content the bundle
+    // carries is checked against the agent's V2 project scope. Shadow: logged
+    // only. Enforce: an out-of-scope project is omitted — with its issues and
+    // routines — and listed as withheld in `warnings`.
+    if (exportOptions.accessActorAgentId) {
+      const accessCache = createAgentAccessCheckCache();
+      const exportedProjectIds = new Set<string>(selectedProjectRows.map((project) => project.id));
+      for (const issue of selectedIssueRows) if (issue.projectId) exportedProjectIds.add(issue.projectId);
+      const withheldProjectIds = new Set<string>();
+      for (const projectId of exportedProjectIds) {
+        const outcome = await checkAgentAccess(
+          db,
+          { companyId, agentId: exportOptions.accessActorAgentId, dimension: "see.projects", target: { projectId } },
+          { site: "export.agent_actor", cache: accessCache },
+        );
+        if (outcome === "refuse") withheldProjectIds.add(projectId);
+      }
+      if (withheldProjectIds.size > 0) {
+        for (const projectId of withheldProjectIds) {
+          const project = projectById.get(projectId) ?? selectedProjects.get(projectId);
+          warnings.push(
+            `${EXPORT_WITHHELD_PROJECT_WARNING_PREFIX} "${project?.name ?? projectId}" (${projectId}): it is outside this agent's access (ACCESS_POLICY_REFUSED), so it and its tasks and routines were left out.`,
+          );
+        }
+        selectedProjectRows = selectedProjectRows.filter((project) => !withheldProjectIds.has(project.id));
+        selectedIssueRows = selectedIssueRows.filter((issue) => !issue.projectId || !withheldProjectIds.has(issue.projectId));
+        for (const routine of [...selectedRoutines.values()]) {
+          if (routine.projectId && withheldProjectIds.has(routine.projectId)) selectedRoutines.delete(routine.id);
+        }
+      }
+    }
     const selectedRoutineSummaries = Array.from(selectedRoutines.values())
       .sort((left, right) => left.title.localeCompare(right.title));
     const selectedRoutineRows = (
@@ -3718,6 +3782,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
   async function previewExport(
     companyId: string,
     input: CompanyPortabilityExport,
+    exportOptions: ExportBehaviorOptions = {},
   ): Promise<CompanyPortabilityExportPreviewResult> {
     const previewInput: CompanyPortabilityExport = {
       ...input,
@@ -3732,7 +3797,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     if (previewInput.include && previewInput.include.issues === undefined) {
       previewInput.include.issues = false;
     }
-    const exported = await exportBundle(companyId, previewInput);
+    const exported = await exportBundle(companyId, previewInput, exportOptions);
     return {
       ...exported,
       fileInventory: Object.keys(exported.files)
@@ -4109,12 +4174,84 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     return plan.preview;
   }
 
+
+  /**
+   * AgentDash (APM gate 3, P3.4): the up-front enforce check for an agent
+   * importing into its own company (a new company has no policy for it).
+   * Skills each written agent would get (by the manifest's skill key), and
+   * every assignment to an agent that already exists. Assignments to agents
+   * this import creates, and skills renamed on conflict, can only be checked
+   * once they exist; those are withheld mid-import instead. Off and shadow:
+   * nothing here runs (gate 2's shadow checks stay where they were).
+   */
+  async function assertImportWithinAgentAccess(
+    input: CompanyPortabilityImport,
+    plan: Awaited<ReturnType<typeof buildPreview>>,
+    sourceManifest: CompanyPortabilityManifest,
+    include: Awaited<ReturnType<typeof buildPreview>>["include"],
+    options: ImportBehaviorOptions | undefined,
+    cache: AgentAccessCheckCache,
+  ) {
+    const actorAgentId = options?.actorAgentId;
+    if (!actorAgentId || input.target.mode === "new_company") return;
+    const companyId = input.target.companyId;
+    if ((await agentAccessEnforcementModeCached(db, companyId, cache).catch(() => "off" as const)) !== "enforce") return;
+    const planBySlug = new Map(
+      include.agents
+        ? plan.preview.plan.agentPlans
+            .filter((entry) => plan.selectedAgents.some((agent) => agent.slug === entry.slug))
+            .map((entry) => [entry.slug, entry] as const)
+        : [],
+    );
+    if (include.agents) {
+      const skillKeyByRef = new Map<string, string>();
+      for (const skill of sourceManifest.skills ?? []) {
+        skillKeyByRef.set(skill.key, skill.key);
+        skillKeyByRef.set(skill.slug, skill.key);
+      }
+      for (const manifestAgent of plan.selectedAgents) {
+        const planAgent = planBySlug.get(manifestAgent.slug);
+        if (!planAgent || planAgent.action === "skip") continue;
+        for (const skillRef of manifestAgent.skills ?? []) {
+          await enforceAgentAccess(
+            db,
+            { companyId, agentId: actorAgentId, dimension: "do.skills", target: { skillKey: skillKeyByRef.get(skillRef) ?? skillRef } },
+            { site: "import.skills", cache },
+          );
+        }
+      }
+    }
+    if (include.issues) {
+      const existingIdBySlug = new Map<string, string>();
+      for (const existing of await agents.list(companyId)) {
+        existingIdBySlug.set(normalizeAgentUrlKey(existing.name) ?? existing.id, existing.id);
+      }
+      for (const manifestIssue of sourceManifest.issues ?? []) {
+        if (manifestIssue.recurring || !manifestIssue.assigneeAgentSlug) continue;
+        const planAgent = planBySlug.get(manifestIssue.assigneeAgentSlug);
+        const assigneeAgentId = planAgent?.action === "create"
+          ? null
+          : planAgent?.action === "update"
+            ? planAgent.existingAgentId
+            : existingIdBySlug.get(manifestIssue.assigneeAgentSlug) ?? null;
+        if (!assigneeAgentId || assigneeAgentId === actorAgentId) continue;
+        await enforceAgentAccess(
+          db,
+          { companyId, agentId: actorAgentId, dimension: "talk.agents", target: { agentId: assigneeAgentId }, via: "assign" },
+          { site: "import.assign", cache },
+        );
+      }
+    }
+  }
+
   async function importBundle(
     input: CompanyPortabilityImport,
     actorUserId: string | null | undefined,
     options?: ImportBehaviorOptions,
   ): Promise<CompanyPortabilityImportResult> {
     const mode = resolveImportMode(options);
+    // AgentDash (APM gate 2, P2.3): one V2 access memo for this import.
+    const importAccessCache: AgentAccessCheckCache = createAgentAccessCheckCache();
     const plan = await buildPreview(input, options);
     if (plan.preview.errors.length > 0) {
       throw unprocessable(`Import preview has errors: ${plan.preview.errors.join("; ")}`);
@@ -4167,6 +4304,11 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     // settings and an agent's adapterConfig.workspaceStrategy. Checked up
     // front, like the overrides above, so a refusal writes nothing.
     assertImportedHostWorkspaceCommandsAllowed(sourceManifest, include, options);
+    // AgentDash (APM gate 3, P3.4; access LLD §4 do.skills + talk.agents
+    // assign, import): an importing agent's skills and assignments are
+    // checked up front in enforce, before anything is written, so a refusal
+    // (403 ACCESS_POLICY_REFUSED) leaves no partial import.
+    await assertImportWithinAgentAccess(input, plan, sourceManifest, include, options, importAccessCache);
     const plannedAgentCreates = include.agents
       ? plan.preview.plan.agentPlans.filter((entry) => entry.action === "create").length
       : 0;
@@ -4493,7 +4635,28 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
             ], hostExecutionContextForCompany(targetCompany.id, { agentId: existingForHostExec?.id ?? null }));
           }
 
-          const desiredSkills = (manifestAgent.skills ?? []).map((skillRef) => desiredSkillRefMap.get(skillRef) ?? skillRef);
+          let desiredSkills = (manifestAgent.skills ?? []).map((skillRef) => desiredSkillRefMap.get(skillRef) ?? skillRef);
+          // AgentDash (APM gate 2, P2.3; gate 3, P3.4; do.skills, import): an
+          // importing agent cannot hand imported agents skills outside its own
+          // V2 skill scope. Shadow: logged only. Enforce: the up-front check
+          // refused what it could see; a skill that only now has its key (it
+          // was renamed on conflict) is dropped here and listed in warnings,
+          // so the import is never left half-written.
+          if (options?.actorAgentId) {
+            const droppedSkillKeys: string[] = [];
+            for (const skillKey of desiredSkills) {
+              const outcome = await checkAgentAccess(
+                db,
+                { companyId: targetCompany.id, agentId: options.actorAgentId, dimension: "do.skills", target: { skillKey } },
+                { site: "import.skills", cache: importAccessCache },
+              );
+              if (outcome === "refuse") droppedSkillKeys.push(skillKey);
+            }
+            if (droppedSkillKeys.length > 0) {
+              desiredSkills = desiredSkills.filter((skillKey) => !droppedSkillKeys.includes(skillKey));
+              warnings.push(`Agent ${planAgent.slug} was imported without skill${droppedSkillKeys.length === 1 ? "" : "s"} ${droppedSkillKeys.join(", ")}: outside the importing agent's access (ACCESS_POLICY_REFUSED).`);
+            }
+          }
           const normalizedAdapter = await prepareImportedAgentAdapter(
             targetCompany.id,
             adapterOverride?.adapterType ?? manifestAgent.adapterType,
@@ -4733,7 +4896,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           const markdownRaw = readPortableTextFile(plan.source.files, manifestIssue.path);
           const parsed = markdownRaw ? parseFrontmatterMarkdown(markdownRaw) : null;
           const description = parsed?.body || manifestIssue.description || null;
-          const assigneeAgentId = resolveImportedAssigneeAgentId(
+          let assigneeAgentId = resolveImportedAssigneeAgentId(
             manifestIssue.assigneeAgentSlug,
             importedSlugToAgentId,
             existingSlugToAgentId,
@@ -4842,6 +5005,29 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           let issueStatus = manifestIssue.status && ISSUE_STATUSES.includes(manifestIssue.status as any)
             ? manifestIssue.status as typeof ISSUE_STATUSES[number]
             : "backlog";
+          // AgentDash (APM gate 2, P2.3; gate 3, P3.4; talk.agents assign,
+          // import): an importing agent's assignments are checked like its
+          // direct ones. Shadow: the issue is created exactly as before.
+          // Enforce: the up-front check refused assignments to existing
+          // agents; one to an agent this import just created is left
+          // unassigned here and listed in warnings (no partial import).
+          if (options?.actorAgentId && assigneeAgentId && assigneeAgentId !== options.actorAgentId) {
+            const outcome = await checkAgentAccess(
+              db,
+              {
+                companyId: targetCompany.id,
+                agentId: options.actorAgentId,
+                dimension: "talk.agents",
+                target: { agentId: assigneeAgentId },
+                via: "assign",
+              },
+              { site: "import.assign", cache: importAccessCache },
+            );
+            if (outcome === "refuse") {
+              warnings.push(`Task ${manifestIssue.slug} was imported unassigned: assigning it to ${manifestIssue.assigneeAgentSlug} is outside the importing agent's access (ACCESS_POLICY_REFUSED).`);
+              assigneeAgentId = null;
+            }
+          }
           if (!assigneeAgentId && issueStatus === "in_progress") {
             warnings.push(`Task ${manifestIssue.slug} was downgraded to todo because its assignee could not be imported as assignable work.`);
             issueStatus = "todo";

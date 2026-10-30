@@ -20,6 +20,13 @@ import {
 import { HttpError, notFound } from "../errors.js";
 import { actorHumanRole } from "./authz.js";
 import { accessService } from "../services/access.js";
+import {
+  agentAccessCheckCacheFor,
+  agentAccessEnforcementModeCached,
+  checkAgentAccess,
+  loadEnforcedAgentProjectScope,
+} from "../services/agent-access-check.js";
+import type { AgentAccessCheckOutcome } from "@paperclipai/shared";
 
 /**
  * A5 (2026-08-16): open by default, restriction per project.
@@ -75,6 +82,14 @@ export function seesEverything(req: Request, companyId: string): boolean {
  */
 export function projectVisibilityCondition(req: Request, companyId: string): SQL | undefined {
   if (seesEverything(req, companyId)) return undefined; // no extra filter
+  const legacy = legacyProjectVisibilityCondition(req);
+  // AgentDash (APM gate 3, P3.4): an enforced V2 project scope narrows it.
+  const v2 = cachedAgentV2ProjectScope(req, companyId);
+  if (!v2) return legacy;
+  return and(legacy, v2.size === 0 ? sql`false` : inArray(projects.id, [...v2]));
+}
+
+function legacyProjectVisibilityCondition(req: Request): SQL | undefined {
   const principal = actorPrincipal(req);
   const open = eq(projects.visibility, "company");
   if (!principal) return open;
@@ -107,6 +122,12 @@ export function projectScopedVisibilityCondition(
   const col = projectIdColumn as unknown as SQL;
   const notRestricted = sql`not exists (select 1 from ${projects} p
       where p.id = ${col} and p.visibility = 'restricted')`;
+  // AgentDash (APM gate 3, P3.4): an enforced V2 project scope narrows the
+  // rule for an agent actor; rows with no project are never restricted by it.
+  const v2 = cachedAgentV2ProjectScope(req, companyId);
+  const v2Condition = v2
+    ? or(isNull(col as never), v2.size === 0 ? sql`false` : inArray(col as never, [...v2]))
+    : undefined;
   if (!principal) return or(isNull(col as never), notRestricted);
   const creator =
     principal.type === "user"
@@ -115,7 +136,76 @@ export function projectScopedVisibilityCondition(
       : sql`false`;
   const listed = sql`exists (select 1 from ${projectAccess} pa where pa.project_id = ${col}
         and pa.principal_type = ${principal.type} and pa.principal_id = ${principal.id})`;
-  return or(isNull(col as never), notRestricted, creator, listed);
+  const legacy = or(isNull(col as never), notRestricted, creator, listed);
+  return v2Condition ? and(legacy, v2Condition) : legacy;
+}
+
+/* ------------------------------------------------------------------------ */
+/* AgentDash (APM gate 3, P3.4): the enforced V2 project scope (access LLD   */
+/* §4 see.projects, API reads: filtered from lists; 404 on direct read).     */
+/* ------------------------------------------------------------------------ */
+
+const agentV2ProjectScopes = new WeakMap<object, Map<string, ReadonlySet<string> | null>>();
+
+/** The resolved scope for this request, or `undefined` when not resolved yet (then no SQL filter is added). */
+function cachedAgentV2ProjectScope(req: Request, companyId: string): ReadonlySet<string> | null | undefined {
+  if (req.actor?.type !== "agent" || !req.actor.agentId) return null;
+  return agentV2ProjectScopes.get(req)?.get(companyId);
+}
+
+/**
+ * Resolve, once per request, the project ids this AGENT actor may see under
+ * its enforced V2 `see.projects` scope (`null` = no V2 restriction: board
+ * actors, mode off/shadow, or nothing listed). The sync SQL conditions above
+ * read the result; `agentAccessScopeMiddleware` resolves it for every API
+ * request, and `resolveAgentVisibility` resolves it for the routes that
+ * compose issue conditions.
+ */
+export async function resolveAgentV2ProjectScope(
+  db: Pick<Db, "select">,
+  req: Request,
+  companyId: string,
+): Promise<ReadonlySet<string> | null> {
+  if (req.actor?.type !== "agent" || !req.actor.agentId) return null;
+  const known = agentV2ProjectScopes.get(req)?.get(companyId);
+  if (known !== undefined) return known;
+  const scope = await loadEnforcedAgentProjectScope(
+    db,
+    { companyId, agentId: req.actor.agentId },
+    agentAccessCheckCacheFor(req),
+  );
+  let perCompany = agentV2ProjectScopes.get(req);
+  if (!perCompany) {
+    perCompany = new Map();
+    agentV2ProjectScopes.set(req, perCompany);
+  }
+  perCompany.set(companyId, scope);
+  return scope;
+}
+
+/** Does the enforced V2 scope hide this project from this agent actor? Silent (lists); never throws. */
+async function agentV2HidesProject(db: Pick<Db, "select">, req: Request, companyId: string, projectId: string): Promise<boolean> {
+  if (req.actor?.type !== "agent" || !req.actor.agentId) return false;
+  const scope = await resolveAgentV2ProjectScope(db, req, companyId);
+  return scope !== null && !scope.has(projectId);
+}
+
+/**
+ * Express middleware: resolve the agent actor's enforced V2 project scope
+ * before any route builds a list condition. Board and anonymous actors pass
+ * straight through; never fails the request.
+ */
+export function agentAccessScopeMiddleware(db: Db) {
+  return async (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      if (req.actor?.type === "agent" && req.actor.agentId && req.actor.companyId) {
+        await resolveAgentV2ProjectScope(db, req, req.actor.companyId);
+      }
+    } catch {
+      // loadEnforcedAgentProjectScope never throws; nothing to do.
+    }
+    next();
+  };
 }
 
 /**
@@ -123,6 +213,16 @@ export function projectScopedVisibilityCondition(
  * project row is already in hand.
  */
 export async function isProjectVisible(
+  db: Pick<Db, "select">,
+  req: Request,
+  project: { id: string; companyId: string; visibility?: string | null; createdByUserId?: string | null },
+): Promise<boolean> {
+  if (!(await legacyProjectVisible(db, req, project))) return false;
+  // AgentDash (APM gate 3, P3.4): an enforced V2 project scope narrows it.
+  return !(await agentV2HidesProject(db, req, project.companyId, project.id));
+}
+
+async function legacyProjectVisible(
   db: Pick<Db, "select">,
   req: Request,
   project: { id: string; companyId: string; visibility?: string | null; createdByUserId?: string | null },
@@ -144,6 +244,49 @@ export async function isProjectVisible(
     )
     .then((rows) => rows[0] ?? null);
   return Boolean(row);
+}
+
+/**
+ * AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4 see.projects, API
+ * reads): an agent's direct read of something in a project is checked against
+ * the agent's V2 project scope, AFTER the legacy rule above has allowed it.
+ * In shadow a would-be refusal is logged (once per request) and the read is
+ * answered exactly as before; in enforce the refusal is logged as
+ * `authz.refused` and the caller answers 404 (invisible means nonexistent).
+ * Board readers are not agents and are skipped; nothing is evaluated when the
+ * company's mode is off (one company-row read per request). Never throws.
+ */
+export async function checkAgentProjectRead(
+  db: Pick<Db, "select">,
+  req: Request,
+  companyId: string,
+  projectId: string | null | undefined,
+): Promise<AgentAccessCheckOutcome> {
+  if (req.actor?.type !== "agent" || !req.actor.agentId || !projectId) return "allow";
+  if (!("insert" in db)) return "allow";
+  const fullDb = db as Db;
+  const cache = agentAccessCheckCacheFor(req);
+  try {
+    if ((await agentAccessEnforcementModeCached(fullDb, companyId, cache)) === "off") return "allow";
+    return await checkAgentAccess(
+      fullDb,
+      { companyId, agentId: req.actor.agentId, dimension: "see.projects", target: { projectId } },
+      { site: "visibility.project_read", cache },
+    );
+  } catch {
+    // checkAgentAccess never throws; the mode read is the only fallible step.
+    return "allow";
+  }
+}
+
+/** Gate 2 name: the check, ignoring its outcome (shadow). */
+export async function shadowCheckAgentProjectRead(
+  db: Pick<Db, "select">,
+  req: Request,
+  companyId: string,
+  projectId: string | null | undefined,
+): Promise<void> {
+  await checkAgentProjectRead(db, req, companyId, projectId);
 }
 
 /**
@@ -177,7 +320,10 @@ export async function assertProjectVisible(
   req: Request,
   project: { id: string; companyId: string; visibility?: string | null; createdByUserId?: string | null },
 ): Promise<void> {
-  if (await isProjectVisible(db, req, project)) return;
+  if (await legacyProjectVisible(db, req, project)) {
+    // AgentDash (APM gate 3, P3.4): an enforced V2 refusal is 404, like any invisible project.
+    if ((await checkAgentProjectRead(db, req, project.companyId, project.id)) !== "refuse") return;
+  }
   throw notFound("Project not found");
 }
 
@@ -189,6 +335,19 @@ export async function isProjectIdVisible(
   db: Db,
   req: Request,
   projectId: string | null | undefined,
+): Promise<boolean> {
+  return projectIdVisibleBy(db, req, projectId, isProjectVisible);
+}
+
+async function legacyProjectIdVisible(db: Db, req: Request, projectId: string | null | undefined): Promise<boolean> {
+  return projectIdVisibleBy(db, req, projectId, legacyProjectVisible);
+}
+
+async function projectIdVisibleBy(
+  db: Db,
+  req: Request,
+  projectId: string | null | undefined,
+  visibleRule: typeof legacyProjectVisible,
 ): Promise<boolean> {
   if (!projectId) return true;
   if (!isCanonicalUuid(projectId)) return false;
@@ -203,7 +362,7 @@ export async function isProjectIdVisible(
     .where(eq(projects.id, projectId))
     .then((rows) => rows[0] ?? null);
   if (!project) return true; // dangling reference is not this guard's problem
-  return isProjectVisible(db, req, project);
+  return visibleRule(db, req, project);
 }
 
 /**
@@ -213,11 +372,15 @@ export async function isProjectIdVisible(
 export async function assertProjectIdVisible(
   db: Db,
   req: Request,
-  _companyId: string,
+  companyId: string,
   projectId: string | null | undefined,
   what = "Issue",
 ): Promise<void> {
-  if (await isProjectIdVisible(db, req, projectId)) return;
+  if (await legacyProjectIdVisible(db, req, projectId)) {
+    // AgentDash (APM gate 2, P2.3): the legacy rule allowed this read; check V2
+    // (shadow: logged only; enforce, gate 3: 404 like any invisible project).
+    if ((await checkAgentProjectRead(db, req, companyId, projectId)) !== "refuse") return;
+  }
   throw notFound(`${what} not found`);
 }
 
@@ -229,7 +392,23 @@ export async function filterVisibleByProject<T extends { projectId: string | nul
 ): Promise<T[]> {
   const projectIds = [...new Set(rows.map((row) => row.projectId).filter((id): id is string => Boolean(id)))];
   const visible = new Map<string, boolean>();
-  for (const projectId of projectIds) visible.set(projectId, await isProjectIdVisible(db, req, projectId));
+  for (const projectId of projectIds) visible.set(projectId, await legacyProjectIdVisible(db, req, projectId));
+  const companyId = req.actor?.type === "agent" ? req.actor.companyId : null;
+  if (companyId) {
+    const mode = await agentAccessEnforcementModeCached(db, companyId, agentAccessCheckCacheFor(req)).catch(() => "off" as const);
+    if (mode === "enforce") {
+      // AgentDash (APM gate 3, P3.4): lists filter out-of-scope projects silently.
+      const scope = await resolveAgentV2ProjectScope(db, req, companyId);
+      if (scope) {
+        for (const projectId of projectIds) if (!scope.has(projectId)) visible.set(projectId, false);
+      }
+    } else if (mode === "shadow") {
+      // AgentDash (APM gate 2, P2.3): shadow V2 for each project the list keeps.
+      for (const projectId of projectIds) {
+        if (visible.get(projectId) !== false) await shadowCheckAgentProjectRead(db, req, companyId, projectId);
+      }
+    }
+  }
   return rows.filter((row) => !row.projectId || visible.get(row.projectId) !== false);
 }
 
@@ -270,7 +449,7 @@ export async function assertIssueIdVisible(
     .then((rows) => rows[0] ?? null);
   if (!issue) return; // no issue: the route's own lookup answers
   if (issue.projectId) {
-    const visible = await isProjectVisible(db, req, {
+    const visible = await legacyProjectVisible(db, req, {
       id: issue.projectId,
       companyId: issue.projectCompanyId ?? issue.companyId,
       visibility: issue.projectVisibility,
@@ -281,13 +460,19 @@ export async function assertIssueIdVisible(
   // Agent visibility (2026-09-30): the same predicate the list uses, asked
   // of this one row, so detail and list can never disagree.
   const scope = await resolveAgentVisibility(db, req, issue.companyId);
-  if (scope.mode === "all") return;
-  const allowed = await db
-    .select({ id: issues.id })
-    .from(issues)
-    .where(and(eq(issues.id, issue.id), issueVisibilityCondition(req, issue.companyId)))
-    .then((rows) => rows.length > 0);
-  if (!allowed) throw notFound(`${what} not found`);
+  if (scope.mode !== "all") {
+    const allowed = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(eq(issues.id, issue.id), issueVisibilityCondition(req, issue.companyId)))
+      .then((rows) => rows.length > 0);
+    if (!allowed) throw notFound(`${what} not found`);
+  }
+  // AgentDash (APM gate 2, P2.3): the legacy rule allowed this read; check V2
+  // (shadow: logged only; enforce, gate 3: 404 like any invisible issue).
+  if ((await checkAgentProjectRead(db, req, issue.companyId, issue.projectId)) === "refuse") {
+    throw notFound(`${what} not found`);
+  }
 }
 
 /**
@@ -993,6 +1178,9 @@ export async function resolveAgentVisibility(
 ): Promise<AgentVisibilityScope> {
   const cached = cachedScope(req, companyId);
   if (cached) return cached;
+  // AgentDash (APM gate 3, P3.4): the conditions built after this call also
+  // compose an agent actor's enforced V2 project scope; resolve it here too.
+  if (req.actor?.type === "agent") await resolveAgentV2ProjectScope(db, req, companyId);
 
   const userId = restrictedHumanUserId(req, companyId);
   if (!userId || plainlySeesAllAgents(req)) return rememberScope(req, companyId, { mode: "all" });

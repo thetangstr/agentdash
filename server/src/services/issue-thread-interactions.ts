@@ -48,6 +48,7 @@ import { HttpError, conflict, forbidden, notFound, unprocessable } from "../erro
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { issueService, MAX_CHILD_ISSUES_CREATED_BY_HELPER } from "./issues.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
+import { enforceAgentAccess } from "./agent-access-check.js";
 import { workforceService } from "./workforce.js";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
 
@@ -720,6 +721,25 @@ export function issueThreadInteractionService(db: Db) {
   ) {
     await guards?.assertSource?.(connection, issue);
     const data = await resolveCreateInput(connection, issue, input, actor);
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4 talk.people,
+    // questions): an agent's question routed to a named answer owner is
+    // checked against the agent's V2 people scope (its accountable person,
+    // steward and admins are always reachable). On the base connection so the
+    // question's own transaction is untouched. Shadow: the question is
+    // created exactly as before. Enforce: 403 ACCESS_POLICY_REFUSED naming the
+    // allowed people, before the question exists.
+    if (actor.agentId && data.kind === "ask_user_questions" && data.payload.answerOwnerUserId) {
+      await enforceAgentAccess(
+        db,
+        {
+          companyId: issue.companyId,
+          agentId: actor.agentId,
+          dimension: "talk.people",
+          target: { userId: data.payload.answerOwnerUserId, purpose: "question" },
+        },
+        { site: "questions", issueId: issue.id },
+      );
+    }
     if (data.idempotencyKey) {
       const existing = await getIdempotentInteraction({
         issueId: issue.id,

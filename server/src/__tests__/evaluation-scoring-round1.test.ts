@@ -555,7 +555,8 @@ describe("round 4 — verification findings", () => {
   });
 
   it("MEDIUM 2: the formula version moved with the arithmetic", () => {
-    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/8");
+    // m2-score/9: APM gate 3 (P3.2) milestone inputs; the arithmetic of this round is unchanged
+    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/9");
   });
 });
 

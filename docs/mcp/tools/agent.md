@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `fd8259526` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `c625911f5` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -72,7 +72,7 @@ Get a single agent by id, including its kind (stewarded or autonomous) and the h
 
 ## `update_agent`
 
-Rename or retitle an agent: update its name, role, title, icon, reporting line, or capabilities. Only the fields you pass are changed. Role and reporting line need a board (human) key; an agent key may change only name, title, icon and capabilities, and only on agents it is allowed to manage.
+Rename or retitle an agent: update its name, role, title, icon, reporting line, or capabilities. Only the fields you pass are changed. Role, reporting line and capabilities need a board (human) key; an agent key may change only name, title and icon, and only on agents it is allowed to manage. Capabilities are managed by the agent's operating profile: an agent key sending them gets a 422.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
@@ -278,7 +278,7 @@ Create a board approval request, optionally linked to one or more issues. A conn
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `companyId` | string \| null | no |  |
-| `type` | `"hire_agent"` \| `"approve_ceo_strategy"` \| `"budget_override_required"` \| `"request_board_approval"` \| `"mandate_violation"` \| `"connector_send"` \| `"inbound_content_review"` \| `"deliverable_review"` \| `"workflow_recommendation"` | yes |  |
+| `type` | `"hire_agent"` \| `"approve_ceo_strategy"` \| `"budget_override_required"` \| `"request_board_approval"` \| `"mandate_violation"` \| `"connector_send"` \| `"inbound_content_review"` \| `"deliverable_review"` \| `"workflow_recommendation"` \| `"agent_profile_change"` | yes |  |
 | `requestedByAgentId` | string \| null | no |  |
 | `payload` | map of any | yes |  |
 | `issueIds` | array of string | no |  |

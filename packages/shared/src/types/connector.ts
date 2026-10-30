@@ -9,6 +9,7 @@ import type {
   ConnectionVisibility,
   ConnectorActionClass,
 } from "../constants.js";
+import type { AgentAccessRefusalBody } from "./agent-profile.js";
 
 // ---------------------------------------------------------------------------
 // Autonomy config — per-action-class autonomy level
@@ -84,8 +85,13 @@ export interface ActingAsBlocked {
     // caller can tell "an owner disallowed this" from "you picked the wrong
     // connection" — the two have different remedies and different audiences.
     | "provider_not_allowed"
-    | "data_scope_not_allowed";
+    | "data_scope_not_allowed"
+    // AgentDash (APM gate 3, P3.4): the agent's V2 access rules (see.connections)
+    // refused this connection or a data scope it carries, in `enforce` mode.
+    | "access_policy_refused";
   message: string;
+  /** AgentDash (APM gate 3, P3.4): the `ACCESS_POLICY_REFUSED` body, when `reason` is `access_policy_refused`. */
+  refusal?: AgentAccessRefusalBody;
 }
 
 export type ActingAsResult =

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RUN_CANCELLED_BY_OPERATOR_CODE } from "@paperclipai/shared";
-import { cancelledRunLabel, normalizeStoppedRunEventMessage } from "./cancelledRunLabel";
+import { ACCESS_POLICY_REFUSED_RUN_LABEL, cancelledRunLabel, normalizeStoppedRunEventMessage } from "./cancelledRunLabel";
 
 describe("cancelledRunLabel", () => {
   it("reads 'Stopped manually' for an operator stop", () => {
@@ -24,6 +24,17 @@ describe("cancelledRunLabel", () => {
   it("falls back to 'Stopped' when no reason was recorded", () => {
     expect(cancelledRunLabel({ errorCode: "cancelled", error: null })).toBe("Stopped");
     expect(cancelledRunLabel({})).toBe("Stopped");
+  });
+
+  // AgentDash (APM gate 3, P3.4): a run its agent's access rules refused never started.
+  it("reads a run refused by the agent's access rules as not started", () => {
+    expect(
+      cancelledRunLabel({
+        errorCode: "access_policy_refused",
+        error: "Not started: the issue's project is outside this agent's access (ACCESS_POLICY_REFUSED)",
+      }),
+    ).toBe("Not started: outside this agent's access rules");
+    expect(cancelledRunLabel({ errorCode: "access_policy_refused", error: null })).toBe(ACCESS_POLICY_REFUSED_RUN_LABEL);
   });
 
   // AgentDash (c4-stops): pre-rename rows carry the old message with a plain

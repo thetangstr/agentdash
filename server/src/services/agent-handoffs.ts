@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { activityLog, costEvents, heartbeatRuns, issues } from "@paperclipai/db";
 import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import { logActivity } from "./activity-log.js";
+import { checkAgentAccess } from "./agent-access-check.js";
 import { handoffReturnedCorrectionInput, recordAgentCorrection } from "./agent-corrections.js";
 import { featureFlagsService } from "./feature-flags.js";
 import { logger } from "../middleware/logger.js";
@@ -400,6 +401,21 @@ export async function recordAgentHandoff(
   },
 ): Promise<number> {
   const rootIssueIds = unique([input.rootIssueId, ...(input.rootIssueIds ?? [])]);
+  // AgentDash (APM gate 2, P2.3; access LLD §4 talk.agents, handoff): the
+  // hand-off already happened under the legacy rules; the sender's V2
+  // outbound scope for `handoff` is checked. Shadow only: the hand-off is
+  // recorded and counted exactly as before. Never throws.
+  await checkAgentAccess(
+    db,
+    {
+      companyId: input.companyId,
+      agentId: input.fromAgentId,
+      dimension: "talk.agents",
+      target: { agentId: input.toAgentId },
+      via: "handoff",
+    },
+    { site: "handoffs", issueId: input.issueId },
+  );
   const round = (await checkHandoffRounds(db, { companyId: input.companyId, roots: rootIssueIds })).rounds + 1;
   await logActivity(db, {
     companyId: input.companyId,

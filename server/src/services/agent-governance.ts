@@ -16,12 +16,18 @@ import {
   assertWithinCeiling,
   collectCeilingViolations,
   computeEffectiveAgentPolicy,
+  definedAccessV2Dimensions,
+  mergeAccessPolicyWrite,
   normalizeAgentGovernancePolicy,
   policyListAllows,
+  safeParseAccessPolicy,
+  toV1GovernancePolicy,
+  type AgentAccessPolicyWrite,
   type AgentGovernanceChannel,
   type AgentGovernancePolicy,
   type AgentGovernanceTarget,
   type AgentPolicyViolation,
+  type StoredAgentGovernancePolicy,
 } from "@paperclipai/shared";
 import { HttpError, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
@@ -44,10 +50,81 @@ export type AgentGovernanceView = Omit<AgentGovernancePolicyRow, "id" | "created
 };
 
 export interface UpdateAgentGovernanceInput {
-  policy: AgentGovernancePolicy;
+  /**
+   * The six V1 fields, as every legacy writer sends them. AgentDash (APM gate
+   * 2): a V2-aware server writer (profile application) may also supply V2
+   * dimensions and name the ones it removes in `clear`; see
+   * `mergeAccessPolicyWrite`. The HTTP schemas stay V1-only.
+   */
+  policy: AgentAccessPolicyWrite;
   revision: number;
   actorUserId: string | null;
   channel?: AgentGovernanceChannel;
+  /**
+   * AgentDash (APM gate 2, access LLD §3.4): who changed the policy. Every
+   * source but `profile_application` is a change made outside the operating
+   * profile and is recorded as `access.policy_changed`. Defaults from the
+   * target: an owner ceiling write is an admin ceiling edit, a request write a
+   * steward request edit.
+   */
+  source?: AccessPolicyChangeSource;
+}
+
+/** Where a governance write came from (access LLD §3.4). */
+export const ACCESS_POLICY_CHANGE_SOURCES = [
+  "admin_ceiling_edit",
+  "steward_request_edit",
+  "harness_narrowing",
+  "profile_application",
+] as const;
+export type AccessPolicyChangeSource = (typeof ACCESS_POLICY_CHANGE_SOURCES)[number];
+
+const V2_POLICY_KEYS = ["policyVersion", "see", "do", "talk"] as const;
+
+/**
+ * AgentDash (APM gate 2): one stored side as the V1 editors read it — the six
+ * V1 fields only. A side holding V2 dimensions is shown without them, so an
+ * editor that sends back what it read passes the strict V1 schema and its save
+ * merges (keeping the V2 dimensions) instead of being rejected. A V1 side is
+ * returned unchanged, byte for byte.
+ */
+export function toV1GovernanceSide<T>(side: T): T {
+  if (!side || typeof side !== "object" || Array.isArray(side)) return side;
+  const record = side as Record<string, unknown>;
+  if (!V2_POLICY_KEYS.some((key) => key in record)) return side;
+  const projected: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (!(V2_POLICY_KEYS as readonly string[]).includes(key)) projected[key] = value;
+  }
+  return projected as T;
+}
+
+/** A governance record with both sides projected to V1 (`toV1GovernanceSide`); the effective policy is V1 already. */
+export function toV1GovernanceView<T extends { ownerCeiling: unknown; stewardRequest: unknown }>(record: T): T {
+  return { ...record, ownerCeiling: toV1GovernanceSide(record.ownerCeiling), stewardRequest: toV1GovernanceSide(record.stewardRequest) };
+}
+
+/** V1 fields and V2 dimensions that differ between two stored sides. Names only, never values. */
+function changedAccessFields(before: unknown, after: unknown): string[] {
+  const parse = (value: unknown) => {
+    const parsed = safeParseAccessPolicy(value);
+    return parsed.success ? parsed.policy : null;
+  };
+  const a = parse(before);
+  const b = parse(after);
+  if (!a || !b) return JSON.stringify(before) === JSON.stringify(after) ? [] : ["policy"];
+  const changed: string[] = [];
+  for (const field of ["permissions", "monthlyBudgetCents", "destructiveActions", "dataScopes", "providers", "minimumApproval"] as const) {
+    if (JSON.stringify(a[field]) !== JSON.stringify(b[field])) changed.push(field);
+  }
+  const dimensions = new Set([...definedAccessV2Dimensions(a), ...definedAccessV2Dimensions(b)]);
+  for (const dimension of dimensions) {
+    const [section, key] = dimension.split(".") as ["see" | "do" | "talk", string];
+    const left = (a[section] as Record<string, unknown> | undefined)?.[key];
+    const right = (b[section] as Record<string, unknown> | undefined)?.[key];
+    if (JSON.stringify(left) !== JSON.stringify(right)) changed.push(dimension);
+  }
+  return changed;
 }
 
 /** Which board principal may configure a given agent. */
@@ -82,6 +159,19 @@ function revisionConflict(expected: number, actual: number) {
     { code: AGENT_POLICY_REVISION_CONFLICT, expectedRevision: expected, currentRevision: actual },
     AGENT_POLICY_REVISION_CONFLICT,
   );
+}
+
+/**
+ * AgentDash (APM gate 2): merge a write into one stored governance side. A
+ * stored side that is not a readable V1/V2 policy (a hand-edited row) is
+ * replaced by the write's V1 fields, which is exactly today's behaviour.
+ */
+function mergeGovernanceSide(
+  stored: StoredAgentGovernancePolicy | null | undefined,
+  write: AgentAccessPolicyWrite,
+): StoredAgentGovernancePolicy {
+  if (stored && !safeParseAccessPolicy(stored).success) return normalizeAgentGovernancePolicy(write);
+  return mergeAccessPolicyWrite(stored, write);
 }
 
 export function agentGovernanceService(db: Db) {
@@ -235,7 +325,16 @@ export function agentGovernanceService(db: Db) {
     const channel: AgentGovernanceChannel = input.channel ?? "web";
     const agent = await requireCompanyAgent(companyId, agentId);
     const current = await materialize(companyId, agentId);
-    const requested = normalizeAgentGovernancePolicy(input.policy);
+    // AgentDash (APM gate 2, access LLD §3.4): the written side goes through
+    // `mergeAccessPolicyWrite`, so a V1-shaped write replaces the six V1
+    // fields exactly as before but KEEPS the side's stored V2 dimensions.
+    // With no V2 dimension stored or written the result is the normalized V1
+    // policy — byte-identical to today's rows. V2 is never flattened into the
+    // effective policy, which stays V1 (`computeEffectiveAgentPolicy`).
+    const requested = mergeGovernanceSide(
+      (target === "owner_ceiling" ? current.ownerCeiling : current.stewardRequest) as StoredAgentGovernancePolicy,
+      input.policy,
+    );
 
     const nextCeiling = target === "owner_ceiling" ? requested : (current.ownerCeiling as AgentGovernancePolicy);
     const nextRequest = target === "steward_request" ? requested : (current.stewardRequest as AgentGovernancePolicy);
@@ -265,7 +364,7 @@ export function agentGovernanceService(db: Db) {
       }
     }
 
-    const effectivePolicy = computeEffectiveAgentPolicy(nextCeiling, nextRequest);
+    const effectivePolicy = computeEffectiveAgentPolicy(toV1GovernancePolicy(nextCeiling), toV1GovernancePolicy(nextRequest));
     const nextRevision = current.revision + 1;
     const now = new Date();
     void agent;
@@ -473,6 +572,38 @@ export function agentGovernanceService(db: Db) {
           }
         }
 
+        // AgentDash (APM gate 2, access LLD §3.4): a change made outside the
+        // operating profile is recorded with its source, so the profile
+        // history can show it as "changed outside the profile". Profile
+        // application records its own steps instead.
+        const source: AccessPolicyChangeSource =
+          input.source ?? (target === "owner_ceiling" ? "admin_ceiling_edit" : "steward_request_edit");
+        const writtenBefore = target === "owner_ceiling" ? current.ownerCeiling : current.stewardRequest;
+        const writtenAfter = target === "owner_ceiling" ? updated.ownerCeiling : updated.stewardRequest;
+        const changed = changedAccessFields(writtenBefore, writtenAfter);
+        if (source !== "profile_application" && changed.length > 0) {
+          await logActivity(tx as unknown as Db, {
+            companyId,
+            actorType: "user",
+            actorId: input.actorUserId ?? "board",
+            action: "access.policy_changed",
+            entityType: "agent",
+            entityId: agentId,
+            agentId,
+            details: {
+              source,
+              target,
+              channel,
+              changed,
+              // The V2 dimensions the written side still holds: a V1-shaped
+              // write keeps them (mergeAccessPolicyWrite).
+              v2Dimensions: definedAccessV2Dimensions(requested),
+              fromRevision: input.revision,
+              toRevision: updated.revision,
+            },
+          });
+        }
+
         await logActivity(tx as unknown as Db, {
           companyId,
           actorType: "user",
@@ -573,6 +704,7 @@ export function agentGovernanceService(db: Db) {
       revision: input.revision ?? current.revision,
       actorUserId: input.actorUserId,
       channel: "system",
+      source: "harness_narrowing",
     });
 
     for (const violation of clamped) {

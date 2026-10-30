@@ -11,6 +11,7 @@ import { checkConnectorSendPayload, classifyAction, CONNECTOR_SEND_PROVIDERS } f
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
+import { checkAgentAccessAll, connectorSendAccessChecks } from "./agent-access-check.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { connectorService } from "./connectors.js";
 import { hubspotConnectorService } from "./hubspot-connector.js";
@@ -65,6 +66,8 @@ const REASON_TEXT: Record<string, string> = {
   no_connection: "there is no usable connection for this provider",
   provider_not_allowed: "this agent's ceiling does not allow this provider",
   data_scope_not_allowed: "this agent's ceiling does not allow this data scope",
+  // AgentDash (APM gate 3, P3.4): the agent's V2 access rules refused it in enforce mode.
+  access_policy_refused: "this agent's access rules do not allow this send",
   connection_changed: "the connection changed after the request was filed",
   connection_unavailable: "the connection is revoked or not active",
   connection_unreadable: "the connection's credential could not be read",
@@ -368,6 +371,22 @@ export function connectorSendExecutionService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (!connection || connection.revokedAt || connection.status !== "active") {
         return await recordRefusal(approval, payload, "connection_unavailable");
+      }
+
+      // AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4
+      // do.connections / talk.external): re-checked at the moment of the act,
+      // after every legacy re-check passed. Shadow: the approved send
+      // proceeds exactly as before. Enforce: the send is refused and recorded
+      // like any other execution refusal (the steward is told it did not go out).
+      const sendChecks = connectorSendAccessChecks({
+        companyId: approval.companyId,
+        agentId,
+        connectionId: acting.resolution.connectionId,
+        properties: (payload.properties ?? null) as Record<string, unknown> | null,
+      });
+      const sendAccess = await checkAgentAccessAll(db, sendChecks.inputs, { site: "connector_send.execute", context: sendChecks.context });
+      if (sendAccess === "refuse") {
+        return await recordRefusal(approval, payload, "access_policy_refused");
       }
 
       // --- claim, then act -------------------------------------------------

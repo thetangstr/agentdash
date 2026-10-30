@@ -96,6 +96,7 @@ export {
   JOIN_REQUEST_TYPES,
   JOIN_REQUEST_STATUSES,
   PERMISSION_KEYS,
+  INERT_PERMISSION_KEYS,
   PLUGIN_API_VERSION,
   PLUGIN_STATUSES,
   PLUGIN_CATEGORIES,
@@ -275,6 +276,14 @@ export {
   type VerdictEntityType,
   type ActivityLogActionGoalsEvalHitl,
   type CosCardKindGoalsEvalHitl,
+  // AgentDash: Agent Performance Management gate 2
+  ACTIVITY_LOG_ACTIONS_AGENT_PROFILE,
+  type ActivityLogActionAgentProfile,
+  // AgentDash: Agent Performance Management gate 4
+  ACTIVITY_LOG_ACTIONS_PERFORMANCE_MANAGER,
+  type ActivityLogActionPerformanceManager,
+  ACTIVITY_LOG_ACTIONS_AGENT_BRIEF,
+  type ActivityLogActionAgentBrief,
 } from "./constants.js";
 
 // AgentDash (GH #992): credential redaction shared by the UI transcript views
@@ -735,6 +744,28 @@ export {
   type AgentGovernancePolicyRecord,
   type AgentPolicyViolation,
   type AgentPolicyViolationCode,
+  // AgentDash: Agent Performance Management gate 2 — access policy V2.
+  AGENT_ACCESS_POLICY_VERSION,
+  AGENT_ACCESS_MODES,
+  AGENT_ACCESS_LIST_SCOPE_MODES,
+  AGENT_ACCESS_CONTACT_MODES,
+  AGENT_ACCESS_CONTACT_VIAS,
+  AGENT_ACCESS_EXTERNAL_TARGET_MODES,
+  AGENT_ACCESS_V2_DIMENSIONS,
+  type AgentAccessMode,
+  type AgentAccessListScopeMode,
+  type AgentAccessListScope,
+  type AgentAccessContactMode,
+  type AgentAccessContactScope,
+  type AgentAccessContactVia,
+  type AgentAccessExternalTargetMode,
+  type AgentAccessSee,
+  type AgentAccessDo,
+  type AgentAccessTalk,
+  type AgentAccessPolicyV2Fields,
+  type AgentAccessPolicy,
+  type StoredAgentGovernancePolicy,
+  type AgentAccessV2Dimension,
 } from "./types/agent-governance.js";
 
 export {
@@ -1235,6 +1266,7 @@ export { API_PREFIX, API } from "./api.js";
 export {
   ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS,
   HIDDEN_FEED_ACTIVITY_ACTIONS,
+  ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS,
   IMPORTANT_SYSTEM_ACTIVITY_ACTIONS,
 } from "./activity-actions.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
@@ -1488,6 +1520,18 @@ export {
   type UpdateAssistantGrant,
 } from "./validators/assistant-actions.js";
 
+// AgentDash: Agent Performance Management gate 1 read-only contracts.
+export * from './types/agent-performance.js';
+// AgentDash: Agent Performance Management gate 2 — operating profiles, V2 access, responsibility mapping.
+export * from './types/agent-profile.js';
+export * from './validators/agent-profile.js';
+export * from './agent-access-v2.js';
+// AgentDash: Agent Performance Management gate 4 — the performance manager.
+export * from './types/performance-manager.js';
+export * from './validators/performance-manager.js';
+// AgentDash: Agent Performance Management gate 5 — briefs, scenario manifests, unbound drafts.
+export * from './types/agent-brief.js';
+export * from './validators/agent-brief.js';
 // AgentDash: workforce launch contracts.
 export * from './types/workforce.js';
 export * from './validators/workforce.js';

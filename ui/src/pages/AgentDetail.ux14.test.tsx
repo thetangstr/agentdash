@@ -164,12 +164,31 @@ afterEach(() => {
 });
 
 describe("tab grouping (every company)", () => {
-  it("reduces the top tabs to Overview, Runs, and Settings", () => {
+  // AgentDash: Agent Performance Management gate 1 adds three read-only top
+  // tabs (Profile, Access, Performance); the detail views stay under Settings.
+  it("keeps the top tabs to Overview, Runs, the three read-only views, and Settings", () => {
     expect(AGENT_DETAIL_TOP_TABS.map((t) => t.label)).toEqual([
       "Overview",
       "Runs",
+      "Profile",
+      "Access",
+      "Performance",
       "Settings",
     ]);
+  });
+
+  it("does not fold the Profile, Access and Performance views under Settings", () => {
+    for (const view of ["profile", "access", "performance"] as const) {
+      expect(agentDetailTabValue(view)).toBe(view);
+      expect(agentDetailInSettings(view)).toBe(false);
+    }
+  });
+
+  // APM gate 4 (P4.2): the performance manager's record sits under the Performance tab.
+  it("highlights Performance for the manager record view", () => {
+    expect(agentDetailTabValue("manager-record")).toBe("performance");
+    expect(agentDetailInSettings("manager-record")).toBe(false);
+    expect(AGENT_DETAIL_TOP_TABS.map((t) => t.value)).not.toContain("manager-record");
   });
 
   it("highlights Settings for every detail view", () => {

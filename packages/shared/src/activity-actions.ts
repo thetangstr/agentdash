@@ -133,6 +133,21 @@ export const HIDDEN_FEED_ACTIVITY_ACTIONS = [
 ] as const;
 
 /**
+ * AgentDash: Agent Performance Management gate 2 — high-volume bookkeeping
+ * hidden from every default feed, whoever the actor: shadow-mode would-be
+ * refusals (the agent's Access tab summarises them) and the per-step rows of
+ * a profile application (the Profile tab shows the steps;
+ * `agent_profile.applied` / `.application_failed` stay visible). They stay in
+ * the record and the ledger. The company activity list excludes them in SQL
+ * unless the caller asks for system events (`includeSystem=true`).
+ *
+ * Deliberately NOT in `HIDDEN_FEED_ACTIVITY_ACTIONS`: that list also marks
+ * rows as system plumbing, which the UI re-attributes to AgentDash when
+ * shown. These rows have a real actor.
+ */
+export const ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS = ["access.would_refuse", "agent_profile.application_step"] as const;
+
+/**
  * AgentDash (review #1003): system-actor events an owner DOES need to see —
  * budget hard-stops, ceiling pauses, failed recovery, verdict and liveness
  * escalations, failed hire hooks and undelivered sends. Home hides system-actor

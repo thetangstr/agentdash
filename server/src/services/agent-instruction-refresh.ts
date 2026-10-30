@@ -35,6 +35,12 @@ import {
   resolveDefaultAgentInstructionsBundleRole,
 } from "./default-agent-instructions.js";
 import { logger } from "../middleware/logger.js";
+import {
+  OPERATING_PROFILE_BLOCK_SLUG,
+  loadActiveProfileBlockRevision,
+  renderProfileBlock,
+  type ProfileBlockRevision,
+} from "./agent-profile-block.js";
 
 export interface RefreshResult {
   refreshed: boolean;
@@ -69,6 +75,12 @@ export interface AgentInstructionRefreshDeps {
    * Production uses loadDefaultAgentInstructionsBundle.
    */
   loadDefaultBundle?: (role: string) => Promise<Record<string, string>>;
+  /**
+   * AgentDash: APM gate 2 — the agent's ACTIVE profile revision, the only
+   * source of its `operating-profile` block. Production reads it through
+   * `loadActiveProfileBlockRevision`. A failure leaves the block as it is.
+   */
+  loadActiveProfileBlock?: (agent: { id: string; companyId: string }) => Promise<ProfileBlockRevision | null>;
 }
 
 // One archetype for every agent. This used to be "default" | "ceo" |
@@ -200,17 +212,39 @@ export function readSuppressedBlocks(adapterConfig: unknown): Set<string> {
   return new Set(raw.filter((v): v is string => typeof v === "string" && v.length > 0));
 }
 
+/**
+ * AgentDash: APM gate 2 — what the refresh does with the agent's
+ * `operating-profile` block, which is sourced from its active profile
+ * revision and NEVER from the default bundle:
+ * - `ensure`: the block must equal `fullText` (added or rewritten);
+ * - `remove`: the agent suppresses the block (honoured like any suppression);
+ * - `keep`: no active revision, or it could not be read — leave it untouched.
+ */
+export type OperatingProfileBlockAction =
+  | { mode: "ensure"; fullText: string }
+  | { mode: "remove" }
+  | { mode: "keep" };
+
 function diffAndApply(
   sourceContent: string,
   bundleContent: string,
   suppressed: Set<string> = new Set(),
+  profileBlock: OperatingProfileBlockAction = { mode: "keep" },
 ): DiffResult {
   const allSourceBlocks = parseBlocks(sourceContent);
   // A suppressed block is treated exactly as though the source never carried
   // it: never added, and removed if the bundle still has it.
+  //
+  // AgentDash: APM gate 2 — the source never supplies `operating-profile`
+  // (only the active revision does), so a source copy is ignored here and the
+  // bundle's block is never removed for being absent from the source.
   const sourceBlocks = new Map(
-    [...allSourceBlocks].filter(([slug]) => !suppressed.has(slug)),
+    [...allSourceBlocks].filter(([slug]) => !suppressed.has(slug) && slug !== OPERATING_PROFILE_BLOCK_SLUG),
   );
+  if (profileBlock.mode === "ensure") {
+    const rendered = parseBlocks(profileBlock.fullText).get(OPERATING_PROFILE_BLOCK_SLUG);
+    if (rendered) sourceBlocks.set(OPERATING_PROFILE_BLOCK_SLUG, rendered);
+  }
   const bundleBlocks = parseBlocks(bundleContent);
 
   const blocksUpdated: string[] = [];
@@ -253,6 +287,8 @@ function diffAndApply(
   const removals: BlockSpan[] = [];
   for (const [slug, bundleSpan] of bundleBlocks) {
     if (sourceBlocks.has(slug)) continue;
+    // Removed only on an explicit suppression; never because the source lacks it.
+    if (slug === OPERATING_PROFILE_BLOCK_SLUG && profileBlock.mode !== "remove") continue;
     blocksRemoved.push(slug);
     removals.push(bundleSpan);
   }
@@ -303,6 +339,20 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
   const supportsBundle = deps.supportsBundle ?? adapterSupportsInstructionsBundle;
   const loadDefaultBundle = deps.loadDefaultBundle
     ?? ((role: string) => loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(role)));
+  const loadActiveProfileBlock = deps.loadActiveProfileBlock
+    ?? ((agent: { id: string; companyId: string }) => loadActiveProfileBlockRevision(db, agent));
+
+  /** Best-effort: a read failure keeps whatever block the bundle has. */
+  async function operatingProfileAction(agent: AgentRow, suppressed: Set<string>): Promise<OperatingProfileBlockAction> {
+    if (suppressed.has(OPERATING_PROFILE_BLOCK_SLUG)) return { mode: "remove" };
+    try {
+      const active = await loadActiveProfileBlock({ id: agent.id, companyId: agent.companyId });
+      return active ? { mode: "ensure", fullText: renderProfileBlock(active) } : { mode: "keep" };
+    } catch (err) {
+      logger.warn({ err, agentId: agent.id }, "active operating profile unreadable; leaving the operating-profile block as it is");
+      return { mode: "keep" };
+    }
+  }
 
   async function loadAgent(agentId: string): Promise<AgentRow | null> {
     const rows = await db
@@ -425,9 +475,10 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
     // Skipped when this agent suppresses blocks: an identical bundle is exactly
     // the case where a newly-added suppression still has to be applied.
     const suppressedForFastPath = readSuppressedBlocks(agent.adapterConfig);
-    if (bundleContent === sourceContent && suppressedForFastPath.size === 0) return done(noop);
+    const profileBlock = await operatingProfileAction(agent, suppressedForFastPath);
+    if (bundleContent === sourceContent && suppressedForFastPath.size === 0 && profileBlock.mode === "keep") return done(noop);
 
-    const diff = diffAndApply(sourceContent, bundleContent, readSuppressedBlocks(agent.adapterConfig));
+    const diff = diffAndApply(sourceContent, bundleContent, readSuppressedBlocks(agent.adapterConfig), profileBlock);
 
     if (diff.blocksRemoved.length > 0) {
       logger.info(

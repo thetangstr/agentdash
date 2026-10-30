@@ -8,6 +8,7 @@ import { normalizeHumanRole } from "./company-member-roles.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
+import { assertProfileChangeDecider } from "./agent-profile-authority.js";
 
 type ApprovalRow = typeof approvals.$inferSelect;
 
@@ -34,6 +35,12 @@ export type ApprovalDecisionRole =
    * very often neither of them.
    */
   | "approver"
+  /**
+   * AgentDash: APM gate 2 — the agent's accountable person deciding an
+   * `agent_profile_change` they hold the field authority for. (A steward
+   * records `steward`, an administrator `admin`.)
+   */
+  | "accountable"
   | "owner_override";
 
 export interface ApprovalDecisionContext {
@@ -44,10 +51,21 @@ export interface ApprovalDecisionContext {
 }
 
 export interface ApprovalDecisionActor {
+  /** Present on some callers (`req.actor`); an `agent` actor never decides an `agent_profile_change`. */
+  type?: string;
+  agentId?: string | null;
   userId?: string | null;
   source?: string | null;
   isInstanceAdmin?: boolean;
 }
+
+/**
+ * AgentDash: APM gate 2 — the connector card callbacks (Telegram, Teams,
+ * WhatsApp) decide without running the post-decision effects, so an approved
+ * profile change would never be applied there. Every other surface (web,
+ * assistant, the bridge inbox and work reply) runs `afterApprove`.
+ */
+const PROFILE_CHANGE_REFUSED_CHANNELS: ReadonlySet<string> = new Set(["telegram", "teams", "whatsapp"]);
 
 export interface ApprovalDecisionRequest {
   revision?: number;
@@ -151,6 +169,13 @@ export function approvalAuthorityService(db: Db) {
     approval: ApprovalRow,
     actor: ApprovalDecisionActor,
   ): Promise<ApprovalDecisionRole | null> {
+    // AgentDash: APM gate 2 — in EVERY company the decider of a profile change
+    // must hold the strongest authority any changed field needs, and must be a
+    // person (the proposing agent never decides). Checked before the MK
+    // profile gate on purpose; other approval types are untouched.
+    if (approval.type === "agent_profile_change") {
+      return (await assertProfileChangeDecider(db, approval, actor)).decisionActorRole;
+    }
     if (!(await isProfileCompany(approval.companyId))) return null;
 
     // The local_trusted bootstrap board actor has no userId and no steward, but
@@ -246,6 +271,20 @@ export function approvalAuthorityService(db: Db) {
     body: ApprovalDecisionRequest,
   ): Promise<ApprovalDecisionContext> {
     assertDecisionChannelAllowed(actor, body.channel);
+    if (approval.type === "agent_profile_change") {
+      if (body.channel && PROFILE_CHANGE_REFUSED_CHANNELS.has(body.channel)) {
+        throw forbidden("Profile changes are decided in AgentDash, where the change and its authority are shown");
+      }
+      if (await isProfileCompany(approval.companyId)) requireDecisionMetadata(body);
+      assertRevisionMatches(approval, body.revision);
+      const role = (await requireDecisionActor(approval, actor)) ?? "admin";
+      return {
+        role,
+        channel: body.channel ?? "web",
+        revision: body.revision ?? approval.revision,
+        idempotencyKey: body.idempotencyKey ?? null,
+      };
+    }
     if (!(await isProfileCompany(approval.companyId))) {
       return {
         role: "board",

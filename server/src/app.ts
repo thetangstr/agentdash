@@ -13,6 +13,7 @@ import { configuredEdgeSecret, configuredEdgeSecrets, edgeGate } from "./middlew
 import { applySecurityHeaders } from "./middleware/security-headers.js";
 import { backupExportRoutes, configuredBackupToken, type BackupExportService } from "./routes/agentdash-backup-export.js";
 import { actorMiddleware } from "./middleware/auth.js";
+import { agentAccessScopeMiddleware } from "./routes/visibility.js";
 import { requestActorSourceMiddleware } from "./lib/request-actor-source.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
@@ -40,6 +41,12 @@ import { companySkillRoutes } from "./routes/company-skills.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
 import { agentGovernanceRoutes } from "./routes/agent-governance.js";
+import { agentAccessRoutes } from "./routes/agent-access.js";
+import { agentAccessEnforcementRoutes } from "./routes/agent-access-enforcement.js";
+import { agentPerformanceRoutes } from "./routes/agent-performance.js";
+import { agentProfileRoutes } from "./routes/agent-profiles.js";
+import { agentBriefRoutes } from "./routes/agent-briefs.js";
+import { issueResponsibilityRoutes } from "./routes/issue-responsibilities.js";
 import { agentDirectivesRoutes } from "./routes/agent-directives.js";
 import { agentMemoryRoutes } from "./routes/agent-memory.js";
 import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
@@ -128,6 +135,8 @@ import { gmailRoutes } from "./routes/gmail.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
 import { evaluationRoutes } from "./routes/evaluation.js";
+import { evaluationAgentRoutes } from "./routes/evaluation-agents.js";
+import { performanceManagerRoutes } from "./routes/performance-manager.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
 import { HttpError } from "./errors.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -433,6 +442,11 @@ export async function createApp(
   // for any existing self-hoster who has not opted in. `license-enforcement.test.ts`
   // pins both the behaviour and this ordering.
   api.use(requireLicense);
+  // AgentDash (APM gate 3, P3.4): resolve an agent actor's enforced V2 project
+  // scope once per request, so every list condition built from visibility.ts
+  // filters out-of-scope projects (access LLD §4 see.projects). No-op for
+  // board actors and for companies not in `enforce`.
+  api.use(agentAccessScopeMiddleware(db));
   // The turnkey harness endpoint: POST /api/mcp with an agent key as bearer.
   // Mounted after the license gate on purpose — an unlicensed box should say
   // so to a connecting harness, not serve it tools.
@@ -453,6 +467,15 @@ export async function createApp(
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(agentStewardshipRoutes(db));
   api.use(agentGovernanceRoutes(db));
+  // AgentDash: Agent Performance Management gate 1 (read-only access, profile and performance views).
+  api.use(agentAccessRoutes(db));
+  api.use(agentPerformanceRoutes(db));
+  // AgentDash: Agent Performance Management gate 2 (profile drafts, approval and application; responsibility mapping).
+  api.use(agentProfileRoutes(db));
+  // AgentDash: Agent Performance Management gate 5 (start from a brief).
+  api.use(agentBriefRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(issueResponsibilityRoutes(db));
+  api.use(agentAccessEnforcementRoutes(db));
   api.use(agentDirectivesRoutes(db));
   api.use(agentMemoryRoutes(db));
   api.use(workflowMetricsRoutes(db));
@@ -570,6 +593,8 @@ export async function createApp(
   api.use("/human-control", humanControlRoutes(db));
   // AgentDash: Company Evaluator (Stage 1 shadow)
   api.use(evaluationRoutes(db));
+  api.use(evaluationAgentRoutes(db)); // AgentDash (APM gate 3, P3.3): agent cards
+  api.use(performanceManagerRoutes(db)); // AgentDash (APM gate 4, P4.1): the performance manager
   api.use(featureFlagRoutes(db));
   // AgentDash: billing — always mount so /api/billing/status responds with
   // sensible defaults in dev. When Stripe is configured (STRIPE_SECRET_KEY set)

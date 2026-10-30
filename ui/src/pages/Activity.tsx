@@ -10,7 +10,6 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
-import { isSystemPlumbingActivity } from "../lib/activity-format";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { useIsPhone } from "../hooks/useIsPhone";
 import {
@@ -113,38 +112,35 @@ export function Activity() {
     return <PageSkeleton variant="list" />;
   }
 
-  // AgentDash (batch 2 review lane): plumbing actions AND rows the server
-  // stamped as system-actor (review-queue churn) are hidden until asked for —
-  // previously a System row with an unlisted action still rendered.
-  const visible = data && !showSystem
-    ? data.filter((e) => e.actorType !== "system" && !isSystemPlumbingActivity(e.action))
-    : data;
-  const hiddenSystemCount = (data?.length ?? 0) - (visible?.length ?? 0);
-
+  // AgentDash (batch 2 review lane, APM gate 2): plumbing actions, rows the
+  // server stamped as system-actor (review-queue churn, except the ones an
+  // owner must see) and the APM bookkeeping rows are hidden until asked for.
+  // The server filters them (`includeSystem`), so a page holds
+  // ACTIVITY_PAGE_LIMIT readable rows instead of a page cut short here.
   const filtered =
-    visible && filter !== "all"
-      ? visible.filter((e) => e.entityType === filter)
-      : visible;
+    data && filter !== "all"
+      ? data.filter((e) => e.entityType === filter)
+      : data;
 
-  const entityTypes = visible
-    ? [...new Set(visible.map((e) => e.entityType))].sort()
+  const entityTypes = data
+    ? [...new Set(data.map((e) => e.entityType))].sort()
     : [];
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-end gap-3">
-        {(hiddenSystemCount > 0 || showSystem) && (
-          <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0" data-testid="activity-show-system">
-            <input
-              type="checkbox"
-              className="accent-foreground"
-              aria-label="Show system events"
-              checked={showSystem}
-              onChange={(e) => setShowSystem(e.target.checked)}
-            />
-            Show system events
-          </label>
-        )}
+        {/* The server filters, so the page can't tell whether anything was
+            hidden: the toggle is always offered. */}
+        <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0" data-testid="activity-show-system">
+          <input
+            type="checkbox"
+            className="accent-foreground"
+            aria-label="Show system events"
+            checked={showSystem}
+            onChange={(e) => setShowSystem(e.target.checked)}
+          />
+          Show system events
+        </label>
         <Select value={filter} onValueChange={setFilter}>
           <SelectTrigger className="w-[140px] h-8 text-xs max-sm:h-11 max-sm:w-full">
             <SelectValue placeholder="Filter by type" />

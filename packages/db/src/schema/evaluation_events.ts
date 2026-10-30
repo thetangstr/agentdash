@@ -1,4 +1,5 @@
 import { bigserial, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import type { EvaluationAccessClass } from "@paperclipai/shared";
 import { companies } from "./companies.js";
 
 /**
@@ -54,6 +55,22 @@ export const evaluationEvents = pgTable(
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
     /** Links two sources reporting one fact so it is counted once. */
     correlationId: text("correlation_id"),
+    /**
+     * AgentDash (APM gate 3): who may read this event and drill into it —
+     * `company`, `project:<id>`, `private_pairing:<receiptId>` or
+     * `private_agent:<agentId>` (`EvaluationAccessClass`; evaluation LLD §9.1).
+     * Set by ingest from the source row; rows ingested before gate 3 are
+     * `company` (the column default backfills them). Readers filter on it
+     * before anything is returned or aggregated.
+     */
+    accessClass: text("access_class").$type<EvaluationAccessClass>().notNull().default("company"),
+    /**
+     * AgentDash (APM gate 3): lookup hint for agent cards — the agent the
+     * event is most likely about. A hint only: scoring re-derives every role
+     * from the timeline (evaluation LLD §5, §9.2). No foreign key, like the
+     * scope hints above, so the ledger outlives its subjects.
+     */
+    subjectAgentId: uuid("subject_agent_id"),
   },
   (table) => ({
     dedupeUq: uniqueIndex("evaluation_events_dedupe_uq").on(table.dedupeKey),
@@ -63,5 +80,8 @@ export const evaluationEvents = pgTable(
     companyTypeIdx: index("evaluation_events_company_type_idx").on(table.companyId, table.eventType),
     companyProjectIdx: index("evaluation_events_company_project_idx").on(table.companyId, table.projectId),
     sourceIdx: index("evaluation_events_source_idx").on(table.companyId, table.sourceTable, table.sourceId),
+    // AgentDash (APM gate 3): an agent card's candidate rows, cut on seq; and the rows an actor authored.
+    companySubjectAgentSeqIdx: index("evaluation_events_company_subject_agent_seq_idx").on(table.companyId, table.subjectAgentId, table.seq),
+    companyActorIdx: index("evaluation_events_company_actor_idx").on(table.companyId, table.actorId),
   }),
 );

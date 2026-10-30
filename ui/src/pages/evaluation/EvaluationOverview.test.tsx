@@ -15,6 +15,7 @@ const versionsMock = vi.hoisted(() => vi.fn());
 const eventsMock = vi.hoisted(() => vi.fn());
 const eventMock = vi.hoisted(() => vi.fn());
 const setBreadcrumbsMock = vi.hoisted(() => vi.fn());
+const agentCardsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/api/evaluation", () => ({
   evaluationApi: {
@@ -27,6 +28,10 @@ vi.mock("@/api/evaluation", () => ({
     snapshot: vi.fn(),
   },
 }));
+vi.mock("@/api/agent-performance", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/agent-performance")>();
+  return { ...actual, agentPerformanceApi: { ...actual.agentPerformanceApi, cards: (companyId: string) => agentCardsMock(companyId) } };
+});
 vi.mock("@/api/access", () => ({ accessApi: { listMembers: async () => ({ members: [], access: { currentUserRole: "admin", canManageMembers: true, canInviteUsers: true, canApproveJoinRequests: true, canManageAgents: true } }) } }));
 vi.mock("@/api/issues", () => ({ issuesApi: { list: async () => [] } }));
 vi.mock("@/context/CompanyContext", () => ({
@@ -180,6 +185,7 @@ const flush = async () => {
 
 beforeEach(() => {
   overviewMock.mockReset().mockResolvedValue(overview);
+  agentCardsMock.mockReset().mockResolvedValue({ agents: [] });
   latestMock.mockReset().mockResolvedValue({ latest: { id: "s1", companyId: "company-1", milestoneKind: "project", milestoneId: MILESTONE, version: 3, contractVersion: "derived/1", formulaVersion: "m2-score/5", throughSeq: 42, throughEventId: null, card, cardHash: "h".repeat(64), createdAt: "2026-09-05T12:00:00.000Z" }, verify: null });
   versionsMock.mockReset().mockResolvedValue({ versions: [] });
   eventsMock.mockReset().mockResolvedValue({ events: [], count: 0 });
@@ -248,5 +254,77 @@ describe("EvaluationOverview", () => {
     await flush();
     expect(container.textContent).toContain("712");
     expect(container.textContent).toContain("3 immediate · 40 material · 457 routine (split counted over the first 500 on the card)");
+  });
+
+  // AgentDash (APM gate 3, P3.5): an Agents list beside the projects and goals.
+  it("lists agents beside projects and goals: latest stored card, owed and delivered, fatal flags, in name order", async () => {
+    agentCardsMock.mockResolvedValue({
+      agents: [
+        {
+          agentId: "aaaaaaaa-0000-4000-8000-000000000002",
+          agentName: "Scout",
+          // renamed since the card was stored: links use the agent's url key today
+          urlKey: "field-scout",
+          stored: { version: 2, storedAt: "2026-10-28T12:00:00.000Z", cardHash: "c".repeat(64), throughSeq: 90 },
+          contractSource: "declared",
+          fatalFlags: 1,
+          obligations: [
+            { responsibilityKey: "weekly-report", owed: 3, delivered: 2 },
+            { responsibilityKey: "inbound-leads", owed: null, delivered: 4 },
+          ],
+          restricted: true,
+        },
+        {
+          agentId: "aaaaaaaa-0000-4000-8000-000000000001",
+          agentName: "Analyst",
+          urlKey: "analyst",
+          stored: { version: 1, storedAt: "2026-10-27T12:00:00.000Z", cardHash: "d".repeat(64), throughSeq: 80 },
+          contractSource: "none",
+          fatalFlags: null,
+          obligations: null,
+          restricted: true,
+        },
+        { agentId: "aaaaaaaa-0000-4000-8000-000000000003", agentName: "Writer", urlKey: "writer", stored: null, contractSource: "none", fatalFlags: null, obligations: null, restricted: true },
+      ],
+    });
+    render("/evaluation", <OverviewPage />);
+    await flush();
+    expect(agentCardsMock).toHaveBeenCalledWith("company-1");
+    const headings = [...container.querySelectorAll("h2")].map((h) => h.textContent);
+    expect(headings).toEqual(["Projects and goals", "Agents"]);
+    const section = container.querySelector<HTMLElement>("[data-testid='evaluation-agents']")!;
+    expect(section.textContent).toContain("in name order. There is no ranking.");
+    expect(section.textContent).toContain("Counts include only the records you can read.");
+    const names = [...section.querySelectorAll("li > div > a")].map((a) => a.textContent);
+    expect(names).toEqual(["Analyst", "Scout", "Writer"]);
+    const scout = container.querySelector<HTMLElement>("[data-testid='evaluation-agent-aaaaaaaa-0000-4000-8000-000000000002']")!;
+    expect(scout.querySelector("a")?.getAttribute("href")).toMatch(/\/agents\/field-scout\/performance$/);
+    expect(scout.textContent).toContain("Card v2 stored");
+    expect(scout.textContent).toContain("Contract declared");
+    expect(scout.textContent).toContain("Potentially fatal flags: 1");
+    expect(scout.textContent).toContain("weekly-report: 2 delivered of 3 owed");
+    expect(scout.textContent).toContain("inbound-leads: 4 delivered of Unknown owed");
+    const analyst = container.querySelector<HTMLElement>("[data-testid='evaluation-agent-aaaaaaaa-0000-4000-8000-000000000001']")!;
+    expect(analyst.textContent).toContain("Potentially fatal flags: Not visible to you");
+    expect(analyst.textContent).toContain("Work owed and delivered: Not visible to you");
+    expect(analyst.textContent).toContain("No applied profile");
+    const writer = container.querySelector<HTMLElement>("[data-testid='evaluation-agent-aaaaaaaa-0000-4000-8000-000000000003']")!;
+    expect(writer.textContent).toContain("No stored card yet");
+    expect(writer.textContent).not.toContain("fatal");
+    expect(section.textContent?.toLowerCase()).not.toMatch(/\bscore\b|\brank\b/);
+  });
+
+  it("says when there are no agents to list, and when their cards can't be read", async () => {
+    render("/evaluation", <OverviewPage />);
+    await flush();
+    expect(container.querySelector("[data-testid='evaluation-agents']")?.textContent).toContain("No agents you can see yet.");
+    act(() => root.unmount());
+    root = createRoot(container);
+    agentCardsMock.mockRejectedValue(new Error("Agent cards are read by people."));
+    render("/evaluation", <OverviewPage />);
+    await flush();
+    expect(container.querySelector("[data-testid='evaluation-agents'] [role='alert']")?.textContent).toBe(
+      "Couldn't load the agents' cards: Agent cards are read by people.",
+    );
   });
 });

@@ -207,6 +207,20 @@ describe.sequential("activity routes", () => {
     });
   });
 
+  // AgentDash: APM gate 2 — "Show system events" asks for the full feed
+  // (`includeSystem=true`); the default keeps the service's default hiding.
+  it("passes includeSystem=true and includeSystem=false through to the list", async () => {
+    mockActivityService.list.mockResolvedValue([]);
+    const app = await createApp();
+    for (const [query, expected] of [["true", true], ["false", false], ["yes", undefined]] as const) {
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).get(`/api/companies/company-1/activity?includeSystem=${query}`),
+      );
+      expect(res.status).toBe(200);
+      expect(mockActivityService.list).toHaveBeenLastCalledWith(expect.objectContaining({ includeSystem: expected }));
+    }
+  });
+
   it("400s on a since the server cannot parse (#676)", async () => {
     const app = await createApp();
     const res = await requestApp(app, (baseUrl) =>

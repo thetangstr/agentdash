@@ -9,6 +9,7 @@ import { logger } from "../middleware/logger.js";
 import { approvalService } from "./approvals.js";
 import { connectorService } from "./connectors.js";
 import { logActivity } from "./activity-log.js";
+import { AccessPolicyRefusedError, enforceAgentAccessAll, connectorSendAccessChecks } from "./agent-access-check.js";
 
 /**
  * AgentDash-MK: HubSpot as a native, per-user bring-your-own-key connector.
@@ -484,8 +485,26 @@ export function hubspotConnectorService(db: Db) {
       PROVIDER,
     );
     if (!acting.ok) {
+      // AgentDash (APM gate 3, P3.4): a V2 refusal answers the standard 403 body.
+      if (acting.blocked.reason === "access_policy_refused" && acting.blocked.refusal) {
+        throw new AccessPolicyRefusedError(acting.blocked.refusal);
+      }
       return { ok: false, reason: acting.blocked.reason, message: acting.blocked.message };
     }
+
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4 do.connections /
+    // talk.external): after the legacy path allowed the request, the V2 send
+    // mode and the external targets the write names are checked. Shadow: the
+    // connector_send approval is filed exactly as before. Enforce: 403
+    // ACCESS_POLICY_REFUSED before any approval is filed; V2 never
+    // auto-executes (HubSpot always files the approval, precedence rule 1).
+    const sendChecks = connectorSendAccessChecks({
+      companyId: input.companyId,
+      agentId: input.agentId,
+      connectionId: acting.resolution.connectionId,
+      properties: input.properties,
+    });
+    await enforceAgentAccessAll(db, sendChecks.inputs, { site: "connector_send.create", context: sendChecks.context });
 
     const expiresAt = new Date(Date.now() + CONNECTOR_SEND_TTL_MS);
     const approval = await approvals.create(input.companyId, {

@@ -272,19 +272,25 @@ describeEmbeddedPostgres("agent peer-edit allowlist (#727)", () => {
   });
 
   describe("legitimate paths", () => {
-    it("lets a CEO agent retitle and describe a report", async () => {
+    it("lets a CEO agent retitle a report (capabilities are profile-managed since APM gate 3)", async () => {
       const { company, ceo, peer } = await seed();
 
       const res = await requestApp(createApp(db, agentActor(company.id, ceo.id)), (baseUrl) =>
         request(baseUrl)
           .patch(`/api/agents/${peer.id}`)
-          .send({ name: "Builder", title: "Senior Builder", capabilities: "Ships server routes" }));
+          .send({ name: "Builder", title: "Senior Builder" }));
 
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       const after = await readAgent(db, peer.id);
       expect(after.name).toBe("Builder");
       expect(after.title).toBe("Senior Builder");
-      expect(after.capabilities).toBe("Ships server routes");
+
+      // APM gate 3 (P3.4; access LLD §3.1, §5): `capabilities` left the peer list — 422, unchanged.
+      const describe = await requestApp(createApp(db, agentActor(company.id, ceo.id)), (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${peer.id}`).send({ capabilities: "Ships server routes" }));
+      expect(describe.status, JSON.stringify(describe.body)).toBe(422);
+      expect(describe.body.details).toMatchObject({ code: "AGENT_FIELD_PROFILE_MANAGED", fields: ["capabilities"] });
+      expect((await readAgent(db, peer.id)).capabilities).not.toBe("Ships server routes");
     });
 
     it("lets an agents:create holder retitle a peer", async () => {
