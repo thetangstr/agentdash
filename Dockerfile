@@ -2,7 +2,9 @@
 # AgentDash (#721): uv, pinned by digest, only to install Hermes from its lockfile.
 FROM ghcr.io/astral-sh/uv:0.11.6@sha256:b1e699368d24c57cda93c338a57a8c5a119009ba809305cc8e86986d4a006754 AS uv_source
 
-FROM node:lts-trixie-slim AS base
+# AgentDash: pinned to Node 24. The floating `lts` tag moved to a Node release that no longer
+# bundles corepack, so `corepack enable` below failed (exit 127) and every image build broke.
+FROM node:24-trixie-slim AS base
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN apt-get update \
