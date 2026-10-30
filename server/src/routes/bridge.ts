@@ -27,7 +27,7 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
 // Ids reach uuid columns. Checked here so a malformed one is the caller's 400,
 // not a Postgres cast error (22P02) surfacing as a 500 with the SQL and body
 // in the server log.
-const uuidSchema = z.string().uuid();
+const uuidSchema = z.guid();
 
 function requireUuid(value: unknown, field: string): string {
   const parsed = uuidSchema.safeParse(value);
@@ -36,9 +36,16 @@ function requireUuid(value: unknown, field: string): string {
 }
 
 const createBridgeTaskSchema = z.object({
-  endpointId: z
-    .string({ required_error: "endpointId is required" })
-    .uuid("endpointId must be a uuid"),
+  endpointId: z.guid({
+    // zod 3's required_error / check message, as one zod 4 error function:
+    // undefined falls back to zod's default for any other issue.
+    error: (issue) =>
+      issue.input === undefined
+        ? "endpointId is required"
+        : issue.code === "invalid_format"
+          ? "endpointId must be a uuid"
+          : undefined,
+  }),
   taskClass: z.enum(BRIDGE_TASK_CLASSES).default("read"),
   // Emptiness is the service's refusal ("An instruction is required").
   instruction: z.string().default(""),

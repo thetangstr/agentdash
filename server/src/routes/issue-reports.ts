@@ -36,7 +36,7 @@ const issueReportSchema = z.object({
     .trim()
     .min(10, "Describe what happened")
     .max(MAX_REPORT_DESCRIPTION_LENGTH),
-  companyId: z.string().uuid().optional(),
+  companyId: z.guid().optional(),
   // Where the reporter was standing when they hit it. Client-supplied and
   // therefore untrusted — it is redacted and length-capped like any other
   // free text before it reaches GitHub.

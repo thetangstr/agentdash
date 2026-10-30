@@ -77,7 +77,7 @@ export const createCliAuthChallengeSchema = z.object({
   command: z.string().min(1).max(240),
   clientName: z.string().max(120).optional().nullable(),
   requestedAccess: boardCliAuthAccessLevelSchema.default("board"),
-  requestedCompanyId: z.string().uuid().optional().nullable(),
+  requestedCompanyId: z.guid().optional().nullable(),
 });
 
 export type CreateCliAuthChallenge = z.infer<typeof createCliAuthChallengeSchema>;
@@ -123,8 +123,8 @@ export type UpdateCompanyMemberWithPermissions = z.infer<typeof updateCompanyMem
 export const archiveCompanyMemberSchema = z.object({
   reassignment: z
     .object({
-      assigneeAgentId: z.string().uuid().optional().nullable(),
-      assigneeUserId: z.string().uuid().optional().nullable(),
+      assigneeAgentId: z.guid().optional().nullable(),
+      assigneeUserId: z.guid().optional().nullable(),
     })
     .optional()
     .nullable(),
@@ -141,7 +141,7 @@ export const archiveCompanyMemberSchema = z.object({
 export type ArchiveCompanyMember = z.infer<typeof archiveCompanyMemberSchema>;
 
 export const updateUserCompanyAccessSchema = z.object({
-  companyIds: z.array(z.string().uuid()).default([]),
+  companyIds: z.array(z.guid()).default([]),
 });
 
 export type UpdateUserCompanyAccess = z.infer<typeof updateUserCompanyAccessSchema>;

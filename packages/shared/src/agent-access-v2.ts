@@ -53,7 +53,7 @@ import { agentGovernancePolicySchema } from "./validators/agent-governance.js";
 // ---------------------------------------------------------------------------
 
 const scopeIdSchema = z.string().trim().min(1).max(200);
-const agentIdListSchema = z.array(z.string().uuid()).max(500);
+const agentIdListSchema = z.array(z.guid()).max(500);
 const userIdListSchema = z.array(scopeIdSchema).max(500);
 
 export const agentAccessListScopeSchema = z
@@ -86,9 +86,9 @@ export const agentAccessSeeSchema = z
   .object({
     projects: agentAccessListScopeSchema.optional(),
     connections: z
-      .array(z.object({ connectionId: z.string().uuid(), dataScopes: dataScopeListSchema }).strict())
+      .array(z.object({ connectionId: z.guid(), dataScopes: dataScopeListSchema }).strict())
       .max(200)
-      .refine(uniqueBy((entry) => entry.connectionId), { message: "each connection may appear once" })
+      .refine(uniqueBy((entry: { connectionId: string }) => entry.connectionId), { message: "each connection may appear once" })
       .optional(),
   })
   .strict();
@@ -99,14 +99,14 @@ export const agentAccessDoSchema = z
       .array(
         z
           .object({
-            connectionId: z.string().uuid(),
+            connectionId: z.guid(),
             draft: z.enum(AGENT_ACCESS_MODES),
             send: z.enum(AGENT_ACCESS_MODES),
           })
           .strict(),
       )
       .max(200)
-      .refine(uniqueBy((entry) => entry.connectionId), { message: "each connection may appear once" })
+      .refine(uniqueBy((entry: { connectionId: string }) => entry.connectionId), { message: "each connection may appear once" })
       .optional(),
     skills: agentAccessListScopeSchema.optional(),
   })
@@ -123,7 +123,7 @@ export const agentAccessTalkSchema = z
       .array(
         z
           .object({
-            connectionId: z.string().uuid(),
+            connectionId: z.guid(),
             targets: z
               .object({
                 mode: z.enum(AGENT_ACCESS_EXTERNAL_TARGET_MODES),
@@ -134,7 +134,7 @@ export const agentAccessTalkSchema = z
           .strict(),
       )
       .max(200)
-      .refine(uniqueBy((entry) => entry.connectionId), { message: "each connection may appear once" })
+      .refine(uniqueBy((entry: { connectionId: string }) => entry.connectionId), { message: "each connection may appear once" })
       .optional(),
     inbound: agentAccessContactScopeSchema.optional(),
   })

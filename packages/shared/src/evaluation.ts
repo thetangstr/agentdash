@@ -187,7 +187,7 @@ export const EVALUATION_DEFAULT_REQUIRED_EVIDENCE: readonly EvaluationEvidenceCl
 
 export const evaluationMilestoneRefSchema = z.object({
   kind: z.enum(["project", "goal"]),
-  id: z.string().uuid(),
+  id: z.guid(),
 });
 export type EvaluationMilestoneRef = z.infer<typeof evaluationMilestoneRefSchema>;
 
@@ -223,12 +223,12 @@ export const evaluationAcceptanceCriterionSchema = z.object({
 /** The canonical evaluation contract, v1 (spec §4). Stored as a `contract.declared` ledger event. */
 export const evaluationContractV1Schema = z.object({
   contractVersion: z.literal(EVALUATION_CONTRACT_VERSION),
-  companyId: z.string().uuid(),
-  goalId: z.string().uuid().nullable(),
-  parentGoalId: z.string().uuid().nullable(),
+  companyId: z.guid(),
+  goalId: z.guid().nullable(),
+  parentGoalId: z.guid().nullable(),
   milestoneRef: evaluationMilestoneRefSchema,
   accountableUserId: z.string().min(1).nullable(),
-  leadAgentId: z.string().uuid().nullable(),
+  leadAgentId: z.guid().nullable(),
   acceptanceCriteria: z.array(evaluationAcceptanceCriterionSchema),
   definitionOfDone: z.string().nullable(),
   requiredEvidence: z.array(z.enum(EVALUATION_EVIDENCE_CLASSES)),
@@ -236,7 +236,7 @@ export const evaluationContractV1Schema = z.object({
   /** Actors who may not review this milestone's items, declared by the founder. */
   excludedReviewers: z.array(z.string()).default([]),
   /** Items only the founder may act on; there is no system record of a lock (§4.4). */
-  founderLocks: z.array(z.string().uuid()).default([]),
+  founderLocks: z.array(z.guid()).default([]),
   outcomeTarget: z
     .object({ metricKey: z.string().min(1), target: z.number(), unit: z.string().min(1), source: z.string().min(1) })
     .nullable(),
@@ -265,7 +265,7 @@ export type EvaluationSubjectKind = (typeof EVALUATION_SUBJECT_KINDS)[number];
 /** What is being evaluated (§2). Milestone (V1) contracts keep `EvaluationMilestoneRef`. */
 export const evaluationSubjectRefSchema = z.object({
   kind: z.enum(EVALUATION_SUBJECT_KINDS),
-  id: z.string().uuid(),
+  id: z.guid(),
 });
 export type EvaluationSubjectRef = z.infer<typeof evaluationSubjectRefSchema>;
 
@@ -318,7 +318,7 @@ export const evaluationResponsibilityContractSchema = z
       }),
     coverage: z.array(z.enum(EVALUATION_COVERAGE_CLASSES)).max(EVALUATION_COVERAGE_CLASSES.length),
     deadline: evaluationResponsibilityDeadlineSchema.optional(),
-    outcomeLinks: z.array(z.object({ goalId: z.string().uuid() }).strict()).max(20),
+    outcomeLinks: z.array(z.object({ goalId: z.guid() }).strict()).max(20),
     expectedHumanSteps: z.array(z.enum(EVALUATION_EXPECTED_HUMAN_STEPS)).max(EVALUATION_EXPECTED_HUMAN_STEPS.length),
     judges: z
       .object({
@@ -346,10 +346,10 @@ export type EvaluationResponsibilityContract = z.infer<typeof evaluationResponsi
 export const evaluationContractV2Schema = z
   .object({
     contractVersion: z.literal(EVALUATION_CONTRACT_V2_VERSION),
-    companyId: z.string().uuid(),
+    companyId: z.guid(),
     subjectRef: evaluationSubjectRefSchema.extend({ kind: z.literal("agent") }),
     accountableUserId: z.string().min(1).nullable(),
-    profileRevisionId: z.string().uuid(),
+    profileRevisionId: z.guid(),
     independenceRule: z.literal("independence/v1"),
     responsibilities: z
       .array(evaluationResponsibilityContractSchema.extend({ key: z.string().min(1).max(80) }).strict())
@@ -678,7 +678,7 @@ export function evaluationTypedPredicate(check: EvaluationCriterionCheck | null 
  */
 export const evaluationCriterionRefSchema = z
   .object({
-    contractEventId: z.string().uuid(),
+    contractEventId: z.guid(),
     responsibilityKey: z.string().min(1).max(80),
     criterionId: z.string().min(1),
     checkHash: z.string().regex(/^[0-9a-f]{16}$/, "checkHash is 16 lowercase hex characters"),
@@ -694,7 +694,7 @@ export function evaluationCriterionRefKey(ref: EvaluationCriterionRef): string {
 /** The work a judgment or a case is about: an issue (a work version) or a deliverable run (deliverables have no issue). */
 export const EVALUATION_WORK_ITEM_KINDS = ["issue", "deliverable_run"] as const;
 export type EvaluationWorkItemKind = (typeof EVALUATION_WORK_ITEM_KINDS)[number];
-export const evaluationWorkItemRefSchema = z.object({ kind: z.enum(EVALUATION_WORK_ITEM_KINDS), id: z.string().uuid() }).strict();
+export const evaluationWorkItemRefSchema = z.object({ kind: z.enum(EVALUATION_WORK_ITEM_KINDS), id: z.guid() }).strict();
 export type EvaluationWorkItemRef = z.infer<typeof evaluationWorkItemRefSchema>;
 
 // ---- Dispositions (LLD §4, §10, §12) ---------------------------------------
@@ -728,7 +728,7 @@ export const evaluationCriterionAttestBindingSchema = z
   .strict();
 export type EvaluationCriterionAttestBinding = z.infer<typeof evaluationCriterionAttestBindingSchema>;
 
-const dispositionEvidenceRefsSchema = z.array(z.string().uuid()).max(50);
+const dispositionEvidenceRefsSchema = z.array(z.guid()).max(50);
 const dispositionNoteSchema = z.string().min(1).max(4000);
 
 /**
@@ -775,7 +775,7 @@ export const evaluationDisagreementNotedSchema = z
     criterion: evaluationCriterionRefSchema,
     /** The disagreeing judgments' ledger events. */
     judgmentEventIds: z
-      .array(z.string().uuid())
+      .array(z.guid())
       .min(2)
       .max(20)
       .refine((ids) => new Set(ids).size === ids.length, { message: "judgment event ids must be distinct" }),
@@ -908,7 +908,7 @@ export type AgentCardGapCode = (typeof AGENT_CARD_GAP_CODES)[number];
 export const agentCardDependencyCitationSchema = z
   .object({
     kind: z.enum(["project", "goal"]),
-    id: z.string().uuid(),
+    id: z.guid(),
     throughSeq: z.number().int().nonnegative(),
     formulaVersion: z.string().min(1),
     /** sha256 of the canonical milestone card (`cardHash`). */

@@ -62,9 +62,9 @@ export const agentScenarioSchema = z
     unknowns: z.array(longText.min(1)).max(50),
     recommendation: z.enum(AGENT_SCENARIO_RECOMMENDATIONS),
     /** The existing agent that takes the work (`reuse`, `bounded_change`). */
-    targetAgentId: z.string().uuid().optional(),
+    targetAgentId: z.guid().optional(),
     /** The unbound draft for a new role (`new_role`), once one is written. */
-    unboundProfileId: z.string().uuid().optional(),
+    unboundProfileId: z.guid().optional(),
     reason: longText.min(1),
   })
   .strict()
@@ -87,7 +87,7 @@ export const agentScenarioManifestV1Schema = z
   .object({
     manifestVersion: z.literal(1),
     /** The `agent-work-brief` revision the scenarios were read from, so later brief edits are visible. */
-    briefRevisionId: z.string().uuid().nullable().optional(),
+    briefRevisionId: z.guid().nullable().optional(),
     scenarios: z
       .array(agentScenarioSchema)
       .max(50)
@@ -152,18 +152,18 @@ export const proposeUnboundAgentProfileSchema = proposeAgentProfileRevisionSchem
   .extend({
     role: z.enum(AGENT_ROLES).optional(),
     icon: z.enum(AGENT_ICON_NAMES).optional().nullable(),
-    reportsTo: z.string().uuid().optional().nullable(),
+    reportsTo: z.guid().optional().nullable(),
     budgetMonthlyCents: z.number().int().nonnegative().optional(),
     /** The brief's planning issue, linked to the hire approval. */
-    sourceIssueId: z.string().uuid().optional().nullable(),
+    sourceIssueId: z.guid().optional().nullable(),
   })
   .strict();
 export type ProposeUnboundAgentProfile = z.infer<typeof proposeUnboundAgentProfileSchema>;
 
 /** The profile fields on a `hire_agent` approval payload (`AgentProfileHireFields`). Server-written; read back through this. */
 export const agentProfileHireFieldsSchema = z.object({
-  profileId: z.string().uuid(),
-  profileRevisionId: z.string().uuid(),
+  profileId: z.guid(),
+  profileRevisionId: z.guid(),
   profileRevisionNumber: z.number().int().positive(),
   profileBodyHash: z.string().regex(/^[0-9a-f]{64}$/),
   profileChange: agentProfileChangePayloadSchema,

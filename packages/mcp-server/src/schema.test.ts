@@ -62,14 +62,14 @@ describe("zodToJsonSchema", () => {
   });
 
   it("converts arrays with item schemas", () => {
-    expect(zodToJsonSchema(z.array(z.string().uuid()))).toEqual({
+    expect(zodToJsonSchema(z.array(z.guid()))).toEqual({
       type: "array",
       items: { type: "string" },
     });
   });
 
   it("converts records to additionalProperties objects", () => {
-    expect(zodToJsonSchema(z.record(z.unknown()))).toEqual({
+    expect(zodToJsonSchema(z.record(z.string(), z.unknown()))).toEqual({
       type: "object",
       additionalProperties: {},
     });
@@ -104,7 +104,7 @@ describe("zodToJsonSchema", () => {
 
   it("treats optional+nullable fields as not required", () => {
     const schema = z.object({
-      companyId: z.string().uuid().optional().nullable(),
+      companyId: z.guid().optional().nullable(),
     });
     const converted = zodToJsonSchema(schema);
     expect(converted.required).toBeUndefined();

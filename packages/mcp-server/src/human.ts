@@ -27,8 +27,8 @@ async function request(config: PaperclipMcpConfig, action: 'identity' | 'discove
     const body = await response.json().catch(() => ({})) as { details?: unknown };
     const details = z.object({
       status: z.enum(['prepared', 'completed', 'denied', 'stale', 'expired', 'recovery_required']).optional(),
-      actionId: z.string().uuid().optional(),
-      result: z.object({ reference: z.object({ issueId: z.string().uuid().optional(), interactionId: z.string().uuid().optional(), enrollmentId: z.string().uuid().optional() }).optional() }).nullable().optional(),
+      actionId: z.guid().optional(),
+      result: z.object({ reference: z.object({ issueId: z.guid().optional(), interactionId: z.guid().optional(), enrollmentId: z.guid().optional() }).optional() }).nullable().optional(),
     }).safeParse(body.details ?? {});
     throw new HumanBridgeRefusal({ error: 'Human bridge refused the request. Inspect current state before retrying.', httpStatus: response.status, ...(details.success ? details.data : {}) });
   }
@@ -43,7 +43,7 @@ export function humanTools(config: PaperclipMcpConfig): ToolDefinition[] {
   assertHumanConfig(config);
   let selected: HumanTarget | null = config.humanTarget ?? (config.companyId ? humanTargetSchema.parse({ kind: 'company', companyId: config.companyId }) : null);
   const same = (a: HumanTarget, b: HumanTarget) => a.kind === b.kind && (a.kind !== 'company' || (b.kind === 'company' && a.companyId === b.companyId));
-  function tool(name: string, description: string, schema: z.AnyZodObject, execute: (input: any) => Promise<unknown>): ToolDefinition {
+  function tool(name: string, description: string, schema: z.ZodObject, execute: (input: any) => Promise<unknown>): ToolDefinition {
     return { name, description, schema, annotations: { readOnlyHint: !['human_prepare', 'human_confirm'].includes(name), destructiveHint: name === 'human_confirm', openWorldHint: false }, execute: async raw => {
       try {
         const input = schema.parse(raw);

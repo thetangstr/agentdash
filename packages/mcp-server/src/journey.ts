@@ -15,7 +15,7 @@ import { makeTool, type ToolDefinition } from "./tools.js";
 const PLAN_CARD_KIND = "agent_plan_proposal_v1";
 const COS_ROLE = "chief_of_staff";
 
-const companyIdOptional = z.string().uuid().optional().nullable();
+const companyIdOptional = z.guid().optional().nullable();
 
 // ---------------------------------------------------------------------------
 // Self-driving anchor: the setup-status state machine
@@ -561,9 +561,9 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         + "Staff and returns the next question (or the completed state). Repeat until a team plan "
         + "is proposed, then use agentdash_get_plan.",
       z.object({
-        conversationId: z.string().uuid(),
+        conversationId: z.guid(),
         userMessage: z.string().min(1),
-        cosAgentId: z.string().uuid().optional().nullable(),
+        cosAgentId: z.guid().optional().nullable(),
         companyId: companyIdOptional,
       }),
       async ({ conversationId, userMessage, cosAgentId, companyId }) =>
@@ -580,7 +580,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "agentdash_get_plan",
       "Fetch the latest proposed agent-team plan (the newest agent_plan_proposal_v1 card in the "
         + "onboarding conversation). Present the plan to the human before confirming.",
-      z.object({ conversationId: z.string().uuid() }),
+      z.object({ conversationId: z.guid() }),
       async ({ conversationId }) => {
         const messages = await fetchConversationMessages(client, conversationId);
         const planMessage = findLatestPlanMessage(messages);
@@ -606,7 +606,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "Confirm and materialize the proposed agent team from the latest plan card. Creates one "
         + "agent per plan entry. Only call this after the human has approved the plan. Hires beyond "
         + "this confirmed plan are gated — use agentdash_request_approval for those.",
-      z.object({ conversationId: z.string().uuid() }),
+      z.object({ conversationId: z.guid() }),
       async ({ conversationId }) =>
         client.requestJson("POST", "/onboarding/confirm-plan", {
           body: { conversationId },
@@ -617,7 +617,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "Request revisions to the proposed agent-team plan. Pass the human's feedback; the Chief of "
         + "Staff rewrites the plan as a delta and posts a new plan card.",
       z.object({
-        conversationId: z.string().uuid(),
+        conversationId: z.guid(),
         revisionText: z.string().min(1).max(4000),
       }),
       async ({ conversationId, revisionText }) =>
@@ -637,7 +637,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         summary: z.string().min(1).max(500),
         proposedAction: z.string().min(1).max(2000),
         details: z.string().max(10000).optional(),
-        issueIds: z.array(z.string().uuid()).optional(),
+        issueIds: z.array(z.guid()).optional(),
       }),
       async ({ companyId, summary, proposedAction, details, issueIds }) => {
         const resolvedCompanyId = client.resolveCompanyId(companyId);
@@ -677,7 +677,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         + "NOT proceed with the gated action until status === \"approved\". If status is "
         + "\"rejected\" or \"revision_requested\", read the comments (list_approval_comments) "
         + "and either revise the request or drop the action. Never fabricate approval status.",
-      z.object({ approvalId: z.string().uuid() }),
+      z.object({ approvalId: z.guid() }),
       async ({ approvalId }) => {
         const approval = await client.requestJson<Record<string, unknown>>(
           "GET",
@@ -729,7 +729,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         title: z.string().min(1),
         description: z.string().optional(),
         priority: z.enum(["critical", "high", "medium", "low"]).optional().default("medium"),
-        assigneeAgentId: z.string().uuid().optional().nullable(),
+        assigneeAgentId: z.guid().optional().nullable(),
       }),
       async ({ companyId, title, description, priority, assigneeAgentId }) =>
         client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/issues`, {
@@ -754,7 +754,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "agentdash_pause_agent",
       "Pause one agent so it stops picking up new work. GATED when applied to ALL agents: "
         + "pausing the whole fleet requires agentdash_request_approval first — wait for approved.",
-      z.object({ agentId: z.string().uuid() }),
+      z.object({ agentId: z.guid() }),
       async ({ agentId }) =>
         client.requestJson("POST", `/agents/${encodeURIComponent(agentId)}/pause`, { body: {} }),
     ),
@@ -763,7 +763,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "Resume a paused agent. GATED: resuming an agent a human paused, or resuming the whole "
         + "fleet, requires agentdash_request_approval first — wait until agentdash_check_approval "
         + "returns approved before calling this.",
-      z.object({ agentId: z.string().uuid() }),
+      z.object({ agentId: z.guid() }),
       async ({ agentId }) =>
         client.requestJson("POST", `/agents/${encodeURIComponent(agentId)}/resume`, { body: {} }),
     ),

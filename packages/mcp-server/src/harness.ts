@@ -34,8 +34,8 @@ import { makeTool, type ToolDefinition } from "./tools.js";
  * route here 404s.
  */
 
-const agentIdOptional = z.string().uuid().optional().nullable();
-const companyIdOptional = z.string().uuid().optional().nullable();
+const agentIdOptional = z.guid().optional().nullable();
+const companyIdOptional = z.guid().optional().nullable();
 
 const policyListSchema = z.array(z.string().trim().min(1)).min(1);
 

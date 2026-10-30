@@ -22,8 +22,8 @@
 //
 // The shared package is TypeScript source, so it is loaded through tsx's ESM
 // loader. zod-to-openapi patches zod's prototypes, so it must patch the SAME
-// zod module instance the shared validators were built with: that instance is
-// resolved from packages/shared, not from here.
+// zod module instance the shared validators are built with (resolved from
+// packages/shared, not from here), and before they are built (zod 4).
 //
 // Usage: node scripts/docs/generate-openapi.mjs [--check] [--out <dir>]
 
@@ -183,19 +183,27 @@ const PARAM_DESCRIPTIONS = {
 
 let sharedModules = null;
 
-/** @paperclipai/shared from source, plus the zod instance it was built with. */
+/**
+ * @paperclipai/shared from source, built on a zod instance zod-to-openapi has
+ * already extended. zod 4 copies prototype members onto a schema when it is
+ * constructed, so the extension must run before the shared validators exist:
+ * a schema built earlier never gains `.openapi()`.
+ */
 async function loadShared(repoRoot) {
   if (sharedModules) return sharedModules;
   const { register } = await import("tsx/esm/api");
   register();
   const sharedDir = path.join(repoRoot, SHARED_DIR_REL);
-  const shared = await import(pathToFileURL(path.join(sharedDir, "src", "index.ts")).href);
   const requireFromShared = createRequire(path.join(sharedDir, "package.json"));
   const zodDir = path.dirname(realpathSync(requireFromShared.resolve("zod/package.json")));
   const zodPackage = JSON.parse(readFileSync(path.join(zodDir, "package.json"), "utf8"));
   const zodEntry = zodPackage.exports?.["."]?.import ?? zodPackage.module ?? "index.js";
   const zod = await import(pathToFileURL(path.join(zodDir, zodEntry)).href);
-  sharedModules = { shared, z: zod.z ?? zod.default ?? zod };
+  const z = zod.z ?? zod.default ?? zod;
+  const { extendZodWithOpenApi } = await import("@asteasolutions/zod-to-openapi");
+  extendZodWithOpenApi(z);
+  const shared = await import(pathToFileURL(path.join(sharedDir, "src", "index.ts")).href);
+  sharedModules = { shared, z };
   return sharedModules;
 }
 
@@ -251,10 +259,34 @@ export function redactEnums(node) {
 }
 const REDACTED = Symbol("redacted");
 
+/**
+ * Mark every `z.guid()` string reachable from `schema` as `format: uuid`.
+ *
+ * The validators accept ids with zod's lax 8-4-4-4-12 hex match (`z.guid()`:
+ * what zod 3's `z.string().uuid()` was), which zod-to-openapi leaves without a
+ * format; the contract has always called them `uuid`. Docs-only metadata on
+ * zod's registry: it changes nothing the server validates.
+ */
+export function markGuidsAsUuid(z, schema, seen = new Set()) {
+  if (!schema?._zod?.def || seen.has(schema)) return;
+  seen.add(schema);
+  const def = schema._zod.def;
+  const isGuid = def.format === "guid" || (def.checks ?? []).some((check) => check._zod?.def?.check === "string_format" && check._zod.def.format === "guid");
+  if (def.type === "string" && isGuid) {
+    z.globalRegistry.add(schema, { ...(z.globalRegistry.get(schema) ?? {}), format: "uuid" });
+  }
+  const children = [
+    def.innerType, def.element, def.keyType, def.valueType, def.catchall, def.in, def.out, def.left, def.right,
+    ...(def.type === "object" ? Object.values(schema.shape) : []),
+    ...(def.options ?? []), ...(def.items ?? []),
+    ...(def.type === "lazy" ? [def.getter()] : []),
+  ];
+  for (const child of children) markGuidsAsUuid(z, child, seen);
+}
+
 async function requestSchemas(repoRoot, names) {
   const { shared, z } = await loadShared(repoRoot);
-  const { extendZodWithOpenApi, OpenAPIRegistry, OpenApiGeneratorV31 } = await import("@asteasolutions/zod-to-openapi");
-  extendZodWithOpenApi(z);
+  const { OpenAPIRegistry, OpenApiGeneratorV31 } = await import("@asteasolutions/zod-to-openapi");
   const schemas = {};
   const failed = [];
   for (const name of names) {
@@ -264,6 +296,7 @@ async function requestSchemas(repoRoot, names) {
       continue;
     }
     try {
+      markGuidsAsUuid(z, schema);
       // One registry per validator: a failure in one cannot take the others down.
       const registry = new OpenAPIRegistry();
       registry.register(requestComponentName(name), schema);

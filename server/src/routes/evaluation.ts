@@ -61,11 +61,11 @@ export function evaluationRoutes(db: Db) {
     since: z.string().datetime().optional(),
     // drill-down scope: the rows tagged with a milestone, cut at a stored card's sequence, newest first
     kind: z.enum(["project", "goal"]).optional(),
-    id: z.string().uuid().optional(),
+    id: z.guid().optional(),
     throughSeq: z.coerce.number().int().min(0).optional(),
     order: z.enum(["asc", "desc"]).optional(),
   });
-  const refQuery = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid() });
+  const refQuery = z.object({ kind: z.enum(["project", "goal"]), id: z.guid() });
 
   /**
    * AgentDash (APM gate 3, P3.3; evaluation LLD §9.1): a restricted project the viewer may not read is nonexistent on
@@ -313,7 +313,7 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       await assertCompanyAdministrator(access, req, companyId);
-      const body = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid() }).safeParse(req.body);
+      const body = z.object({ kind: z.enum(["project", "goal"]), id: z.guid() }).safeParse(req.body);
       if (!body.success) throw badRequest("kind, id required", { issues: body.error.issues });
       const ref = evaluationMilestoneRefSchema.parse(body.data);
       const stored = await cards.snapshot(companyId, ref);
@@ -421,7 +421,7 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       await assertEvaluatorOrAdministrator(req, companyId);
-      const body = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid() }).safeParse(req.body);
+      const body = z.object({ kind: z.enum(["project", "goal"]), id: z.guid() }).safeParse(req.body);
       if (!body.success) throw badRequest("kind, id required", { issues: body.error.issues });
       const ref = evaluationMilestoneRefSchema.parse({ kind: body.data.kind, id: body.data.id });
       const latest = await cards.latest(companyId, ref);
@@ -444,7 +444,7 @@ export function evaluationRoutes(db: Db) {
   });
 
   // citations are ledger event ids: anything else is a 400 the evaluator can learn from, never a uuid cast error
-  const evidenceRefsSchema = z.array(z.string().uuid()).min(1).max(50);
+  const evidenceRefsSchema = z.array(z.guid()).min(1).max(50);
   const noteSchema = z.string().min(1).max(4000);
 
   /** §9.3: every evaluator statement cites ledger events; uncited notes are refused, not stored. */
@@ -513,7 +513,7 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       if (req.actor.type !== "board") throw forbidden("Corrections are filed by humans");
-      const body = z.object({ disputedEventId: z.string().uuid(), claimedFact: noteSchema, evidenceRefs: z.array(z.string().uuid()).max(50).default([]), correlationId: z.string().max(200).optional() }).safeParse(req.body);
+      const body = z.object({ disputedEventId: z.guid(), claimedFact: noteSchema, evidenceRefs: z.array(z.guid()).max(50).default([]), correlationId: z.string().max(200).optional() }).safeParse(req.body);
       if (!body.success) throw badRequest("disputedEventId and claimedFact are required", { issues: body.error.issues });
       const exists = await ledger.existing(companyId, [body.data.disputedEventId, ...body.data.evidenceRefs]);
       if (!exists.has(body.data.disputedEventId)) throw notFound("Disputed event not found in this company's ledger");
@@ -612,12 +612,12 @@ export function evaluationRoutes(db: Db) {
       await assertCompanyAdministrator(access, req, companyId);
       const body = z
         .discriminatedUnion("kind", [
-          z.object({ kind: z.literal("correction_decided"), correctionEventId: z.string().uuid(), decision: z.enum(["accepted", "rejected"]), note: noteSchema.optional() }),
-          z.object({ kind: z.literal("criterion_attest"), criterionId: z.string().min(1), issueId: z.string().uuid().optional(), result: z.enum(["satisfied", "unsatisfied"]), evidenceRefs: evidenceRefsSchema, milestoneRef: evaluationMilestoneRefSchema }),
-          z.object({ kind: z.literal("contract_exception_accepted"), contractEventId: z.string().uuid(), note: noteSchema.optional() }),
+          z.object({ kind: z.literal("correction_decided"), correctionEventId: z.guid(), decision: z.enum(["accepted", "rejected"]), note: noteSchema.optional() }),
+          z.object({ kind: z.literal("criterion_attest"), criterionId: z.string().min(1), issueId: z.guid().optional(), result: z.enum(["satisfied", "unsatisfied"]), evidenceRefs: evidenceRefsSchema, milestoneRef: evaluationMilestoneRefSchema }),
+          z.object({ kind: z.literal("contract_exception_accepted"), contractEventId: z.guid(), note: noteSchema.optional() }),
           // Milestone 5 shadow-run records (humans only): a verdict on a raised exception, an exception the evaluator missed, a note on the run
-          z.object({ kind: z.literal("exception_reviewed"), milestoneRef: evaluationMilestoneRefSchema, exceptionKey: z.string().min(1).max(300), verdict: z.enum(["confirmed", "false_positive"]), reason: noteSchema.optional(), evidenceRefs: z.array(z.string().uuid()).max(50).default([]) }),
-          z.object({ kind: z.literal("exception_missed"), milestoneRef: evaluationMilestoneRefSchema, title: z.string().min(1).max(200), severity: z.enum(["immediate", "material", "routine"]), description: noteSchema, evidenceRefs: z.array(z.string().uuid()).max(50).default([]) }),
+          z.object({ kind: z.literal("exception_reviewed"), milestoneRef: evaluationMilestoneRefSchema, exceptionKey: z.string().min(1).max(300), verdict: z.enum(["confirmed", "false_positive"]), reason: noteSchema.optional(), evidenceRefs: z.array(z.guid()).max(50).default([]) }),
+          z.object({ kind: z.literal("exception_missed"), milestoneRef: evaluationMilestoneRefSchema, title: z.string().min(1).max(200), severity: z.enum(["immediate", "material", "routine"]), description: noteSchema, evidenceRefs: z.array(z.guid()).max(50).default([]) }),
           z.object({ kind: z.literal("shadow_note"), milestoneRef: evaluationMilestoneRefSchema, topic: z.enum(EVALUATION_SHADOW_NOTE_TOPICS), text: noteSchema }),
         ])
         .safeParse(req.body);

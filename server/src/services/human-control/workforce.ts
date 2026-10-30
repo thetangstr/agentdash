@@ -10,7 +10,7 @@ import { workforceService } from '../workforce.js';
 import type { heartbeatService } from '../heartbeat.js';
 import type { HumanOperation, HumanOperationContext } from '../human-control.js';
 const empty = z.object({}).strict();
-const id = z.string().uuid(), text = z.string(), revision = z.number().int().nonnegative();
+const id = z.guid(), text = z.string(), revision = z.number().int().nonnegative();
 const agentInput = z.object({ agentId: id }).strict();
 const brief = updateWorkforceBriefSchema.omit({ expectedRevision: true }).extend({ revision, confirmedByUserId: text.nullable(), updatedAt: text.nullable() }).strict();
 const template = z.object({ id: text, version: z.literal(1), name: text, description: text, responsibilities: z.array(text), requiredFactKeys: z.array(text), procedures: z.array(text), skills: z.array(z.object({ key: text, name: text, description: text, content: text }).strict()), qualityChecks: z.array(text), suggestedMetrics: z.array(text), starterJob: z.object({ title: text, description: text }).strict() }).strict();
@@ -23,7 +23,7 @@ export function humanCompany(ctx: HumanOperationContext) {
   return ctx.target.companyId;
 }
 export function workforceHumanOperations(heartbeat: Pick<ReturnType<typeof heartbeatService>, 'wakeup'>): HumanOperation[] {
-  function operation(operationId: HumanOperationDescriptor['operationId'], input: z.AnyZodObject, output: z.ZodTypeAny, direction: boolean, handler: Pick<HumanOperation, 'read' | 'execute' | 'afterCommit' | 'recoveryReference'>): HumanOperation {
+  function operation(operationId: HumanOperationDescriptor['operationId'], input: z.ZodObject, output: z.ZodTypeAny, direction: boolean, handler: Pick<HumanOperation, 'read' | 'execute' | 'afterCommit' | 'recoveryReference'>): HumanOperation {
     return {
       descriptor: { operationId, version: 1, pageId: 'workforce', actionId: operationId.slice('workforce.'.length), targetKind: 'company', behavior: handler.read ? 'read' : 'prepare_confirm', authority: direction ? 'company_direction' : 'company_access', confirmation: handler.read ? 'none' : 'human_readback', inputSchema: humanJsonSchema(input), outputSchema: humanJsonSchema(output), content: { fullText: true, pagination: 'none' } },
       input, output, ...handler,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partialWithoutDefaults } from "./zod-object.js";
 import {
   ISSUE_EXECUTION_DECISION_OUTCOMES,
   ISSUE_EXECUTION_POLICY_MODES,
@@ -38,23 +39,23 @@ const executionWorkspaceStrategySchema = z
 export const issueExecutionWorkspaceSettingsSchema = z
   .object({
     mode: z.enum(ISSUE_EXECUTION_WORKSPACE_PREFERENCES).optional(),
-    environmentId: z.string().uuid().optional().nullable(),
+    environmentId: z.guid().optional().nullable(),
     workspaceStrategy: executionWorkspaceStrategySchema.optional().nullable(),
-    workspaceRuntime: z.record(z.unknown()).optional().nullable(),
+    workspaceRuntime: z.record(z.string(), z.unknown()).optional().nullable(),
   })
   .strict();
 
 export const issueAssigneeAdapterOverridesSchema = z
   .object({
     modelProfile: z.enum(MODEL_PROFILE_KEYS).optional(),
-    adapterConfig: z.record(z.unknown()).optional(),
+    adapterConfig: z.record(z.string(), z.unknown()).optional(),
     useProjectWorkspace: z.boolean().optional(),
   })
   .strict();
 
 const issueExecutionStagePrincipalBaseSchema = z.object({
   type: z.enum(["agent", "user"]),
-  agentId: z.string().uuid().optional().nullable(),
+  agentId: z.guid().optional().nullable(),
   userId: z.string().optional().nullable(),
 });
 
@@ -78,7 +79,7 @@ export const issueExecutionStagePrincipalSchema = issueExecutionStagePrincipalBa
   });
 
 export const issueExecutionStageParticipantSchema = issueExecutionStagePrincipalBaseSchema.extend({
-  id: z.string().uuid().optional(),
+  id: z.guid().optional(),
 }).superRefine((value, ctx) => {
   if (value.type === "agent") {
     if (!value.agentId) {
@@ -98,7 +99,7 @@ export const issueExecutionStageParticipantSchema = issueExecutionStagePrincipal
 });
 
 export const issueExecutionStageSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: z.guid().optional(),
   type: z.enum(ISSUE_EXECUTION_STAGE_TYPES),
   approvalsNeeded: z.literal(1).optional().default(1),
   participants: z.array(issueExecutionStageParticipantSchema).default([]),
@@ -116,19 +117,19 @@ export const issueReviewRequestSchema = z.object({
 
 export const issueExecutionStateSchema = z.object({
   status: z.enum(ISSUE_EXECUTION_STATE_STATUSES),
-  currentStageId: z.string().uuid().nullable(),
+  currentStageId: z.guid().nullable(),
   currentStageIndex: z.number().int().nonnegative().nullable(),
   currentStageType: z.enum(ISSUE_EXECUTION_STAGE_TYPES).nullable(),
   currentParticipant: issueExecutionStagePrincipalSchema.nullable(),
   returnAssignee: issueExecutionStagePrincipalSchema.nullable(),
   reviewRequest: issueReviewRequestSchema.nullable().optional().default(null),
-  completedStageIds: z.array(z.string().uuid()).default([]),
-  lastDecisionId: z.string().uuid().nullable(),
+  completedStageIds: z.array(z.guid()).default([]),
+  lastDecisionId: z.guid().nullable(),
   lastDecisionOutcome: z.enum(ISSUE_EXECUTION_DECISION_OUTCOMES).nullable(),
   // AgentDash: the task-recovery namespace is owned by the recovery ledger,
   // not the execution-stage workflow. It must survive policy/status
   // transitions instead of being stripped by this schema.
-  recoveryBudget: z.record(z.unknown()).nullable().optional(),
+  recoveryBudget: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 const issueRequestDepthInputSchema = z
@@ -138,12 +139,12 @@ const issueRequestDepthInputSchema = z
   .transform((value) => clampIssueRequestDepth(value));
 
 const createIssueBaseSchema = z.object({
-  projectId: z.string().uuid().optional().nullable(),
-  projectWorkspaceId: z.string().uuid().optional().nullable(),
-  goalId: z.string().uuid().optional().nullable(),
-  parentId: z.string().uuid().optional().nullable(),
-  blockedByIssueIds: z.array(z.string().uuid()).optional(),
-  inheritExecutionWorkspaceFromIssueId: z.string().uuid().optional().nullable(),
+  projectId: z.guid().optional().nullable(),
+  projectWorkspaceId: z.guid().optional().nullable(),
+  goalId: z.guid().optional().nullable(),
+  parentId: z.guid().optional().nullable(),
+  blockedByIssueIds: z.array(z.guid()).optional(),
+  inheritExecutionWorkspaceFromIssueId: z.guid().optional().nullable(),
   title: z.string().min(1),
   description: multilineTextSchema.optional().nullable(),
   // AgentDash: no default here. An omitted status is resolved on the server
@@ -152,7 +153,7 @@ const createIssueBaseSchema = z.object({
   // it — the CLI and the MCP tools do — and the setting would never apply.
   status: z.enum(ISSUE_STATUSES).optional(),
   priority: z.enum(ISSUE_PRIORITIES).optional().default("medium"),
-  assigneeAgentId: z.string().uuid().optional().nullable(),
+  assigneeAgentId: z.guid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),
   /**
    * AgentDash: work assigned to a person who stewards an agent goes to that
@@ -181,10 +182,10 @@ const createIssueBaseSchema = z.object({
   definitionOfDone: definitionOfDoneSchema.optional().nullable(),
   assigneeAdapterOverrides: issueAssigneeAdapterOverridesSchema.optional().nullable(),
   executionPolicy: issueExecutionPolicySchema.optional().nullable(),
-  executionWorkspaceId: z.string().uuid().optional().nullable(),
+  executionWorkspaceId: z.guid().optional().nullable(),
   executionWorkspacePreference: z.enum(ISSUE_EXECUTION_WORKSPACE_PREFERENCES).optional().nullable(),
   executionWorkspaceSettings: issueExecutionWorkspaceSettingsSchema.optional().nullable(),
-  labelIds: z.array(z.string().uuid()).optional(),
+  labelIds: z.array(z.guid()).optional(),
 });
 
 // AgentDash: an ExecOS origin must carry both halves. A kind without an id
@@ -236,12 +237,12 @@ export const createIssueLabelSchema = z.object({
 
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
-export const updateIssueSchema = createIssueBaseSchema.omit({
+export const updateIssueSchema = partialWithoutDefaults(createIssueBaseSchema.omit({
   definitionOfDone: true,
   // AgentDash: ExecOS request identity is immutable after creation.
   originKind: true,
   originId: true,
-}).partial().extend({
+})).extend({
   /**
    * Refuse it loudly instead of dropping it on the floor.
    *
@@ -303,7 +304,7 @@ export type UpdateIssue = z.infer<typeof updateIssueSchema>;
 export type IssueExecutionWorkspaceSettings = z.infer<typeof issueExecutionWorkspaceSettingsSchema>;
 
 export const checkoutIssueSchema = z.object({
-  agentId: z.string().uuid(),
+  agentId: z.guid(),
   expectedStatuses: z.array(z.enum(ISSUE_STATUSES)).nonempty(),
 });
 
@@ -334,11 +335,11 @@ export const issueDocumentKeySchema = z
 export const suggestedTaskDraftSchema = z.object({
   clientKey: z.string().trim().min(1).max(120),
   parentClientKey: z.string().trim().min(1).max(120).nullable().optional(),
-  parentId: z.string().uuid().nullable().optional(),
+  parentId: z.guid().nullable().optional(),
   title: z.string().trim().min(1).max(240),
   description: multilineTextSchema.pipe(z.string().trim().max(20000)).nullable().optional(),
   priority: z.enum(ISSUE_PRIORITIES).nullable().optional(),
-  assigneeAgentId: z.string().uuid().nullable().optional(),
+  assigneeAgentId: z.guid().nullable().optional(),
   assigneeUserId: z.string().trim().min(1).nullable().optional(),
   // AgentDash: same meaning as on issue create; applied when the drafts are written.
   assignToPerson: z.boolean().optional(),
@@ -346,8 +347,8 @@ export const suggestedTaskDraftSchema = z.object({
   // agent they steward; carried to that agent's wake when the draft is
   // accepted. Ignored on input.
   routedFromStewardUserId: z.string().trim().min(1).optional(),
-  projectId: z.string().uuid().nullable().optional(),
-  goalId: z.string().uuid().nullable().optional(),
+  projectId: z.guid().nullable().optional(),
+  goalId: z.guid().nullable().optional(),
   billingCode: z.string().trim().max(120).nullable().optional(),
   labels: z.array(z.string().trim().min(1).max(48)).max(20).optional(),
   hiddenInPreview: z.boolean().optional(),
@@ -363,7 +364,7 @@ export const suggestedTaskDraftSchema = z.object({
 
 export const suggestTasksPayloadSchema = z.object({
   version: z.literal(1),
-  defaultParentId: z.string().uuid().nullable().optional(),
+  defaultParentId: z.guid().nullable().optional(),
   tasks: z.array(suggestedTaskDraftSchema).min(1).max(50),
 }).superRefine((value, ctx) => {
   const seenClientKeys = new Set<string>();
@@ -382,10 +383,10 @@ export const suggestTasksPayloadSchema = z.object({
 
 export const suggestTasksResultCreatedTaskSchema = z.object({
   clientKey: z.string().trim().min(1).max(120),
-  issueId: z.string().uuid(),
+  issueId: z.guid(),
   identifier: z.string().trim().min(1).nullable().optional(),
   title: z.string().trim().min(1).nullable().optional(),
-  parentIssueId: z.string().uuid().nullable().optional(),
+  parentIssueId: z.guid().nullable().optional(),
   parentIdentifier: z.string().trim().min(1).nullable().optional(),
 });
 
@@ -422,11 +423,11 @@ export const askUserQuestionsQuestionSchema = z.object({
 export const askUserQuestionsPayloadSchema = z.object({
   version: z.literal(1),
   answerOwnerUserId: z.string().trim().min(1).max(255).optional(),
-  workforceAgentId: z.string().uuid().optional(),
-  workforceEnrollmentId: z.string().uuid().optional(),
+  workforceAgentId: z.guid().optional(),
+  workforceEnrollmentId: z.guid().optional(),
   workforceTemplateId: z.string().max(120).optional(),
   workforceTemplateVersion: z.literal(1).optional(),
-  replacesInteractionId: z.string().uuid().optional(),
+  replacesInteractionId: z.guid().optional(),
   title: z.string().trim().max(240).nullable().optional(),
   submitLabel: z.string().trim().max(120).nullable().optional(),
   questions: z.array(askUserQuestionsQuestionSchema).min(1).max(10),
@@ -485,10 +486,10 @@ const requestConfirmationTargetBaseSchema = z.object({
 
 export const requestConfirmationIssueDocumentTargetSchema = requestConfirmationTargetBaseSchema.extend({
   type: z.literal("issue_document"),
-  issueId: z.string().uuid().nullable().optional(),
-  documentId: z.string().uuid().nullable().optional(),
+  issueId: z.guid().nullable().optional(),
+  documentId: z.guid().nullable().optional(),
   key: issueDocumentKeySchema,
-  revisionId: z.string().uuid(),
+  revisionId: z.guid(),
   revisionNumber: z.number().int().positive().nullable().optional(),
 });
 
@@ -522,7 +523,7 @@ export const requestConfirmationResultSchema = z.object({
   version: z.literal(1),
   outcome: z.enum(["accepted", "rejected", "superseded_by_comment", "stale_target"]),
   reason: z.string().trim().max(4000).nullable().optional(),
-  commentId: z.string().uuid().nullable().optional(),
+  commentId: z.guid().nullable().optional(),
   staleTarget: requestConfirmationTargetSchema.nullable().optional(),
 });
 
@@ -530,8 +531,8 @@ export const createIssueThreadInteractionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("suggest_tasks"),
     idempotencyKey: z.string().trim().max(255).nullable().optional(),
-    sourceCommentId: z.string().uuid().nullable().optional(),
-    sourceRunId: z.string().uuid().nullable().optional(),
+    sourceCommentId: z.guid().nullable().optional(),
+    sourceRunId: z.guid().nullable().optional(),
     title: z.string().trim().max(240).nullable().optional(),
     summary: z.string().trim().max(1000).nullable().optional(),
     continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("wake_assignee"),
@@ -540,8 +541,8 @@ export const createIssueThreadInteractionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("ask_user_questions"),
     idempotencyKey: z.string().trim().max(255).nullable().optional(),
-    sourceCommentId: z.string().uuid().nullable().optional(),
-    sourceRunId: z.string().uuid().nullable().optional(),
+    sourceCommentId: z.guid().nullable().optional(),
+    sourceRunId: z.guid().nullable().optional(),
     title: z.string().trim().max(240).nullable().optional(),
     summary: z.string().trim().max(1000).nullable().optional(),
     continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("wake_assignee"),
@@ -550,8 +551,8 @@ export const createIssueThreadInteractionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("request_confirmation"),
     idempotencyKey: z.string().trim().max(255).nullable().optional(),
-    sourceCommentId: z.string().uuid().nullable().optional(),
-    sourceRunId: z.string().uuid().nullable().optional(),
+    sourceCommentId: z.guid().nullable().optional(),
+    sourceRunId: z.guid().nullable().optional(),
     title: z.string().trim().max(240).nullable().optional(),
     summary: z.string().trim().max(1000).nullable().optional(),
     continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("none"),
@@ -597,13 +598,13 @@ export const respondIssueThreadInteractionSchema = z.object({
 export type RespondIssueThreadInteraction = z.infer<typeof respondIssueThreadInteractionSchema>;
 
 export const linkIssueApprovalSchema = z.object({
-  approvalId: z.string().uuid(),
+  approvalId: z.guid(),
 });
 
 export type LinkIssueApproval = z.infer<typeof linkIssueApprovalSchema>;
 
 export const createIssueAttachmentMetadataSchema = z.object({
-  issueCommentId: z.string().uuid().optional().nullable(),
+  issueCommentId: z.guid().optional().nullable(),
 });
 
 export type CreateIssueAttachmentMetadata = z.infer<typeof createIssueAttachmentMetadataSchema>;
@@ -617,7 +618,7 @@ export const upsertIssueDocumentSchema = z.object({
   format: issueDocumentFormatSchema,
   body: multilineTextSchema.pipe(z.string().max(524288)),
   changeSummary: z.string().trim().max(500).nullable().optional(),
-  baseRevisionId: z.string().uuid().nullable().optional(),
+  baseRevisionId: z.guid().nullable().optional(),
 });
 
 export const restoreIssueDocumentRevisionSchema = z.object({});

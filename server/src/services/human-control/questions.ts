@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { companyMemberships, issues, issueThreadInteractions } from '@paperclipai/db';
-import { askUserQuestionsPayloadSchema, askUserQuestionsQuestionSchema, askUserQuestionsQuestionOptionSchema, askUserQuestionsAnswerSchema, askUserQuestionsResultSchema, humanJsonSchema, type AskUserQuestionsInteraction, type HumanOperationDescriptor } from '@paperclipai/shared';
+import { askUserQuestionsPayloadSchema, askUserQuestionsQuestionSchema, askUserQuestionsQuestionOptionSchema, askUserQuestionsAnswerSchema, askUserQuestionsResultSchema, humanJsonSchema, withoutRefinements, type AskUserQuestionsInteraction, type HumanOperationDescriptor } from '@paperclipai/shared';
 import { conflict, forbidden, notFound } from '../../errors.js';
 import { assertProjectIdVisible } from '../../routes/visibility.js';
 import { issueThreadInteractionService } from '../issue-thread-interactions.js';
@@ -14,11 +14,11 @@ import type { heartbeatService } from '../heartbeat.js';
 import type { HumanOperation, HumanOperationContext } from '../human-control.js';
 import { humanCompany } from './workforce.js';
 import { questionReplacement } from './authority.js';
-const id = z.string().uuid(), text = z.string();
+const id = z.guid(), text = z.string();
 const reference = z.object({ issueId: id, interactionId: id }).strict();
 const answer = askUserQuestionsAnswerSchema.strict();
-const question = askUserQuestionsQuestionSchema.innerType().extend({ options: z.array(askUserQuestionsQuestionOptionSchema.strict()).max(10) }).strict();
-const payloadSchema = askUserQuestionsPayloadSchema.innerType().extend({ questions: z.array(question).min(1).max(10) }).strict();
+const question = withoutRefinements(askUserQuestionsQuestionSchema).extend({ options: z.array(askUserQuestionsQuestionOptionSchema.strict()).max(10) }).strict();
+const payloadSchema = withoutRefinements(askUserQuestionsPayloadSchema).extend({ questions: z.array(question).min(1).max(10) }).strict();
 const resultSchema = askUserQuestionsResultSchema.extend({ answers: z.array(answer).max(20) }).strict();
 const detail = z.object({ interactionId: id, issueId: id, status: text, title: text.nullable(), payload: payloadSchema, result: resultSchema.nullable(), sourceRunId: id.nullable(), sourceCommentId: id.nullable(), continuationPolicy: text }).strict();
 const pendingRow = z.object({ interactionId: id, issueId: id, identifier: text.nullable(), issueTitle: text, title: text, questionSummary: text, waitingSince: text, answerOwnerUserId: text, answerOwnerName: text }).strict();
@@ -69,7 +69,7 @@ function recoveryProject(q: AskUserQuestionsInteraction) {
     resolvedByUserId: q.resolvedByUserId ?? null, resolvedAt: q.resolvedAt ? new Date(q.resolvedAt).toISOString() : null };
 }
 export function questionHumanOperations(heartbeat: Pick<ReturnType<typeof heartbeatService>, 'wakeup'>): HumanOperation[] {
-  function operation(operationId: HumanOperationDescriptor['operationId'], input: z.AnyZodObject, output: z.ZodTypeAny, handler: Pick<HumanOperation, 'read' | 'execute' | 'afterCommit'>): HumanOperation {
+  function operation(operationId: HumanOperationDescriptor['operationId'], input: z.ZodObject, output: z.ZodTypeAny, handler: Pick<HumanOperation, 'read' | 'execute' | 'afterCommit'>): HumanOperation {
     return {
       descriptor: { operationId, version: 1, pageId: 'inbox', actionId: operationId.slice('human_questions.'.length), targetKind: 'company', behavior: handler.read ? 'read' : 'prepare_confirm', authority: 'exact_question_owner', confirmation: handler.read ? 'none' : 'human_readback', inputSchema: humanJsonSchema(input), outputSchema: humanJsonSchema(output), content: { fullText: true, pagination: operationId.endsWith('list') ? 'offset' : 'none' } },
       input, output, ...handler, recoveryReference: value => ({ interactionId: (value as {id:string}).id, issueId: (value as {issueId:string}).issueId }), authorize() {},

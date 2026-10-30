@@ -65,7 +65,7 @@ export const cosCreateIssueTrailerSchema = z
       .object({
         title: z.string().trim().min(1).max(200),
         description: z.string().trim().max(8000).optional(),
-        assigneeAgentId: z.string().uuid(),
+        assigneeAgentId: z.guid(),
       })
       .strict(),
   })

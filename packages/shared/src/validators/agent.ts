@@ -1,5 +1,6 @@
 import { workforceTemplateIdSchema } from "./workforce.js";
 import { z } from "zod";
+import { partialWithoutDefaults } from "./zod-object.js";
 import {
   AGENT_AUTONOMY_KINDS,
   AGENT_ICON_NAMES,
@@ -35,7 +36,7 @@ export const upsertAgentInstructionsFileSchema = z.object({
 
 export type UpsertAgentInstructionsFile = z.infer<typeof upsertAgentInstructionsFileSchema>;
 
-const adapterConfigSchema = z.record(z.unknown()).superRefine((value, ctx) => {
+const adapterConfigSchema = z.record(z.string(), z.unknown()).superRefine((value, ctx) => {
   const envValue = value.env;
   if (envValue === undefined) return;
   const parsed = envConfigSchema.safeParse(envValue);
@@ -66,7 +67,7 @@ function normalizeAgentAdapterAliases(value: unknown) {
 
 export const createAgentInstructionsBundleSchema = z.object({
   entryFile: z.string().trim().min(1).optional(),
-  files: z.record(z.string()).refine((files) => Object.keys(files).length > 0, {
+  files: z.record(z.string(), z.string()).refine((files) => Object.keys(files).length > 0, {
     message: "instructionsBundle.files must contain at least one file",
   }),
 });
@@ -128,14 +129,14 @@ const createAgentBaseSchema = z.object({
   role: z.enum(AGENT_ROLES).optional().default("general"),
   title: z.string().optional().nullable(),
   icon: z.enum(AGENT_ICON_NAMES).optional().nullable(),
-  reportsTo: z.string().uuid().optional().nullable(),
+  reportsTo: z.guid().optional().nullable(),
   capabilities: z.string().optional().nullable(),
   desiredSkills: z.array(z.string().min(1)).optional(),
   adapterType: agentAdapterTypeSchema,
   adapterConfig: adapterConfigSchema.optional().default({}),
   instructionsBundle: createAgentInstructionsBundleSchema.optional(),
   runtimeConfig: agentRuntimeConfigSchema.optional().default({}),
-  defaultEnvironmentId: z.string().uuid().optional().nullable(),
+  defaultEnvironmentId: z.guid().optional().nullable(),
   /**
    * Run the adapter's ENVIRONMENT preflight before creating the agent.
    *
@@ -154,7 +155,7 @@ const createAgentBaseSchema = z.object({
   requireHarnessPreflight: z.boolean().optional().default(false),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   permissions: agentPermissionsSchema.optional(),
-  metadata: z.record(z.unknown()).optional().nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   /**
    * Which kind of agent this is. Absent means `stewarded`, so every existing
    * caller keeps creating personal agents without changing a line.
@@ -215,15 +216,14 @@ export const createAgentSchema = z.preprocess(normalizeAgentAdapterAliases, crea
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export const createAgentHireSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema.extend({
-  sourceIssueId: z.string().uuid().optional().nullable(),
-  sourceIssueIds: z.array(z.string().uuid()).optional(),
+  sourceIssueId: z.guid().optional().nullable(),
+  sourceIssueIds: z.array(z.guid()).optional(),
 })).superRefine(assertAdapterConfigComplete);
 
 export type CreateAgentHire = z.infer<typeof createAgentHireSchema>;
 
-export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema
-  .omit({ permissions: true, workforceTemplateId: true })
-  .partial()
+export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, partialWithoutDefaults(createAgentBaseSchema
+  .omit({ permissions: true, workforceTemplateId: true }))
   .extend({
     permissions: z.never().optional(),
     workforceTemplateId: z.never().optional(),
@@ -284,7 +284,7 @@ export const wakeAgentSchema = z.object({
   source: z.enum(["timer", "assignment", "on_demand", "automation"]).optional().default("on_demand"),
   triggerDetail: z.enum(["manual", "ping", "callback", "system"]).optional(),
   reason: z.string().optional().nullable(),
-  payload: z.record(z.unknown()).optional().nullable(),
+  payload: z.record(z.string(), z.unknown()).optional().nullable(),
   idempotencyKey: z.string().optional().nullable(),
   forceFreshSession: z.preprocess(
     (value) => (value === null ? undefined : value),
@@ -308,14 +308,14 @@ export const testAdapterEnvironmentSchema = z.object({
    * environment is non-local (SSH/sandbox), the test probes are executed
    * inside that environment so the result reflects real agent execution.
    */
-  environmentId: z.string().uuid().optional().nullable(),
+  environmentId: z.guid().optional().nullable(),
   /**
    * AgentDash (security): the agent being edited, when the test runs from an
    * edit form. The server compares host-execution fields (command, args, env,
    * cwd) against that agent's STORED config, so resending unchanged values does
    * not require instance admin.
    */
-  agentId: z.string().uuid().optional().nullable(),
+  agentId: z.guid().optional().nullable(),
 });
 
 export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema>;

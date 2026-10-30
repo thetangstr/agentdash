@@ -1543,3 +1543,5 @@ export * from './reserved-company-prefixes.js';
 // AgentDash (PR #1059): the markdown line-break normalizer every multiline
 // write uses; exported so the run page's tests can run a document through it.
 export { normalizeEscapedLineBreaks } from './validators/text.js';
+// zod 3 → zod 4 object semantics (refinement-free objects, defaults-free partials).
+export { withoutRefinements, partialWithoutDefaults } from './validators/zod-object.js';

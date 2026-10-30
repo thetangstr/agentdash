@@ -52,7 +52,7 @@ export const workflowRecommendationEvidenceSchema = z
   .object({
     query: z.string().min(1).max(2000),
     runIds: z.array(z.string().min(1)).min(1),
-    eventIds: z.array(z.string().uuid()).min(1),
+    eventIds: z.array(z.guid()).min(1),
     eventTypes: z.array(z.string().min(1)).min(1),
     from: z.string().nullable(),
     to: z.string().nullable(),
@@ -75,7 +75,7 @@ export const raiseWorkflowRecommendationSchema = z
     cyclesObserved: z.number().int().positive(),
     evidenceCycles: z.number().int().positive(),
     latestRunId: z.string().trim().min(1).max(200),
-    observation: z.record(z.number()),
+    observation: z.record(z.string(), z.number()),
     evidence: workflowRecommendationEvidenceSchema,
   })
   .strict();

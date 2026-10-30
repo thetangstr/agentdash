@@ -179,7 +179,7 @@ function markerPreconditions(issue: typeof issues.$inferSelect) {
 export function taskRecoveryHumanOperations(heartbeat: TaskRecoveryHeartbeat): HumanOperation[] {
   function operation(
     operationId: HumanOperationDescriptor['operationId'],
-    input: z.AnyZodObject,
+    input: z.ZodObject,
     output: z.ZodTypeAny,
     handler: Pick<HumanOperation, 'read' | 'execute' | 'afterCommit'>,
   ): HumanOperation {

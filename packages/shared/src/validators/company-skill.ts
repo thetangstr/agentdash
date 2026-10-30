@@ -11,8 +11,8 @@ export const companySkillFileInventoryEntrySchema = z.object({
 });
 
 export const companySkillSchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
+  id: z.guid(),
+  companyId: z.guid(),
   key: z.string().min(1),
   slug: z.string().min(1),
   name: z.string().min(1),
@@ -24,7 +24,7 @@ export const companySkillSchema = z.object({
   trustLevel: companySkillTrustLevelSchema,
   compatibility: companySkillCompatibilitySchema,
   fileInventory: z.array(companySkillFileInventoryEntrySchema).default([]),
-  metadata: z.record(z.unknown()).nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });
@@ -38,7 +38,7 @@ export const companySkillListItemSchema = companySkillSchema.extend({
 });
 
 export const companySkillUsageAgentSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string().min(1),
   urlKey: z.string().min(1),
   adapterType: z.string().min(1),
@@ -71,14 +71,14 @@ export const companySkillImportSchema = z.object({
 });
 
 export const companySkillProjectScanRequestSchema = z.object({
-  projectIds: z.array(z.string().uuid()).optional(),
-  workspaceIds: z.array(z.string().uuid()).optional(),
+  projectIds: z.array(z.guid()).optional(),
+  workspaceIds: z.array(z.guid()).optional(),
 });
 
 export const companySkillProjectScanSkippedSchema = z.object({
-  projectId: z.string().uuid(),
+  projectId: z.guid(),
   projectName: z.string().min(1),
-  workspaceId: z.string().uuid().nullable(),
+  workspaceId: z.guid().nullable(),
   workspaceName: z.string().nullable(),
   path: z.string().nullable(),
   reason: z.string().min(1),
@@ -87,12 +87,12 @@ export const companySkillProjectScanSkippedSchema = z.object({
 export const companySkillProjectScanConflictSchema = z.object({
   slug: z.string().min(1),
   key: z.string().min(1),
-  projectId: z.string().uuid(),
+  projectId: z.guid(),
   projectName: z.string().min(1),
-  workspaceId: z.string().uuid(),
+  workspaceId: z.guid(),
   workspaceName: z.string().min(1),
   path: z.string().min(1),
-  existingSkillId: z.string().uuid(),
+  existingSkillId: z.guid(),
   existingSkillKey: z.string().min(1),
   existingSourceLocator: z.string().nullable(),
   reason: z.string().min(1),
@@ -117,7 +117,7 @@ export const companySkillCreateSchema = z.object({
 });
 
 export const companySkillFileDetailSchema = z.object({
-  skillId: z.string().uuid(),
+  skillId: z.guid(),
   path: z.string().min(1),
   kind: z.enum(["skill", "markdown", "reference", "script", "asset", "other"]),
   content: z.string(),

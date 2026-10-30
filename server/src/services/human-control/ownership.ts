@@ -56,7 +56,7 @@ export async function recordAccountabilityChange(db: Db, req: Request, existing:
   else await logActivity(db, input);
 }
 export function ownershipHumanOperations(): HumanOperation[] {
-  const id = z.string().uuid(), userId = z.string().trim().min(1).max(256);
+  const id = z.guid(), userId = z.string().trim().min(1).max(256);
   const inputs = {
     'human_questions.owner.assign': z.object({ agentId: id, accountableUserId: userId }).strict(),
     'human_questions.stewardship.assign': assignAgentStewardshipSchema,

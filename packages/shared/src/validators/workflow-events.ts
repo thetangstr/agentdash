@@ -153,7 +153,7 @@ export const emitWorkflowEventSchema = z
     eventType: z.enum(WORKFLOW_EVENT_TYPES),
     actorKind: z.enum(WORKFLOW_ACTOR_KINDS),
     durationMs: z.number().int().nonnegative().nullable().optional(),
-    payload: z.record(z.unknown()).optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 

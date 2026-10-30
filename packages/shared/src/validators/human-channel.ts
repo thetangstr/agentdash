@@ -12,7 +12,7 @@ export const verifyHumanChannelBindingSchema = z
     externalTenantId: z.string().trim().min(1).max(200).optional().nullable(),
     externalUserId: z.string().trim().min(1).max(200),
     externalConversationId: z.string().trim().min(1).max(200).optional().nullable(),
-    metadata: z.record(z.unknown()).optional().nullable(),
+    metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   })
   .strict();
 

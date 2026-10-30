@@ -10,58 +10,83 @@ import { z } from "zod";
  */
 export type JsonSchema = Record<string, unknown>;
 
-function withDescription(schema: JsonSchema, zodSchema: z.ZodTypeAny): JsonSchema {
-  const description = zodSchema._def.description;
+// zod 4 reading notes. Dispatch is on the public definition (`_zod.def.type`).
+// Refinements are checks on the schema itself (zod 3 wrapped them in
+// ZodEffects); `.transform()` is `pipe(schema, transform)` and `z.preprocess()`
+// is `pipe(transform, schema)`, each rendered by the side a caller sends, as
+// zod 3's ZodEffects was; any other `.pipe()` falls back to `{}` as zod 3's
+// ZodPipeline did.
+type Def = z.core.$ZodTypeDef & Record<string, unknown>;
+type CheckDef = { check: string; [key: string]: unknown };
+
+const DESCRIPTION_INHERITING_WRAPPERS = new Set(["optional", "nullable", "default", "prefault", "catch", "readonly"]);
+
+/**
+ * The schema's description, as zod 3 would have reported it. zod 3 copied a
+ * description onto the wrapper `.optional()` / `.nullable()` / `.default()`
+ * built around a described schema; zod 4 keeps it on the inner schema only.
+ * A description set on the wrapper itself (even "") still wins.
+ */
+function descriptionOf(schema: z.ZodType): string | undefined {
+  const meta = z.globalRegistry.get(schema);
+  if (meta && "description" in meta) return meta.description;
+  const def = schema._zod.def as Def;
+  if (DESCRIPTION_INHERITING_WRAPPERS.has(def.type)) return descriptionOf(def.innerType as z.ZodType);
+  return undefined;
+}
+
+function withDescription(schema: JsonSchema, zodSchema: z.ZodType): JsonSchema {
+  const description = descriptionOf(zodSchema);
   return typeof description === "string" && description.length > 0
     ? { ...schema, description }
     : schema;
 }
 
-export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
-  const def = schema._def as { typeName?: string } & Record<string, unknown>;
-  const typeName = def.typeName;
+function checksOf(schema: z.ZodType): CheckDef[] {
+  return ((schema._zod.def as { checks?: Array<{ _zod: { def: CheckDef } }> }).checks ?? []).map((check) => check._zod.def);
+}
 
-  switch (typeName) {
-    case z.ZodFirstPartyTypeKind.ZodString:
+export function zodToJsonSchema(schema: z.ZodType): JsonSchema {
+  const def = schema._zod.def as Def;
+
+  switch (def.type) {
+    case "string":
       return withDescription({ type: "string" }, schema);
-    case z.ZodFirstPartyTypeKind.ZodNumber: {
-      const checks = (schema as z.ZodNumber)._def.checks;
-      const isInt = checks.some((check) => check.kind === "int");
+    case "number": {
+      const checks = checksOf(schema);
+      const isInt = (typeof def.format === "string" && def.format.includes("int"))
+        || checks.some((check) => check.check === "number_format" && String(check.format).includes("int"));
       // AgentDash: repeated Zod bounds are conjunctive. Advertise the strongest
       // bound on each side; an exclusive bound wins a tie at the same value.
       let lower: { value: number; inclusive: boolean } | undefined;
       let upper: { value: number; inclusive: boolean } | undefined;
       for (const check of checks) {
-        if (check.kind === "min" && (!lower || check.value > lower.value ||
-          (check.value === lower.value && !check.inclusive))) lower = check;
-        if (check.kind === "max" && (!upper || check.value < upper.value ||
-          (check.value === upper.value && !check.inclusive))) upper = check;
+        const bound = { value: check.value as number, inclusive: check.inclusive === true };
+        if (check.check === "greater_than" && (!lower || bound.value > lower.value ||
+          (bound.value === lower.value && !bound.inclusive))) lower = bound;
+        if (check.check === "less_than" && (!upper || bound.value < upper.value ||
+          (bound.value === upper.value && !bound.inclusive))) upper = bound;
       }
       const result: JsonSchema = { type: isInt ? "integer" : "number" };
       if (lower) result[lower.inclusive ? "minimum" : "exclusiveMinimum"] = lower.value;
       if (upper) result[upper.inclusive ? "maximum" : "exclusiveMaximum"] = upper.value;
       return withDescription(result, schema);
     }
-    case z.ZodFirstPartyTypeKind.ZodBoolean:
+    case "boolean":
       return withDescription({ type: "boolean" }, schema);
-    case z.ZodFirstPartyTypeKind.ZodDate:
+    case "date":
       return withDescription({ type: "string", format: "date-time" }, schema);
-    case z.ZodFirstPartyTypeKind.ZodEnum:
-      return withDescription({ type: "string", enum: [...(def.values as string[])] }, schema);
-    case z.ZodFirstPartyTypeKind.ZodNativeEnum: {
-      const values = Object.values(def.values as Record<string, unknown>)
-        .filter((value) => typeof value === "string" || typeof value === "number");
-      return withDescription({ enum: values }, schema);
-    }
-    case z.ZodFirstPartyTypeKind.ZodLiteral:
-      return withDescription({ const: def.value }, schema);
-    case z.ZodFirstPartyTypeKind.ZodArray:
+    case "enum":
+      return withDescription({ type: "string", enum: Object.values(def.entries as Record<string, string>) }, schema);
+    case "literal":
+      return withDescription({ const: (def.values as unknown[])[0] }, schema);
+    case "array":
       return withDescription(
-        { type: "array", items: zodToJsonSchema(def.type as z.ZodTypeAny) },
+        { type: "array", items: zodToJsonSchema(def.element as z.ZodType) },
         schema,
       );
-    case z.ZodFirstPartyTypeKind.ZodObject: {
-      const shape = (schema as z.AnyZodObject).shape as Record<string, z.ZodTypeAny>;
+    case "object": {
+      const shape = (schema as z.ZodObject).shape as Record<string, z.ZodType>;
       const properties: Record<string, JsonSchema> = {};
       const required: string[] = [];
       for (const [key, value] of Object.entries(shape)) {
@@ -72,33 +97,37 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
       if (required.length > 0) result.required = required;
       return withDescription(result, schema);
     }
-    case z.ZodFirstPartyTypeKind.ZodRecord:
+    case "record":
       return withDescription(
-        { type: "object", additionalProperties: zodToJsonSchema(def.valueType as z.ZodTypeAny) },
+        { type: "object", additionalProperties: zodToJsonSchema(def.valueType as z.ZodType) },
         schema,
       );
-    case z.ZodFirstPartyTypeKind.ZodUnion:
-    case z.ZodFirstPartyTypeKind.ZodDiscriminatedUnion: {
-      const options = def.options as z.ZodTypeAny[];
+    case "union": {
+      const options = def.options as z.ZodType[];
       return withDescription({ anyOf: options.map((option) => zodToJsonSchema(option)) }, schema);
     }
-    case z.ZodFirstPartyTypeKind.ZodOptional:
+    case "optional":
       // AgentDash: as with nullable/default, an explicit wrapper description
       // takes precedence; otherwise retain the converted inner description.
-      return withDescription(zodToJsonSchema(def.innerType as z.ZodTypeAny), schema);
-    case z.ZodFirstPartyTypeKind.ZodNullable: {
-      const inner = zodToJsonSchema(def.innerType as z.ZodTypeAny);
+      return withDescription(zodToJsonSchema(def.innerType as z.ZodType), schema);
+    case "nullable": {
+      const inner = zodToJsonSchema(def.innerType as z.ZodType);
       return withDescription({ anyOf: [inner, { type: "null" }] }, schema);
     }
-    case z.ZodFirstPartyTypeKind.ZodDefault: {
-      const inner = zodToJsonSchema(def.innerType as z.ZodTypeAny);
-      const defaultValue = (def.defaultValue as () => unknown)();
-      return withDescription({ ...inner, default: defaultValue }, schema);
+    case "default":
+    case "prefault": {
+      const inner = zodToJsonSchema(def.innerType as z.ZodType);
+      return withDescription({ ...inner, default: def.defaultValue }, schema);
     }
-    case z.ZodFirstPartyTypeKind.ZodEffects:
-      return zodToJsonSchema(def.schema as z.ZodTypeAny);
-    case z.ZodFirstPartyTypeKind.ZodAny:
-    case z.ZodFirstPartyTypeKind.ZodUnknown:
+    case "pipe": {
+      const input = def.in as z.ZodType;
+      const output = def.out as z.ZodType;
+      if (output._zod.def.type === "transform") return zodToJsonSchema(input);
+      if (input._zod.def.type === "transform") return zodToJsonSchema(output);
+      return {};
+    }
+    case "any":
+    case "unknown":
       return withDescription({}, schema);
     default:
       // Permissive fallback for anything exotic — zod still validates on call.
@@ -107,7 +136,7 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
 }
 
 /** Convert a tool's zod object schema into an MCP inputSchema. */
-export function toolInputSchema(schema: z.AnyZodObject): JsonSchema {
+export function toolInputSchema(schema: z.ZodObject): JsonSchema {
   const converted = zodToJsonSchema(schema);
   return { type: "object", properties: {}, ...converted };
 }

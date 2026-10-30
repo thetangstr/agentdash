@@ -11,7 +11,7 @@ import { z } from "zod";
  */
 
 export const assistantPrepareDecisionSchema = z.object({
-  approvalId: z.string().uuid(),
+  approvalId: z.guid(),
   decision: z.enum(["approve", "reject", "request_changes"]),
   note: z.string().max(1000).optional().nullable(),
 });
@@ -23,7 +23,7 @@ export const assistantPrepareHireSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
   /** Optional human-name hint ("Quinn"); the role title is used without one. */
   name: z.string().trim().min(1).max(120).optional().nullable(),
-  projectId: z.string().uuid().optional().nullable(),
+  projectId: z.guid().optional().nullable(),
 });
 export type AssistantPrepareHire = z.infer<typeof assistantPrepareHireSchema>;
 

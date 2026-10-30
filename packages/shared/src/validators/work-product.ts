@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partialWithoutDefaults } from "./zod-object.js";
 
 export const issueWorkProductTypeSchema = z.enum([
   "preview_url",
@@ -30,9 +31,9 @@ export const issueWorkProductReviewStateSchema = z.enum([
 ]);
 
 export const createIssueWorkProductSchema = z.object({
-  projectId: z.string().uuid().optional().nullable(),
-  executionWorkspaceId: z.string().uuid().optional().nullable(),
-  runtimeServiceId: z.string().uuid().optional().nullable(),
+  projectId: z.guid().optional().nullable(),
+  executionWorkspaceId: z.guid().optional().nullable(),
+  runtimeServiceId: z.guid().optional().nullable(),
   type: issueWorkProductTypeSchema,
   provider: z.string().min(1),
   externalId: z.string().optional().nullable(),
@@ -43,13 +44,13 @@ export const createIssueWorkProductSchema = z.object({
   isPrimary: z.boolean().optional().default(false),
   healthStatus: z.enum(["unknown", "healthy", "unhealthy"]).optional().default("unknown"),
   summary: z.string().optional().nullable(),
-  metadata: z.record(z.unknown()).optional().nullable(),
-  createdByRunId: z.string().uuid().optional().nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional().nullable(),
+  createdByRunId: z.guid().optional().nullable(),
 });
 
 export type CreateIssueWorkProduct = z.infer<typeof createIssueWorkProductSchema>;
 
-export const updateIssueWorkProductSchema = createIssueWorkProductSchema.partial();
+export const updateIssueWorkProductSchema = partialWithoutDefaults(createIssueWorkProductSchema);
 
 export type UpdateIssueWorkProduct = z.infer<typeof updateIssueWorkProductSchema>;
 
