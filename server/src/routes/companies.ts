@@ -197,6 +197,11 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     }
   }
 
+  /** AgentDash (APM gate 2, P2.3): the exporting agent, when an agent key exports. */
+  function exportingAgentId(req: Request): string | null {
+    return req.actor.type === "agent" ? req.actor.agentId ?? null : null;
+  }
+
   // AgentDash (#1057): company summaries follow the same spend predicate as Costs.
   async function companyForReader(req: Request, company: Awaited<ReturnType<typeof svc.list>>[number]) {
     return await canReadCompanySpend(db, req, company.id)
@@ -284,7 +289,8 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.post("/:companyId/export", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "exports");
-    const result = await portability.exportBundle(companyId, req.body);
+    // AgentDash (APM gate 2, P2.3): an agent exporter's V2 project scope is shadow-checked.
+    const result = await portability.exportBundle(companyId, req.body, { accessActorAgentId: exportingAgentId(req) });
     res.json(result);
   });
 
@@ -333,14 +339,15 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.post("/:companyId/exports/preview", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "exports");
-    const preview = await portability.previewExport(companyId, req.body);
+    const preview = await portability.previewExport(companyId, req.body, { accessActorAgentId: exportingAgentId(req) });
     res.json(preview);
   });
 
   router.post("/:companyId/exports", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanManagePortability(req, companyId, "exports");
-    const result = await portability.exportBundle(companyId, req.body);
+    // AgentDash (APM gate 2, P2.3): an agent exporter's V2 project scope is shadow-checked.
+    const result = await portability.exportBundle(companyId, req.body, { accessActorAgentId: exportingAgentId(req) });
     res.json(result);
   });
 
@@ -377,6 +384,8 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       sourceCompanyId: companyId,
       allowHostExecutionConfig: actorMaySetHostExecutionConfig(req.actor),
       actorIsAgent: req.actor.type === "agent",
+      // AgentDash (APM gate 2, P2.3): an agent importer's V2 scopes are shadow-checked.
+      actorAgentId: req.actor.type === "agent" ? req.actor.agentId ?? null : null,
       // AgentDash: (#710) recurring tasks become routines; this route admitted
       // any board member and CEO agents, so it applies the routine-write rule.
       assertCanWriteRoutines: () => assertCanWriteRoutines(access, req, companyId),

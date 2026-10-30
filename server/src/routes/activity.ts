@@ -93,8 +93,10 @@ export function activityRoutes(db: Db) {
       since,
       limit: normalizeActivityLimit(Number(req.query.limit)),
       // AgentDash (review #1003): the Activity page asks for the filtered
-      // feed; every other consumer keeps the full one.
-      includeSystem: req.query.includeSystem === "false" ? false : undefined,
+      // feed; every other consumer keeps the full one, less the APM gate 2
+      // bookkeeping rows (ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS) that only
+      // `includeSystem=true` — "Show system events" — returns.
+      includeSystem: req.query.includeSystem === "false" ? false : req.query.includeSystem === "true" ? true : undefined,
       // A5 (GH #830): rows about an issue or project the actor cannot see
       // are absent, so `?entityType=issue&entityId=` cannot read around the
       // guarded /issues/:id/activity.

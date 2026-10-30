@@ -67,6 +67,7 @@ import { AdapterManager } from "./pages/AdapterManager";
 import { PluginPage } from "./pages/PluginPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
+import { AgentBriefPage, AgentDraftProfilePage, NewAgentFromBrief } from "./pages/AgentBriefPages";
 import BillingPage from "./pages/BillingPage";
 import { AssessPage } from "./pages/AssessPage";
 import { AssessHistoryPage } from "./pages/AssessHistoryPage";
@@ -174,6 +175,10 @@ function boardRoutes() {
       <Route path="agents/error" element={<Agents />} />
       <Route path="agents/new" element={<NewAgent />} />
       <Route path="agents/new/studio" element={<AgentCreatorStudio />} />
+      {/* AgentDash (APM gate 5): start from a brief; the brief page; a draft profile for a new role. */}
+      <Route path="agents/new/brief" element={<NewAgentFromBrief />} />
+      <Route path="agents/briefs/:issueId" element={<AgentBriefPage />} />
+      <Route path="agents/drafts/:profileId" element={<AgentDraftProfilePage />} />
       <Route path="agents/:agentId" element={<AgentDetail />} />
       <Route path="agents/:agentId/:tab" element={<AgentDetail />} />
       <Route path="agents/:agentId/runs/:runId" element={<AgentDetail />} />

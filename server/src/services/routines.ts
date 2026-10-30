@@ -12,6 +12,7 @@ import {
   issueReadStates,
   issues,
   projects,
+  routineRunOccurrences,
   routineRuns,
   routines,
   routineTriggers,
@@ -49,6 +50,7 @@ import { parseCron, validateCron } from "./cron.js";
 import { heartbeatService } from "./heartbeat.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
+import { recordRoutineDispatchResponsibility } from "./issue-responsibilities.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
 const OPEN_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"];
@@ -122,7 +124,9 @@ function matchesCronMinute(expression: string, timeZone: string, date: Date) {
   );
 }
 
-function nextCronTickInTimeZone(expression: string, timeZone: string, after: Date) {
+// AgentDash (APM gate 1): exported so the performance projection's owed-fire
+// counter is tested against the scheduler's own semantics.
+export function nextCronTickInTimeZone(expression: string, timeZone: string, after: Date) {
   const trimmed = expression.trim();
   assertTimeZone(timeZone);
   const error = validateCron(trimmed);
@@ -829,6 +833,11 @@ export function routineService(
     executionWorkspacePreference?: string | null;
     executionWorkspaceSettings?: Record<string, unknown> | null;
     actor?: Actor;
+    /**
+     * AgentDash (APM gate 3, evaluation LLD §7): the schedule tick this run serves — the trigger's due `next_run_at`
+     * the scheduler claimed, or the catch-up cursor. Schedule dispatch only; recorded in `routine_run_occurrences`.
+     */
+    scheduledFor?: Date | null;
   }) {
     const publications: ActivityPublication[] = [];
     let acceptedRun: typeof routineRuns.$inferSelect | undefined;
@@ -906,6 +915,23 @@ export function routineService(
           source: input.source, status: "received", triggeredAt, idempotencyKey: input.idempotencyKey ?? null,
           triggerPayload, dispatchFingerprint,
         }).returning();
+        // AgentDash (APM gate 3, evaluation LLD §7): which scheduled occurrence this run serves, so owed work can be
+        // matched to what ran. Schedule triggers only; in the run's own acceptance transaction, inside a savepoint so a
+        // failure is logged and never changes dispatch.
+        if (input.source === "schedule" && trigger?.kind === "schedule" && input.scheduledFor) {
+          try {
+            await tx.transaction(async (savepoint) => {
+              await (savepoint as unknown as Db).insert(routineRunOccurrences).values({
+                companyId: routine.companyId,
+                routineRunId: createdRun.id,
+                triggerId: trigger.id,
+                scheduledFor: input.scheduledFor!,
+              });
+            });
+          } catch (err) {
+            logger.warn({ err, routineId: routine.id, runId: createdRun.id, triggerId: trigger.id }, "failed to record the scheduled occurrence of a routine run");
+          }
+        }
         const nextRunAt = trigger?.kind === "schedule" && trigger.cronExpression && trigger.timezone
           ? nextCronTickInTimeZone(trigger.cronExpression, trigger.timezone, triggeredAt) : undefined;
         async function finish(patch: Partial<typeof routineRuns.$inferInsert>, issue?: Awaited<ReturnType<typeof issueSvc.create>>) {
@@ -965,6 +991,24 @@ export function routineService(
       });
     }
     for (const publication of publications) publishActivity(publication);
+    // AgentDash (APM gate 2): a trigger bound to a responsibility in the assignee's ACTIVE profile maps the new issue to
+    // it (evaluation LLD §5.2). After acceptance commits and before the wake, so the agent starts on mapped work. It
+    // never changes dispatch: an unbound trigger writes nothing, and a failure is logged and dispatch continues.
+    if (accepted.issue && input.trigger && accepted.issue.assigneeAgentId) {
+      try {
+        await recordRoutineDispatchResponsibility(db, {
+          companyId: accepted.issue.companyId,
+          issueId: accepted.issue.id,
+          agentId: accepted.issue.assigneeAgentId,
+          routineTriggerId: input.trigger.id,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, routineId: input.routine.id, runId: accepted.run.id, issueId: accepted.issue.id },
+          "failed to map a routine issue to its bound responsibility",
+        );
+      }
+    }
     let run = accepted.run;
     if (accepted.issue) {
       let acknowledgment: unknown;
@@ -1647,12 +1691,17 @@ export function routineService(
 
         let runCount = 1;
         let claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, now);
+        // AgentDash (APM gate 3): the due tick each dispatched run serves — the claimed `next_run_at` (skip_missed: the
+        // one run serves it and the later missed ticks are skipped), or each catch-up cursor in turn.
+        const scheduledTicks: Date[] = [row.trigger.nextRunAt];
 
         if (row.routine.catchUpPolicy === "enqueue_missed_with_cap") {
           let cursor: Date | null = row.trigger.nextRunAt;
           runCount = 0;
+          scheduledTicks.length = 0;
           while (cursor && cursor <= now && runCount < MAX_CATCH_UP_RUNS) {
             runCount += 1;
+            scheduledTicks.push(cursor);
             claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, cursor);
             cursor = claimedNextRunAt;
           }
@@ -1680,6 +1729,7 @@ export function routineService(
             routine: row.routine,
             trigger: row.trigger,
             source: "schedule",
+            scheduledFor: scheduledTicks[i] ?? null,
           });
           triggered += 1;
         }

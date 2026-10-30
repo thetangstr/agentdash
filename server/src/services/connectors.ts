@@ -19,6 +19,7 @@ import { isDocumentProvider, policyListAllows, policyListAllowsAll } from "@pape
 import { notFound, forbidden, conflict, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { agentGovernanceService } from "./agent-governance.js";
+import { accessPolicyRefusedMessage, checkAgentAccessDetailed, createAgentAccessCheckCache } from "./agent-access-check.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 
 // ---------------------------------------------------------------------------
@@ -414,7 +415,10 @@ export function connectorService(db: Db) {
     // (not through an agent). The human may use connections they own, and
     // agent-only controls (owner ceiling, per-agent overrides, stewardship)
     // do not apply to them. Defaults to "agent".
-    options?: { connectionId?: string; actorType?: "agent" | "user" },
+    // AgentDash (APM gate 2, P2.3): `accessCheck: false` skips the V2 shadow
+    // check below. Only read-only previews pass it (the access inventory asks
+    // the resolver about every connection and must not write a log row).
+    options?: { connectionId?: string; actorType?: "agent" | "user"; accessCheck?: boolean },
   ): Promise<ActingAsResult> {
     const actorType = options?.actorType ?? "agent";
     // AgentDash-MK: the owner ceiling gates provider selection before anything
@@ -622,6 +626,36 @@ export function connectorService(db: Db) {
     }
     if (agentOverride?.sendIdentity) {
       sendIdentity = agentOverride.sendIdentity;
+    }
+
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4
+    // see.connections): AFTER the legacy decision allowed this connection, the
+    // agent's V2 connection scope is evaluated for it and each data scope it
+    // carries. Shadow: the resolution below is returned unchanged whatever V2
+    // says. Enforce: the connection is not resolvable — a blocked result with
+    // reason `access_policy_refused` and the refusal body (logged as
+    // `authz.refused`). The MK checks above ran unchanged in every mode.
+    if (actorType === "agent" && options?.accessCheck !== false) {
+      const accessCache = createAgentAccessCheckCache();
+      const dataScopes = Array.isArray(conn.scopes) ? (conn.scopes as unknown[]).filter((value): value is string => typeof value === "string") : [];
+      for (const dataScope of [null, ...dataScopes]) {
+        const result = await checkAgentAccessDetailed(
+          db,
+          { companyId, agentId, dimension: "see.connections", target: { connectionId: conn.id, dataScope } },
+          { site: "connectors.resolve_acting_as", cache: accessCache },
+        );
+        if (result.outcome === "refuse" && result.refusal) {
+          return {
+            ok: false,
+            blocked: {
+              reason: "access_policy_refused",
+              message: accessPolicyRefusedMessage(result.refusal),
+              refusal: result.refusal,
+            },
+          };
+        }
+        if (result.outcome !== "allow") break;
+      }
     }
 
     return {

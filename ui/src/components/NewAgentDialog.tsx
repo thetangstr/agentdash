@@ -233,6 +233,15 @@ export function NewAgentDialog() {
           <WorkforceRoleSelect value={workforceTemplateId} onChange={id => { setWorkforceTemplateId(id); const template = resolveWorkforceTemplate(id); if (template) setHireRole(template.name); }}/>
           <WorkforceTemplatePreview templateId={workforceTemplateId}/>
           <button className="text-sm underline" onClick={() => { closeNewAgent(); navigate('/workforce'); }}>Company knowledge and first-job setup</button>
+          {/* AgentDash (APM gate 5): plan the work from a Markdown brief; nothing is hired until a hire is approved. */}
+          <button
+            type="button"
+            className="block text-sm underline"
+            data-testid="new-agent-dialog-start-from-brief"
+            onClick={() => { closeNewAgent(); navigate('/agents/new/brief'); }}
+          >
+            Start from a brief
+          </button>
           {hirePathPending ? (
             <div className="flex justify-center py-8" aria-hidden="true">
               <Bot className="h-6 w-6 animate-pulse text-muted-foreground" />

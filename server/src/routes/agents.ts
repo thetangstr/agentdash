@@ -16,6 +16,10 @@ import {
   createAgentKeySchema,
   createAgentHireSchema,
   createAgentSchema,
+  AGENT_PROFILE_HIRE_INVALID,
+  proposeUnboundAgentProfileSchema,
+  type AgentProfileHireFields,
+  type CreateAgentHire,
   deriveAgentUrlKey,
   isUuidLike,
   resetAgentSessionSchema,
@@ -78,6 +82,13 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import {
+  buildHireProfileFields,
+  finalizeUnboundProfileProposal,
+  prepareUnboundProfileHire,
+  releaseUnboundProfileClaim,
+} from "../services/agent-profiles.js";
+import { profileActorFromRequest } from "./agent-profiles.js";
 import { assertNoAssistantProvenanceClaim } from "../services/assistant-provenance-claims.js";
 import {
   actorMaySetHostExecutionConfig,
@@ -112,6 +123,14 @@ import {
   visibleAgentIdsFor,
 } from "./visibility.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import {
+  AccessPolicyRefusedError,
+  agentAccessCheckCacheFor,
+  agentAccessEnforcementModeCached,
+  checkAgentAccess,
+  checkAgentAccessDetailed,
+  type AgentAccessCheckSite,
+} from "../services/agent-access-check.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { documentRunAccess, withholdUnreadableRunContent, withoutRunContent } from "./document-run-access.js";
 import { founderStewardshipDeps, pairFounderWithAgent } from "../services/founder-stewardship.js";
@@ -1043,9 +1062,9 @@ export function agentRoutes(
 
   // AgentDash (#1053): hiring is not authority to delegate privileged roles
   // or grant hiring authority, including the CEO role's inherited default.
-  function assertAgentCreationAuthority(req: Request) {
+  function assertAgentCreationAuthority(req: Request, body: { role?: unknown; permissions?: { canCreateAgents?: unknown } | null } = req.body) {
     if (req.actor.type !== "agent") return;
-    if (req.body.role === "ceo" || req.body.role === "chief_of_staff" || req.body.permissions?.canCreateAgents === true) {
+    if (body.role === "ceo" || body.role === "chief_of_staff" || body.permissions?.canCreateAgents === true) {
       throw forbidden("Agents cannot create privileged roles or grant canCreateAgents. Ask a board administrator to create this agent.");
     }
   }
@@ -1319,11 +1338,13 @@ export function agentRoutes(
   // self-edits until someone decides they belong here. What remains is
   // presentation: how the agent is named and described. Role and authority
   // changes are reserved for humans with agent-configuration authority.
+  // AgentDash (APM gate 3, P3.4; access LLD §3.1, §5): `capabilities` left
+  // this list in every mode — it is profile-managed. An agent sending it gets
+  // a 422 naming the profile route (`refuseProfileManagedFields`).
   const AGENT_SELF_PATCHABLE_FIELDS: ReadonlySet<string> = new Set([
     "name",
     "title",
     "icon",
-    "capabilities",
   ]);
 
   // AgentDash (security, #727): the fields a CEO agent or an `agents:create`
@@ -1340,12 +1361,29 @@ export function agentRoutes(
   // assignment lives in adapterConfig and is written by
   // `POST /agents/:id/skills/sync`, which has its own allowlist), so the field
   // answered 200 having changed nothing.
+  // AgentDash (APM gate 3, P3.4): `capabilities` left this list too (profile-managed).
   const AGENT_PEER_PATCHABLE_FIELDS: ReadonlySet<string> = new Set([
     "name",
     "title",
     "icon",
-    "capabilities",
   ]);
+
+  /**
+   * AgentDash (APM gate 3, P3.4; access LLD §3.1 fixed rules, §5): fields the
+   * operating profile owns. No agent may PATCH them — on itself or on a peer —
+   * in any enforcement mode; the 422 says where the change belongs. A fixed
+   * rule that narrows; humans with configuration authority are unaffected.
+   */
+  const AGENT_PROFILE_MANAGED_FIELDS = ["capabilities"] as const;
+  function refuseProfileManagedFields(body: Record<string, unknown>) {
+    const managed = AGENT_PROFILE_MANAGED_FIELDS.filter((field) => hasOwn(body, field));
+    if (managed.length === 0) return;
+    throw unprocessable(
+      `An agent cannot change ${managed.join(", ")}: it is managed by the agent's operating profile. ` +
+        "Propose a profile change (POST /api/companies/:companyId/agents/:agentId/profile/revisions, then propose it); a person decides.",
+      { code: "AGENT_FIELD_PROFILE_MANAGED", fields: managed },
+    );
+  }
 
   async function assertCanUpdateAgent(
     req: Request,
@@ -1363,6 +1401,10 @@ export function agentRoutes(
     if (!actorAgent || actorAgent.companyId !== targetAgent.companyId) {
       throw forbidden("Agent key cannot access another company");
     }
+
+    // AgentDash (APM gate 3, P3.4): profile-managed fields are refused for
+    // every agent actor, self or peer, before the allowlists below.
+    refuseProfileManagedFields(req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {});
 
     if (actorAgent.id === targetAgent.id) {
       // Self-update is allowed, but only of the fields the calling route names
@@ -2115,6 +2157,54 @@ export function agentRoutes(
     };
   }
 
+  /**
+   * AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4 do.skills,
+   * persistent writers): each skill a write gives an agent is checked against
+   * `agentId`'s V2 skill scope (the platform's required skills are always
+   * allowed). Shadow: every skill is checked and logged, and the write goes
+   * ahead exactly as before. Enforce: only the skills the write ADDS
+   * (`alreadyHeld` are the agent's current desired skills) are checked — a
+   * write that keeps or removes skills is never refused, because V2 only
+   * narrows — and a refusal answers `403 ACCESS_POLICY_REFUSED` before
+   * anything is written. Nothing is evaluated when the company's mode is off.
+   */
+  async function checkSkillWrite(
+    req: Request,
+    companyId: string,
+    agentId: string,
+    skillKeys: readonly string[] | null | undefined,
+    runtimeSkillEntries: ReadonlyArray<{ key: string; required?: boolean }> | null | undefined,
+    site: AgentAccessCheckSite,
+    alreadyHeld: readonly string[] = [],
+  ) {
+    if (!skillKeys || skillKeys.length === 0) return;
+    const cache = agentAccessCheckCacheFor(req);
+    const mode = await agentAccessEnforcementModeCached(db, companyId, cache).catch(() => "off" as const);
+    if (mode === "off") return;
+    const requiredSkillKeys = (runtimeSkillEntries ?? []).filter((entry) => entry.required).map((entry) => entry.key);
+    if (mode === "shadow") {
+      for (const skillKey of skillKeys) {
+        await checkAgentAccess(
+          db,
+          { companyId, agentId, dimension: "do.skills", target: { skillKey } },
+          { site, cache, context: { requiredSkillKeys } },
+        );
+      }
+      return;
+    }
+    let refused: AccessPolicyRefusedError | null = null;
+    for (const skillKey of skillKeys) {
+      if (alreadyHeld.includes(skillKey)) continue;
+      const result = await checkAgentAccessDetailed(
+        db,
+        { companyId, agentId, dimension: "do.skills", target: { skillKey } },
+        { site, cache, context: { requiredSkillKeys } },
+      );
+      if (result.outcome === "refuse" && result.refusal && !refused) refused = new AccessPolicyRefusedError(result.refusal);
+    }
+    if (refused) throw refused;
+  }
+
   async function resolveDesiredSkillAssignment(
     companyId: string,
     adapterType: string,
@@ -2443,6 +2533,17 @@ export function agentRoutes(
       if (!desiredSkills || !runtimeSkillEntries) {
         throw unprocessable("Skill sync requires desiredSkills.");
       }
+      // AgentDash (APM gate 2, P2.3; gate 3, P3.4): self and peer skill sync —
+      // V2 do.skills (enforce refuses only skills this sync adds).
+      await checkSkillWrite(
+        req,
+        agent.companyId,
+        agent.id,
+        desiredSkills,
+        runtimeSkillEntries,
+        "agents.skill_sync",
+        readPaperclipSkillSyncPreference(agent.adapterConfig as Record<string, unknown>).desiredSkills,
+      );
       const actor = getActorInfo(req);
       const updated = await svc.update(agent.id, {
         adapterConfig: nextAdapterConfig,
@@ -3035,15 +3136,30 @@ export function agentRoutes(
     });
   });
 
-  router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
+  /**
+   * AgentDash (APM gate 5, P5.1): the hire request itself, shared by
+   * `POST /agent-hires` and by proposing an unbound draft profile (which
+   * always files the approval and adds the profile fields to its payload).
+   * `body` is a parsed `createAgentHireSchema` body. Returns null when it has
+   * already answered (company missing, tier capacity).
+   */
+  async function fileAgentHire(
+    req: Request,
+    res: Response,
+    companyId: string,
+    body: CreateAgentHire,
+    profileHire?: {
+      /** Computed after the pending agent exists and right before the approval is written. */
+      approvalPayloadFields: (agent: { id: string }) => Promise<Record<string, unknown>>;
+    },
+  ): Promise<{ agent: Awaited<ReturnType<typeof materializeDefaultInstructionsBundleForNewAgent>>; approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null } | null> {
     await assertCanCreateAgentsForCompany(req, companyId);
-    assertAgentCreationAuthority(req);
-    if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
+    assertAgentCreationAuthority(req, body);
+    if (body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     // AgentDash (GH #828): body metadata becomes the hire approval's payload
     // metadata, which the digest reads for assistant provenance.
-    assertNoAssistantProvenanceClaim(req.actor, req.body.metadata);
-    const sourceIssueIds = parseSourceIssueIds(req.body);
+    assertNoAssistantProvenanceClaim(req.actor, body.metadata);
+    const sourceIssueIds = parseSourceIssueIds(body);
     // A5 (GH #830): the hire approval links these issues; they must be visible.
     for (const issueId of sourceIssueIds) {
       await assertIssueIdVisible(db, req, issueId);
@@ -3058,7 +3174,7 @@ export function agentRoutes(
       // stays opt-in, and why configuration completeness is enforced instead.
       requireHarnessPreflight,
       ...hireInput
-    } = req.body;
+    } = body;
     hireInput.adapterType = assertKnownAdapterType(hireInput.adapterType);
     const rawHireAdapterConfig = (hireInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertNoNewAgentLegacyPromptTemplate(
@@ -3089,6 +3205,11 @@ export function agentRoutes(
       requestedAdapterConfig,
       Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined,
     );
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; do.skills, hire): an agent
+    // cannot hand a new hire skills outside its own V2 skill scope (enforce: 403).
+    if (req.actor.type === "agent" && req.actor.agentId) {
+      await checkSkillWrite(req, companyId, req.actor.agentId, desiredSkillAssignment.desiredSkills, desiredSkillAssignment.runtimeSkillEntries, "agents.hire_skills");
+    }
     const normalizedAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
       companyId,
       adapterType: hireInput.adapterType,
@@ -3130,7 +3251,7 @@ export function agentRoutes(
       .then((rows) => rows[0] ?? null);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
-      return;
+      return null;
     }
 
     // AgentDash: the hire path pins an environment too, so it gets the same
@@ -3156,7 +3277,8 @@ export function agentRoutes(
         })
       : null;
 
-    const requiresApproval = company.requireBoardApprovalForNewAgents;
+    // A hire with a profile is always decided by a person: the decision applies the profile.
+    const requiresApproval = company.requireBoardApprovalForNewAgents || Boolean(profileHire);
     const status = requiresApproval ? "pending_approval" : "idle";
     const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx, acceptance) =>
       createAgentRow(agentService(dbOrTx), companyId, {
@@ -3183,10 +3305,10 @@ export function agentRoutes(
         });
       } : undefined,
     );
-    if (!createdAgent) return;
+    if (!createdAgent) return null;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
     // AgentDash: enrollment is atomic with creation; filesystem work follows commit.
-    if (req.body.workforceTemplateId !== undefined) {
+    if (body.workforceTemplateId !== undefined) {
       await workforceService(db).ensureSkillsInstalled(companyId, agent.id, { userId: req.actor.userId ?? "board" });
     }
     // AgentDash (scan 2, E3): the onboarding wizard hires here; a company's
@@ -3211,6 +3333,7 @@ export function agentRoutes(
         redactEventPayload(
           ((normalizedHireInput.metadata ?? agent.metadata ?? {}) as Record<string, unknown>),
         ) ?? {};
+      const profileFields = profileHire ? await profileHire.approvalPayloadFields(agent) : {};
       approval = await approvalsSvc.create(companyId, {
         type: "hire_agent",
         requestedByAgentId: actor.actorType === "agent" ? actor.actorId : null,
@@ -3240,6 +3363,7 @@ export function agentRoutes(
             runtimeConfig: requestedRuntimeConfig,
             desiredSkills: desiredSkillAssignment.desiredSkills,
           },
+          ...profileFields,
         },
         decisionNote: null,
         decidedByUserId: null,
@@ -3271,6 +3395,7 @@ export function agentRoutes(
         approvalId: approval?.id ?? null,
         issueIds: sourceIssueIds,
         desiredSkills: desiredSkillAssignment.desiredSkills,
+        ...(profileHire ? { withProfile: true } : {}),
       },
     });
     await logHermesSshEnvironmentPin(req, agent, hermesSshHirePin);
@@ -3299,12 +3424,79 @@ export function agentRoutes(
       });
     }
 
+    return { agent, approval };
+  }
+
+  router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const filed = await fileAgentHire(req, res, companyId, req.body);
+    if (!filed) return;
     const canReadSpend = await canReadCompanySpend(db, req, companyId);
     res.status(201).json({
-      agent: redactMonthlySpendForReader(agent, canReadSpend),
-      approval: approval ? redactApprovalForReader(approval, canReadSpend) : null,
+      agent: redactMonthlySpendForReader(filed.agent, canReadSpend),
+      approval: filed.approval ? redactApprovalForReader(filed.approval, canReadSpend) : null,
     });
   });
+
+  /**
+   * AgentDash (APM gate 5, P5.1): propose an unbound draft profile as a hire.
+   * The draft gives the new agent's name, title, summary and adapter type;
+   * the body gives role and the other hire fields. Validated by the hire
+   * validator (`createAgentHireSchema`) and filed through `fileAgentHire`, so
+   * every check a hire request makes applies — including the requester's own
+   * authority to hire. The approval always exists (whatever the company's
+   * board-approval setting) and carries `AgentProfileHireFields`. The agent
+   * stays `pending_approval` and never runs until a person approves; the
+   * approved hire binds the profile and applies it (agent-profile-application.ts).
+   */
+  router.post(
+    "/companies/:companyId/agent-profiles/:profileId/revisions/:revisionId/propose",
+    validate(proposeUnboundAgentProfileSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const scope = { companyId, profileId: req.params.profileId as string, revisionId: req.params.revisionId as string };
+      assertCompanyAccess(req, companyId);
+      const actor = profileActorFromRequest(req);
+      const prepared = await prepareUnboundProfileHire(db, { ...scope, input: req.body }, actor);
+      let filed: Awaited<ReturnType<typeof fileAgentHire>> = null;
+      const captured: { fields: AgentProfileHireFields | null; pendingAgentId: string | null } = { fields: null, pendingAgentId: null };
+      try {
+        const parsed = createAgentHireSchema.safeParse(prepared.hireInput);
+        if (!parsed.success) {
+          throw unprocessable("This draft cannot be filed as a hire", {
+            code: AGENT_PROFILE_HIRE_INVALID,
+            issues: parsed.error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
+          });
+        }
+        if (parsed.data.adapterType !== prepared.adapterType) {
+          throw unprocessable(`Use the adapter type "${parsed.data.adapterType}" in the draft's runtime.adapterType`, {
+            code: AGENT_PROFILE_HIRE_INVALID,
+            issues: [{ path: "runtime.adapterType", message: `the adapter type is "${parsed.data.adapterType}"` }],
+          });
+        }
+        filed = await fileAgentHire(req, res, companyId, parsed.data, {
+          approvalPayloadFields: async (agent) => {
+            captured.pendingAgentId = agent.id;
+            captured.fields = await buildHireProfileFields(db, { ...scope, agentId: agent.id, input: req.body }, actor);
+            return captured.fields as unknown as Record<string, unknown>;
+          },
+        });
+      } finally {
+        if (!filed?.approval) {
+          await releaseUnboundProfileClaim(db, scope);
+          // A pending agent with no hire approval would never be decided: end it (never a working agent).
+          if (captured.pendingAgentId) await svc.terminate(captured.pendingAgentId, { onlyIfStatus: "pending_approval" }).catch(() => null);
+        }
+      }
+      if (!filed?.approval || !captured.fields) return;
+      const result = await finalizeUnboundProfileProposal(
+        db,
+        { ...scope, approvalId: filed.approval.id, agentId: filed.agent.id, fields: captured.fields },
+        actor,
+      );
+      res.status(201).json(result);
+    },
+  );
 
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -3366,6 +3558,10 @@ export function agentRoutes(
       requestedAdapterConfig,
       Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined,
     );
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; do.skills, hire): same rule as agent-hires.
+    if (req.actor.type === "agent" && req.actor.agentId) {
+      await checkSkillWrite(req, companyId, req.actor.agentId, desiredSkillAssignment.desiredSkills, desiredSkillAssignment.runtimeSkillEntries, "agents.hire_skills");
+    }
     const normalizedAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
       companyId,
       adapterType: createInput.adapterType,
@@ -4573,6 +4769,8 @@ export function agentRoutes(
           actorUserId: decidedByUserId,
           decisionNote,
           wakeRequester: false,
+          // AgentDash (APM gate 5): how the decider authenticated, for a profile hire's authority re-check.
+          actor: { source: req.actor.source ?? null, isInstanceAdmin: req.actor.isInstanceAdmin ?? false },
         });
       }
     } catch (err) {

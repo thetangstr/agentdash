@@ -175,6 +175,47 @@ describeEmbeddedPostgres("activity service", () => {
     expect(everything).toHaveLength(4);
   });
 
+  // AgentDash: APM gate 2 — shadow would-be refusals and per-step profile
+  // application rows are out of every default feed, in SQL (so a limited page
+  // is not short), and back only when system events are asked for.
+  it("hides APM bookkeeping rows by default and returns them with includeSystem=true", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    const agentId = randomUUID();
+    const row = (action: string, minute: number) => ({
+      companyId,
+      actorType: "agent" as const,
+      actorId: agentId,
+      action,
+      entityType: "agent",
+      entityId: agentId,
+      createdAt: new Date(Date.UTC(2026, 9, 29, 12, minute)),
+    });
+    await db.insert(activityLog).values([
+      row("agent_profile.applied", 0),
+      row("access.would_refuse", 1),
+      row("agent_profile.application_step", 2),
+      row("access.would_refuse", 3),
+    ]);
+
+    const byDefault = await activityService(db).list({ companyId, limit: 1 });
+    expect(byDefault.map((event) => event.action)).toEqual(["agent_profile.applied"]);
+    const filtered = await activityService(db).list({ companyId, includeSystem: false });
+    expect(filtered.map((event) => event.action)).toEqual(["agent_profile.applied"]);
+    const everything = await activityService(db).list({ companyId, includeSystem: true });
+    expect(everything.map((event) => event.action)).toEqual([
+      "access.would_refuse",
+      "agent_profile.application_step",
+      "access.would_refuse",
+      "agent_profile.applied",
+    ]);
+  });
+
   it("returns compact usage and result summaries for issue runs", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

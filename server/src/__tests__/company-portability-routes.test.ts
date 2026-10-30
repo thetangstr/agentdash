@@ -251,8 +251,9 @@ describe.sequential("company portability routes", () => {
       expect(res.body.rootPath).toBe("paperclip");
     }
     expect(mockCompanyPortabilityService.exportBundle).toHaveBeenCalledTimes(2);
-    expect(mockCompanyPortabilityService.exportBundle).toHaveBeenNthCalledWith(1, companyId, exportRequest);
-    expect(mockCompanyPortabilityService.exportBundle).toHaveBeenNthCalledWith(2, companyId, exportRequest);
+    // AgentDash (APM gate 2, P2.3): the exporting agent is passed for the V2 shadow check.
+    expect(mockCompanyPortabilityService.exportBundle).toHaveBeenNthCalledWith(1, companyId, exportRequest, { accessActorAgentId: ceoAgentId });
+    expect(mockCompanyPortabilityService.exportBundle).toHaveBeenNthCalledWith(2, companyId, exportRequest, { accessActorAgentId: ceoAgentId });
   });
 
   it.sequential("allows board users to export through legacy and CEO-safe bundle routes", async () => {

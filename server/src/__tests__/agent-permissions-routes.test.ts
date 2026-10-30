@@ -2071,14 +2071,27 @@ describe.sequential("agent permission routes", () => {
 
       const res = await requestApp(app, (baseUrl) => request(baseUrl)
         .patch(`/api/agents/${agentId}`)
-        .send({ title: "Senior Builder", capabilities: "Ships server routes" }));
+        .send({ title: "Senior Builder" }));
 
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(mockAgentService.update).toHaveBeenCalledWith(
         agentId,
-        expect.objectContaining({ title: "Senior Builder", capabilities: "Ships server routes" }),
+        expect.objectContaining({ title: "Senior Builder" }),
         expect.anything(),
       );
+    });
+
+    // APM gate 3 (P3.4; access LLD §3.1, §5): `capabilities` is profile-managed and left the self list.
+    it("answers 422 when an agent patches its own capabilities", async () => {
+      const app = await createApp(agentActor);
+
+      const res = await requestApp(app, (baseUrl) => request(baseUrl)
+        .patch(`/api/agents/${agentId}`)
+        .send({ title: "Senior Builder", capabilities: "Ships server routes" }));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.details).toMatchObject({ code: "AGENT_FIELD_PROFILE_MANAGED", fields: ["capabilities"] });
+      expect(mockAgentService.update).not.toHaveBeenCalledWith(agentId, expect.objectContaining({ capabilities: "Ships server routes" }), expect.anything());
     });
 
     it("refuses an agent rolling back its own configuration", async () => {

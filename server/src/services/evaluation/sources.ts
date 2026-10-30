@@ -2,22 +2,35 @@ import { and, asc, desc, eq, getTableColumns, inArray, or, sql, type SQL } from 
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
+  agentCorrections,
+  agentProfileApplications,
+  agentProfileRevisions,
+  agentProfiles,
   agents,
   costEvents,
+  deliverableRuns,
+  deliverables,
   evaluationEvents,
   goals,
   heartbeatRuns,
   issueApprovals,
   issueComments,
+  issueExecutionDecisions,
   issueLabels,
+  issueResponsibilities,
   issueThreadInteractions,
   issues,
   labels,
   projects,
+  routineRunOccurrences,
+  routineRuns,
+  routineTriggers,
+  routines,
   verdicts,
 } from "@paperclipai/db";
 import {
   EVALUATION_HANDOFF_TYPES,
+  isUuidLike,
   type EvaluationActorType,
   type EvaluationEventType,
   type EvaluationHandoffType,
@@ -86,6 +99,18 @@ const AGENT_LIFECYCLE_ACTIONS = new Set([
   "agent.directives_pushed",
   "agent.governance_change_rejected",
 ]);
+/** AgentDash (APM gate 3): activity_log actions minted as their own event type (they used to be `activity.other` with no item). */
+const TYPED_ACCESS_ACTIONS = new Set(["access.policy_changed", "access.would_refuse"]);
+/** Structured detail kept from typed access rows; prose (`allowedSummary`, `reason`) stays in the activity log. */
+const ACCESS_DETAIL_FIELDS = ["dimension", "rule", "target", "site", "via", "side", "policyMode", "source", "channel", "changed", "v2Dimensions", "fromRevision", "toRevision"] as const;
+/** The V2 fields an enforced refusal (`authz.refused` from the access check) carries. */
+const V2_REFUSAL_FIELDS = ["dimension", "rule", "target", "site", "via", "side", "policyMode"] as const;
+
+function detailIssueId(details: unknown): string | null {
+  const v = details && typeof details === "object" ? (details as Record<string, unknown>).issueId : null;
+  return typeof v === "string" && isUuidLike(v) ? v : null;
+}
+
 const APPROVAL_DECIDED_ACTIONS = new Set([
   "approval.approved",
   "approval.rejected",
@@ -316,6 +341,11 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
     (r) => r.id,
   );
   const issueIds = rows.filter((r) => r.entityType === "issue" && r.entityId).map((r) => r.entityId as string);
+  // AgentDash (APM gate 3): typed access rows name the issue they were about in details; it scopes and classes them.
+  for (const r of rows) if (TYPED_ACCESS_ACTIONS.has(r.action)) {
+    const detailIssue = detailIssueId(r.details);
+    if (detailIssue) issueIds.push(detailIssue);
+  }
   const approvalIds = [...new Set(rows.filter((r) => r.entityType === "approval" && r.entityId).map((r) => r.entityId as string))];
   const approvalIssue = new Map<string, string>();
   if (approvalIds.length > 0) {
@@ -353,8 +383,24 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
     const issueRef = linkedIssueId ? { issueId: linkedIssueId, identifier: sc?.identifier ?? details.identifier ?? null } : {};
     let eventType: EvaluationEventType = "activity.other";
     let payload: Record<string, unknown> = { action: r.action, entityType: r.entityType, entityId: r.entityId, ...issueRef };
+    // AgentDash (APM gate 3): the subject hint — the agent the row is most likely about (LLD §9.2).
+    let subjectAgentId: string | null = null;
+    const fallbackSubject = (isIssue ? sc?.assigneeAgentId : null) ?? r.agentId ?? (actor.actorType === "agent" ? actor.actorId : null);
     if (r.action === "issue.created") {
       eventType = "issue.created";
+    } else if (r.action === "issue.checked_out" && isIssue) {
+      // AgentDash (APM gate 3, LLD §9.2 fix): a checkout assigns the issue to the agent and moves it to in_progress
+      // (`issueService.checkout`). The row records only the agent, so the previous status and assignee are unknown.
+      const toAgentId = typeof details.agentId === "string" ? details.agentId : null;
+      subjectAgentId = toAgentId;
+      events.push({
+        ...base,
+        eventType: "issue.assignment_changed",
+        subjectAgentId: toAgentId ?? fallbackSubject,
+        payload: boundedPayload({ ...issueRef, fromAgentId: null, toAgentId, fromUserId: null, toUserId: null, previousUnknown: true, source: "checkout" }),
+      });
+      eventType = "issue.transition";
+      payload = { ...issueRef, from: null, fromUnknown: true, to: "in_progress", reopened: false, source: "checkout" };
     } else if (r.action === "issue.updated" && isIssue) {
       const toStatus = typeof details.status === "string" ? details.status : null;
       const fromStatus =
@@ -380,7 +426,8 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
       };
       if (toStatus && assignmentTouched) {
         // One PATCH may move status and reassign at once: both facts are minted from the one row (distinct event types).
-        events.push({ ...base, eventType: "issue.assignment_changed", payload: boundedPayload(assignmentPayload) });
+        const assignedTo = typeof assignmentPayload.toAgentId === "string" ? assignmentPayload.toAgentId : null;
+        events.push({ ...base, eventType: "issue.assignment_changed", subjectAgentId: assignedTo ?? fallbackSubject, payload: boundedPayload(assignmentPayload) });
       }
       if (toStatus) {
         eventType = "issue.transition";
@@ -396,6 +443,7 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
       } else if (assignmentTouched) {
         eventType = "issue.assignment_changed";
         payload = assignmentPayload;
+        subjectAgentId = typeof assignmentPayload.toAgentId === "string" ? assignmentPayload.toAgentId : null;
       } else {
         payload = { ...payload, changedKeys: Object.keys(details).filter((k) => k !== "_previous" && k !== "identifier").sort() };
       }
@@ -426,6 +474,26 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
     } else if (AGENT_LIFECYCLE_ACTIONS.has(r.action)) {
       eventType = "agent.lifecycle";
       payload = { action: r.action, agentId: r.agentId ?? r.entityId ?? null };
+      subjectAgentId = r.agentId ?? r.entityId ?? null;
+    } else if (TYPED_ACCESS_ACTIONS.has(r.action)) {
+      // AgentDash (APM gate 3, LLD §9.2): V2 access policy edits and shadow would-be refusals, typed for agent scoring.
+      const agentRef = r.agentId ?? (r.entityType === "agent" ? r.entityId : null) ?? null;
+      const detailIssue = detailIssueId(details);
+      const accessScope = detailIssue ? scope.get(detailIssue) : undefined;
+      eventType = r.action as EvaluationEventType;
+      payload = {
+        action: r.action,
+        agentId: agentRef,
+        ...(detailIssue ? { issueId: detailIssue, identifier: accessScope?.identifier ?? null } : {}),
+        ...pick(details, ACCESS_DETAIL_FIELDS),
+      };
+      subjectAgentId = agentRef;
+      base.projectId = accessScope?.projectId ?? null;
+      base.goalId = accessScope?.goalId ?? null;
+    } else if (r.action === "routine.trigger_deleted") {
+      // AgentDash (APM gate 3): a deleted trigger owes nothing from here on; the trigger row is gone, so this row is the record.
+      eventType = "routine.trigger_deleted";
+      payload = { action: r.action, triggerId: r.entityId, routineId: typeof details.routineId === "string" ? details.routineId : null, kind: typeof details.kind === "string" ? details.kind : null, deleted: true };
     } else if (r.action === "approval.created") {
       eventType = "approval.created";
       payload = { ...issueRef, approvalId: r.entityId, type: details.type ?? null };
@@ -434,9 +502,12 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
       payload = { ...issueRef, approvalId: r.entityId, decision: r.action.replace("approval.", ""), type: details.type ?? null };
     } else if (r.action === "authz.refused") {
       eventType = "authz.refused";
-      payload = { ...issueRef, ...pick(details, ["method", "routePath", "reasonCode"]), entityType: r.entityType, entityId: r.entityId };
+      // AgentDash (APM gate 3): an enforced V2 refusal carries its dimension, rule and target (access LLD §4), so agent
+      // scoring can tell a repeat of the same refusal; milestone P6 reads only the three original fields.
+      payload = { ...issueRef, ...pick(details, ["method", "routePath", "reasonCode", ...V2_REFUSAL_FIELDS]), entityType: r.entityType, entityId: r.entityId };
+      if (r.entityType === "agent") subjectAgentId = r.entityId ?? null;
     }
-    events.push({ ...base, eventType, payload: boundedPayload(payload) });
+    events.push({ ...base, eventType, subjectAgentId: subjectAgentId ?? fallbackSubject, payload: boundedPayload(payload) });
   }
   return { events, scanned, nextCursor };
 }
@@ -466,6 +537,7 @@ export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Curso
       goalId: sc?.goalId ?? null,
       actorType: "agent",
       actorId: r.agentId,
+      subjectAgentId: r.agentId,
       sourceTable: "heartbeat_runs",
       sourceId: r.id,
       // A terminal run without finished_at must not become a new fact on every later touch: no time falls back in.
@@ -497,6 +569,12 @@ export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Curso
   return { events, scanned, nextCursor };
 }
 
+/** The explicitly configured model (`adapterConfig.model`), capped; null when the adapter's own default serves the agent. */
+function configuredModel(config: unknown): string | null {
+  const v = config && typeof config === "object" ? (config as Record<string, unknown>).model : null;
+  return typeof v === "string" && v.trim().length > 0 ? v.trim().slice(0, 200) : null;
+}
+
 function numberOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
@@ -521,6 +599,8 @@ export async function readVerdicts(tx: Tx, companyId: string, cursor: Cursor, li
       projectId: r.projectId ?? sc?.projectId ?? null,
       goalId: r.goalId ?? sc?.goalId ?? null,
       ...actor,
+      // whose work was judged: the item's assignee; a project- or goal-level verdict falls back to the reviewing agent
+      subjectAgentId: sc?.assigneeAgentId ?? r.reviewerAgentId ?? null,
       sourceTable: "verdicts",
       sourceId: r.id,
       sourceVersion: r.id,
@@ -530,6 +610,9 @@ export async function readVerdicts(tx: Tx, companyId: string, cursor: Cursor, li
         verdictId: r.id,
         entityType: r.entityType,
         issueId: r.issueId,
+        // AgentDash (APM gate 3): the verdict row's own scope, so a project- or goal-level verdict is kept (LLD §9.2)
+        verdictProjectId: r.projectId ?? null,
+        verdictGoalId: r.goalId ?? null,
         identifier: sc?.identifier ?? null,
         outcome: r.outcome,
         rubricScores: r.rubricScores ?? null,
@@ -562,6 +645,7 @@ export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor
       projectId: sc?.projectId ?? null,
       goalId: sc?.goalId ?? null,
       ...actor,
+      subjectAgentId: r.createdByAgentId ?? sc?.assigneeAgentId ?? null,
       sourceTable: "issue_thread_interactions",
       sourceId: r.id,
       // One event per status: a row touched without a status change (result payload writes) is not a new fact.
@@ -601,6 +685,7 @@ export async function readCostEvents(tx: Tx, companyId: string, cursor: Cursor, 
     goalId: r.goalId ?? null,
     actorType: "agent",
     actorId: r.agentId,
+    subjectAgentId: r.agentId,
     sourceTable: "cost_events",
     sourceId: r.id,
     sourceVersion: r.id,
@@ -717,6 +802,7 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
         projectId: sc?.projectId ?? null,
         goalId: sc?.goalId ?? null,
         ...actor,
+        subjectAgentId: sc?.assigneeAgentId ?? r.authorAgentId ?? null,
         sourceTable: "issue_comments",
         sourceId: r.id,
         // The position inside the comment keeps two same-type payloads in one comment as two facts.
@@ -877,6 +963,7 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
       goalId: sc?.goalId ?? r.goalId ?? null,
       actorType: "system",
       actorId: null,
+      subjectAgentId: r.assigneeAgentId,
       sourceTable: "issues",
       sourceId: r.id,
       sourceVersion: `${hash}:${r.cursorTime}`,
@@ -974,6 +1061,7 @@ export async function readIssueLabels(tx: Tx, companyId: string, cursor: Cursor,
       goalId: sc?.goalId ?? null,
       actorType: "system",
       actorId: null,
+      subjectAgentId: sc?.assigneeAgentId ?? null,
       sourceTable: "issue_labels",
       sourceId: `${r.issueId}:${r.labelId}`,
       sourceVersion: "added",
@@ -1003,6 +1091,8 @@ export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Curs
         reportsTo: agents.reportsTo,
         accountableUserId: agents.accountableUserId,
         autonomy: agents.autonomy,
+        adapterType: agents.adapterType,
+        adapterConfig: agents.adapterConfig,
         createdByUserId: agents.createdByUserId,
         createdAt: agents.createdAt,
         updatedAt: agents.updatedAt,
@@ -1016,13 +1106,25 @@ export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Curs
   );
   const latest = await latestSnapshotHashes(tx, companyId, "agents", "agent.snapshot", rows.map((r) => r.id));
   const events: EvaluationEventInput[] = rows.flatMap((r) => {
-    const facts = { name: r.name, role: r.role, status: r.status, reportsTo: r.reportsTo, accountableUserId: r.accountableUserId, autonomy: r.autonomy };
+    // AgentDash (APM gate 3, LLD §9.2): which runtime served the agent — the adapter and the explicitly configured
+    // model (adapterConfig.model only; nothing else of the config, which can hold secrets). Known from this change on.
+    const facts = {
+      name: r.name,
+      role: r.role,
+      status: r.status,
+      reportsTo: r.reportsTo,
+      accountableUserId: r.accountableUserId,
+      autonomy: r.autonomy,
+      adapterType: r.adapterType,
+      model: configuredModel(r.adapterConfig),
+    };
     const hash = hashCanonical(facts);
     if (latest.get(r.id) === hash) return [];
     const event: EvaluationEventInput = {
       companyId,
       actorType: "system",
       actorId: null,
+      subjectAgentId: r.id,
       sourceTable: "agents",
       sourceId: r.id,
       sourceVersion: `${hash}:${r.cursorTime}`,
@@ -1079,6 +1181,7 @@ export async function readProjectSnapshots(tx: Tx, companyId: string, cursor: Cu
       goalId: r.goalId ?? null,
       actorType: "system",
       actorId: null,
+      subjectAgentId: r.leadAgentId,
       sourceTable: "projects",
       sourceId: r.id,
       sourceVersion: `${hash}:${r.cursorTime}`,
@@ -1122,6 +1225,9 @@ export async function readGoalSnapshots(tx: Tx, companyId: string, cursor: Curso
       parentId: r.parentId,
       ownerAgentId: r.ownerAgentId,
       metricDefinition: md ? { target: md.target ?? null, unit: md.unit ?? null, source: md.source ?? null, baseline: md.baseline ?? null } : null,
+      // AgentDash (APM gate 3, LLD §4/§9.2): the measurement a `goal:<id>` metric check reads. Unknown before this change.
+      currentValue: md && (typeof md.currentValue === "number" || typeof md.currentValue === "string") ? md.currentValue : null,
+      lastUpdatedAt: md && typeof md.lastUpdatedAt === "string" ? md.lastUpdatedAt : null,
     };
     const hash = hashCanonical(facts);
     return {
@@ -1130,6 +1236,7 @@ export async function readGoalSnapshots(tx: Tx, companyId: string, cursor: Curso
       goalId: r.id,
       actorType: "system",
       actorId: null,
+      subjectAgentId: r.ownerAgentId,
       sourceTable: "goals",
       sourceId: r.id,
       sourceVersion: `${hash}:${r.cursorTime}`,
@@ -1137,6 +1244,643 @@ export async function readGoalSnapshots(tx: Tx, companyId: string, cursor: Curso
       eventType: "goal.snapshot",
       eventTime: r.updatedAt,
       payload: { goalId: r.id, ...facts, createdAt: r.createdAt.toISOString() },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+// ---------------------------------------------------------------------------
+// AgentDash: Agent Performance Management gate 3 (P3.2) — the agent-side
+// sources (evaluation LLD §9.2). Same discipline as the sources above: pure
+// keyset reads, one event per fact version, prose kept out of the ledger.
+// Their event types (EVALUATION_AGENT_SOURCE_EVENT_TYPES) feed agent cards
+// only; milestone scoring drops them before it folds a window.
+// ---------------------------------------------------------------------------
+
+/** One-line, capped text for server-written labels (failure reasons, check criteria). */
+function shortText(v: unknown, max = 200): string | null {
+  if (typeof v !== "string") return null;
+  const flat = v.replace(/\s+/g, " ").trim();
+  return flat.length === 0 ? null : flat.slice(0, max);
+}
+
+function iso(d: Date | null | undefined): string | null {
+  return d ? d.toISOString() : null;
+}
+
+function objOf(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+/** The kind the paired-harness slice stores its receipts under (`agent_corrections.kind`). */
+export const HARNESS_RECEIPT_KIND = "harness_evaluation";
+/** A receipt keeps at most this many checks in the ledger; the rest are counted. */
+const MAX_RECEIPT_CHECKS = 50;
+
+/**
+ * The represented person on a harness receipt. The slice stores it in
+ * `details`; every spelling it may use is read here so the ledger carries one
+ * normalised `representedUserId` (the viewer rule reads only that).
+ */
+export function receiptRepresentedUserId(details: Record<string, unknown>): string | null {
+  const direct = details.representedUserId ?? details.representedPersonId;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  for (const key of ["representedUser", "represented", "representedPerson"]) {
+    const o = objOf(details[key]);
+    const id = o?.userId ?? o?.id;
+    if (typeof id === "string" && id.length > 0) return id;
+  }
+  return null;
+}
+
+/** A harness check as the ledger keeps it: the criterion it names (bound only with a `criterionId`), its outcome, how much evidence it cited. */
+function receiptChecks(details: Record<string, unknown>): { checks: Array<Record<string, unknown>>; total: number } {
+  const raw = Array.isArray(details.checks) ? details.checks : [];
+  const checks = raw.slice(0, MAX_RECEIPT_CHECKS).map((c) => {
+    const o = objOf(c) ?? {};
+    const outcome = o.outcome === "pass" || o.outcome === "fail" || o.outcome === "unknown" ? o.outcome : null;
+    return {
+      criterionId: typeof o.criterionId === "string" && o.criterionId.length > 0 ? o.criterionId.slice(0, 200) : null,
+      criterion: shortText(o.criterion),
+      outcome,
+      evidenceCount: Array.isArray(o.evidence) ? o.evidence.length : 0,
+    };
+  });
+  return { checks, total: raw.length };
+}
+
+/**
+ * T0 (private): agent_corrections → `assessment.automated` for paired-harness
+ * receipts (class `private_pairing:<receiptId>`) and `correction.recorded` for
+ * every other correction (class `private_agent:<agentId>`). The row is a queue
+ * entry whose delivery columns move; the fact is the insert, so the version is
+ * the row id. The correction summary (prose, quoting people) is not copied.
+ */
+export async function readAgentCorrections(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agentCorrections.createdAt, agentCorrections.id, (predicate, take, direction) =>
+    tx
+      .select(withCursorTime(agentCorrections, agentCorrections.createdAt))
+      .from(agentCorrections)
+      .where(predicate ? and(eq(agentCorrections.companyId, companyId), predicate) : eq(agentCorrections.companyId, companyId))
+      .orderBy(...ordered(direction, agentCorrections.createdAt, agentCorrections.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId).filter((x): x is string => !!x));
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const sc = r.issueId ? scope.get(r.issueId) : undefined;
+    const details = (r.details ?? {}) as Record<string, unknown>;
+    const common = {
+      companyId,
+      projectId: sc?.projectId ?? null,
+      goalId: sc?.goalId ?? null,
+      sourceTable: "agent_corrections",
+      sourceId: r.id,
+      sourceVersion: r.id,
+      eventTime: r.createdAt,
+    };
+    if (r.kind === HARNESS_RECEIPT_KIND) {
+      const { checks, total } = receiptChecks(details);
+      const learning = objOf(details.learning);
+      return {
+        ...common,
+        // the bridge endpoint that submitted it: attributed to the harness, never presented as a person
+        actorType: "system" as const,
+        actorId: r.sourceActorId,
+        eventType: "assessment.automated" as const,
+        classHints: { pairingReceiptId: r.id },
+        // the producer is resolved by scoring from the timeline; the hint is the item's assignee, else the paired agent
+        subjectAgentId: sc?.assigneeAgentId ?? r.agentId,
+        payload: boundedPayload({
+          receiptId: r.id,
+          pairedAgentId: r.agentId,
+          issueId: r.issueId,
+          identifier: sc?.identifier ?? null,
+          sourceActorType: r.sourceActorType,
+          endpointId: r.sourceActorId,
+          representedUserId: receiptRepresentedUserId(details),
+          outcome: shortText(details.outcome, 40),
+          reviewedVersion: shortText(details.reviewedVersion, 200),
+          workflow: shortText(learning?.workflow ?? details.workflow, 120),
+          checks,
+          checkCount: total,
+          boundChecks: checks.filter((c) => c.criterionId !== null).length,
+          lessonCount: Array.isArray(learning?.lessons) ? learning!.lessons.length : 0,
+        }),
+      };
+    }
+    return {
+      ...common,
+      ...actorFrom(r.sourceActorType, r.sourceActorId),
+      eventType: "correction.recorded" as const,
+      classHints: { privateAgentId: r.agentId },
+      subjectAgentId: r.agentId,
+      payload: boundedPayload({
+        correctionId: r.id,
+        agentId: r.agentId,
+        issueId: r.issueId,
+        identifier: sc?.identifier ?? null,
+        kind: r.kind,
+        sourceActorType: r.sourceActorType,
+        sourceActorId: r.sourceActorId,
+        summaryLength: r.summary.length,
+        lessonCount: Array.isArray(details.lessons) ? details.lessons.length : 0,
+      }),
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0 definitions: routines → `routine.snapshot` (status, catch-up and
+ * concurrency policies, assignee, scope). Minted only when those facts change
+ * (dispatch touches the row on every run); the version carries the row time,
+ * so A→B→A is three facts. Title and description are prose and stay out.
+ */
+export async function readRoutineSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, routines.updatedAt, routines.id, (predicate, take, direction) =>
+    tx
+      .select({
+        id: routines.id,
+        status: routines.status,
+        concurrencyPolicy: routines.concurrencyPolicy,
+        catchUpPolicy: routines.catchUpPolicy,
+        assigneeAgentId: routines.assigneeAgentId,
+        projectId: routines.projectId,
+        goalId: routines.goalId,
+        parentIssueId: routines.parentIssueId,
+        createdAt: routines.createdAt,
+        updatedAt: routines.updatedAt,
+        cursorTime: sql<string>`${routines.updatedAt}::text`,
+      })
+      .from(routines)
+      .where(predicate ? and(eq(routines.companyId, companyId), predicate) : eq(routines.companyId, companyId))
+      .orderBy(...ordered(direction, routines.updatedAt, routines.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const latest = await latestSnapshotHashes(tx, companyId, "routines", "routine.snapshot", rows.map((r) => r.id));
+  const events: EvaluationEventInput[] = rows.flatMap((r) => {
+    const facts = {
+      status: r.status,
+      concurrencyPolicy: r.concurrencyPolicy,
+      catchUpPolicy: r.catchUpPolicy,
+      assigneeAgentId: r.assigneeAgentId,
+      projectId: r.projectId,
+      goalId: r.goalId,
+      parentIssueId: r.parentIssueId,
+    };
+    const hash = hashCanonical(facts);
+    if (latest.get(r.id) === hash) return [];
+    return [
+      {
+        companyId,
+        projectId: r.projectId ?? null,
+        goalId: r.goalId ?? null,
+        actorType: "system" as const,
+        actorId: null,
+        subjectAgentId: r.assigneeAgentId,
+        sourceTable: "routines",
+        sourceId: r.id,
+        sourceVersion: `${hash}:${r.cursorTime}`,
+        sourceRowHash: hash,
+        eventType: "routine.snapshot" as const,
+        eventTime: r.updatedAt,
+        payload: { routineId: r.id, ...facts, createdAt: r.createdAt.toISOString() },
+      },
+    ];
+  });
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0 definitions: routine_triggers → `routine.trigger_snapshot` (kind, cron,
+ * timezone, enabled), each with its event time, so owed occurrences are
+ * generated from the definition in force rather than from what ran (LLD §7).
+ * Minted only when the definition changes: the scheduler moves `next_run_at`
+ * and the row time on every claim, which is not a new definition. A deleted
+ * trigger is recorded from its activity row (`routine.trigger_deleted`).
+ */
+export async function readRoutineTriggerSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, routineTriggers.updatedAt, routineTriggers.id, (predicate, take, direction) =>
+    tx
+      .select({
+        id: routineTriggers.id,
+        routineId: routineTriggers.routineId,
+        kind: routineTriggers.kind,
+        enabled: routineTriggers.enabled,
+        cronExpression: routineTriggers.cronExpression,
+        timezone: routineTriggers.timezone,
+        createdAt: routineTriggers.createdAt,
+        updatedAt: routineTriggers.updatedAt,
+        routineProjectId: routines.projectId,
+        routineGoalId: routines.goalId,
+        routineAssigneeAgentId: routines.assigneeAgentId,
+        cursorTime: sql<string>`${routineTriggers.updatedAt}::text`,
+      })
+      .from(routineTriggers)
+      .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
+      .where(predicate ? and(eq(routineTriggers.companyId, companyId), predicate) : eq(routineTriggers.companyId, companyId))
+      .orderBy(...ordered(direction, routineTriggers.updatedAt, routineTriggers.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const latest = await latestSnapshotHashes(tx, companyId, "routine_triggers", "routine.trigger_snapshot", rows.map((r) => r.id));
+  const events: EvaluationEventInput[] = rows.flatMap((r) => {
+    const facts = { routineId: r.routineId, kind: r.kind, enabled: r.enabled, cronExpression: r.cronExpression, timezone: r.timezone };
+    const hash = hashCanonical(facts);
+    if (latest.get(r.id) === hash) return [];
+    return [
+      {
+        companyId,
+        projectId: r.routineProjectId ?? null,
+        goalId: r.routineGoalId ?? null,
+        actorType: "system" as const,
+        actorId: null,
+        subjectAgentId: r.routineAssigneeAgentId,
+        sourceTable: "routine_triggers",
+        sourceId: r.id,
+        sourceVersion: `${hash}:${r.cursorTime}`,
+        sourceRowHash: hash,
+        eventType: "routine.trigger_snapshot" as const,
+        eventTime: r.updatedAt,
+        payload: { triggerId: r.id, ...facts, createdAt: r.createdAt.toISOString() },
+      },
+    ];
+  });
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0: routine_runs → `routine.run_changed`, one event per status, carrying
+ * the occurrence schedule dispatch recorded (`routine_run_occurrences
+ * .scheduled_for`; null for webhook/API/manual runs and for runs dispatched
+ * before gate 3). The occurrence row is written in the run's own acceptance
+ * transaction, so a run is never read without it.
+ */
+export async function readRoutineRuns(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, routineRuns.updatedAt, routineRuns.id, (predicate, take, direction) =>
+    tx
+      .select({
+        id: routineRuns.id,
+        routineId: routineRuns.routineId,
+        triggerId: routineRuns.triggerId,
+        source: routineRuns.source,
+        status: routineRuns.status,
+        triggeredAt: routineRuns.triggeredAt,
+        linkedIssueId: routineRuns.linkedIssueId,
+        coalescedIntoRunId: routineRuns.coalescedIntoRunId,
+        failureReason: routineRuns.failureReason,
+        completedAt: routineRuns.completedAt,
+        updatedAt: routineRuns.updatedAt,
+        occurrenceTriggerId: routineRunOccurrences.triggerId,
+        scheduledFor: routineRunOccurrences.scheduledFor,
+        routineProjectId: routines.projectId,
+        routineGoalId: routines.goalId,
+        routineAssigneeAgentId: routines.assigneeAgentId,
+        cursorTime: sql<string>`${routineRuns.updatedAt}::text`,
+      })
+      .from(routineRuns)
+      .innerJoin(routines, eq(routineRuns.routineId, routines.id))
+      .leftJoin(routineRunOccurrences, eq(routineRunOccurrences.routineRunId, routineRuns.id))
+      .where(predicate ? and(eq(routineRuns.companyId, companyId), predicate) : eq(routineRuns.companyId, companyId))
+      .orderBy(...ordered(direction, routineRuns.updatedAt, routineRuns.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.linkedIssueId).filter((x): x is string => !!x));
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const sc = r.linkedIssueId ? scope.get(r.linkedIssueId) : undefined;
+    return {
+      companyId,
+      projectId: sc?.projectId ?? r.routineProjectId ?? null,
+      goalId: sc?.goalId ?? r.routineGoalId ?? null,
+      actorType: "system" as const,
+      actorId: null,
+      subjectAgentId: sc?.assigneeAgentId ?? r.routineAssigneeAgentId,
+      sourceTable: "routine_runs",
+      sourceId: r.id,
+      // one event per status, as for interactions: a touch without a status change is not a new fact
+      sourceVersion: r.status,
+      eventType: "routine.run_changed" as const,
+      eventTime: r.updatedAt,
+      payload: {
+        routineRunId: r.id,
+        routineId: r.routineId,
+        triggerId: r.triggerId ?? r.occurrenceTriggerId ?? null,
+        source: r.source,
+        status: r.status,
+        triggeredAt: r.triggeredAt.toISOString(),
+        scheduledFor: iso(r.scheduledFor),
+        linkedIssueId: r.linkedIssueId,
+        identifier: sc?.identifier ?? null,
+        coalescedIntoRunId: r.coalescedIntoRunId,
+        failureReason: shortText(r.failureReason),
+        completedAt: iso(r.completedAt),
+      },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0: deliverable_runs → `deliverable.run_changed`, one event per status and
+ * check (a re-check at the same status is a new fact). Carries what the typed
+ * predicates read: shipped, the check verdict, both named approvals.
+ */
+export async function readDeliverableRuns(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, deliverableRuns.updatedAt, deliverableRuns.id, (predicate, take, direction) =>
+    tx
+      .select({
+        id: deliverableRuns.id,
+        deliverableId: deliverableRuns.deliverableId,
+        runKey: deliverableRuns.runKey,
+        status: deliverableRuns.status,
+        openedAt: deliverableRuns.openedAt,
+        assembledAt: deliverableRuns.assembledAt,
+        checkedAt: deliverableRuns.checkedAt,
+        checkPassed: deliverableRuns.checkPassed,
+        checkOutcome: deliverableRuns.checkOutcome,
+        firstApprovalId: deliverableRuns.firstApprovalId,
+        firstApprovedAt: deliverableRuns.firstApprovedAt,
+        secondApprovalId: deliverableRuns.secondApprovalId,
+        secondApprovedAt: deliverableRuns.secondApprovedAt,
+        shippedAt: deliverableRuns.shippedAt,
+        abandonedAt: deliverableRuns.abandonedAt,
+        updatedAt: deliverableRuns.updatedAt,
+        deliverableKey: deliverables.key,
+        cadence: deliverables.cadence,
+        assemblerAgentId: deliverables.assemblerAgentId,
+        firstApproverUserId: deliverables.firstApproverUserId,
+        secondApproverUserId: deliverables.secondApproverUserId,
+        cursorTime: sql<string>`${deliverableRuns.updatedAt}::text`,
+      })
+      .from(deliverableRuns)
+      .innerJoin(deliverables, eq(deliverableRuns.deliverableId, deliverables.id))
+      .where(predicate ? and(eq(deliverableRuns.companyId, companyId), predicate) : eq(deliverableRuns.companyId, companyId))
+      .orderBy(...ordered(direction, deliverableRuns.updatedAt, deliverableRuns.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const events: EvaluationEventInput[] = rows.map((r) => ({
+    companyId,
+    actorType: "system" as const,
+    actorId: null,
+    subjectAgentId: r.assemblerAgentId,
+    sourceTable: "deliverable_runs",
+    sourceId: r.id,
+    sourceVersion: `${r.status}:${r.checkedAt ? r.checkedAt.toISOString() : "unchecked"}`,
+    eventType: "deliverable.run_changed" as const,
+    eventTime: r.updatedAt,
+    payload: {
+      deliverableRunId: r.id,
+      deliverableId: r.deliverableId,
+      deliverableKey: r.deliverableKey,
+      cadence: r.cadence,
+      runKey: r.runKey,
+      status: r.status,
+      assemblerAgentId: r.assemblerAgentId,
+      openedAt: r.openedAt.toISOString(),
+      assembledAt: iso(r.assembledAt),
+      checkedAt: iso(r.checkedAt),
+      checkPassed: r.checkPassed,
+      checkCount: Array.isArray(r.checkOutcome) ? r.checkOutcome.length : 0,
+      firstApprovalId: r.firstApprovalId,
+      firstApprovedAt: iso(r.firstApprovedAt),
+      firstApproverUserId: r.firstApproverUserId,
+      secondApprovalId: r.secondApprovalId,
+      secondApprovedAt: iso(r.secondApprovedAt),
+      secondApproverUserId: r.secondApproverUserId,
+      shippedAt: iso(r.shippedAt),
+      abandonedAt: iso(r.abandonedAt),
+    },
+  }));
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0: issue_responsibilities → `responsibility.interval`: one event when an
+ * interval opens and one when it closes (append-only history; LLD §5.2). The
+ * table has no updated time, so the read is keyed on when the row last
+ * changed — its close time once closed — and a close re-reads the row.
+ */
+export async function readResponsibilityIntervals(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const changedAt = sql`greatest(${issueResponsibilities.createdAt}, coalesce(${issueResponsibilities.validTo}, ${issueResponsibilities.createdAt}))`;
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, changedAt, issueResponsibilities.id, (predicate, take, direction) =>
+    tx
+      .select({ ...getTableColumns(issueResponsibilities), cursorTime: sql<string>`${changedAt}::text` })
+      .from(issueResponsibilities)
+      .where(predicate ? and(eq(issueResponsibilities.companyId, companyId), predicate) : eq(issueResponsibilities.companyId, companyId))
+      .orderBy(...ordered(direction, changedAt, issueResponsibilities.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId));
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const sc = scope.get(r.issueId);
+    const actor =
+      r.mappedBy === "human"
+        ? { actorType: "user" as const, actorId: r.mappedByActorId }
+        : r.mappedBy === "agent" || r.mappedBy === "planner"
+          ? { actorType: (r.mappedByActorId ? "agent" : "system") as EvaluationActorType, actorId: r.mappedByActorId }
+          : { actorType: "system" as const, actorId: r.mappedByActorId };
+    return {
+      companyId,
+      projectId: sc?.projectId ?? null,
+      goalId: sc?.goalId ?? null,
+      ...actor,
+      subjectAgentId: r.agentId,
+      sourceTable: "issue_responsibilities",
+      sourceId: r.id,
+      sourceVersion: r.validTo ? `closed:${r.validTo.toISOString()}` : "open",
+      eventType: "responsibility.interval" as const,
+      eventTime: r.validTo ?? r.validFrom,
+      payload: {
+        mappingId: r.id,
+        issueId: r.issueId,
+        identifier: sc?.identifier ?? null,
+        agentId: r.agentId,
+        responsibilityKey: r.responsibilityKey,
+        profileRevisionId: r.profileRevisionId,
+        validFrom: r.validFrom.toISOString(),
+        validTo: iso(r.validTo),
+        mappedBy: r.mappedBy,
+        mappedByActorId: r.mappedByActorId,
+        hasReason: !!r.reason,
+      },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+/** What agent scoring needs from a profile body: per responsibility, its key, the record it binds and its deadline. Prose stays out. */
+function profileResponsibilitiesDigest(body: unknown): Array<Record<string, unknown>> {
+  const list = Array.isArray(objOf(body)?.responsibilities) ? (objOf(body)!.responsibilities as unknown[]) : [];
+  return list.map((item) => {
+    const o = objOf(item) ?? {};
+    const obligation = objOf(o.obligation);
+    const performance = objOf(o.performance);
+    return {
+      key: typeof o.key === "string" ? o.key : null,
+      obligation: obligation
+        ? {
+            kind: typeof obligation.kind === "string" ? obligation.kind : null,
+            routineTriggerId: typeof obligation.routineTriggerId === "string" ? obligation.routineTriggerId : null,
+            deliverableId: typeof obligation.deliverableId === "string" ? obligation.deliverableId : null,
+            goalId: typeof obligation.goalId === "string" ? obligation.goalId : null,
+          }
+        : null,
+      deadline: objOf(performance?.deadline) ?? null,
+    };
+  });
+}
+
+/**
+ * T0: agent_profile_revisions → `profile.revision_changed`, one event per
+ * state and body hash. Drafts are not minted: nothing a draft says is in
+ * force. Carries the responsibility keys, obligations and deadlines plus the
+ * requested runtime; the profile's prose stays in the profile.
+ */
+export async function readProfileRevisions(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agentProfileRevisions.updatedAt, agentProfileRevisions.id, (predicate, take, direction) =>
+    tx
+      .select({
+        id: agentProfileRevisions.id,
+        profileId: agentProfileRevisions.profileId,
+        revisionNumber: agentProfileRevisions.revisionNumber,
+        basedOnRevisionId: agentProfileRevisions.basedOnRevisionId,
+        state: agentProfileRevisions.state,
+        body: agentProfileRevisions.body,
+        bodyHash: agentProfileRevisions.bodyHash,
+        approvalId: agentProfileRevisions.approvalId,
+        createdByAgentId: agentProfileRevisions.createdByAgentId,
+        createdByUserId: agentProfileRevisions.createdByUserId,
+        createdAt: agentProfileRevisions.createdAt,
+        updatedAt: agentProfileRevisions.updatedAt,
+        agentId: agentProfiles.agentId,
+        cursorTime: sql<string>`${agentProfileRevisions.updatedAt}::text`,
+      })
+      .from(agentProfileRevisions)
+      .innerJoin(agentProfiles, eq(agentProfileRevisions.profileId, agentProfiles.id))
+      .where(predicate ? and(eq(agentProfileRevisions.companyId, companyId), predicate) : eq(agentProfileRevisions.companyId, companyId))
+      .orderBy(...ordered(direction, agentProfileRevisions.updatedAt, agentProfileRevisions.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const events: EvaluationEventInput[] = rows.flatMap((r) => {
+    if (r.state === "draft") return [];
+    const runtime = objOf(objOf(r.body)?.runtime);
+    return [
+      {
+        companyId,
+        actorType: "system" as const,
+        actorId: null,
+        subjectAgentId: r.agentId,
+        sourceTable: "agent_profile_revisions",
+        sourceId: r.id,
+        sourceVersion: `${r.state}:${r.bodyHash}`,
+        eventType: "profile.revision_changed" as const,
+        eventTime: r.updatedAt,
+        payload: boundedPayload({
+          revisionId: r.id,
+          profileId: r.profileId,
+          agentId: r.agentId,
+          revisionNumber: r.revisionNumber,
+          basedOnRevisionId: r.basedOnRevisionId,
+          state: r.state,
+          bodyHash: r.bodyHash,
+          approvalId: r.approvalId,
+          createdByAgentId: r.createdByAgentId,
+          createdByUserId: r.createdByUserId,
+          createdAt: r.createdAt.toISOString(),
+          responsibilities: profileResponsibilitiesDigest(r.body),
+          runtime: runtime ? { adapterType: shortText(runtime.adapterType, 80), model: shortText(runtime.model, 200) } : null,
+        }),
+      },
+    ];
+  });
+  return { events, scanned, nextCursor };
+}
+
+/** T0: agent_profile_applications → `profile.application_changed`, one event per status (`applied` is when a revision came into force). */
+export async function readProfileApplications(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agentProfileApplications.updatedAt, agentProfileApplications.id, (predicate, take, direction) =>
+    tx
+      .select(withCursorTime(agentProfileApplications, agentProfileApplications.updatedAt))
+      .from(agentProfileApplications)
+      .where(predicate ? and(eq(agentProfileApplications.companyId, companyId), predicate) : eq(agentProfileApplications.companyId, companyId))
+      .orderBy(...ordered(direction, agentProfileApplications.updatedAt, agentProfileApplications.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const events: EvaluationEventInput[] = rows.map((r) => ({
+    companyId,
+    ...(r.approverUserId ? { actorType: "user" as const, actorId: r.approverUserId } : { actorType: "system" as const, actorId: null }),
+    subjectAgentId: r.agentId,
+    sourceTable: "agent_profile_applications",
+    sourceId: r.id,
+    sourceVersion: r.status,
+    eventType: "profile.application_changed" as const,
+    eventTime: r.updatedAt,
+    payload: {
+      applicationId: r.id,
+      agentId: r.agentId,
+      revisionId: r.revisionId,
+      approvalId: r.approvalId,
+      status: r.status,
+      approverUserId: r.approverUserId,
+      stepCount: Array.isArray(r.steps) ? r.steps.length : 0,
+      createdAt: r.createdAt.toISOString(),
+    },
+  }));
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0: issue_execution_decisions → `issue.execution_decision` (a review or
+ * approval stage decided on an issue). The decision body is prose: its length
+ * is kept, and an edit to it is a new fact through the version hash.
+ */
+export async function readExecutionDecisions(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueExecutionDecisions.updatedAt, issueExecutionDecisions.id, (predicate, take, direction) =>
+    tx
+      .select(withCursorTime(issueExecutionDecisions, issueExecutionDecisions.updatedAt))
+      .from(issueExecutionDecisions)
+      .where(predicate ? and(eq(issueExecutionDecisions.companyId, companyId), predicate) : eq(issueExecutionDecisions.companyId, companyId))
+      .orderBy(...ordered(direction, issueExecutionDecisions.updatedAt, issueExecutionDecisions.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId));
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const sc = scope.get(r.issueId);
+    const actor = r.actorAgentId ? { actorType: "agent" as const, actorId: r.actorAgentId } : { actorType: "user" as const, actorId: r.actorUserId ?? null };
+    const version = hashCanonical({ stageId: r.stageId, stageType: r.stageType, outcome: r.outcome, actorAgentId: r.actorAgentId, actorUserId: r.actorUserId, body: r.body });
+    return {
+      companyId,
+      projectId: sc?.projectId ?? null,
+      goalId: sc?.goalId ?? null,
+      ...actor,
+      subjectAgentId: sc?.assigneeAgentId ?? r.actorAgentId ?? null,
+      sourceTable: "issue_execution_decisions",
+      sourceId: r.id,
+      sourceVersion: version.slice(0, 32),
+      sourceRowHash: version,
+      eventType: "issue.execution_decision" as const,
+      eventTime: r.updatedAt,
+      payload: {
+        decisionId: r.id,
+        issueId: r.issueId,
+        identifier: sc?.identifier ?? null,
+        stageId: r.stageId,
+        stageType: r.stageType,
+        outcome: r.outcome,
+        actorAgentId: r.actorAgentId,
+        actorUserId: r.actorUserId,
+        createdByRunId: r.createdByRunId,
+        bodyLength: r.body.length,
+        createdAt: r.createdAt.toISOString(),
+      },
     };
   });
   return { events, scanned, nextCursor };
@@ -1154,5 +1898,15 @@ export const SOURCE_READERS = {
   issue_comments: readCommentHandoffs,
   issues: readIssueSnapshots,
   issue_labels: readIssueLabels,
+  // AgentDash (APM gate 3, P3.2): the agent-side sources (evaluation LLD §9.2)
+  routines: readRoutineSnapshots,
+  routine_triggers: readRoutineTriggerSnapshots,
+  routine_runs: readRoutineRuns,
+  deliverable_runs: readDeliverableRuns,
+  issue_responsibilities: readResponsibilityIntervals,
+  agent_profile_revisions: readProfileRevisions,
+  agent_profile_applications: readProfileApplications,
+  agent_corrections: readAgentCorrections,
+  issue_execution_decisions: readExecutionDecisions,
 } as const;
 export type SourceName = keyof typeof SOURCE_READERS;

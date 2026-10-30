@@ -96,7 +96,14 @@ export const api = {
     request<T>(path, { method: "POST", body }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
-  patch: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
+  // AgentDash (APM gate 2): optional extra headers, e.g. `If-Match` on a profile
+  // draft save. `request` spreads `init` after its merged headers, so the
+  // JSON content type is restated here or it would be dropped.
+  patch: <T>(path: string, body: unknown, headers?: Record<string, string>) =>
+    request<T>(path, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+      ...(headers ? { headers: { "Content-Type": "application/json", ...headers } } : {}),
+    }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };

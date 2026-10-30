@@ -36,7 +36,18 @@ import {
   MARKER_RETROSPECTIVE,
   MARKER_SYNTHETIC_HUMANS,
 } from "./state.js";
-import { buildTimeline, doneAt, isEvaluatorEvent, latestGoal, latestProject, membership, terminalAt, type Timeline } from "./timeline.js";
+import {
+  buildTimeline,
+  doneAt,
+  isEvaluatorEvent,
+  isMilestoneInput,
+  isTypedActivity,
+  latestGoal,
+  latestProject,
+  membership,
+  terminalAt,
+  type Timeline,
+} from "./timeline.js";
 import type { ActorRow, ExceptionRecord, MetricResult, ScoredCard } from "./types.js";
 
 /**
@@ -44,8 +55,16 @@ import type { ActorRow, ExceptionRecord, MetricResult, ScoredCard } from "./type
  * function of the ordered window `seq <= throughSeq` plus the open flag.
  * `FORMULA_VERSION` changes whenever any formula, rule, ordering or card shape
  * changes; `verify` refuses to compare across versions.
+ *
+ * m2-score/9 (APM gate 3, P3.2; evaluation LLD §9.2): milestone inputs changed —
+ * `issue.checked_out` is an assignment plus a transition (it was
+ * `activity.other`); issue-less runs, costs and project/goal-level verdicts are
+ * kept in the timeline (no milestone metric reads them); the agent-side sources
+ * are not milestone inputs. Formulas, rules and card shape are unchanged, so
+ * `METRICS_FORMULA_VERSION` and `COMPOSITE_FORMULA_VERSION` stay. Change log:
+ * doc/plans/2026-09-05-company-evaluator-decisions.md, "APM gate 3".
  */
-export const FORMULA_VERSION = "m2-score/8";
+export const FORMULA_VERSION = "m2-score/9";
 /** The card keeps this many exceptions (immediate and material first); the count is always exact. */
 const MAX_CARD_EXCEPTIONS = 500;
 
@@ -54,9 +73,19 @@ export interface ScoreOptions {
   fallbackOpen: boolean;
 }
 
-/** Membership for the drill-down digest (Milestone 1 shape): source events scoped to the milestone. The evaluator's own findings and contracts are not source facts (rules 9, 12). */
+/**
+ * Membership for the drill-down digest (Milestone 1 shape): source events scoped to the milestone. The evaluator's own
+ * findings and contracts are not source facts (rules 9, 12). Neither are the agent-side sources (APM gate 3), nor the
+ * typed access/routine activity, which as `activity.other` never carried a milestone scope.
+ */
 export function selectMilestoneEvents(events: EvaluationEventRow[], ref: EvaluationMilestoneRef): EvaluationEventRow[] {
-  return events.filter((e) => !isEvaluatorEvent(e.eventType) && (ref.kind === "project" ? e.projectId === ref.id : e.goalId === ref.id && e.projectId === null));
+  return events.filter(
+    (e) =>
+      !isEvaluatorEvent(e.eventType) &&
+      isMilestoneInput(e) &&
+      !isTypedActivity(e) &&
+      (ref.kind === "project" ? e.projectId === ref.id : e.goalId === ref.id && e.projectId === null),
+  );
 }
 
 /** The open flag from the ledger's own roster snapshots; null when the window has none for the milestone. */
@@ -74,7 +103,8 @@ function sortRecord(r: Record<string, number>): Record<string, number> {
 }
 
 export function scoreMilestone(window: EvaluationEventRow[], ref: EvaluationMilestoneRef, throughSeq: number, companyId: string, opts: ScoreOptions): ScoredCard {
-  const ordered = orderEvents(window.filter((e) => Number(e.seq) <= throughSeq));
+  // APM gate 3: the agent-side sources are not milestone inputs (their backfilled history must not move a milestone card).
+  const ordered = orderEvents(window.filter((e) => Number(e.seq) <= throughSeq && isMilestoneInput(e)));
   const tl = buildTimeline(ordered);
   const milestoneEvents = selectMilestoneEvents(ordered, ref);
   const mem = membership(tl, ref);

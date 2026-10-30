@@ -10,6 +10,7 @@ import {
   checkConnectorSendPayload,
   CONNECTOR_SEND_PROVIDERS,
   createApprovalSchema,
+  hirePayloadNamesProfile,
   overrideApprovalSchema,
   requestApprovalRevisionSchema,
   resolveApprovalSchema,
@@ -25,6 +26,8 @@ import { stewardInboxService } from "../services/steward-inbox.js";
 import { bridgeService } from "../services/bridge.js";
 import { connectorSendExecutionService } from "../services/connector-send-execution.js";
 import { accessService } from "../services/access.js";
+import { agentAccessCheckCacheFor, agentAccessEnforcementModeCached, checkAgentAccess, enforceAgentAccess } from "../services/agent-access-check.js";
+import { agentAccountabilityService } from "../services/agent-accountability.js";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
@@ -72,10 +75,81 @@ import {
  * Absent, not null, when the instance advertises no public URL — the same idiom
  * the health route uses for `publicBaseUrl`.
  */
+/**
+ * AgentDash: APM gate 2 — the agent an `agent_profile_change` is ABOUT. Its
+ * requester may be a person or the performance manager, so visibility of the
+ * subject agent is checked separately: a hidden agent's profile change does
+ * not exist for the caller.
+ */
+function profileChangeSubjectAgentId(approval: { type: string; payload: unknown }): string | null {
+  if (approval.type !== "agent_profile_change") return null;
+  const agentId = (approval.payload as Record<string, unknown> | null)?.agentId;
+  return typeof agentId === "string" ? agentId : null;
+}
+
+/**
+ * AgentDash: APM gate 5 — a `hire_agent` that carries a profile is filed only
+ * by proposing an unbound draft (its change payload is server-computed), and
+ * is never resubmitted with a new payload.
+ */
+function refuseDirectProfileHire(type: string, payload: unknown, action: "created" | "resubmitted") {
+  if (type !== "hire_agent" || !hirePayloadNamesProfile(payload)) return;
+  throw unprocessable(
+    action === "created"
+      ? "A hire with an operating profile is filed by proposing the draft: POST /api/companies/:companyId/agent-profiles/:profileId/revisions/:revisionId/propose"
+      : "A hire with an operating profile cannot be resubmitted; withdraw it and propose the draft again",
+    { code: "AGENT_PROFILE_CHANGE_NOT_DIRECT" },
+  );
+}
+
+/** AgentDash: APM gate 2 — only `proposeProfileRevision` files (and nothing resubmits) a profile change. */
+function refuseDirectProfileChange(type: string, action: "created" | "resubmitted") {
+  if (type !== "agent_profile_change") return;
+  throw unprocessable(
+    action === "created"
+      ? "Profile changes are filed by proposing a profile revision: POST /api/companies/:companyId/agents/:agentId/profile/revisions/:revisionId/propose"
+      : "A profile change cannot be resubmitted; withdraw it and propose a new revision",
+    { code: "AGENT_PROFILE_CHANGE_NOT_DIRECT" },
+  );
+}
+
+function profileChangeOf(payload: unknown): Record<string, unknown> | null {
+  const value = (payload as Record<string, unknown> | null)?.profileChange;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
 function approvalResponse<T extends { id: string; type: string; payload: Record<string, unknown> }>(approval: T, canReadSpend: boolean) {
   const url = approvalUrl(approval.id);
+  const redacted = redactApprovalForReader(approval, canReadSpend);
   return {
-    ...redactApprovalForReader(approval, canReadSpend),
+    ...redacted,
+    // AgentDash: APM gate 2 — `fieldAuthority` / `requiredAuthority` match the
+    // credential-key pattern ("auth") but are server-computed enums and JSON
+    // pointers (`proposeProfileRevision`), never caller text; the decider has
+    // to see them. Everything else in the payload stays redacted.
+    ...(approval.type === "agent_profile_change"
+      ? {
+          payload: {
+            ...redacted.payload,
+            fieldAuthority: approval.payload.fieldAuthority,
+            requiredAuthority: approval.payload.requiredAuthority,
+          },
+        }
+      : {}),
+    // AgentDash: APM gate 5 — the same two server-computed fields inside a
+    // profile hire's `profileChange`, so the decider sees what applying it needs.
+    ...(approval.type === "hire_agent" && profileChangeOf(approval.payload) && profileChangeOf(redacted.payload)
+      ? {
+          payload: {
+            ...redacted.payload,
+            profileChange: {
+              ...profileChangeOf(redacted.payload),
+              fieldAuthority: profileChangeOf(approval.payload)!.fieldAuthority,
+              requiredAuthority: profileChangeOf(approval.payload)!.requiredAuthority,
+            },
+          },
+        }
+      : {}),
     ...(url ? { url } : {}),
   };
 }
@@ -247,6 +321,8 @@ export function approvalRoutes(
     if (approval.requestedByAgentId) {
       await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
     }
+    const subjectAgentId = profileChangeSubjectAgentId(approval);
+    if (subjectAgentId) await assertAgentIdVisible(db, req, subjectAgentId, "Approval");
     // AgentDash (GH #902): a budget override for a hidden project does not exist.
     await assertApprovalProjectVisible(db, req, approval);
     return approval;
@@ -329,7 +405,11 @@ export function approvalRoutes(
     const visible =
       visibleIds === null
         ? result
-        : result.filter((approval) => !approval.requestedByAgentId || visibleIds.has(approval.requestedByAgentId));
+        : result.filter((approval) => {
+            if (approval.requestedByAgentId && !visibleIds.has(approval.requestedByAgentId)) return false;
+            const subjectAgentId = profileChangeSubjectAgentId(approval);
+            return !subjectAgentId || visibleIds.has(subjectAgentId);
+          });
     const canReadSpend = await canReadCompanySpend(db, req, companyId);
     res.json(visible.map((approval) => approvalResponse(approval, canReadSpend)));
   });
@@ -345,10 +425,24 @@ export function approvalRoutes(
     if (approval.requestedByAgentId) {
       await assertAgentIdVisible(db, req, approval.requestedByAgentId, "Approval");
     }
+    const subjectAgentId = profileChangeSubjectAgentId(approval);
+    if (subjectAgentId) await assertAgentIdVisible(db, req, subjectAgentId, "Approval");
     // AgentDash (GH #902): 404 for a budget override on a hidden project.
     await assertApprovalProjectVisible(db, req, approval);
     res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
   });
+
+  /**
+   * AgentDash (APM gate 2, P2.3; gate 3, P3.4): the person an agent-filed
+   * approval reaches — the approver it names, else the person who answers for
+   * the agent. Null when neither resolves.
+   */
+  async function approvalRoutedToUserId(companyId: string, agentId: string, payload: unknown): Promise<string | null> {
+    const named = (payload as Record<string, unknown> | null)?.approverUserId;
+    return typeof named === "string" && named
+      ? named
+      : await agentAccountabilityService(db).escalationUserId(companyId, agentId).catch(() => null);
+  }
 
   router.post("/companies/:companyId/approvals", validate(createApprovalSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -364,6 +458,8 @@ export function approvalRoutes(
       await assertIssueIdVisible(db, req, issueId);
     }
     const { issueIds: _issueIds, ...approvalInput } = req.body;
+    refuseDirectProfileChange(approvalInput.type, "created");
+    refuseDirectProfileHire(approvalInput.type, approvalInput.payload, "created");
     if (approvalInput.type === "connector_send") {
       assertConnectorSendPayloadExecutable(approvalInput.payload);
     }
@@ -398,6 +494,26 @@ export function approvalRoutes(
     if (actor.agentId && approvalInput.requestedByAgentId
         && approvalInput.requestedByAgentId !== actor.agentId) {
       throw forbidden("An agent can only request approvals on its own behalf");
+    }
+    // AgentDash (APM gate 3, P3.4; access LLD §4 talk.people, approval
+    // routing): in enforce, the person an agent-filed approval would reach is
+    // checked BEFORE the approval exists, and a refusal answers 403
+    // ACCESS_POLICY_REFUSED naming who is allowed. The agent's accountable
+    // person, steward and company admins are always reachable. Off and
+    // shadow are unchanged (the shadow check below runs after creation).
+    const routingCache = agentAccessCheckCacheFor(req);
+    if (
+      actor.actorType === "agent" && actor.agentId &&
+      (await agentAccessEnforcementModeCached(db, companyId, routingCache).catch(() => "off" as const)) === "enforce"
+    ) {
+      const routedToUserId = await approvalRoutedToUserId(companyId, actor.agentId, normalizedPayload);
+      if (routedToUserId) {
+        await enforceAgentAccess(
+          db,
+          { companyId, agentId: actor.agentId, dimension: "talk.people", target: { userId: routedToUserId, purpose: "approval" } },
+          { site: "approval_routing", cache: routingCache },
+        );
+      }
     }
     // GH #919: create + issue links + the activity row are one unit — a link
     // failure must not leave a pending approval with no links and no record.
@@ -443,6 +559,26 @@ export function approvalRoutes(
       return { approval: created, publication: activityPublication };
     });
     publishActivity(publication);
+
+    // AgentDash (APM gate 2, P2.3; access LLD §4 talk.people, approval
+    // routing): an agent-filed approval reaches the approver it names, or the
+    // person who answers for the agent. That person is checked against the
+    // agent's V2 people scope (its accountable person, steward and admins are
+    // always reachable). Shadow only: the approval is routed exactly as before.
+    const accessCache = agentAccessCheckCacheFor(req);
+    if (
+      actor.actorType === "agent" && actor.agentId && approval.requestedByAgentId === actor.agentId &&
+      (await agentAccessEnforcementModeCached(db, companyId, accessCache).catch(() => "off" as const)) !== "off"
+    ) {
+      const routedToUserId = await approvalRoutedToUserId(companyId, actor.agentId, approval.payload);
+      if (routedToUserId) {
+        await checkAgentAccess(
+          db,
+          { companyId, agentId: actor.agentId, dimension: "talk.people", target: { userId: routedToUserId, purpose: "approval" } },
+          { site: "approval_routing", cache: accessCache },
+        );
+      }
+    }
 
     await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
 
@@ -498,6 +634,7 @@ export function approvalRoutes(
     await decisionEffects.afterApprove(approval, applied, {
       actorUserId: req.actor.userId ?? "board",
       decisionNote: req.body.decisionNote ?? null,
+      actor: { source: req.actor.source ?? null, isInstanceAdmin: req.actor.isInstanceAdmin ?? false },
     });
 
     res.json(approvalResponse(approval, await canReadCompanySpend(db, req, approval.companyId)));
@@ -590,6 +727,50 @@ export function approvalRoutes(
       });
 
       await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");
+      // AgentDash: APM gate 2 — an overridden profile change goes through the
+      // SAME application function as an ordinary approval (which re-checks the
+      // decider's field authority). Logged, never thrown: the decision is
+      // committed and the receipt records what happened.
+      if (approval.type === "agent_profile_change") {
+        try {
+          if (req.body.decision === "approved") {
+            const { applyProfileRevision } = await import("../services/agent-profile-application.js");
+            await applyProfileRevision(db, approval.id, {
+              userId: decidedByUserId,
+              path: "override",
+              source: req.actor.source ?? null,
+              isInstanceAdmin: req.actor.isInstanceAdmin ?? false,
+            });
+          } else {
+            const { markProfileRevisionRejected } = await import("../services/agent-profiles.js");
+            await markProfileRevisionRejected(db, approval, { userId: decidedByUserId });
+          }
+        } catch (err) {
+          logger.error({ err, approvalId: approval.id }, "profile change settlement failed after override");
+        }
+      }
+      // AgentDash: APM gate 5 — an overridden hire filed from an unbound
+      // draft settles its profile exactly as an ordinary decision does.
+      if (approval.type === "hire_agent") {
+        try {
+          const { applyHireProfileRevision, isProfileHireApproval } = await import("../services/agent-profile-application.js");
+          if (isProfileHireApproval(approval)) {
+            if (req.body.decision === "approved") {
+              await applyHireProfileRevision(db, approval.id, {
+                userId: decidedByUserId,
+                path: "override",
+                source: req.actor.source ?? null,
+                isInstanceAdmin: req.actor.isInstanceAdmin ?? false,
+              });
+            } else {
+              const { markProfileRevisionRejected } = await import("../services/agent-profiles.js");
+              await markProfileRevisionRejected(db, approval, { userId: decidedByUserId });
+            }
+          }
+        } catch (err) {
+          logger.error({ err, approvalId: approval.id }, "hire profile settlement failed after override");
+        }
+      }
       // An override is still a decision, so a bridge task must follow it. Left
       // out, an overridden approval would strand its task forever.
       try {
@@ -668,6 +849,9 @@ export function approvalRoutes(
       res.status(403).json({ error: "Only requesting agent can resubmit this approval" });
       return;
     }
+    refuseDirectProfileChange(existing.type, "resubmitted");
+    refuseDirectProfileHire(existing.type, existing.payload, "resubmitted");
+    refuseDirectProfileHire(existing.type, req.body.payload, "resubmitted");
     // A resubmit now advances the revision, which invalidates every in-flight
     // card. Without an authority check that is a decision-denial vector for any
     // ordinary member, so board callers must satisfy the same actor rules.

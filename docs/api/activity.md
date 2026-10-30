@@ -41,6 +41,7 @@ curl "https://your-instance.example/api/companies/$COMPANY_ID/activity?entityTyp
 | `agentId` | UUID. Only rows about this agent. |
 | `entityType` | Only rows about this kind of entity, such as `issue`, `agent`, `project`, `secret` or `cost_event`. |
 | `entityId` | Only rows about this entity. Usually paired with `entityType`. |
+| `includeSystem` | `true` returns every row. `false` also leaves out system bookkeeping (workspace leases, read markers, run internals) and rows a system actor wrote, except the ones an owner must see (budget stops, failed hires, system-opened approvals). Omitted, every row comes back except `access.would_refuse` and `agent_profile.application_step` (`ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS` in `packages/shared/src/activity-actions.ts`), which only `true` returns. |
 
 Rows come back newest first. There is no offset. To follow the log, pass the newest `createdAt` you have seen as `since`: the bound is inclusive, so that row comes back again, and if more than `limit` rows arrived since then, only the newest `limit` are returned. Rows about hidden issues are never returned.
 

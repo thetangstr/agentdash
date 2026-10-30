@@ -19,11 +19,31 @@ vi.mock("../services/evaluation/ingest.js", () => ({
   evaluationIngest: () => ({ tick, backfill, cursors: vi.fn().mockResolvedValue({}), running: false }),
   withCompanyLock: (_db: unknown, _companyId: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
 }));
-const ledgerList = vi.fn().mockResolvedValue([{ id: "e1" }]);
+// Rows carry their access class (APM gate 3); every pre-gate-3 row reads `company`.
+const ledgerList = vi.fn().mockResolvedValue([{ id: "e1", accessClass: "company", projectId: null }]);
 const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")));
 const findBySource = vi.fn(async () => ({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", eventType: "evaluation.correction" }));
 const findBySourceId = vi.fn(async (_c: string, table: string, id: string) => (table === "evaluation" && id === "E4:issue:x" ? { id: "f1", sourceId: id } : null));
-const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" ? { id, eventType: "evaluation.correction" } : id === "dddddddd-dddd-4ddd-8ddd-ddddddddddd1" ? { id, eventType: "issue.created" } : null));
+const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" ? { id, eventType: "evaluation.correction", accessClass: "company", projectId: null } : id === "dddddddd-dddd-4ddd-8ddd-ddddddddddd1" ? { id, eventType: "issue.created", accessClass: "company", projectId: null } : null));
+// APM gate 3: the viewer is resolved from the actor without a database here (the class rule itself is the real one).
+vi.mock("../services/evaluation/access-class.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/evaluation/access-class.js")>();
+  return {
+    ...actual,
+    resolveEvaluationViewer: vi.fn(async (_db: unknown, req: { actor: Record<string, unknown> }, companyId: string) => {
+      const admin = req.actor.type === "board" && req.actor.isInstanceAdmin === true;
+      return {
+        companyId,
+        principal: req.actor.type === "agent" ? { type: "agent", agentId: req.actor.agentId, evaluator: req.actor.principalKind === "evaluator" } : { type: "board", userId: req.actor.userId ?? null },
+        admin,
+        readableProjectIds: admin ? "all" : new Set<string>(),
+        hiddenProjectIds: new Set<string>(),
+        privateAgentIds: new Set<string>(),
+        pairingReceiptIds: new Set<string>(),
+      };
+    }),
+  };
+});
 vi.mock("../services/evaluation/ledger.js", () => ({
   hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
   evaluationLedger: () => ({
@@ -370,5 +390,41 @@ describe("evaluation routes", () => {
     expect((await request(admin).get("/api/companies/company-1/evaluation/shadow-report?refs=project:22222222-2222-4222-8222-222222222222,project:22222222-2222-4222-8222-222222222222")).status).toBe(400); // the same milestone twice is not two milestones
     expect((await request(admin).get("/api/companies/company-1/evaluation/shadow-report?refs=sprint:x")).status).toBe(400);
     expect((await request(admin).get("/api/companies/company-1/evaluation/shadow-report")).status).toBe(400);
+  });
+
+  it("APM gate 3: the events list and detail filter by access class before returning; an administrator reads every class", async () => {
+    const PRIVATE = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1";
+    const rows = [
+      { id: "e-company", accessClass: "company", projectId: null },
+      { id: "e-private", accessClass: `private_agent:${PRIVATE}`, projectId: null },
+      { id: "e-project", accessClass: "project:22222222-2222-4222-8222-222222222222", projectId: "22222222-2222-4222-8222-222222222222" },
+      { id: "e-garbage", accessClass: "private_agent:not-a-uuid", projectId: null },
+    ];
+    ledgerList.mockResolvedValue(rows);
+    try {
+      const agent = await createApp(agentKey);
+      ledgerList.mockClear();
+      const listed = await request(agent).get("/api/companies/company-1/evaluation/events");
+      expect(listed.status).toBe(200);
+      // the SQL condition goes to the query (filtered before the LIMIT) and the rows are filtered again
+      expect(ledgerList.mock.calls[0]![1]).toHaveProperty("accessCondition");
+      expect(ledgerList.mock.calls[0]![1].accessCondition).toBeDefined();
+      expect(listed.body.events.map((e: { id: string }) => e.id)).toEqual(["e-company"]);
+      expect(listed.body.count).toBe(1);
+
+      const admin = await createApp(boardAdmin);
+      ledgerList.mockClear();
+      const all = await request(admin).get("/api/companies/company-1/evaluation/events");
+      expect(ledgerList.mock.calls[0]![1].accessCondition).toBeUndefined();
+      expect(all.body.events.map((e: { id: string }) => e.id)).toEqual(["e-company", "e-private", "e-project", "e-garbage"]);
+
+      // detail: a row the viewer may not read is absent, not forbidden
+      ledgerGet.mockImplementationOnce(async (_c: string, id: string) => ({ id, eventType: "correction.recorded", accessClass: `private_agent:${PRIVATE}`, projectId: null }));
+      expect((await request(agent).get(`/api/companies/company-1/evaluation/events/${PRIVATE}`)).status).toBe(404);
+      ledgerGet.mockImplementationOnce(async (_c: string, id: string) => ({ id, eventType: "correction.recorded", accessClass: `private_agent:${PRIVATE}`, projectId: null }));
+      expect((await request(admin).get(`/api/companies/company-1/evaluation/events/${PRIVATE}`)).status).toBe(200);
+    } finally {
+      ledgerList.mockResolvedValue([{ id: "e1", accessClass: "company", projectId: null }]);
+    }
   });
 });

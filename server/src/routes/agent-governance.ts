@@ -11,7 +11,7 @@ import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { agentAccountabilityService } from "../services/agent-accountability.js";
-import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentGovernanceService, toV1GovernanceView } from "../services/agent-governance.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 import {
@@ -94,7 +94,9 @@ export function agentGovernanceRoutes(db: Db) {
     const agentId = req.params.agentId as string;
     await requireProfileCompany(req, companyId);
     await requirePolicyReadAuthority(req, companyId, agentId);
-    res.json({ policy: await governance.getForAgent(companyId, agentId) });
+    // AgentDash (APM gate 2): the editors read and send back V1 sides; V2
+    // dimensions stay stored (a V1-shaped save merges and keeps them).
+    res.json({ policy: toV1GovernanceView(await governance.getForAgent(companyId, agentId)) });
   });
 
   router.put(
@@ -112,7 +114,7 @@ export function agentGovernanceRoutes(db: Db) {
         actorUserId: req.actor.userId ?? null,
         channel: req.body.channel ?? "web",
       });
-      res.json({ policy });
+      res.json({ policy: toV1GovernanceView(policy) });
     },
   );
 
@@ -131,7 +133,7 @@ export function agentGovernanceRoutes(db: Db) {
         actorUserId: req.actor.userId ?? null,
         channel: req.body.channel ?? "web",
       });
-      res.json({ policy });
+      res.json({ policy: toV1GovernanceView(policy) });
     },
   );
 
@@ -169,7 +171,7 @@ export function agentGovernanceRoutes(db: Db) {
         revision: req.body.revision,
         actorUserId: active.userId,
       });
-      res.json({ policy, clamped });
+      res.json({ policy: toV1GovernanceView(policy), clamped });
     },
   );
 

@@ -1,11 +1,15 @@
-import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
+import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck, UserCog } from "lucide-react";
 import { formatCents } from "../lib/utils";
 import { humanizeAgentRole } from "../lib/agent-identity";
 import {
   AGENT_MODEL_TIER_METADATA_KEY,
+  agentProfileHireFieldsSchema,
   describeHermesModel,
   HERMES_LOCAL_ADAPTER_TYPE,
+  hirePayloadNamesProfile,
 } from "@paperclipai/shared";
+import { Link } from "@/lib/router";
+import { AgentProfileChangePayloadView } from "./agent-performance/AgentProfileChangePayload";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
@@ -13,6 +17,8 @@ export const typeLabel: Record<string, string> = {
   budget_override_required: "Budget Override",
   request_board_approval: "Approval",
   mandate_violation: "Mandate escalation",
+  // AgentDash: Agent Performance Management gate 2.
+  agent_profile_change: "Profile change",
 };
 
 function firstNonEmptyString(...values: unknown[]): string | null {
@@ -44,6 +50,10 @@ export function approvalLabel(type: string, payload?: Record<string, unknown> | 
     if (name && title) return `Hire ${name} as ${title}`;
     if (name) return `Hire ${name}`;
   }
+  // AgentDash (APM gate 2): a profile change names the revision it would apply.
+  if (type === "agent_profile_change" && typeof payload?.revisionNumber === "number") {
+    return `Profile change: revision ${payload.revisionNumber}`;
+  }
   const base = typeLabel[type] ?? type;
   const subject = approvalSubject(payload);
   if (subject) {
@@ -62,6 +72,7 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   budget_override_required: ShieldAlert,
   request_board_approval: ShieldCheck,
   mandate_violation: ShieldAlert,
+  agent_profile_change: UserCog,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -139,6 +150,54 @@ function hermesModelLine(payload: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * AgentDash (APM gate 5, P5.2): a hire filed from a draft profile for a new
+ * role carries that profile (`AgentProfileHireFields`). Approving creates
+ * the agent and applies the profile through the profile application path.
+ * The full profile is on the draft's page; this names it and links there.
+ */
+export const HIRE_PROFILE_APPLY_TEXT =
+  "Approving creates the agent and applies this profile through the recorded profile application. Nothing runs before the hire is approved.";
+
+function HireProfileSection({ payload }: { payload: Record<string, unknown> }) {
+  if (!hirePayloadNamesProfile(payload)) return null;
+  const parsed = agentProfileHireFieldsSchema.safeParse(payload);
+  const profileId = parsed.success ? parsed.data.profileId : stringValue(payload.profileId);
+  const link = profileId ? (
+    <Link to={`/agents/drafts/${profileId}`} className="underline" data-testid="hire-agent-profile-link">
+      Open the draft profile
+    </Link>
+  ) : null;
+  if (!parsed.success) {
+    return (
+      <div className="mt-3 space-y-1 rounded-md border border-border px-3 py-2 text-sm" data-testid="hire-agent-profile">
+        <p className="font-medium">Operating profile</p>
+        <p className="text-muted-foreground">This hire names an operating profile, but its details couldn't be read.</p>
+        {link}
+      </div>
+    );
+  }
+  const fields = parsed.data;
+  const titles = new Map<string, string>();
+  for (const entry of fields.profileChange.diff) {
+    if (entry.key && !titles.has(entry.key)) titles.set(entry.key, entry.title ?? entry.key);
+  }
+  for (const key of fields.profileChange.affectedResponsibilities) {
+    if (!titles.has(key)) titles.set(key, key);
+  }
+  const responsibilities = [...titles.values()];
+  return (
+    <div className="mt-3 space-y-1 rounded-md border border-border px-3 py-2 text-sm" data-testid="hire-agent-profile">
+      <p className="font-medium">Operating profile: draft revision {fields.profileRevisionNumber}</p>
+      <p className="text-muted-foreground">
+        {responsibilities.length > 0 ? `Work it would own: ${responsibilities.join(", ")}.` : "It names no responsibilities yet."}
+      </p>
+      <p className="text-muted-foreground">{HIRE_PROFILE_APPLY_TEXT}</p>
+      {link}
+    </div>
+  );
+}
+
 export function HireAgentPayload({ payload }: { payload: Record<string, unknown> }) {
   // AgentDash (c4-hire-ux): the human title carries the job ("Bookkeeper");
   // the role slug and adapter are internal detail and render under Technical
@@ -166,6 +225,7 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
         </div>
       )}
       <SkillList values={payload.desiredSkills} />
+      <HireProfileSection payload={payload} />
     </div>
   );
 }
@@ -350,5 +410,6 @@ export function ApprovalPayloadRenderer({
   if (type === "request_board_approval") {
     return <BoardApprovalPayload payload={payload} hideTitle={hidePrimaryTitle} />;
   }
+  if (type === "agent_profile_change") return <AgentProfileChangePayloadView payload={payload} />;
   return <CeoStrategyPayload payload={payload} />;
 }

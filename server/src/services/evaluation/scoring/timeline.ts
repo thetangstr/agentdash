@@ -1,4 +1,11 @@
-import { EVALUATION_REVIEW_LABEL, type EvaluationHandoffType, type EvaluationMilestoneRef } from "@paperclipai/shared";
+import {
+  EVALUATION_ADVISORY_EVENT_TYPES,
+  EVALUATION_AGENT_SOURCE_EVENT_TYPES,
+  EVALUATION_REVIEW_LABEL,
+  EVALUATION_TYPED_ACTIVITY_EVENT_TYPES,
+  type EvaluationHandoffType,
+  type EvaluationMilestoneRef,
+} from "@paperclipai/shared";
 import type { EvaluationEventRow } from "../ledger.js";
 
 /**
@@ -10,7 +17,43 @@ import type { EvaluationEventRow } from "../ledger.js";
  *
  * Evaluator output (`evaluation.*`) and contracts never enter item timelines
  * (rules 9 and 12); contracts are read separately.
+ *
+ * AgentDash (APM gate 3, P3.2; evaluation LLD §9.2) fixes, folded into the
+ * milestone formula version `m2-score/9`:
+ * - `issue.checked_out` arrives as an assignment plus a transition (ingest);
+ * - runs and costs with no issue are kept (`unattributedRuns`/`unattributedCosts`)
+ *   instead of dropped; source presence still reflects item-level records only;
+ * - project- and goal-level verdicts are kept (`milestoneVerdicts`);
+ * - goal snapshots carry `currentValue`/`lastUpdatedAt`, agent facts carry
+ *   `adapterType`/`model`.
+ * Events from the agent-side sources (`EVALUATION_AGENT_SOURCE_EVENT_TYPES`)
+ * are not folded at all (`isMilestoneInput`), and typed access/routine activity
+ * counts exactly as the `activity.other` row it replaced, so neither moves a
+ * milestone card.
  */
+
+const AGENT_SOURCE_EVENT_TYPES: ReadonlySet<string> = new Set(EVALUATION_AGENT_SOURCE_EVENT_TYPES);
+// AgentDash (APM gate 4, P4.1): recommendations and their decisions are advisory records, inputs to no card.
+const ADVISORY_EVENT_TYPES: ReadonlySet<string> = new Set(EVALUATION_ADVISORY_EVENT_TYPES);
+const TYPED_ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set(EVALUATION_TYPED_ACTIVITY_EVENT_TYPES);
+
+/**
+ * Whether an event is a milestone input. Events from the agent-side sources
+ * (gate 3) are not: milestone scoring drops them before folding, so their
+ * history (backfilled with old event times) cannot add an ingest-lag marker,
+ * shift `asOf`, add a human actor or an emission count to a milestone card.
+ * Advisory records (APM gate 4: the performance manager's recommendations and
+ * the owner's decisions) are not either, and since agent scoring folds the
+ * same timeline, they move no agent card.
+ */
+export function isMilestoneInput(e: Pick<EvaluationEventRow, "eventType">): boolean {
+  return !AGENT_SOURCE_EVENT_TYPES.has(e.eventType) && !ADVISORY_EVENT_TYPES.has(e.eventType);
+}
+
+/** Typed activity_log rows (gate 3) that used to be `activity.other` with no item; they never join an item timeline. */
+export function isTypedActivity(e: Pick<EvaluationEventRow, "eventType">): boolean {
+  return TYPED_ACTIVITY_EVENT_TYPES.has(e.eventType);
+}
 
 export const TERMINAL_STATUSES = new Set(["done", "cancelled"]);
 
@@ -201,6 +244,9 @@ export interface AgentFacts {
   reportsTo: string | null;
   accountableUserId: string | null;
   autonomy: string | null;
+  /** AgentDash (APM gate 3): the adapter and explicitly configured model; null on snapshots taken before gate 3. */
+  adapterType: string | null;
+  model: string | null;
   asOf: Date;
 }
 
@@ -223,6 +269,15 @@ export interface GoalSnapshot extends Ref {
   ownerAgentId: string | null;
   hasMetricDefinition: boolean;
   metricDefinition: Payload | null;
+  /** AgentDash (APM gate 3): the goal's measurement and when it was last updated; null when unknown (and on snapshots before gate 3). */
+  currentValue: number | string | null;
+  lastUpdatedAt: string | null;
+}
+
+/** AgentDash (APM gate 3): a verdict on a project or goal itself (no issue), kept instead of dropped. */
+export interface MilestoneVerdict extends Verdict {
+  projectId: string | null;
+  goalId: string | null;
 }
 
 export interface SourcePresence {
@@ -253,11 +308,18 @@ export interface Timeline {
   /** Human attestations and other evaluator-side dispositions (read, never scored). */
   dispositions: EvaluationEventRow[];
   authzRefused: Array<Ref & { payload: Payload; issueId: string | null }>;
+  /** AgentDash (APM gate 3): runs with no issue (unattributed work); kept for agent cost sections. */
+  unattributedRuns: Run[];
+  /** AgentDash (APM gate 3): cost events with no issue (unattributed spend). */
+  unattributedCosts: Cost[];
+  /** AgentDash (APM gate 3): project- and goal-level verdicts (no issue). */
+  milestoneVerdicts: MilestoneVerdict[];
   sources: SourcePresence;
   /** The deterministic "now": the latest event or ingest time the window knows about. */
   asOf: Date;
   /** Rule 13: the blind window — maximum ingest lag observed. */
   maxIngestLagMs: number;
+  /** Milestone-input events folded (agent-side source events are not counted; `isMilestoneInput`). */
   eventCount: number;
   /** Actor keys of every human actor seen; all-synthetic means the deployment-mode caveat (§7). */
   humanActors: Set<string>;
@@ -305,6 +367,46 @@ function item(tl: Timeline, issueId: string, identifier: string | null): ItemTim
   return it;
 }
 
+function runOf(e: EvaluationEventRow, p: Payload): Run {
+  return {
+    ...ref(e),
+    runId: str(p, "runId"),
+    agentId: str(p, "agentId"),
+    status: str(p, "status"),
+    durationMs: num(p, "durationMs"),
+    retryOfRunId: str(p, "retryOfRunId"),
+    startedAt: date(p, "startedAt"),
+    usagePresent: bool(p, "usagePresent"),
+    inputTokens: num(p, "inputTokens"),
+    outputTokens: num(p, "outputTokens"),
+    errorCode: str(p, "errorCode"),
+    invocationSource: str(p, "invocationSource"),
+  };
+}
+
+function costOf(e: EvaluationEventRow, p: Payload): Cost {
+  return {
+    ...ref(e),
+    runId: str(p, "heartbeatRunId"),
+    agentId: str(p, "agentId"),
+    costCents: num(p, "costCents"),
+    inputTokens: num(p, "inputTokens"),
+    outputTokens: num(p, "outputTokens"),
+  };
+}
+
+function verdictOf(e: EvaluationEventRow, p: Payload): Verdict {
+  return {
+    ...ref(e),
+    verdictId: str(p, "verdictId"),
+    entityType: str(p, "entityType"),
+    outcome: str(p, "outcome"),
+    reviewerAgentId: str(p, "reviewerAgentId"),
+    reviewerUserId: str(p, "reviewerUserId"),
+    rubricScores: obj(p, "rubricScores"),
+  };
+}
+
 function touch(it: ItemTimeline, e: EvaluationEventRow) {
   it.eventIds.push(e.id);
   if (!it.lastActivity || e.eventTime > it.lastActivity) it.lastActivity = e.eventTime;
@@ -320,6 +422,9 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
     contracts: [],
     dispositions: [],
     authzRefused: [],
+    unattributedRuns: [],
+    unattributedCosts: [],
+    milestoneVerdicts: [],
     sources: {
       verdicts: false,
       approvalsDecided: false,
@@ -338,10 +443,13 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
     },
     asOf: new Date(0),
     maxIngestLagMs: 0,
-    eventCount: window.length,
+    eventCount: 0,
     humanActors: new Set(),
   };
   for (const e of window) {
+    // AgentDash (APM gate 3): the agent-side sources are not milestone inputs, not even for asOf, lag or humans.
+    if (!isMilestoneInput(e)) continue;
+    tl.eventCount++;
     const p = (e.payload ?? {}) as Payload;
     const t = e.eventTime;
     if (t > tl.asOf) tl.asOf = t;
@@ -375,6 +483,8 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
           reportsTo: str(p, "reportsTo"),
           accountableUserId: str(p, "accountableUserId"),
           autonomy: str(p, "autonomy"),
+          adapterType: str(p, "adapterType"),
+          model: str(p, "model"),
           asOf: t,
         });
         continue;
@@ -411,6 +521,8 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
           ownerAgentId: str(p, "ownerAgentId"),
           hasMetricDefinition: !!md,
           metricDefinition: md,
+          currentValue: typeof p.currentValue === "number" || typeof p.currentValue === "string" ? (p.currentValue as number | string) : null,
+          lastUpdatedAt: str(p, "lastUpdatedAt"),
         });
         tl.goals.set(id, list);
         continue;
@@ -426,7 +538,18 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
       default:
         break;
     }
-    if (!issueId) continue;
+    // AgentDash (APM gate 3): typed access/routine activity counts as the item-less `activity.other` it replaced.
+    if (isTypedActivity(e)) continue;
+    if (!issueId) {
+      // AgentDash (APM gate 3, LLD §9.2 fix): issue-less runs, costs and verdicts are kept, not dropped. They join no
+      // item and set no source-presence flag, so no milestone metric reads them.
+      if (e.eventType === "run.finished") tl.unattributedRuns.push(runOf(e, p));
+      else if (e.eventType === "cost.recorded") tl.unattributedCosts.push(costOf(e, p));
+      else if (e.eventType === "verdict.recorded") {
+        tl.milestoneVerdicts.push({ ...verdictOf(e, p), projectId: str(p, "verdictProjectId") ?? e.projectId ?? null, goalId: str(p, "verdictGoalId") ?? e.goalId ?? null });
+      }
+      continue;
+    }
     const it = item(tl, issueId, identifier);
     touch(it, e);
     switch (e.eventType) {
@@ -504,32 +627,11 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
         break;
       case "run.finished":
         tl.sources.runs = true;
-        it.runs.push({
-          ...ref(e),
-          runId: str(p, "runId"),
-          agentId: str(p, "agentId"),
-          status: str(p, "status"),
-          durationMs: num(p, "durationMs"),
-          retryOfRunId: str(p, "retryOfRunId"),
-          startedAt: date(p, "startedAt"),
-          usagePresent: bool(p, "usagePresent"),
-          inputTokens: num(p, "inputTokens"),
-          outputTokens: num(p, "outputTokens"),
-          errorCode: str(p, "errorCode"),
-          invocationSource: str(p, "invocationSource"),
-        });
+        it.runs.push(runOf(e, p));
         break;
       case "verdict.recorded":
         tl.sources.verdicts = true;
-        it.verdicts.push({
-          ...ref(e),
-          verdictId: str(p, "verdictId"),
-          entityType: str(p, "entityType"),
-          outcome: str(p, "outcome"),
-          reviewerAgentId: str(p, "reviewerAgentId"),
-          reviewerUserId: str(p, "reviewerUserId"),
-          rubricScores: obj(p, "rubricScores"),
-        });
+        it.verdicts.push(verdictOf(e, p));
         break;
       case "approval.created":
         it.approvals.push({ ...ref(e), approvalId: str(p, "approvalId"), type: str(p, "type"), kind: "created", decision: null });
@@ -552,14 +654,7 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
         break;
       case "cost.recorded":
         tl.sources.costEvents = true;
-        it.costs.push({
-          ...ref(e),
-          runId: str(p, "heartbeatRunId"),
-          agentId: str(p, "agentId"),
-          costCents: num(p, "costCents"),
-          inputTokens: num(p, "inputTokens"),
-          outputTokens: num(p, "outputTokens"),
-        });
+        it.costs.push(costOf(e, p));
         break;
       case "evidence.withdrawn":
         it.withdrawn.push({ ...ref(e), commentId: str(p, "commentId") });

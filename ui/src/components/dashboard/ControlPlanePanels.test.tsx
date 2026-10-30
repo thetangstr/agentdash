@@ -26,7 +26,7 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-const { ControlPlanePanels, fleetSize, fleetRowSubtitle, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT } = await import(
+const { ControlPlanePanels, fleetSize, fleetRowSubtitle, monthSpendTile, BYOK_SPEND_NOTE, NO_AGENTS_TEXT, NO_ACTIVITY_TEXT, DASHBOARD_ACTIVITY_LIMIT } = await import(
   "./ControlPlanePanels"
 );
 
@@ -284,6 +284,33 @@ describe("ControlPlanePanels", () => {
     expect(activity.textContent).toContain("ACM-1");
     expect(activity.querySelector('a[href="/issues/ACM-1"]')).not.toBeNull();
     expect(activity.querySelector('a[href="/activity"]')).not.toBeNull();
+  });
+
+  // AgentDash: APM gate 2 — shadow would-be refusals, per-step application
+  // rows, plumbing and system-actor rows stay out of Home. The server filters
+  // them (`includeSystem: false`), so the panel shows what it gets: a full
+  // panel, never one cut short by a client-side filter.
+  it("asks the server for the filtered feed and shows every row it returns", async () => {
+    mockAgentsApi.list.mockResolvedValue([makeAgent(1, "running")]);
+    const base = {
+      companyId: "company-1",
+      actorType: "agent" as const,
+      actorId: "agent-1",
+      entityType: "agent",
+      entityId: "agent-1",
+      agentId: "agent-1",
+      runId: null,
+      createdAt: new Date().toISOString(),
+    };
+    mockActivityApi.list.mockResolvedValue([
+      { ...base, id: "ev-a", action: "agent_profile.applied", details: { revisionNumber: 2 } },
+      { ...base, id: "ev-b", action: "budget.hard_threshold_crossed", actorType: "system" as const, actorId: "system", details: null },
+    ]);
+    await render();
+    expect(mockActivityApi.list).toHaveBeenCalledWith("company-1", { limit: DASHBOARD_ACTIVITY_LIMIT, includeSystem: false });
+    const activity = q("dashboard-activity")!;
+    expect(activity.textContent).toContain("applied a profile change to");
+    expect(activity.textContent).toContain("hit the hard budget limit");
   });
 
   it("raises a budget incident above the stats", async () => {

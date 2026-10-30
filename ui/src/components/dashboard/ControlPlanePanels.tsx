@@ -26,7 +26,6 @@ import { BILLED_BY_PROVIDER_NOTE, NOT_MEASURED_TEXT, TOKENS_COUNTED_NOTE, UNMEAS
 import { timeAgo } from "../../lib/timeAgo";
 import { agentIdentityLineUnderName, humanizeAgentRole, isGenericAgentRole } from "../../lib/agent-identity";
 import { ActivityRow } from "../ActivityRow";
-import { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS, isSystemPlumbingActivity } from "../../lib/activity-format";
 
 export const FLEET_TILE_LIMIT = 6;
 export const DASHBOARD_ACTIVITY_LIMIT = 8;
@@ -375,8 +374,14 @@ function FleetPanel({ agents, isLoading, error }: { agents: Agent[] | undefined;
 
 function ActivityPanel({ companyId, agents }: { companyId: string; agents: Agent[] | undefined }) {
   const { data: activity, isLoading, error } = useQuery({
-    queryKey: [...queryKeys.activity(companyId), { limit: DASHBOARD_ACTIVITY_LIMIT }],
-    queryFn: () => activityApi.list(companyId, { limit: DASHBOARD_ACTIVITY_LIMIT }),
+    // System plumbing (workspace leases, runtime checks, read/queue noise),
+    // system-actor rows and the APM gate 2 bookkeeping rows stay out of Home
+    // — but the system events an owner must not miss (budget hard-stops,
+    // ceiling pauses, failed recovery, escalations, failed hire hooks) stay
+    // in. The server filters (`includeSystem: false`), so the panel holds
+    // DASHBOARD_ACTIVITY_LIMIT rows rather than what's left after a filter.
+    queryKey: [...queryKeys.activity(companyId), { limit: DASHBOARD_ACTIVITY_LIMIT, includeSystem: false }],
+    queryFn: () => activityApi.list(companyId, { limit: DASHBOARD_ACTIVITY_LIMIT, includeSystem: false }),
     refetchInterval: 60_000,
   });
   const { data: members } = useQuery({
@@ -403,15 +408,7 @@ function ActivityPanel({ companyId, agents }: { companyId: string; agents: Agent
     }
     return map;
   }, [activity]);
-  // System plumbing (workspace leases, runtime checks, read/queue noise)
-  // stays out of Home — but the system events an owner must not miss (budget
-  // hard-stops, ceiling pauses, failed recovery, escalations, failed hire
-  // hooks) stay in.
-  const events = (activity ?? [])
-    .filter((event) =>
-      !isSystemPlumbingActivity(event.action)
-      && (event.actorType !== "system" || IMPORTANT_SYSTEM_ACTIVITY_ACTIONS.has(event.action)))
-    .slice(0, DASHBOARD_ACTIVITY_LIMIT);
+  const events = (activity ?? []).slice(0, DASHBOARD_ACTIVITY_LIMIT);
 
   return (
     <Panel

@@ -1847,6 +1847,15 @@ paths:
           description: Only rows about this entity.
           schema:
             type: string
+        - name: includeSystem
+          in: query
+          required: false
+          description: "`true`: every row. `false`: also leaves out system bookkeeping and system-actor rows (owner-critical ones stay). Omitted: every row except shadow-mode would-be refusals and per-step profile application rows."
+          schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
       responses:
         "200":
           description: Success.
@@ -3256,6 +3265,7 @@ components:
         - inbound_content_review
         - deliverable_review
         - workflow_recommendation
+        - agent_profile_change
     BillingType:
       type: string
       enum:
@@ -3274,6 +3284,7 @@ components:
         - harness_liveness_escalation
         - issue_productivity_review
         - stranded_issue_recovery
+        - agent_work_brief
       description: "1 value omitted: engagement-specific. Other values may appear."
     CheckoutIssueRequest:
       type: object
@@ -3646,6 +3657,7 @@ components:
             - inbound_content_review
             - deliverable_review
             - workflow_recommendation
+            - agent_profile_change
         requestedByAgentId:
           type:
             - string

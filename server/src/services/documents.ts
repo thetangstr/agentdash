@@ -4,6 +4,7 @@ import { companies, documentRevisions, documents, issueDocuments, issues } from 
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
+import { assertScenarioManifestWrite, loadIssueOrigin } from "./scenario-manifest.js";
 
 function normalizeDocumentKey(key: string) {
   const normalized = key.trim().toLowerCase();
@@ -192,11 +193,13 @@ export function documentService(db: Db) {
     }) => {
       const key = normalizeDocumentKey(input.key);
       const issue = await db
-        .select({ id: issues.id, companyId: issues.companyId })
+        .select({ id: issues.id, companyId: issues.companyId, originKind: issues.originKind })
         .from(issues)
         .where(eq(issues.id, input.issueId))
         .then((rows) => rows[0] ?? null);
       if (!issue) throw notFound("Issue not found");
+      // AgentDash (APM gate 5, P5.1): a brief's `scenario-manifest` is validated on every write (422).
+      await assertScenarioManifestWrite(db, issue, key, input.body);
 
       try {
         return await db.transaction(async (tx) => {
@@ -406,6 +409,9 @@ export function documentService(db: Db) {
           .then((rows) => rows[0] ?? null);
 
         if (!revision) throw notFound("Document revision not found");
+        // AgentDash (APM gate 5, P5.1): restoring a brief's manifest is a write too; the old body must still be valid.
+        const origin = await loadIssueOrigin(tx as unknown as Db, input.issueId);
+        if (origin) await assertScenarioManifestWrite(tx as unknown as Db, origin, key, revision.body);
         if (existing.latestRevisionId === revision.id) {
           throw conflict("Selected revision is already the latest revision", {
             currentRevisionId: existing.latestRevisionId,

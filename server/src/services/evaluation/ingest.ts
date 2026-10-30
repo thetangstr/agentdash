@@ -3,7 +3,8 @@ import type { Db } from "@paperclipai/db";
 import { companies, evaluationIngestState } from "@paperclipai/db";
 import { conflict } from "../../errors.js";
 import { logger } from "../../middleware/logger.js";
-import { evaluationLedger, type LedgerDb } from "./ledger.js";
+import { classifyEvent, restrictedProjectIds, type EvaluationClassContext } from "./access-class.js";
+import { evaluationLedger, type EvaluationEventInput, type LedgerDb } from "./ledger.js";
 import { detectWithdrawnComments, SOURCE_READERS, type Cursor, type SourceName, type Tx } from "./sources.js";
 
 /**
@@ -16,7 +17,29 @@ import { detectWithdrawnComments, SOURCE_READERS, type Cursor, type SourceName, 
  * with the events it covers. Never on the request path of anything else,
  * never on the heartbeat scheduler tick. Backfill is the same tick run to
  * exhaustion, bounded.
+ *
+ * AgentDash (APM gate 3): every event gets its evidence access class here,
+ * from its source row (`classifyEvent`), with the company's restricted
+ * projects read once per tick inside the same transaction. Already stored
+ * rows are never reclassified (the ledger is append-only); readers apply the
+ * live restricted-project rule on top of the stored class.
  */
+
+/** The class an ingested event carries, from its source's hints and the tick's restricted projects. */
+export function withAccessClass(e: EvaluationEventInput, ctx: EvaluationClassContext): EvaluationEventInput {
+  if (e.accessClass) return e;
+  const accessClass = classifyEvent(
+    {
+      sourceTable: e.sourceTable,
+      eventType: e.eventType,
+      projectId: e.projectId ?? null,
+      pairingReceiptId: e.classHints?.pairingReceiptId ?? null,
+      privateAgentId: e.classHints?.privateAgentId ?? null,
+    },
+    ctx,
+  );
+  return { ...e, accessClass };
+}
 
 export interface IngestOptions {
   /** Rows read per source per tick. */
@@ -111,6 +134,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
 
       const ledger = evaluationLedger(tx);
       const cursors = await loadCursors(tx, companyId);
+      const classCtx: EvaluationClassContext = { restrictedProjectIds: await restrictedProjectIds(tx, companyId) };
       const perSource: Record<string, SourceTickStats> = {};
       let scanned = 0;
       let inserted = 0;
@@ -137,7 +161,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
             nextCursor = { ...nextCursor, withdrawalCheckedAt: cursors[source]!.withdrawalCheckedAt };
           }
         }
-        const appended = await ledger.append(events);
+        const appended = await ledger.append(events.map((e) => withAccessClass(e, classCtx)));
         if (result.scanned > 0 || checkedNow) await saveCursor(tx, companyId, source, nextCursor);
         if (appended.oldestInsertedEventTime) {
           maxLagMs = Math.max(maxLagMs ?? 0, now().getTime() - appended.oldestInsertedEventTime.getTime());

@@ -48,6 +48,9 @@ export { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS };
  */
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
   // Agent lifecycle and configuration
+  // AgentDash: Agent Performance Management gate 2 — V2 access (shadow logs, outside-profile changes)
+  "access.policy_changed": "changed the access rules of",
+  "access.would_refuse": "would have been denied access under rules not yet enforced",
   "agent.accountability_changed": "changed accountability for",
   "agent.approved": "approved",
   "agent.budget_updated": "updated budget for",
@@ -96,6 +99,19 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "agent_fact.asked": "asked a question",
   "agent_fact.declined": "declined a question",
   "agent_fact.escalated": "escalated a question to a person",
+  // AgentDash: Agent Performance Management gate 2 — operating profiles
+  "agent_profile.applied": "applied a profile change to",
+  "agent_profile.application_failed": "could not finish applying a profile change to",
+  "agent_profile.application_refused_stale": "stopped an out-of-date profile change for",
+  "agent_profile.application_started": "started applying a profile change to",
+  "agent_profile.application_step": "applied part of a profile change to",
+  "agent_profile.draft_saved": "saved a profile draft for",
+  "agent_profile.proposed": "asked for approval of a profile change for",
+  "agent_profile.withdrawn": "withdrew a profile change for",
+  // AgentDash: Agent Performance Management gate 5 — briefs and hires with a profile
+  "agent_profile.bound": "bound a draft profile to",
+  "agent_brief.created": "started a brief",
+  "agent_brief.submitted": "sent a brief to the performance manager",
   "approval.comment_added": "commented on an approval request",
   "approval.redacted": "redacted an approval request",
   "approval.requester_wakeup_failed": "could not notify the requester of",
@@ -119,12 +135,15 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "budget.incident_resolved": "resolved a budget incident",
   "budget.policy_upserted": "updated the budget policy",
   "budget.soft_threshold_crossed": "crossed the soft budget limit",
+  "company.agent_access_enforcement_changed": "changed how agent access rules are checked",
   "company.archived": "archived",
   "company.branding_updated": "updated the company branding",
   "company.budget_updated": "updated budget for",
   "company.created": "created company",
   "company.feedback_data_sharing_updated": "changed the feedback data-sharing setting on",
   "company.imported": "imported",
+  // AgentDash: Agent Performance Management gate 4 — the performance manager
+  "company.performance_manager_changed": "changed the performance manager",
   "company.skill_created": "created a company skill",
   "company.skill_deleted": "deleted a company skill",
   "company.skill_file_updated": "updated a company skill file",
@@ -164,6 +183,9 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "evaluation.contract_declared": "declared an evaluation contract",
   "evaluation.correction_filed": "filed an evaluation correction",
   "evaluation.correction_noted": "noted an evaluation correction",
+  "evaluation.agent_card_snapshot": "stored a performance card for",
+  "evaluation.agent_recommendation_created": "recommended a change for",
+  "evaluation.agent_recommendation_decided": "recorded a decision on a recommendation for",
   "evaluation.disposition_recorded": "recorded an evaluation disposition",
   "evaluation.finding_noted": "noted an evaluation finding",
   "evaluation.ingest_run": "ingested an evaluation run",
@@ -260,6 +282,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "issue.recovery_budget_exhausted": "ran out of recovery attempts on",
   "issue.relations.updated": "updated references on",
   "issue.released": "released",
+  "issue.responsibility_mapped": "linked a responsibility to",
   "issue.reviewers_updated": "updated reviewers on",
   "issue.task_recovery_authorized": "authorized a recovery attempt on",
   "issue.task_recovery_permit_consumed": "used a recovery attempt on",
@@ -293,6 +316,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "plugin.installed": "installed a plugin",
   "plugin.uninstalled": "uninstalled a plugin",
   "plugin.upgraded": "upgraded a plugin",
+  "profile.block_drift": "found its operating-profile instructions out of date on",
   "project.access_replaced": "updated access to",
   "project.created": "created",
   "project.deleted": "deleted",
@@ -603,6 +627,7 @@ const APPROVAL_TYPE_OBJECTS: Record<string, string> = {
   inbound_content_review: "held inbound content",
   deliverable_review: "a deliverable review",
   workflow_recommendation: "a workflow suggestion",
+  agent_profile_change: "a profile change",
   verdict_escalation: "a verdict escalation",
   governance_push: "a governance change",
 };
@@ -707,11 +732,36 @@ function formatStewardshipVerb(action: string, details: ActivityDetails, options
     : `ended ${user}'s stewardship of ${agentName}`;
 }
 
+/**
+ * AgentDash (APM gate 3, P3.4/P3.5): what an enforced refusal by an agent's
+ * own access rules (`authz.refused` with reasonCode `ACCESS_POLICY_REFUSED`)
+ * kept it from, by V2 dimension. Unknown dimensions fall back to the plain
+ * sentence without the object.
+ */
+const ACCESS_POLICY_DIMENSION_OBJECTS: Record<string, string> = {
+  "see.projects": "a project",
+  "see.connections": "a connection",
+  "do.connections": "an action through a connection",
+  "do.skills": "a skill",
+  "talk.agents": "contact with another agent",
+  "talk.people": "contact with a person",
+  "talk.external": "contact outside the company",
+  "talk.inbound": "contact",
+};
+
+function formatAccessPolicyRefusedVerb(details: ActivityDetails): string | null {
+  if (details?.reasonCode !== "ACCESS_POLICY_REFUSED") return null;
+  const dimension = typeof details.dimension === "string" ? details.dimension : "";
+  const object = ACCESS_POLICY_DIMENSION_OBJECTS[dimension];
+  return object ? `was refused ${object} by the access rules of` : "was refused by the access rules of";
+}
+
 function formatDetailAwareVerb(
   action: string,
   details: ActivityDetails,
   options: ActivityFormatOptions,
 ): string | null {
+  if (action === "authz.refused") return formatAccessPolicyRefusedVerb(details);
   const approvalVerb = APPROVAL_ACTION_VERBS[action];
   if (approvalVerb) return approvalVerb(approvalObject(details));
   if (action === "company.updated") return formatCompanyUpdatedVerb(details);

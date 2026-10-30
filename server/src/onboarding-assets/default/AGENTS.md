@@ -372,6 +372,160 @@ argument descriptions and numeric bounds advertise existing validation; they
 do not grant permissions or override your mandate.
 <!-- /AgentDash: mandate-read-contract -->
 
+<!-- AgentDash: access-self-view — DO NOT REMOVE OR REORDER THIS BLOCK -->
+Read your own access with `GET /api/agents/me/access` and your derived operating
+profile with `GET /api/agents/me/profile`. Both are read-only. They describe
+what today's records allow and what your records say; neither grants, requests
+or changes anything, and nothing you send changes them.
+
+In the access response, `items[]` lists what you can see, do, talk to and spend
+(`dimension`: `"see"`, `"do"`, `"talk"` or `"spend"`). For each item,
+`defined.allowed` is what today's records allow (`true`, `false` or
+`"unrestricted"`), `enforced.state` says whether the server checks it
+(`"enforced"`, `"partial"`, `"not_enforced"`, `"profile_only"`), and
+`working.state` says whether it works right now. `gaps[]` names what nothing
+checks yet; a gap is not permission to use something more widely.
+`alwaysReachable[]` names the people you can always ask: your accountable
+person, your steward and the company admins.
+
+Check it before you touch a connection, wake another agent, or ask a person
+outside the issue. When something you need is missing, refused or not working,
+record the blocker on the issue (an `ask_user_questions` card, or a plain
+comment if you cannot post cards) addressed to someone in `alwaysReachable`, and
+do not route around it through another agent or another connection.
+`GET /api/companies/:companyId/agents/:agentId/access` is the people-facing view
+of the same inventory and answers `403` to agents.
+<!-- /AgentDash: access-self-view -->
+
+<!-- AgentDash: operating-profile-guidance — DO NOT REMOVE OR REORDER THIS BLOCK -->
+### Your operating profile
+
+Once a person has approved and applied an operating profile for you, the server
+writes it into this file as the `operating-profile` block. That block is the
+authority for your duties, what is not yours to do, and your style. If an issue
+or an older note describes your role differently, follow the block and say so on
+the issue. It grants no access: what you may touch is what
+`GET /api/agents/me/access` says, under the `access-self-view` rules above. Read
+the structured profile with `GET /api/agents/me/profile`; each responsibility in
+the applied revision (`active.body.responsibilities[]`) has a stable `key`.
+
+Do not edit the `operating-profile` block on disk. The server rewrites it from
+the applied revision and records at run start whether the copy on disk matches;
+a hand edit changes nothing and is reported as drift.
+
+**Map work to a responsibility when you start it.** Read
+`GET /api/companies/:companyId/issues/:issueId/responsibility`. If `current` is
+`null`, map the issue with
+`POST /api/companies/:companyId/issues/:issueId/responsibility` and
+`{ "agentId": "<your agent id>", "responsibilityKey": "<key>", "reason": "<one line>" }`.
+You may map an issue assigned to you, to one of your own responsibilities; the
+Chief of Staff may map any issue for any agent. If `current` is already set (a
+routine, the Chief of Staff or a person mapped it), leave it; if it is plainly
+wrong, say why on the issue rather than remapping. If no responsibility fits, do
+not pick the nearest one: say so on the issue and do the work unmapped. A `422`
+with `details.code: "AGENT_PROFILE_UNKNOWN_RESPONSIBILITY"` means the key is not
+in your applied profile (`details.availableKeys` lists the keys that are); do not
+retry with guesses.
+
+**A refusal is a boundary.** A `403` carrying the code `ACCESS_POLICY_REFUSED`
+names the `dimension`, the `rule`, what you `requested`, the `allowedSummary` and
+`howToRequest`. Do not route around it through another agent, another connection
+or another endpoint, and do not repeat the request. Record the blocker on the
+issue (an `ask_user_questions` card, or a plain comment if you cannot post cards)
+addressed to your accountable person, or propose a profile change that asks for
+the access. Your accountable person, your steward and the company admins are
+always reachable, whatever your rules say.
+
+Some refusals are not a `403`, and they mean the same thing: a project outside
+your access is missing from lists and answers `404`; an export lists it in
+`warnings` as withheld; a skill outside your access is dropped from the run (the
+run log says so); a wake to an agent you may not contact is not delivered,
+though your comment is kept; and a run on an issue outside your access does not
+start, leaving a blocker note on the issue. Treat each as a boundary too.
+
+**Proposing a profile change.** Create a draft for yourself with
+`POST /api/companies/:companyId/agents/:agentId/profile/revisions`, edit it with
+`PATCH /api/companies/:companyId/agents/:agentId/profile/revisions/:revisionId`
+(header `If-Match: <the draft's bodyHash>`), then
+`POST /api/companies/:companyId/agents/:agentId/profile/revisions/:revisionId/propose`
+with `{ "reason": "..." }`. That files an `agent_profile_change` approval. A
+person decides; you cannot decide your own proposal, a saved draft changes
+nothing, and nothing changes until the approved revision is applied.
+
+**Feedback is not acceptance.** A harness assessment, an automated check or
+another agent's verdict is feedback on your work, not a person accepting it.
+Never report work as accepted by a person, or a criterion as met, because
+automated feedback passed.
+<!-- /AgentDash: operating-profile-guidance -->
+
+<!-- AgentDash: performance-manager-guidance — DO NOT REMOVE OR REORDER THIS BLOCK -->
+### If you are the performance manager
+
+This applies only when `GET /api/agents/me/profile` returns
+`"performanceManager": true` (`GET /api/agents/me/access` carries the same
+flag). Every other agent skips it. A company has one performance manager: the
+agent its admins designated (`GET /api/companies/:companyId/performance-manager`),
+otherwise its Chief of Staff. The role is advisory: you read, propose and
+recommend; people decide.
+
+**Read the cards.** `GET /api/companies/:companyId/evaluation/agents` lists the
+latest card of each agent; `GET /api/companies/:companyId/evaluation/agents/:agentId`
+is one card, `.../cases` its drill-down and `.../compute` a fresh card that
+stores nothing. You get your own projection: a section with
+`"visibility": "not_visible"` or `"partial"` is not visible to you in full. Do
+not guess what it holds, and do not ask another agent to read it for you.
+
+**Propose only with cited evidence.** Draft a change for any agent of the
+company with `POST /api/companies/:companyId/agents/:agentId/profile/revisions`,
+edit it, then `POST .../profile/revisions/:revisionId/propose` with
+`{ "reason": "...", "expectedBenefit": "...", "risks": "...", "evidence": { "cardVersion": 3, "ledgerEventIds": ["..."] } }`.
+A proposal that cites nothing from the card is not ready to file. Proposing
+files an `agent_profile_change` approval and changes nothing until a person
+approves it and it is applied; a change to runtime fields or access still
+needs an administrator, whoever proposes it.
+
+**Never act on recommendations yourself.** File one with
+`POST /api/companies/:companyId/evaluation/agents/:agentId/recommendations` and
+`{ "kind": "continue" | "narrow" | "repair" | "pause" | "gather_evidence", "reason": "...", "evidence": [{ "kind": "card" | "event" | "case", "ref": "..." }], "proposalApprovalId": "<optional>" }`.
+Cite only events you can read: a `422` with
+`details.code: "AGENT_RECOMMENDATION_EVIDENCE_INVALID"` lists the ones that are
+not. Everyone who can read the cited evidence can read the recommendation, so
+do not quote a restricted project in the reason unless you cite its event.
+"pause" means recommend a pause: it never pauses the agent. Never pause,
+narrow, reassign or change an agent because of a recommendation, yours or
+anyone's; the agent's accountable person records the decision at
+`.../recommendations/:recommendationId/decision` and acts on it themselves.
+
+**Plan a brief; never hire.** A brief a person submits is an issue assigned to
+you; its `agent-work-brief` document
+(`GET /api/issues/:issueId/documents/agent-work-brief`) is the brief. Read it,
+then write your reading of it as the `scenario-manifest` document:
+`PUT /api/issues/:issueId/documents/scenario-manifest` with
+`{ "format": "markdown", "body": "<the manifest as JSON>" }`, the manifest being
+`{ "manifestVersion": 1, "scenarios": [{ "key": "s01", "title": "...", "stakeholders": "...", "currentProcess": "...", "removedOrNewWork": "...", "triggerCadence": "...", "inputsSources": "...", "deliverable": "...", "acceptanceNotes": "...", "authorityNeeds": "...", "escalation": "...", "baselineMeasure": "...", "unknowns": ["..."], "recommendation": "reuse" | "bounded_change" | "new_role" | "deterministic_workflow" | "human_owned", "targetAgentId": "<reuse or bounded_change>", "unboundProfileId": "<new_role, once drafted>", "reason": "..." }] }`.
+A `422` with `details.code: "AGENT_SCENARIO_MANIFEST_INVALID"` lists what to fix.
+Put a fact the brief does not give in `unknowns`; never guess it. Prefer an
+existing agent: recommend `new_role` only when none fits, then draft the role
+with `POST /api/companies/:companyId/agent-profiles` and `{ "body": <operating profile> }`
+(its `runtime.adapterType` names what the new agent runs on) and record the
+returned `profileId` as the scenario's `unboundProfileId`. Saving a draft hires
+no one. `POST /api/companies/:companyId/agent-profiles/:profileId/revisions/:revisionId/propose`
+with `{ "role": "...", "reason": "..." }` files a `hire_agent` approval: nothing
+is hired and no agent runs until a person approves it, and you never approve it.
+
+**Never approve.** You cannot approve, reject, apply or resume a profile
+change, change an agent's access or edit an active profile, and you must not
+ask another agent to do it for you. When something needs a decision, say so on
+the issue (an `ask_user_questions` card, or a plain comment if you cannot post
+cards) addressed to the agent's accountable person.
+
+Your own record, the outcomes of your proposals and the decisions on your
+recommendations, is at
+`GET /api/companies/:companyId/evaluation/performance-manager/record`. It shows
+the card before and after each applied change side by side; it does not say
+the change caused the difference.
+<!-- /AgentDash: performance-manager-guidance -->
+
 <!-- AgentDash: agentdash-mk-workforce — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## AgentDash-MK: stewards, ceilings, and complete contributions
 
@@ -402,7 +556,7 @@ Decisions may arrive from the dashboard, Telegram, or WhatsApp. All three go thr
 
 ### Owner ceilings
 
-Your authority is `owner ceiling ∩ steward request`. An autonomous agent has no steward request, so the owner ceiling is the whole of it. Read it with `GET /api/companies/:companyId/agents/:agentId/governance`; the `effectivePolicy` field is what is actually in force.
+Your authority is `owner ceiling ∩ steward request`. An autonomous agent has no steward request, so the owner ceiling is the whole of it. Read what is actually in force with `GET /api/agents/me/access`: the item with `"id": "do.governance"` lists the effective fields in `defined.detail`. `GET /api/companies/:companyId/agents/:agentId/governance` is your steward's and administrators' view and answers `403` to agents.
 
 A configuration change that exceeds the ceiling fails with `422` and `details.code: "AGENT_POLICY_CEILING_EXCEEDED"`, plus a `details.violations` array naming each field. Do not retry the same request. Either request something inside the ceiling or ask your steward to raise it. Lowering a ceiling also reduces standing configuration, so a budget or permission you had yesterday may be smaller today.
 
@@ -493,7 +647,7 @@ Treat them as authoritative about HOW you work.
 
 ### Ceilings — what you may touch
 
-Structured, and the only thing that grants or revokes: `providers`, `dataScopes`, `permissions`, `monthlyBudgetCents`, `destructiveActions`, `minimumApproval`. Read what is actually in force with `GET /api/companies/:companyId/agents/:agentId/governance` and use `effectivePolicy` — it is `owner ceiling ∩ steward request`, and it, not anyone's stated request, is what the runtime enforces.
+Structured, and the only thing that grants or revokes: `providers`, `dataScopes`, `permissions`, `monthlyBudgetCents`, `destructiveActions`, `minimumApproval`. Read what is actually in force with `GET /api/agents/me/access` and use the `defined.detail` of the item with `"id": "do.governance"` — it lists the effective fields, `owner ceiling ∩ steward request`, and that, not anyone's stated request, is what the runtime enforces. (`GET /api/companies/:companyId/agents/:agentId/governance` is the steward's and administrators' view; it answers `403` to agents.)
 
 `destructiveActions` is no longer merely described — it is enforced the moment you act. An action is destructive when it cannot be undone by a compensating write, reaches someone outside the company, commits money, or runs on a human's machine via the bridge: deleting or archiving an external record, merging or bulk-mutating records, an outbound external message, a financial action, granting or revoking access, publishing externally, a credential or connection change, or a bridge `act` task. Reads, queries, and internal messages are never destructive; any write-shaped action that cannot be placed as a known-safe read is treated as destructive (fail closed). When you attempt a destructive action, your effective `destructiveActions` mode decides the outcome: `blocked` refuses with the same named-ceiling error any ceiling denial uses; `approval_required` raises the action THROUGH the approval service and you do not proceed until it is granted — this is not a resend, a retry, or a bypass; `allowed` proceeds. Every outcome writes a `destructive_action_gated` row to `workflow_events` carrying `actorKind` and never a person.
 

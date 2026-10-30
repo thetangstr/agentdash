@@ -55,6 +55,13 @@ import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { MandatesTab } from "../components/agent/MandatesTab";
 import { AgentMemorySection } from "../components/agent/AgentMemorySection";
+// AgentDash: Agent Performance Management gate 1 (read-only Profile, Access and Performance tabs).
+import { AgentProfileTab } from "../components/agent-performance/AgentProfileTab";
+import { AgentAccessTab } from "../components/agent-performance/AgentAccessTab";
+import { AgentPerformanceTab } from "../components/agent-performance/AgentPerformanceTab";
+// AgentDash: Agent Performance Management gate 4 — the performance manager's record, reached from its Performance tab.
+import { PerformanceManagerRecordView } from "../components/agent-performance/PerformanceManagerRecordView";
+import { agentActionErrorText } from "../lib/access-policy-refusal";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
@@ -243,7 +250,11 @@ type AgentDetailView =
   | "runs"
   | "budget"
   | "mandates"
-  | "settings";
+  | "settings"
+  | "profile"
+  | "access"
+  | "performance"
+  | "manager-record";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "instructions" || value === "prompts") return "instructions";
@@ -252,6 +263,10 @@ function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "budget") return "budget";
   if (value === "mandates") return "mandates";
   if (value === "runs") return value;
+  // AgentDash: Agent Performance Management gate 1 — read-only views.
+  if (value === "profile" || value === "access" || value === "performance") return value;
+  // AgentDash (APM gate 4): the agent's record as performance manager; it sits under the Performance tab.
+  if (value === "manager-record") return value;
   // AgentDash (GH #795): the five detail views fold under one Settings tab; the bare /settings URL opens a small section index there.
   if (value === "settings") return "settings";
   return "dashboard";
@@ -283,10 +298,15 @@ export function agentDetailInSettings(view: AgentDetailView): boolean {
 export const AGENT_DETAIL_TOP_TABS: { value: AgentDetailView; label: string }[] = [
   { value: "dashboard", label: "Overview" },
   { value: "runs", label: "Runs" },
+  // AgentDash: Agent Performance Management gate 1 — read-only, same for every company.
+  { value: "profile", label: "Profile" },
+  { value: "access", label: "Access" },
+  { value: "performance", label: "Performance" },
   { value: "settings", label: "Settings" },
 ];
 
 export function agentDetailTabValue(view: AgentDetailView): AgentDetailView {
+  if (view === "manager-record") return "performance";
   return agentDetailInSettings(view) ? "settings" : view;
 }
 
@@ -818,6 +838,8 @@ export function AgentDetail() {
                 ? "mandates"
               : activeView === "settings"
                 ? "settings"
+              : activeView === "profile" || activeView === "access" || activeView === "performance" || activeView === "manager-record"
+                ? activeView
               : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
       navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
@@ -858,7 +880,7 @@ export function AgentDetail() {
       }
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Action failed");
+      setActionError(agentActionErrorText(err, "Action failed"));
     },
   });
 
@@ -939,7 +961,7 @@ export function AgentDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.taskSessions(agentLookupRef) });
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to reset session");
+      setActionError(agentActionErrorText(err, "Failed to reset session"));
     },
   });
 
@@ -955,7 +977,7 @@ export function AgentDetail() {
       }
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to update permissions");
+      setActionError(agentActionErrorText(err, "Failed to update permissions"));
     },
   });
 
@@ -974,7 +996,7 @@ export function AgentDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentLookupRef) });
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to update token ceiling");
+      setActionError(agentActionErrorText(err, "Failed to update token ceiling"));
     },
   });
 
@@ -1002,6 +1024,14 @@ export function AgentDetail() {
         crumbs.push({ label: "Budget" });
       } else if (activeView === "settings") {
         crumbs.push({ label: "Settings" });
+      } else if (activeView === "profile") {
+        crumbs.push({ label: "Profile" });
+      } else if (activeView === "access") {
+        crumbs.push({ label: "Access" });
+      } else if (activeView === "performance") {
+        crumbs.push({ label: "Performance" });
+      } else if (activeView === "manager-record") {
+        crumbs.push({ label: "Record as performance manager" });
       } else {
         crumbs.push({ label: "Dashboard" });
       }
@@ -1144,7 +1174,7 @@ export function AgentDetail() {
         </Tabs>
       )}
 
-      {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+      {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
       {isPendingApproval && (
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-950/30 dark:text-amber-200">
           <span>This agent is waiting for your approval and cannot be woken yet.</span>
@@ -1351,6 +1381,20 @@ export function AgentDetail() {
 
       {activeView === "mandates" && resolvedCompanyId ? (
         <MandatesTab companyId={resolvedCompanyId} agentId={agent.id} agents={allAgents ?? []} />
+      ) : null}
+
+      {/* AgentDash: Agent Performance Management gate 1 — read-only views. */}
+      {activeView === "profile" && resolvedCompanyId ? (
+        <AgentProfileTab companyId={resolvedCompanyId} agentId={agent.id} accountable={agent.accountable ?? null} />
+      ) : null}
+      {activeView === "access" && resolvedCompanyId ? (
+        <AgentAccessTab companyId={resolvedCompanyId} agentId={agent.id} />
+      ) : null}
+      {activeView === "performance" && resolvedCompanyId ? (
+        <AgentPerformanceTab companyId={resolvedCompanyId} agentId={agent.id} accountable={agent.accountable ?? null} />
+      ) : null}
+      {activeView === "manager-record" && resolvedCompanyId ? (
+        <PerformanceManagerRecordView companyId={resolvedCompanyId} managerAgentId={agent.id} />
       ) : null}
     </div>
   );
@@ -3867,7 +3911,7 @@ export function AgentSkillsTab({
 
             {syncSkills.isError && (
               <p className="mt-3 text-xs text-destructive">
-                {syncSkills.error instanceof Error ? syncSkills.error.message : "Failed to update skills"}
+                {agentActionErrorText(syncSkills.error, "Failed to update skills")}
               </p>
             )}
           </section>

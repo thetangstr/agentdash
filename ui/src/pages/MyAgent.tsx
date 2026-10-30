@@ -255,6 +255,9 @@ export default function MyAgent() {
     enabled: !!selectedCompanyId && !!agentId && stewardshipOn,
   });
 
+  // AgentDash: APM gate 2 — no `includeSystem`, so the server's default feed
+  // applies: shadow would-be refusals and per-step profile application rows
+  // are left out in SQL, and the ten rows are ten readable ones.
   const activity = useQuery({
     queryKey: queryKeys.myAgent.activity(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => activityApi.list(selectedCompanyId!, { agentId: agentId!, limit: 10 }),

@@ -263,7 +263,9 @@ describe("MyAgent", () => {
     expect(container.textContent).toContain("Draft the deck");
     expect(container.textContent).toContain("What just happened");
     expect(container.textContent).toContain("agent run started");
-    // Scoped to this agent, never the whole company.
+    // Scoped to this agent, never the whole company. No `includeSystem`: the
+    // server's default feed, which leaves out the APM gate 2 bookkeeping rows
+    // (shadow would-be refusals, per-step application rows).
     expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", { assigneeAgentId: "agent-1" });
     expect(mockActivityApi.list).toHaveBeenCalledWith("company-1", {
       agentId: "agent-1",

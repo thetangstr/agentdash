@@ -15,6 +15,7 @@ import type { Db } from "@paperclipai/db";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
+import { resolveEvaluationViewer, viewerClassCondition, viewerClassFilter } from "../services/evaluation/access-class.js";
 import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
 import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
 import { evaluationOverview } from "../services/evaluation/overview.js";
@@ -25,6 +26,7 @@ import { evaluationReplay } from "../services/evaluation/replay.js";
 import { REVIEW_PROJECT_DESCRIPTION, evaluationReviewItems, withReviewItemsLock } from "../services/evaluation/review-items.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
 import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
+import { handleAgentDisposition, isAgentDispositionBody } from "./evaluation-agents.js";
 
 /**
  * AgentDash: Company Evaluator — Milestone 1 routes (read-side plus two
@@ -65,6 +67,17 @@ export function evaluationRoutes(db: Db) {
   });
   const refQuery = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid() });
 
+  /**
+   * AgentDash (APM gate 3, P3.3; evaluation LLD §9.1): a restricted project the viewer may not read is nonexistent on
+   * the milestone routes (404, never 403: existence is not disclosed). Milestone cards never carry a private class
+   * (the agent-side sources are not milestone inputs), so the project rule is the whole filter for them.
+   */
+  async function assertMilestoneReadable(req: Parameters<typeof assertCompanyAccess>[0], companyId: string, ref: EvaluationMilestoneRef) {
+    if (ref.kind !== "project") return;
+    const viewer = await resolveEvaluationViewer(db, req, companyId);
+    if (!viewer.admin && viewer.hiddenProjectIds.has(ref.id.toLowerCase())) throw notFound("Milestone not found");
+  }
+
   router.get("/companies/:companyId/evaluation/events", async (req, res, next) => {
     try {
       const companyId = req.params.companyId as string;
@@ -75,7 +88,11 @@ export function evaluationRoutes(db: Db) {
         ? q.data.type.split(",").filter((t): t is EvaluationEventType => (EVALUATION_EVENT_TYPES as readonly string[]).includes(t))
         : undefined;
       if ((q.data.kind && !q.data.id) || (!q.data.kind && q.data.id)) throw badRequest("kind and id go together");
-      const rows = await ledger.list(companyId, {
+      // AgentDash (APM gate 3, evaluation LLD §9.1): filter by access class BEFORE the LIMIT, then again row by row, so
+      // nothing the viewer may not read is returned or counted.
+      const viewer = await resolveEvaluationViewer(db, req, companyId);
+      const readable = viewerClassFilter(viewer);
+      const listed = await ledger.list(companyId, {
         types,
         sinceEventTime: q.data.since ? new Date(q.data.since) : undefined,
         limit: q.data.limit,
@@ -83,7 +100,9 @@ export function evaluationRoutes(db: Db) {
         goalId: q.data.kind === "goal" ? q.data.id : undefined,
         throughSeq: q.data.throughSeq,
         order: q.data.order,
+        accessCondition: viewerClassCondition(viewer),
       });
+      const rows = listed.filter(readable);
       res.json({ events: rows, count: rows.length, scope: q.data.kind && q.data.id ? { kind: q.data.kind, id: q.data.id, throughSeq: q.data.throughSeq ?? null } : null });
     } catch (err) {
       next(err);
@@ -96,7 +115,8 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       const event = await ledger.get(companyId, req.params.eventId as string);
-      if (!event) throw notFound("Event not found");
+      // AgentDash (APM gate 3): an event the viewer may not read is absent (404, never 403: existence is not disclosed).
+      if (!event || !viewerClassFilter(await resolveEvaluationViewer(db, req, companyId))(event)) throw notFound("Event not found");
       res.json({ event });
     } catch (err) {
       next(err);
@@ -108,7 +128,10 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      res.json(await overview.get(companyId));
+      const result = await overview.get(companyId);
+      // AgentDash (APM gate 3, P3.3): restricted projects the viewer may not read are left out, not shown as empty.
+      const viewer = await resolveEvaluationViewer(db, req, companyId);
+      res.json(viewer.admin ? result : { ...result, milestones: result.milestones.filter((m) => m.ref.kind !== "project" || !viewer.hiddenProjectIds.has(m.ref.id.toLowerCase())) });
     } catch (err) {
       next(err);
     }
@@ -121,7 +144,9 @@ export function evaluationRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
-      res.json({ versions: await overview.versions(companyId, evaluationMilestoneRefSchema.parse(q.data)) });
+      const versionsRef = evaluationMilestoneRefSchema.parse(q.data);
+      await assertMilestoneReadable(req, companyId, versionsRef);
+      res.json({ versions: await overview.versions(companyId, versionsRef) });
     } catch (err) {
       next(err);
     }
@@ -131,7 +156,9 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const [cursors, byType, maxSeq] = await Promise.all([ingest.cursors(companyId), ledger.countByType(companyId), ledger.maxSeq(companyId)]);
+      // AgentDash (APM gate 3): per-type counts include only the classes the viewer may read, so a count leaks no private event.
+      const viewer = await resolveEvaluationViewer(db, req, companyId);
+      const [cursors, byType, maxSeq] = await Promise.all([ingest.cursors(companyId), ledger.countByType(companyId, viewerClassCondition(viewer)), ledger.maxSeq(companyId)]);
       res.json({ cursors, eventsByType: byType, maxSeq, running: ingest.running });
     } catch (err) {
       next(err);
@@ -161,6 +188,7 @@ export function evaluationRoutes(db: Db) {
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
       const ref = evaluationMilestoneRefSchema.parse(q.data);
+      await assertMilestoneReadable(req, companyId, ref);
       const wantVerify = req.query.verify === "true";
       // `verify` replays the company window in memory (as the replay route does): administrators only.
       // Plain card reads stay open to company members.
@@ -213,7 +241,10 @@ export function evaluationRoutes(db: Db) {
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
       const ref = evaluationMilestoneRefSchema.parse(q.data);
-      const events = await ledger.list(companyId, { types: ["contract.declared"], limit: 5000 });
+      await assertMilestoneReadable(req, companyId, ref);
+      // AgentDash (APM gate 3, P3.3): read only the contract rows the viewer may read, before the LIMIT and row by row.
+      const contractViewer = await resolveEvaluationViewer(db, req, companyId);
+      const events = (await ledger.list(companyId, { types: ["contract.declared"], limit: 5000, accessCondition: viewerClassCondition(contractViewer) })).filter(viewerClassFilter(contractViewer));
       const contractOf = (e: { payload?: unknown }) => (e.payload as { contract?: { milestoneRef?: { kind?: string; id?: string } } } | undefined)?.contract ?? null;
       const mine = events.filter((e) => {
         const c = contractOf(e);
@@ -570,6 +601,14 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      // AgentDash (APM gate 3, P3.3; evaluation LLD §4, §10, §12): the agent-subject kinds — use_confirmed,
+      // disagreement_noted, and criterion_attest bound to an agent criterion by its named attester — are not
+      // admin-only; their own rules apply. Every milestone kind below is unchanged.
+      if (isAgentDispositionBody(req.body)) {
+        const handled = await handleAgentDisposition(db, req, companyId);
+        res.status(handled.status).json(handled.body);
+        return;
+      }
       await assertCompanyAdministrator(access, req, companyId);
       const body = z
         .discriminatedUnion("kind", [

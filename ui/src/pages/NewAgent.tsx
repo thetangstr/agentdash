@@ -299,6 +299,21 @@ export function NewAgent() {
         </p>
       </div>
 
+      {/* AgentDash (APM gate 5): plan the work from a brief before hiring anyone. */}
+      <div
+        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm"
+        data-testid="new-agent-start-from-brief"
+      >
+        <p className="min-w-0 flex-1 text-muted-foreground">
+          <span className="font-medium text-foreground">Start from a brief.</span> Paste or upload a
+          Markdown brief of the work. The performance manager plans it into scenarios and draft
+          profiles; nothing is hired until a hire is approved.
+        </p>
+        <Button variant="outline" size="sm" asChild>
+          <Link to="/agents/new/brief">Start from a brief</Link>
+        </Button>
+      </div>
+
       <div className="bg-muted/50 border border-border rounded-lg p-3 text-sm text-muted-foreground">
         Press <em>Test Agent</em> to check it can run, then <em>Create agent</em>.
         How it runs is under <em>Advanced</em>; the defaults work for most teams.

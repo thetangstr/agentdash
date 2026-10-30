@@ -2,6 +2,7 @@ import {
   EVALUATION_CONTRACT_VERSION,
   EVALUATION_DEFAULT_REQUIRED_EVIDENCE,
   evaluationContractV1Schema,
+  evaluationContractVersionOf,
   type EvaluationContractV1,
   type EvaluationMilestoneRef,
 } from "@paperclipai/shared";
@@ -40,6 +41,9 @@ export function resolveContract(tl: Timeline, ref: EvaluationMilestoneRef, membe
   const versionEventIds: string[] = [];
   let invalidVersions = 0;
   for (const e of tl.contracts) {
+    // AgentDash (APM gate 2): an agent contract (v2) belongs to another subject. It is neither a version of this
+    // milestone's contract nor an invalid one, so it is skipped before parsing and the card is exactly as before.
+    if (evaluationContractVersionOf(e.payload) === "v2") continue;
     const raw = obj((e.payload ?? {}) as Record<string, unknown>, "contract") ?? (e.payload as Record<string, unknown>);
     const parsed = evaluationContractV1Schema.safeParse(raw);
     if (!parsed.success) {

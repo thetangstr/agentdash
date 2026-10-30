@@ -180,5 +180,11 @@ export { assistantActionHandles } from "./assistant_action_handles.js";
 export { evaluationEvents } from "./evaluation_events.js";
 export { evaluationScorecards } from "./evaluation_scorecards.js";
 export { evaluationIngestState } from "./evaluation_ingest_state.js";
+// AgentDash: Agent Performance Management gate 2 — operating profiles (revisions,
+// application receipts) and the responsibility-mapping history.
+export { agentProfiles, agentProfileRevisions, agentProfileApplications } from "./agent_profiles.js";
+export { issueResponsibilities } from "./issue_responsibilities.js";
+// AgentDash: Agent Performance Management gate 3 — the scheduled occurrence each routine run was dispatched for.
+export { routineRunOccurrences } from "./routine_run_occurrences.js";
 export { workforceEnrollments } from './workforce_enrollments.js';
 export { humanActionHandles } from './human_action_handles.js';

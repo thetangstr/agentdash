@@ -1,8 +1,9 @@
 import type { Db } from "@paperclipai/db";
-import { and, eq, inArray, ne } from "drizzle-orm";
-import { agents, companyMemberships, projects } from "@paperclipai/db";
+import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { agentProfiles, agents, companyMemberships, projects } from "@paperclipai/db";
 import { EVALUATION_REVIEW_PROJECT_NAME, EVALUATOR_AGENT_ROLE } from "@paperclipai/shared";
 import { logger } from "../../middleware/logger.js";
+import { agentCardService } from "./agent-cards.js";
 import { evaluationReviewItems } from "./review-items.js";
 import { evaluationScorecardService } from "./scorecards.js";
 import type { ScoredCard } from "./scoring/types.js";
@@ -19,10 +20,19 @@ import type { ScoredCard } from "./scoring/types.js";
  * no administrator they are recorded as unrouted, never sent to an arbitrary
  * member. A company or milestone that fails is logged and skipped; the loop
  * never stops.
+ *
+ * AgentDash (APM gate 3, P3.3; evaluation LLD §11): the same pass, behind the
+ * same flag, stores an agent card for every agent of the company with an
+ * applied operating profile, and syncs its calibration review items. The
+ * observation time is read here, never inside scoring.
  */
 export interface SnapshotCadenceOptions {
   /** Also sync review items (default true). */
   reviewItems?: boolean;
+  /** Also snapshot agent cards for agents with an applied profile (default true). */
+  agents?: boolean;
+  /** The observation time for agent cards; defaults to the pass's start. */
+  now?: () => Date;
 }
 
 export interface SnapshotCadenceResult {
@@ -34,10 +44,18 @@ export interface SnapshotCadenceResult {
   /** Items a human has closed and the cadence therefore left alone (never recreated). */
   reviewItemsClosed: number;
   failures: Array<{ companyId: string; milestoneId: string | null; error: string }>;
+  /** Agents with an applied profile visited (APM gate 3). */
+  agents: number;
+  /** Agent card versions stored or reused. */
+  agentCards: number;
+  /** Calibration review items created for agent cards. */
+  calibrationItemsCreated: number;
+  agentFailures: Array<{ companyId: string; agentId: string; error: string }>;
 }
 
 export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions = {}) {
   const cards = evaluationScorecardService(db);
+  const agentCards = agentCardService(db);
   const reviewItems = evaluationReviewItems(db);
 
   /** D12: unrouted exceptions go to the evaluator's accountable human (the provisioning administrator) when that person is an active member; otherwise to the first active administrator; never to an arbitrary member. */
@@ -68,7 +86,7 @@ export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions =
   return {
     /** One pass over the open projects of every provisioned company. */
     async run(): Promise<SnapshotCadenceResult> {
-      const result: SnapshotCadenceResult = { companies: 0, milestones: 0, cards: 0, reviewItemsCreated: 0, reviewItemsUpdated: 0, reviewItemsClosed: 0, failures: [] };
+      const result: SnapshotCadenceResult = { companies: 0, milestones: 0, cards: 0, reviewItemsCreated: 0, reviewItemsUpdated: 0, reviewItemsClosed: 0, failures: [], agents: 0, agentCards: 0, calibrationItemsCreated: 0, agentFailures: [] };
       for (const companyId of await provisionedCompanies()) {
         result.companies++;
         let open: Array<{ id: string }> = [];
@@ -101,6 +119,31 @@ export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions =
             // a company mid-ingest holds its lock: skip this pass, the next one catches up
             result.failures.push({ companyId, milestoneId, error: message });
             logger.warn({ companyId, milestoneId, err: message }, "evaluation_snapshot: milestone skipped");
+          }
+        }
+        if (opts.agents === false) continue;
+        let profiled: Array<{ agentId: string | null }> = [];
+        try {
+          profiled = await db
+            .select({ agentId: agentProfiles.agentId })
+            .from(agentProfiles)
+            .innerJoin(agents, eq(agents.id, agentProfiles.agentId))
+            .where(and(eq(agentProfiles.companyId, companyId), isNotNull(agentProfiles.activeRevisionId), ne(agents.status, "terminated")));
+        } catch (err) {
+          result.agentFailures.push({ companyId, agentId: "", error: err instanceof Error ? err.message : String(err) });
+          continue;
+        }
+        for (const agentId of profiled.map((r) => r.agentId).filter((x): x is string => !!x).sort()) {
+          result.agents++;
+          try {
+            const asOf = opts.now ? opts.now() : new Date();
+            const stored = await agentCards.snapshotAgentCard(companyId, agentId, { asOf, fallbackUserId: fallback });
+            result.agentCards++;
+            result.calibrationItemsCreated += stored.reviewItems?.created.length ?? 0;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            result.agentFailures.push({ companyId, agentId, error: message });
+            logger.warn({ companyId, agentId, err: message }, "evaluation_snapshot: agent card skipped");
           }
         }
       }

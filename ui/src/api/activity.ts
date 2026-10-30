@@ -64,8 +64,12 @@ export const activityApi = {
     if (filters?.agentId) params.set("agentId", filters.agentId);
     if (filters?.limit) params.set("limit", String(filters.limit));
     // AgentDash (review #1003): the filtered feed is a server-side filter so
-    // the page limit counts visible rows, not raw rows.
+    // the page limit counts visible rows, not raw rows. Omitted, the server
+    // still hides the APM gate 2 bookkeeping rows
+    // (ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS); `true` ("Show system events")
+    // returns everything.
     if (filters?.includeSystem === false) params.set("includeSystem", "false");
+    if (filters?.includeSystem === true) params.set("includeSystem", "true");
     const qs = params.toString();
     return api.get<ActivityEvent[]>(`/companies/${companyId}/activity${qs ? `?${qs}` : ""}`);
   },

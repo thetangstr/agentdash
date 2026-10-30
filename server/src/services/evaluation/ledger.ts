@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { evaluationEvents } from "@paperclipai/db";
 import { isUuidLike,
+  EVALUATION_DEFAULT_ACCESS_CLASS,
   EVALUATION_SCHEMA_VERSION,
   EVALUATION_SKEW_TOLERANCE_MS,
+  isEvaluationAccessClass,
+  type EvaluationAccessClass,
   type EvaluationActorType,
   type EvaluationEventType,
 } from "@paperclipai/shared";
@@ -38,6 +41,22 @@ export interface EvaluationEventInput {
   eventTime: Date;
   payload?: Record<string, unknown>;
   correlationId?: string | null;
+  /**
+   * AgentDash (APM gate 3): who may read the event (evaluation LLD §9.1). Ingest
+   * sets it with `classifyEvent` from the hints below; other appends default to
+   * `company` (the live restricted-project rule still applies to them through
+   * `projectId`). A value that is not one canonical class is refused.
+   */
+  accessClass?: EvaluationAccessClass;
+  /** Classification hints a source attaches; never stored. */
+  classHints?: {
+    /** The harness receipt a private assessment belongs to → `private_pairing:<id>`. */
+    pairingReceiptId?: string | null;
+    /** The agent whose private record this is → `private_agent:<id>`. */
+    privateAgentId?: string | null;
+  };
+  /** AgentDash (APM gate 3): lookup hint — the agent the event is most likely about (LLD §9.2). Non-uuids are dropped. */
+  subjectAgentId?: string | null;
 }
 
 export type EvaluationEventRow = typeof evaluationEvents.$inferSelect;
@@ -136,6 +155,13 @@ export interface AppendResult {
   oldestInsertedEventTime: Date | null;
 }
 
+/** The stored class: the input's own (validated) or the column default. Never widened, never guessed. */
+function accessClassFor(e: EvaluationEventInput): EvaluationAccessClass {
+  if (e.accessClass === undefined) return EVALUATION_DEFAULT_ACCESS_CLASS;
+  if (!isEvaluationAccessClass(e.accessClass)) throw new Error(`evaluation ledger: "${String(e.accessClass)}" is not an evaluation access class`);
+  return e.accessClass;
+}
+
 /** Page size for seq-keyed reads; the window itself is unbounded. */
 const PAGE = 5000;
 
@@ -166,6 +192,8 @@ export function evaluationLedger(db: LedgerDb) {
         dedupeKey: dedupeKeyFor(e),
         payload: e.payload ?? {},
         correlationId: e.correlationId ?? null,
+        accessClass: accessClassFor(e),
+        subjectAgentId: e.subjectAgentId && isUuidLike(e.subjectAgentId) ? e.subjectAgentId.trim().toLowerCase() : null,
       }));
       // Dedupe inside the batch too, so one tick never races itself.
       const seen = new Set<string>();
@@ -230,9 +258,20 @@ export function evaluationLedger(db: LedgerDb) {
      */
     async list(
       companyId: string,
-      opts: { types?: EvaluationEventType[]; sinceEventTime?: Date; limit?: number; projectId?: string; goalId?: string; throughSeq?: number; order?: "asc" | "desc" } = {},
+      opts: {
+        types?: EvaluationEventType[];
+        sinceEventTime?: Date;
+        limit?: number;
+        projectId?: string;
+        goalId?: string;
+        throughSeq?: number;
+        order?: "asc" | "desc";
+        /** AgentDash (APM gate 3): the viewer's access-class condition (`viewerClassCondition`), applied before the LIMIT. */
+        accessCondition?: SQL;
+      } = {},
     ): Promise<EvaluationEventRow[]> {
-      const conds = [eq(evaluationEvents.companyId, companyId)];
+      const conds: SQL[] = [eq(evaluationEvents.companyId, companyId)];
+      if (opts.accessCondition) conds.push(opts.accessCondition);
       if (opts.types && opts.types.length > 0) conds.push(inArray(evaluationEvents.eventType, opts.types));
       if (opts.sinceEventTime) conds.push(gte(evaluationEvents.eventTime, opts.sinceEventTime));
       if (opts.projectId) conds.push(eq(evaluationEvents.projectId, opts.projectId));
@@ -253,11 +292,12 @@ export function evaluationLedger(db: LedgerDb) {
       return desc_ ? ordered.reverse() : ordered;
     },
 
-    async countByType(companyId: string): Promise<Record<string, number>> {
+    /** Counts per event type; `accessCondition` (APM gate 3) counts only what the viewer may read, so a count never leaks a class. */
+    async countByType(companyId: string, accessCondition?: SQL): Promise<Record<string, number>> {
       const rows = await db
         .select({ eventType: evaluationEvents.eventType, n: sql<number>`count(*)::int` })
         .from(evaluationEvents)
-        .where(eq(evaluationEvents.companyId, companyId))
+        .where(accessCondition ? and(eq(evaluationEvents.companyId, companyId), accessCondition) : eq(evaluationEvents.companyId, companyId))
         .groupBy(evaluationEvents.eventType);
       return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
     },

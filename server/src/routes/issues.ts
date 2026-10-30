@@ -146,6 +146,14 @@ import {
   summarizeRequestHandoffs,
   type AgentHandoffVia,
 } from "../services/agent-handoffs.js";
+import {
+  AccessPolicyRefusedError,
+  accessPolicyRefusedResponse,
+  agentAccessCheckCacheFor,
+  checkAgentAccess,
+  enforceAgentAccess,
+  enforceAgentAccessBeforeEffect,
+} from "../services/agent-access-check.js";
 import { defaultStatusForNewIssue, triageOwnerForNewIssue } from "../services/issue-start-policy.js";
 import { answerCorrectionInput, recordAgentCorrectionAfterCommit } from "../services/agent-corrections.js";
 import { applyDeliverableReviewAfterDocumentRevision } from "../services/deliverable-review-revision.js";
@@ -488,6 +496,84 @@ export function issueRoutes(
       throw forbidden("Missing permission: tasks:assign");
     }
     throw unauthorized();
+  }
+
+  /**
+   * AgentDash (APM gate 2, P2.3; access LLD §4 talk.agents, assign): an agent
+   * assigning work to ANOTHER agent is checked against its V2 outbound scope
+   * for `assign`, after the legacy rule (the `tasks:assign` grant, or the CEO
+   * fallback) has allowed it — in gate 3 a V2 refusal overrides those
+   * fallbacks. Shadow only: the assignment goes ahead exactly as before. Board
+   * actors are not agents and are skipped. Never throws.
+   */
+  async function shadowCheckAgentAssignment(req: Request, companyId: string, assigneeAgentId: unknown, issueId?: string | null) {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return;
+    if (typeof assigneeAgentId !== "string" || !assigneeAgentId || assigneeAgentId === req.actor.agentId) return;
+    await checkAgentAccess(
+      db,
+      { companyId, agentId: req.actor.agentId, dimension: "talk.agents", target: { agentId: assigneeAgentId }, via: "assign" },
+      { site: "issues.assign", issueId: issueId ?? null, cache: agentAccessCheckCacheFor(req) },
+    );
+  }
+
+  /**
+   * AgentDash (APM gate 3, P3.4; access LLD §4 talk.agents, assign): the same
+   * check for a create, run BEFORE the issue is written. Shadow logs exactly
+   * as gate 2; enforce answers `403 ACCESS_POLICY_REFUSED`. The legacy rule
+   * (`tasks:assign`, or the CEO fallback) has already allowed the assignment:
+   * a V2 refusal overrides that fallback.
+   */
+  async function checkAgentAssignmentBeforeCreate(req: Request, companyId: string, assigneeAgentId: unknown) {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return;
+    if (typeof assigneeAgentId !== "string" || !assigneeAgentId || assigneeAgentId === req.actor.agentId) return;
+    await enforceAgentAccess(
+      db,
+      { companyId, agentId: req.actor.agentId, dimension: "talk.agents", target: { agentId: assigneeAgentId }, via: "assign" },
+      { site: "issues.assign", cache: agentAccessCheckCacheFor(req) },
+    );
+  }
+
+  /**
+   * AgentDash (APM gate 3, P3.4): enforce-only checks for what an agent's
+   * write actually assigns, BEFORE it is written — the assignee after
+   * stewarded-agent routing (`assign`) and, when the write is an agent-to-agent
+   * hand-off, the `handoff` channel too. Nothing is evaluated outside
+   * `enforce`, so off and shadow stay exactly as gate 2 (whose shadow checks
+   * run on the requested assignee and after the hand-off is recorded).
+   */
+  async function enforceAgentAssignmentBeforeEffect(
+    req: Request,
+    companyId: string,
+    assigneeAgentId: string | null | undefined,
+    opts: { handoff: boolean; checkAssign: boolean; issueId?: string | null },
+  ) {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return;
+    if (!assigneeAgentId || assigneeAgentId === req.actor.agentId) return;
+    const cache = agentAccessCheckCacheFor(req);
+    const base = { companyId, agentId: req.actor.agentId, dimension: "talk.agents" as const, target: { agentId: assigneeAgentId } };
+    if (opts.checkAssign) {
+      await enforceAgentAccessBeforeEffect(db, { ...base, via: "assign" }, { site: "issues.assign", issueId: opts.issueId ?? null, cache });
+    }
+    if (opts.handoff) {
+      await enforceAgentAccessBeforeEffect(db, { ...base, via: "handoff" }, { site: "handoffs", issueId: opts.issueId ?? null, cache });
+    }
+  }
+
+  /** The patch path's form: an enforced refusal inside acceptance answers the same 403 body. */
+  async function enforceAgentAssignmentInPatch(
+    req: Request,
+    companyId: string,
+    assigneeAgentId: string,
+    opts: { handoff: boolean; checkAssign: boolean; issueId: string },
+  ) {
+    try {
+      await enforceAgentAssignmentBeforeEffect(req, companyId, assigneeAgentId, opts);
+    } catch (error) {
+      if (error instanceof AccessPolicyRefusedError) {
+        throw new IssueCommentPolicyRefusal(403, accessPolicyRefusedResponse(error.refusal));
+      }
+      throw error;
+    }
   }
 
   /**
@@ -2557,6 +2643,7 @@ export function issueRoutes(
     }
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
+      await checkAgentAssignmentBeforeCreate(req, companyId, req.body.assigneeAgentId);
     }
     await assertIssueEnvironmentSelection(companyId, req.body.executionWorkspaceSettings?.environmentId);
 
@@ -2609,6 +2696,11 @@ export function issueRoutes(
       await routePersonAssigneeToStewardedAgent(req, companyId, requestedInput);
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, companyId, issueInput);
     const agentCreatePlan = await planAgentCreate(req, companyId, issueInput, { routeToChiefOfStaff: routeUnownedTodoToChiefOfStaff });
+    // AgentDash (APM gate 3, P3.4): enforce on what is actually assigned.
+    await enforceAgentAssignmentBeforeEffect(req, companyId, issueInput.assigneeAgentId, {
+      checkAssign: issueInput.assigneeAgentId !== req.body.assigneeAgentId,
+      handoff: Boolean(agentCreatePlan?.handoff && agentCreatePlan.handoff.toAgentId === issueInput.assigneeAgentId),
+    });
     let issue;
     try {
       issue = await svc.create(companyId, {
@@ -2722,6 +2814,7 @@ export function issueRoutes(
     }
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, parent.companyId);
+      await checkAgentAssignmentBeforeCreate(req, parent.companyId, req.body.assigneeAgentId);
     }
     await assertIssueEnvironmentSelection(parent.companyId, req.body.executionWorkspaceSettings?.environmentId);
 
@@ -2741,6 +2834,12 @@ export function issueRoutes(
     const routeUnownedTodoToChiefOfStaff = await callerMayRouteToChiefOfStaff(req, parent.companyId, childInput);
     const agentCreatePlan = await planAgentCreate(req, parent.companyId, { ...childInput, parentId: parent.id }, {
       routeToChiefOfStaff: routeUnownedTodoToChiefOfStaff,
+    });
+    // AgentDash (APM gate 3, P3.4): enforce on what is actually assigned.
+    await enforceAgentAssignmentBeforeEffect(req, parent.companyId, childInput.assigneeAgentId, {
+      checkAssign: childInput.assigneeAgentId !== req.body.assigneeAgentId,
+      handoff: Boolean(agentCreatePlan?.handoff && agentCreatePlan.handoff.toAgentId === childInput.assigneeAgentId),
+      issueId: parent.id,
     });
     const { issue, parentBlockerAdded } = await svc.createChild(parent.id, {
       ...childInput,
@@ -2851,6 +2950,10 @@ export function issueRoutes(
           const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
           const toAgentId = next.assigneeAgentId;
           if (!actorAgentId || !toAgentId || toAgentId === actorAgentId || toAgentId === current.assigneeAgentId) return;
+          // AgentDash (APM gate 3, P3.4; talk.agents assign): an agent giving this
+          // issue to another agent is refused (403) before the update in enforce,
+          // whatever let the legacy rule allow it (grant, CEO or reporting line).
+          await enforceAgentAssignmentInPatch(req, current.companyId, toAgentId, { checkAssign: true, handoff: false, issueId: current.id });
           const reader = executor as Db;
           if (!(await agentHandoffsEnabled(reader, current.companyId))) return;
           const { primary: rootIssueId, roots: rootIssueIds } = await reassignRequestRoots(reader, req, current);
@@ -2881,6 +2984,8 @@ export function issueRoutes(
             refusedAgentHandoff = { rootIssueId: fullest.rootIssueId ?? rootIssueId, toAgentId, rounds: check.rounds };
             throw new IssueCommentPolicyRefusal(422, { error: check.message, details: check.details });
           }
+          // AgentDash (APM gate 3, P3.4; talk.agents handoff): the hand-off channel, before the update.
+          await enforceAgentAssignmentInPatch(req, current.companyId, toAgentId, { checkAssign: false, handoff: true, issueId: current.id });
           plannedAgentHandoff = { kind: "handoff", rootIssueId, rootIssueIds, toAgentId, parentIssueId: current.parentId };
         },
         // A5 (GH #830 follow-up): keep blockers the actor cannot see instead
@@ -2915,6 +3020,11 @@ export function issueRoutes(
         };
       }
       await recordAgentHandoffEffects(req, existing, accepted.issue, plannedAgentHandoff, patchIntent.comment);
+      // AgentDash (APM gate 2, P2.3): the accepted reassignment passed the
+      // legacy assignment rule; shadow V2 talk.agents (assign).
+      if (accepted.issue.assigneeAgentId && accepted.issue.assigneeAgentId !== existing.assigneeAgentId) {
+        await shadowCheckAgentAssignment(req, existing.companyId, accepted.issue.assigneeAgentId, existing.id);
+      }
       if (movedFromRoots && req.actor.type === "agent" && req.actor.agentId
         && (accepted.issue.parentId ?? null) !== (existing.parentId ?? null)) {
         await recordAgentRequestRoots(db, {

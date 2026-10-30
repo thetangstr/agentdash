@@ -83,6 +83,13 @@ vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }),
 }));
 
+// AgentDash (APM gate 4): the performance manager control reads its designation; members see it read-only.
+const mockPerformanceManagerApi = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }));
+vi.mock("../api/performance-manager", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/performance-manager")>();
+  return { ...actual, performanceManagerApi: mockPerformanceManagerApi };
+});
+
 vi.mock("@/lib/router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/router")>();
   return {
@@ -217,12 +224,35 @@ describe("CompanySettings reconciliation placement", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     mockHealthApi.get.mockResolvedValue({ status: "ok", hostedBox: false });
+    mockPerformanceManagerApi.get.mockResolvedValue({
+      kind: "performance_manager",
+      companyId: "company-1",
+      designatedAgentId: null,
+      designated: null,
+      effective: { agentId: "agent-cos", name: "Clara", role: "chief_of_staff", status: "active" },
+      source: "chief_of_staff",
+      viewer: { canChange: false },
+    });
   });
 
   afterEach(() => {
     document.body.removeChild(container);
     reconciliation.count = 0;
     vi.clearAllMocks();
+  });
+
+  it("keeps the performance manager control in the Advanced section, read-only for a member, for every company", async () => {
+    const { root } = render(container);
+    await waitForAssertion(() => {
+      expect(container.querySelector('[data-testid="performance-manager-acting"]')).not.toBeNull();
+    });
+    const card = container.querySelector('[data-testid="company-settings-performance-manager"]')!;
+    expect(card.closest('[data-testid="company-settings-advanced"]')).not.toBeNull();
+    expect(card.textContent).toContain("only recommends and proposes");
+    expect(card.querySelector('[data-testid="performance-manager-readonly"]')).not.toBeNull();
+    expect(card.querySelector("select")).toBeNull();
+    expect(mockPerformanceManagerApi.get).toHaveBeenCalledWith("company-1");
+    act(() => root.unmount());
   });
 
   it("keeps an empty reconciliation panel inside the collapsed Advanced section", async () => {

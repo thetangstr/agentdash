@@ -342,6 +342,73 @@ describe("CompanyAccess", () => {
     });
   });
 
+  // AgentDash (APM gate 3): `tasks:assign_scope` is inert — nothing reads it —
+  // so no grant checkbox offers it; a member who already holds it keeps it.
+  it("does not offer inert grants, and keeps an existing one when saving", async () => {
+    const response = await listMembersMock.getMockImplementation()?.("company-1");
+    listMembersMock.mockResolvedValue({
+      ...response,
+      members: response.members.map((member: { id: string }) =>
+        member.id === "member-1"
+          ? {
+              ...member,
+              grants: [
+                {
+                  id: "grant-1",
+                  companyId: "company-1",
+                  principalType: "user",
+                  principalId: "user-1",
+                  permissionKey: "tasks:assign_scope",
+                  scope: null,
+                  grantedByUserId: null,
+                  createdAt: "2026-04-10T00:00:00.000Z",
+                  updatedAt: "2026-04-10T00:00:00.000Z",
+                },
+              ],
+            }
+          : member,
+      ),
+    });
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyAccess />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const editButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Edit");
+    await act(async () => {
+      editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const body = document.body.querySelector<HTMLElement>('[data-testid="edit-member-dialog-body"]')!;
+    expect(body.textContent).toContain("tasks:assign");
+    expect(body.textContent).toContain("joins:approve");
+    expect(body.textContent).not.toContain("tasks:assign_scope");
+    expect(body.textContent).not.toContain("Assign scoped tasks");
+
+    const saveButton = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "Save access");
+    await act(async () => {
+      saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    expect(updateMemberAccessMock).toHaveBeenCalledWith("company-1", "member-1", {
+      membershipRole: "admin",
+      status: "active",
+      grants: [{ permissionKey: "tasks:assign_scope" }],
+    });
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("removes a member with an issue reassignment target", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({

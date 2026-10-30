@@ -13,6 +13,7 @@ import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { logActivity } from "./activity-log.js";
+import { enforceAgentAccess } from "./agent-access-check.js";
 import { STEWARD_INBOX_CAPABILITY } from "./steward-inbox.js";
 import { classifyInboundContent } from "./inbound-filter.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
@@ -430,6 +431,24 @@ export function bridgeService(db: Db) {
     const needed = input.taskClass === "act" ? "bridge:act" : "bridge:read";
     if (!(endpoint.capabilities ?? []).includes(needed)) {
       throw badRequest(`That endpoint did not declare the ${needed} capability`);
+    }
+
+    // AgentDash (APM gate 2, P2.3; gate 3, P3.4; access LLD §4 talk.people,
+    // bridge tasks): an agent-authored task may only go to its steward's or
+    // accountable person's machine. Shadow: the task is created (or gated)
+    // exactly as before. Enforce: 403 ACCESS_POLICY_REFUSED before anything
+    // is written. Off: not evaluated.
+    if (input.requestedByAgentId) {
+      await enforceAgentAccess(
+        db,
+        {
+          companyId,
+          agentId: input.requestedByAgentId,
+          dimension: "talk.people",
+          target: { userId: endpoint.userId, purpose: "bridge_task" },
+        },
+        { site: "bridge.task" },
+      );
     }
 
     /**
