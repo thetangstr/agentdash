@@ -5,7 +5,7 @@
 // days of one scheduled responsibility of which one never ran, judged and used
 // deliverables, agent cards snapshotted and verified, calibration review
 // items, a steward kept out of a restricted project, and a milestone card
-// compared with the pre-gate-3 formula.
+// unchanged by agent-side events.
 //
 // As in the gate 2 walkthrough: the routers are the production route
 // factories mounted the way app.ts mounts them (plus the agent access-scope
@@ -49,23 +49,20 @@
 //   E4 owed work counts a period in which nothing ran ............... steps 5, 7
 //   E5 access classes: no restricted-project leak through the events API,
 //      the agent card (counts included), the agents list or the cases .. step 9
-//   E6 the milestone card differs from the pre-gate-3 formula only by the
-//      declared bump (agent-side sources are not milestone inputs) ..... step 10
+//   E6 the milestone card is unchanged by agent-side events (the declared
+//      m2-score/9 rule: they are not milestone inputs) ................ step 10
 //      (The other declared m2-score/9 change, checkout → assignment +
-//      transition, is an ingest change; this baseline scores the same
-//      ingested rows, so it is covered by evaluation-gate3-ingest.test.ts.)
+//      transition, is an ingest change, covered by
+//      evaluation-gate3-ingest.test.ts.)
 //   E7 calibration samples become review items for the named human ... step 7
 // Plus: human acceptance, automated acceptance and use stay separate facts
 // (steps 7–8), and the independent agent's verdict is a reviewer fact on its
 // own card (step 7).
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
 import express from "express";
 import request from "supertest";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -140,31 +137,6 @@ async function waitFor<T>(label: string, read: () => Promise<T | null | undefine
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-}
-
-/**
- * The pre-gate-3 milestone formula (`m2-score/8`) as code: git HEAD's
- * `services/evaluation/scoring/` (committed before APM gate 1) with the one
- * gate 1–2 change under that directory — the gate 2 agent-contract skip in
- * `contract.ts` (taken from the working tree, whose only diff to HEAD it is).
- * Written to a temp dir with `@paperclipai/shared` and `../ledger.js` pointed
- * at this checkout's modules (`orderEvents`/`hashCanonical` are unchanged).
- */
-async function loadPreGate3MilestoneScoring(): Promise<{ dir: string; mod: { FORMULA_VERSION: string; scoreMilestone: typeof scoreMilestone } }> {
-  const repo = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../..");
-  const scoringPath = "server/src/services/evaluation/scoring/";
-  const shared = join(repo, "packages/shared/src/index.ts");
-  const dir = mkdtempSync(join(tmpdir(), "apm-gate3-pre-bump-"));
-  mkdirSync(join(dir, "scoring"));
-  writeFileSync(join(dir, "ledger.ts"), `export * from ${JSON.stringify(join(repo, "server/src/services/evaluation/ledger.ts"))};\n`);
-  const files = execFileSync("git", ["ls-tree", "--name-only", "HEAD", scoringPath], { cwd: repo, encoding: "utf8" }).trim().split("\n");
-  for (const file of files) {
-    const name = file.slice(scoringPath.length);
-    const source = name === "contract.ts" ? readFileSync(join(repo, file), "utf8") : execFileSync("git", ["show", `HEAD:${file}`], { cwd: repo, encoding: "utf8" });
-    writeFileSync(join(dir, "scoring", name), source.replaceAll('"@paperclipai/shared"', JSON.stringify(shared)));
-  }
-  const mod = (await import(pathToFileURL(join(dir, "scoring", "card.ts")).href)) as { FORMULA_VERSION: string; scoreMilestone: typeof scoreMilestone };
-  return { dir, mod };
 }
 
 describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
@@ -985,7 +957,7 @@ describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
   // 10. The milestone card and the declared formula bump
   // -------------------------------------------------------------------------
 
-  it("10. the Reporting milestone card differs from the pre-gate-3 formula (m2-score/8) only by the declared bump", async () => {
+  it("10. the Reporting milestone card is unchanged by agent-side events (the declared m2-score/9 rule)", async () => {
     const s = requireSeed();
     const ref = { kind: "project" as const, id: s.reportingProjectId };
     const replay = await send(owner(), "get", `${companyPath()}/evaluation/replay?kind=project&id=${s.reportingProjectId}`);
@@ -1006,21 +978,12 @@ describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
     // The HTTP card is the current formula over this window.
     expect(JSON.parse(JSON.stringify(scoreMilestone(window, ref, throughSeq, s.companyId, { fallbackOpen })))).toEqual(current);
 
-    const pre = await loadPreGate3MilestoneScoring();
-    try {
-      expect(pre.mod.FORMULA_VERSION).toBe("m2-score/8");
-      const normalize = (card: Body) => ({ ...JSON.parse(JSON.stringify(card)), formulaVersion: "<formula>" });
-      // The declared rule (card.ts m2-score/9, decisions log "APM gate 3"): agent-side sources are not milestone inputs.
-      // Under the old formula over the inputs the new one declares, the card is the same apart from its version.
-      const baseline = pre.mod.scoreMilestone(window.filter(isMilestoneInput), ref, throughSeq, s.companyId, { fallbackOpen });
-      expect((baseline as Body).formulaVersion).toBe("m2-score/8");
-      expect(normalize(baseline)).toEqual(normalize(current));
-      // The bump was needed: the old formula over the raw window counts the agent-side events into the card.
-      const unbumped = pre.mod.scoreMilestone(window, ref, throughSeq, s.companyId, { fallbackOpen });
-      expect(normalize(unbumped)).not.toEqual(normalize(current));
-    } finally {
-      rmSync(pre.dir, { recursive: true, force: true });
-    }
+    // The declared rule (card.ts m2-score/9, decisions log "APM gate 3"): agent-side sources are not milestone
+    // inputs, so they never change a milestone card. Before merge this walkthrough also compared the card with
+    // the m2-score/8 code from the pre-change commit (c625911) and found it equal apart from the version; that
+    // one-time check can't run against a shallow CI checkout, so the durable form below is what stays.
+    const withoutAgentSide = scoreMilestone(window.filter(isMilestoneInput), ref, throughSeq, s.companyId, { fallbackOpen });
+    expect(JSON.parse(JSON.stringify(withoutAgentSide))).toEqual(current);
   }, 60_000);
 
   it("leaves the wakes settled", async () => {
