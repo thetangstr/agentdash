@@ -10,6 +10,7 @@ Scripts live in `scripts/hosted/`:
 | `claim-box.sh` | the customer's founder | Creates the founder's account with the invite code |
 | `backup-box.sh` | operator | Postgres dump, Volume tarball, Railway snapshots; `--restore-test` proves the dump restores |
 | `lib.sh` | (sourced) | Railway GraphQL helpers; refuses to touch any project not named `agentdash-box-*` |
+| `internal-box.mjs` | an agent | An **internal** box through the control plane: create, claim, move a company in, set the Hermes key ([internal-box.md](internal-box.md)) |
 
 ## 1. What a box is
 

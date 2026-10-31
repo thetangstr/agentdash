@@ -39,6 +39,7 @@ const HELP_SCRIPTS = [
   "msp-mac-mini-readiness.mjs",
   "ci/check-pr-process.mjs",
   "verify-release-registry-state.mjs",
+  "hosted/internal-box.mjs",
 ];
 
 function listMjsFiles(dir) {
