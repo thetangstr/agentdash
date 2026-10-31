@@ -663,9 +663,16 @@ describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
     expect(r.run.status).toBe("cancelled");
     expect(r.run.errorCode).toBe("access_policy_refused");
     expect(r.run.startedAt ?? null).toBeNull();
-    const blocked = await issueRow(r.outside.body.id);
+    // The run is cancelled first and the issue blocked just after it, so wait for the issue rather than read it once.
+    const blocked = await waitFor("the refused run's issue to be blocked", async () => {
+      const row = await issueRow(r.outside.body.id);
+      return row.status === "blocked" ? row : null;
+    });
     expect(blocked.status).toBe("blocked");
-    const notes = await db.select().from(issueComments).where(eq(issueComments.issueId, r.outside.body.id)).orderBy(desc(issueComments.createdAt));
+    const notes = await waitFor("the access blocker note", async () => {
+      const rows = await db.select().from(issueComments).where(eq(issueComments.issueId, r.outside.body.id)).orderBy(desc(issueComments.createdAt));
+      return rows.some((c) => c.body.startsWith(ACCESS_POLICY_BLOCKER_NOTE_PREFIX)) ? rows : null;
+    });
     expect(notes.filter((c) => c.body.startsWith(ACCESS_POLICY_BLOCKER_NOTE_PREFIX))).toHaveLength(1);
     expect(notes[0]!.authorAgentId).toBe(s.analyst.id);
 
