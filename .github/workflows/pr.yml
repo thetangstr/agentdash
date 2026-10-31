@@ -342,7 +342,8 @@ jobs:
 
   e2e:
     needs: [policy]
-    runs-on: ubuntu-latest
+    # AgentDash: pinned. ubuntu-latest moved to 26.04, where Playwright cannot install Chromium.
+    runs-on: ubuntu-24.04
     # 60 (was 45/30): the job runs pnpm install + build + a Playwright
     # browser install + the e2e suite. With `--no-shell` the install now
     # COMPLETES fast (~1s edge-cached Chromium download + extract; the
