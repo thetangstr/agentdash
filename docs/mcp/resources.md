@@ -3,10 +3,10 @@ title: "Resources"
 summary: "The agentdash:// resources and resource templates the MCP server lists, and to whom."
 ---
 
-> Generated at commit `c69c37f49` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `ee2b64710` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
-Measured: `resources/list` and `resources/templates/list` against a server started in each connection shape. "Listed on" names the toolsets whose listing includes the resource. The read handler is in `packages/mcp-server/src/index.ts`; the descriptions and the derivation templates are in `src/resources.ts`. On the assistant and human toolsets a read of anything other than `agentdash://playbook` fails (`src/index.ts`).
+Measured: `resources/list` and `resources/templates/list` against a server started in each connection shape. "Listed on" names the toolsets whose listing includes the resource. The read handler is in `packages/mcp-server/src/index.ts`; the descriptions and the derivation templates are in `src/resources.ts`. On the assistant, human and cloud toolsets a read of anything other than `agentdash://playbook` fails (`src/index.ts`).
 
 ## Resources
 
@@ -16,7 +16,7 @@ The goal-oriented operating contract: the setup-status loop, the approval bounda
 
 Name: Operating Playbook. MIME type: `text/markdown`.
 
-Listed on: [setup](/mcp/tools/setup), [agent](/mcp/tools/agent), [assistant](/mcp/tools/assistant), [human](/mcp/tools/human), [bridge](/mcp/tools/bridge).
+Listed on: [setup](/mcp/tools/setup), [agent](/mcp/tools/agent), [assistant](/mcp/tools/assistant), [human](/mcp/tools/human), [cloud](/mcp/tools/cloud), [bridge](/mcp/tools/bridge).
 
 ### `agentdash://dashboard`
 

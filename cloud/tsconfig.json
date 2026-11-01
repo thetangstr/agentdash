@@ -3,7 +3,8 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"]
+    "types": ["node"],
+    "paths": { "@agentdash/mcp-server": ["./src/types/agentdash-mcp-server.d.ts"] }
   },
   "include": ["src"]
 }

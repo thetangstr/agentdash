@@ -52,6 +52,16 @@ describe("redacting logger", () => {
     expect(out).toContain("postgres.railway.internal");
   });
 
+  it("redacts agent handles and box keys passing through connect (cloud MCP toolset)", () => {
+    const { log, text } = capture();
+    const handle = `agdh_${"Q".repeat(43)}`;
+    const key = `pcp_board_${"ab".repeat(24)}`;
+    const secret = `pcp_cli_auth_${"cd".repeat(24)}`;
+    log.warn(`connect for ${handle} got ${key}`, { note: `challenge secret ${secret}` });
+    for (const v of [handle, key, secret]) expect(text()).not.toContain(v);
+    expect(text()).toContain("agdh_[REDACTED]");
+  });
+
   it("scrubs Error messages and stacks", () => {
     const { log, text } = capture();
     log.error("boom", { err: new Error(`variableUpsert failed for ${VALUES.webhook}`) });

@@ -99,6 +99,13 @@
       "when": 1791486771259,
       "tag": "0013_hosted_invitation_beta",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793509120026,
+      "tag": "0014_agent_handles",
+      "breakpoints": true
     }
   ]
 }

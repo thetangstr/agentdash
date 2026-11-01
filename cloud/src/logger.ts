@@ -1,7 +1,7 @@
 // AgentDash: the control plane's only logger. It redacts by key and by value
 // before anything reaches stdout (spec §3.3 "Secret rules"):
 //   keys:   *SECRET*, *KEY*, *TOKEN*, *CODE*, password (case-insensitive)
-//   values: AGD-… (any case), sk_…, rk_…, re_…, whsec_… anywhere inside a
+//   values: AGD-… (any case), sk_…, rk_…, re_…, whsec_…, agdh_…, pcp_… anywhere inside a
 //           string; Bearer/Basic credentials (with a space, ':' or '=');
 //           URL passwords; `token=…`-style pairs in free text; a UUID after a
 //           token word on the same line; email addresses, plain or
@@ -15,7 +15,9 @@ const SECRET_KEY_RE = /secret|key|token|code|password|authorization|cookie/i;
 // Value patterns: the prefix at a token boundary followed by token characters.
 // Case-insensitive: a lowercased claim code (`agd-…`) is still a claim code
 // (GH #763).
-const SECRET_VALUE_RE = /(?<![A-Za-z0-9])(AGD-|sk_|rk_|re_|whsec_)[A-Za-z0-9_\-]+/gi;
+// AgentDash (cloud MCP toolset): agent handles (agdh_…) and the box keys and
+// challenge secrets that pass through connect (pcp_…) too.
+const SECRET_VALUE_RE = /(?<![A-Za-z0-9])(AGD-|sk_|rk_|re_|whsec_|agdh_|pcp_)[A-Za-z0-9_\-]+/gi;
 // Bearer and Basic credentials in free text: everything up to whitespace
 // (GH #778), so a token with unusual characters is not half-printed.
 // `bearer:<token>` and `bearer=<token>` with no space are caught too (GH #763).

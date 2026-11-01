@@ -52,7 +52,7 @@ const docModules = import.meta.glob(
     "../../../docs/adapters/{overview,claude-local,codex-local,hermes-local,gemini-local,process,http,external-adapters,creating-an-adapter,adapter-ui-parser}.{md,mdx}",
     "../../../docs/api/{index,authentication,api-keys,conventions,versioning,reference,health,companies,agents,issues,projects,goals,approvals,routines,costs,activity,dashboard,secrets,human-control,bridge,mcp,oauth,changelog,route-index}.{md,mdx}",
     "../../../docs/mcp/{overview,connecting,toolsets,resources,playbooks}.{md,mdx}",
-    "../../../docs/mcp/tools/{agent,setup,assistant,human,bridge}.{md,mdx}",
+    "../../../docs/mcp/tools/{agent,setup,assistant,human,cloud,bridge}.{md,mdx}",
     "../../../docs/cli/{agentdash-connect,agentdash-mcp,overview,setup-commands,control-plane-commands}.{md,mdx}",
     "!../../../docs/superpowers/**",
     "!../../../docs/agents/**",

@@ -1,4 +1,4 @@
-import type { PaperclipMcpConfig } from "./config.js";
+import { normalizeApiUrl, type PaperclipMcpConfig } from "./config.js";
 
 export class PaperclipApiError extends Error {
   readonly status: number;
@@ -67,6 +67,16 @@ export class PaperclipApiClient {
    */
   setApiKey(apiKey: string): void {
     this.config.apiKey = apiKey;
+  }
+
+  /**
+   * AgentDash (cloud toolset): point the running session at a different
+   * instance. agentdash_cloud_connect calls this, with setApiKey, once the
+   * person has approved the agent on their new cloud workspace, so the same
+   * session continues there with the setup toolset.
+   */
+  setApiUrl(apiUrl: string): void {
+    this.config.apiUrl = normalizeApiUrl(apiUrl);
   }
 
   get defaults() {

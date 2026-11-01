@@ -202,7 +202,7 @@ test("an engagement-specific playbook section is left out whole and the rest is 
   const surface = {
     playbooks: [{ name: "P", file: "p.ts", text: playbook }],
     connections: Object.fromEntries(
-      ["setup", "setup-agent", "agent", "agent-agent", "assistant", "human", "bridge", "bridge-agent"].map((id) => [id, { instructions: playbook }]),
+      ["setup", "setup-agent", "agent", "agent-agent", "assistant", "human", "cloud", "bridge", "bridge-agent"].map((id) => [id, { instructions: playbook }]),
     ),
   };
   const page = renderPlaybooksPage(surface, "abc1234");

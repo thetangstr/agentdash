@@ -1,6 +1,6 @@
 # @agentdash/mcp-server
 
-The AgentDash MCP server. One server, four toolsets plus a bridge set, two transports. Full reference: `docs/mcp/` (served at `/docs/mcp/overview`), generated from this package by `scripts/docs/generate-mcp-reference.mjs`.
+The AgentDash MCP server. One server, five toolsets plus a bridge set, two transports. Full reference: `docs/mcp/` (served at `/docs/mcp/overview`), generated from this package by `scripts/docs/generate-mcp-reference.mjs`.
 
 ## Toolsets
 
@@ -12,7 +12,7 @@ The AgentDash MCP server. One server, four toolsets plus a bridge set, two trans
 | `human` | The signed-in person on their own board key, prepare then confirm | `src/human.ts` |
 | bridge | What a bridge endpoint token gets instead: the agent bridge and the steward inbox | `src/bridge.ts` |
 
-No `paperclip*` prefix: tool names are exactly as the reference lists them (`list_issues`, `agentdash_setup_status`, `agentdashGetMyMandate`, `inbox_sync`). `buildToolSurface` in `src/index.ts` picks the surface: `human` if asked; otherwise a key that is not a control-plane credential (`isControlPlaneCredential`, `src/config.ts`) gets the bridge set only; otherwise the requested toolset. Tool lists and input schemas: `docs/mcp/tools/*.md`.
+No `paperclip*` prefix: tool names are exactly as the reference lists them (`list_issues`, `agentdash_setup_status`, `agentdashGetMyMandate`, `inbox_sync`). `buildToolSurface` in `src/index.ts` picks the surface: `human` or `cloud` if asked; otherwise a key that is not a control-plane credential (`isControlPlaneCredential`, `src/config.ts`) gets the bridge set only; otherwise the requested toolset. Tool lists and input schemas: `docs/mcp/tools/*.md`.
 
 Every connection is also sent a playbook as its MCP `instructions` and as the `agentdash://playbook` resource (`src/playbook.ts`, `src/human.ts`; verbatim in `docs/mcp/playbooks.md`).
 
@@ -25,12 +25,14 @@ Every connection is also sent a playbook as its MCP `instructions` and as the `a
 
 | Variable | Alias | Required | Purpose |
 |---|---|---|---|
-| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes | Instance URL; `/api` is appended if missing |
+| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes, except for `cloud` | Instance URL; `/api` is appended if missing |
 | `PAPERCLIP_API_KEY` | `AGENTDASH_API_KEY` | no | Bearer credential; its prefix picks the surface. Empty is allowed for sign-up |
 | `PAPERCLIP_COMPANY_ID` | `AGENTDASH_COMPANY_ID` | no | Default company |
 | `PAPERCLIP_AGENT_ID` | — | no | Scopes the connection to one agent |
 | `PAPERCLIP_RUN_ID` | — | no | Sent as `X-Paperclip-Run-Id` on writes |
-| `AGENTDASH_TOOLSET` | — | no | `setup`, `agent`, `assistant` or `human` |
+| `AGENTDASH_TOOLSET` | — | no | `setup`, `agent`, `assistant`, `human` or `cloud` |
+| `AGENTDASH_CLOUD_URL` | — | no | With `cloud`: the AgentDash cloud (default `https://www.agentdash.cloud`); `src/cloud.ts` |
+| `AGENTDASH_CLOUD_EDGE_DOMAIN` | — | no | With `cloud`: where workspaces live (default `agentdash.cloud`) |
 
 `PAPERCLIP_*` is checked first; first non-empty value wins.
 

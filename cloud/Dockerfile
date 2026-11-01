@@ -11,7 +11,10 @@ WORKDIR /repo
 COPY . .
 # Only this package and its dependencies; the lockfile is authoritative.
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter @agentdash/cloud-control...
-RUN pnpm --filter @agentdash/cloud-control build \
+# AgentDash (cloud MCP toolset): cloud-control serves the cloud tools from the
+# workspace package @agentdash/mcp-server, which runs from its built dist/.
+RUN pnpm --filter @agentdash/mcp-server build \
+ && pnpm --filter @agentdash/cloud-control build \
  && pnpm --filter @agentdash/cloud-control deploy --prod /out
 
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c

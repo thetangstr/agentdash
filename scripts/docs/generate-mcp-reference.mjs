@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Generate the MCP reference pages from the MCP server itself:
 //
-//   docs/mcp/tools/<setup|agent|assistant|human|bridge>.md — one page per surface
+//   docs/mcp/tools/<setup|agent|assistant|human|cloud|bridge>.md — one page per surface
 //   docs/mcp/resources.md                                  — agentdash:// resources and templates
 //   docs/mcp/playbooks.md                                  — the four playbook constants, verbatim
 //   docs/cli/agentdash-connect.md                          — packages/connect/README.md, as a page
@@ -52,6 +52,7 @@ export const TOOL_PAGES = [
   { surface: "agent", rel: "docs/mcp/tools/agent.md", title: "Agent toolset" },
   { surface: "assistant", rel: "docs/mcp/tools/assistant.md", title: "Assistant toolset" },
   { surface: "human", rel: "docs/mcp/tools/human.md", title: "Human toolset" },
+  { surface: "cloud", rel: "docs/mcp/tools/cloud.md", title: "Cloud toolset" },
   { surface: "bridge", rel: "docs/mcp/tools/bridge.md", title: "Bridge tools" },
 ];
 export const RESOURCES_REL = "docs/mcp/resources.md";
@@ -82,6 +83,7 @@ const ENTRY = `
 export { createAgentDashServer, AGENTDASH_TOOLSETS } from "./index.ts";
 export { PLAYBOOK, STEWARD_PLAYBOOK, ASSISTANT_PLAYBOOK } from "./playbook.ts";
 export { HUMAN_PLAYBOOK } from "./human.ts";
+export { CLOUD_PLAYBOOK } from "./cloud.ts";
 export { Client } from "@modelcontextprotocol/sdk/client/index.js";
 export { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 export { ASSISTANT_SCOPE_READ, ASSISTANT_SCOPE_WORK, ASSISTANT_SCOPE_DECIDE } from "@paperclipai/shared";
@@ -125,6 +127,7 @@ export const CONNECTIONS = [
   { id: "agent-agent", toolset: "agent", key: "pcp_reference", agentId: STUB_USER_ID, label: "`agent` with `PAPERCLIP_AGENT_ID` set — also every `POST /api/mcp` connection, which takes the agent from the key" },
   { id: "assistant", toolset: "assistant", key: "pcpa_reference", agentId: null, label: "`assistant` (stdio, or `POST /api/mcp/assistant`)" },
   { id: "human", toolset: "human", key: "pcp_board_reference", agentId: null, label: "`human` (board key, stdio only)" },
+  { id: "cloud", toolset: "cloud", key: "", agentId: null, label: "`cloud` (stdio with `AGENTDASH_TOOLSET=cloud`, or `POST /api/cloud/mcp` on the AgentDash cloud)" },
   { id: "bridge", toolset: "agent", key: "bridge-endpoint-reference", agentId: null, label: "a bridge endpoint token (any toolset except `human`)" },
   { id: "bridge-agent", toolset: "agent", key: "bridge-endpoint-reference", agentId: STUB_USER_ID, label: "a bridge endpoint token with `PAPERCLIP_AGENT_ID` set" },
 ];
@@ -204,6 +207,7 @@ export async function readMcpSurface(repoRoot) {
         { name: "STEWARD_PLAYBOOK", file: "packages/mcp-server/src/playbook.ts", text: mod.STEWARD_PLAYBOOK },
         { name: "ASSISTANT_PLAYBOOK", file: "packages/mcp-server/src/playbook.ts", text: mod.ASSISTANT_PLAYBOOK },
         { name: "HUMAN_PLAYBOOK", file: "packages/mcp-server/src/human.ts", text: mod.HUMAN_PLAYBOOK },
+        { name: "CLOUD_PLAYBOOK", file: "packages/mcp-server/src/cloud.ts", text: mod.CLOUD_PLAYBOOK },
       ],
     };
   } finally {
@@ -469,6 +473,11 @@ const SURFACE_TEXT = {
     source: "`buildToolSurface(client, config, \"human\")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/human.ts`, their input schemas in `packages/shared/src/validators/human-control.ts`",
     connection: "human",
   },
+  cloud: {
+    summary: "The tools an agent uses to get a person an AgentDash cloud workspace and then onto it: signup, status, and the person's approval on the box.",
+    source: "`buildToolSurface(client, config, \"cloud\")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/cloud.ts`. The same definitions serve stdio (`AGENTDASH_TOOLSET=cloud`, calling `POST /api/cloud/agent/<op>`) and the hosted endpoint `POST /api/cloud/mcp` (`cloud/src/routes/agent.ts`)",
+    connection: "cloud",
+  },
   bridge: {
     summary: "The tools a bridge endpoint token gets: the local end of the agent bridge and the steward inbox.",
     source: "`buildToolSurface` in `packages/mcp-server/src/index.ts`, which returns these for any credential `isControlPlaneCredential` (`src/config.ts`) rejects, whatever the toolset except `human`; the tools are defined in `src/bridge.ts`",
@@ -530,6 +539,7 @@ const SURFACE_CONNECTIONS = {
   agent: ["agent", "agent-agent"],
   assistant: ["assistant"],
   human: ["human"],
+  cloud: ["cloud"],
   bridge: ["bridge", "bridge-agent"],
 };
 function servedToSurfaces(surface, pick, what) {
@@ -547,7 +557,7 @@ function servedToSurfaces(surface, pick, what) {
 export function renderResourcesPage(surface, commit) {
   const all = surface.connections.agent;
   const lines = [
-    "Measured: `resources/list` and `resources/templates/list` against a server started in each connection shape. \"Listed on\" names the toolsets whose listing includes the resource. The read handler is in `packages/mcp-server/src/index.ts`; the descriptions and the derivation templates are in `src/resources.ts`. On the assistant and human toolsets a read of anything other than `agentdash://playbook` fails (`src/index.ts`).",
+    "Measured: `resources/list` and `resources/templates/list` against a server started in each connection shape. \"Listed on\" names the toolsets whose listing includes the resource. The read handler is in `packages/mcp-server/src/index.ts`; the descriptions and the derivation templates are in `src/resources.ts`. On the assistant, human and cloud toolsets a read of anything other than `agentdash://playbook` fails (`src/index.ts`).",
   ];
   const sections = ["## Resources", ""];
   for (const resource of all.resources) {
@@ -588,7 +598,7 @@ function fenceFor(text) {
 
 export function renderPlaybooksPage(surface, commit) {
   const lines = [
-    "A playbook is the operating contract a connected harness is given: the server sends it as the MCP `instructions` string when the session starts, and serves the same text as the `agentdash://playbook` resource. There are four, one per kind of caller. `selectPlaybook` in `packages/mcp-server/src/playbook.ts` picks among the first three; the human toolset always gets the fourth (`src/index.ts`).",
+    "A playbook is the operating contract a connected harness is given: the server sends it as the MCP `instructions` string when the session starts, and serves the same text as the `agentdash://playbook` resource. There are five, one per kind of caller. `selectPlaybook` in `packages/mcp-server/src/playbook.ts` picks among the first three; the human toolset always gets the fourth and the cloud toolset the fifth (`src/index.ts`).",
     "",
     "Each is quoted verbatim from its constant, except that a section of engagement-specific guidance is left out whole; the page header and the playbook's own line say how many. \"Served to\" is measured: the `instructions` a server started in each connection shape actually sent.",
   ];
@@ -618,7 +628,7 @@ export function renderPlaybooksPage(surface, commit) {
       throw new Error(`connection ${connection.id} was sent instructions that match no playbook constant`);
     }
   }
-  return `${frontMatter("Playbooks", "The four operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which.")}\n${header(commit, lines, omittedTotal > 0 ? [omissionNote(omittedTotal, "section")] : [])}\n${sections.join("\n")}`
+  return `${frontMatter("Playbooks", "The five operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which.")}\n${header(commit, lines, omittedTotal > 0 ? [omissionNote(omittedTotal, "section")] : [])}\n${sections.join("\n")}`
     .trimEnd() + "\n";
 }
 

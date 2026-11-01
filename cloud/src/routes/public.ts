@@ -8,6 +8,9 @@ import { clientIp, fromPrivateNetwork, normaliseIp, socketIp } from "../auth.js"
 import { constantTimeEqual } from "../crypto.js";
 import type { FrontDoor, Visitor } from "../front-door/service.js";
 import { MemoryLimiter } from "../front-door/rate-limit.js";
+import type { AgentDoor } from "../front-door/agent.js";
+import type { Logger } from "../logger.js";
+import { agentRoutes } from "./agent.js";
 
 export const SESSION_COOKIE = "agd_cloud_session";
 
@@ -60,7 +63,12 @@ function setSessionCookie(res: Response, token: string, maxAgeSeconds: number, s
   );
 }
 
-export function publicRoutes(opts: { frontDoor: FrontDoor; config: Pick<CloudConfig, "clientIpSource" | "privateNetwork" | "frontDoor"> }): ExpressRouter {
+export function publicRoutes(opts: {
+  frontDoor: FrontDoor;
+  config: Pick<CloudConfig, "clientIpSource" | "privateNetwork" | "frontDoor">;
+  /** Cloud MCP toolset: POST /agent/<op> and POST /mcp (routes/agent.ts). */
+  agent?: { door: AgentDoor; log: Logger };
+}): ExpressRouter {
   const { frontDoor: fd, config } = opts;
   const router = Router();
   const secureCookie = config.frontDoor.siteUrl.startsWith("https:");
@@ -135,7 +143,7 @@ export function publicRoutes(opts: { frontDoor: FrontDoor; config: Pick<CloudCon
       res.status(429).json({ error: "Too many attempts. Try again later.", code: "rate_limited" });
       return;
     }
-    const result = await fd.verify((req.body ?? {}).token);
+    const result = await fd.verify((req.body ?? {}).token, visitor);
     if (!result.ok) {
       res.status(result.status).json({ error: result.error, code: result.code });
       return;
@@ -173,6 +181,8 @@ export function publicRoutes(opts: { frontDoor: FrontDoor; config: Pick<CloudCon
   router.post("/find", async (req, res) => {
     answer(res, await fd.find((req.body ?? {}) as Record<string, unknown>, visitorOf(req, config)));
   });
+
+  if (opts.agent) router.use(agentRoutes({ agent: opts.agent.door, log: opts.agent.log, config }));
 
   router.use((_req, res) => {
     res.status(404).json({ error: "not found" });

@@ -15,6 +15,8 @@
     "backup-restore": "tsx src/backups/restore-tool.ts"
   },
   "dependencies": {
+    "@agentdash/mcp-server": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "disposable-email-domains-js": "^1.26.0",
     "drizzle-orm": "^0.45.2",
     "express": "^5.1.0",

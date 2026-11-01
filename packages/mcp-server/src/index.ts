@@ -36,6 +36,15 @@ import {
   type PaperclipMcpConfig,
 } from "./config.js";
 import { createJourneyToolDefinitions } from "./journey.js";
+import {
+  CLOUD_PLAYBOOK,
+  createCloudToolDefinitions,
+  edgeDomainFor,
+  httpCloudBackend,
+  normalizeCloudUrl,
+  type CloudBackend,
+  type CloudConnection,
+} from "./cloud.js";
 import { bridgeTools } from "./bridge.js";
 import { harnessTools } from "./harness.js";
 import { createAssistantToolDefinitions } from "./assistant/index.js";
@@ -55,9 +64,25 @@ export const SERVER_VERSION = "0.3.0";
  * relays to a person. stdio picks via AGENTDASH_TOOLSET; /api/mcp stays
  * `agent`.
  */
-export type AgentDashToolset = "setup" | "agent" | "assistant" | "human";
+export type AgentDashToolset = "setup" | "agent" | "assistant" | "human" | "cloud";
 
-export const AGENTDASH_TOOLSETS: readonly AgentDashToolset[] = ["setup", "agent", "assistant", "human"];
+export const AGENTDASH_TOOLSETS: readonly AgentDashToolset[] = ["setup", "agent", "assistant", "human", "cloud"];
+
+/**
+ * AgentDash (cloud toolset, doc/plans/2026-10-31-cloud-mcp-toolset.md): where
+ * the cloud tools send their calls. stdio passes `cloudUrl` (the public cloud
+ * API); cloud-control's hosted endpoint passes its own in-process `backend`.
+ */
+export interface CloudToolsetOptions {
+  backend?: CloudBackend;
+  cloudUrl?: string;
+  /** Overrides the edge domain derived from cloudUrl (AGENTDASH_CLOUD_EDGE_DOMAIN). */
+  edgeDomain?: string;
+}
+
+export { CLOUD_OPS, CLOUD_PLAYBOOK, createCloudToolDefinitions, edgeDomainFor, httpCloudBackend, isWorkspaceApi, normalizeCloudUrl, DEFAULT_CLOUD_URL, DEFAULT_EDGE_DOMAIN } from "./cloud.js";
+export { NO_INSTANCE_API_URL } from "./config.js";
+export type { CloudBackend, CloudCallResult, CloudConnection, CloudOp } from "./cloud.js";
 
 export function parseToolset(raw: string | undefined | null): AgentDashToolset {
   const normalized = raw?.trim().toLowerCase();
@@ -83,8 +108,20 @@ export function buildToolSurface(
   client: PaperclipApiClient,
   config: PaperclipMcpConfig,
   toolset: AgentDashToolset = "agent",
+  cloud: CloudToolsetOptions & { onConnected?: (connection: CloudConnection) => Promise<Record<string, unknown>> } = {},
 ): ToolDefinition[] {
   if (toolset === "human") return humanTools(config);
+  // The cloud tools talk to the AgentDash cloud, never to an instance, so the
+  // instance credential's kind does not choose them. Until connect there is
+  // no instance at all.
+  if (toolset === "cloud") {
+    const cloudUrl = cloud.cloudUrl ?? normalizeCloudUrl(undefined);
+    const backend = cloud.backend ?? httpCloudBackend(cloudUrl);
+    return createCloudToolDefinitions(backend, {
+      edgeDomain: edgeDomainFor(cloudUrl, cloud.edgeDomain),
+      ...(cloud.onConnected ? { onConnected: cloud.onConnected } : {}),
+    });
+  }
   if (!isControlPlaneCredential(config.apiKey)) return [...bridgeTools(client)];
   // No bridge tools on a control-plane credential — the exclusion cuts BOTH
   // ways. Every /bridge/* route requires a bridge-endpoint actor, so each of
@@ -113,7 +150,7 @@ export function buildToolSurface(
 
 export function createAgentDashServer(
   config: PaperclipMcpConfig,
-  options: { toolset?: AgentDashToolset } = {},
+  options: { toolset?: AgentDashToolset; cloud?: CloudToolsetOptions } = {},
 ): Server {
   const client = new PaperclipApiClient(config);
   /**
@@ -126,19 +163,57 @@ export function createAgentDashServer(
    * fresh install has none yet and bootstraps one through the signup tools.
    */
   const toolset = options.toolset ?? "agent";
-  const tools = buildToolSurface(client, config, toolset);
-  const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+  // `let`: a cloud session's surface grows once, at connect (below).
+  let tools: ToolDefinition[] = [];
+  let toolsByName = new Map<string, ToolDefinition>();
+  const setTools = (next: ToolDefinition[]) => {
+    tools = next;
+    toolsByName = new Map(next.map((tool) => [tool.name, tool]));
+  };
+
+  /**
+   * AgentDash (cloud toolset): the in-place upgrade, the agentdash_sign_up
+   * pattern one step further. The person approved this agent on their new
+   * workspace and the credential arrived once; point this session's client at
+   * the workspace, add the setup tools after the cloud ones, and tell the
+   * harness its tool list changed. Only a session that holds state can do
+   * this, so the hosted endpoint (which passes its own backend) never does.
+   */
+  const onConnected = async (connection: CloudConnection): Promise<Record<string, unknown>> => {
+    client.setApiUrl(connection.apiUrl);
+    client.setApiKey(connection.apiKey);
+    const cloudTools = tools.filter((tool) => tool.name.startsWith("agentdash_cloud_"));
+    setTools([...cloudTools, ...createJourneyToolDefinitions(client)]);
+    await server.sendToolListChanged().catch(() => undefined);
+    return {
+      sessionUpgraded: true,
+      nextAction: "agentdash_setup_status",
+      nextActionReason:
+        "This session now talks to the workspace with the setup tools (interview → plan → hire). "
+        + "Call agentdash_setup_status and follow its nextAction.",
+      apiKeyPersistInstructions:
+        `To stay signed in on future sessions, run the AgentDash MCP server with AGENTDASH_TOOLSET=setup, `
+        + `PAPERCLIP_API_URL=${connection.boxUrl} and PAPERCLIP_API_KEY set to apiKey. Keep the key secret.`,
+    };
+  };
+
+  setTools(
+    buildToolSurface(client, config, toolset, {
+      ...options.cloud,
+      ...(toolset === "cloud" && !options.cloud?.backend ? { onConnected } : {}),
+    }),
+  );
 
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
-      capabilities: { resources: {}, tools: {} },
+      capabilities: { resources: {}, tools: toolset === "cloud" ? { listChanged: true } : {} },
       // Scoped to one agent → that agent's own contract; otherwise the
       // operator's. Serving the operator's playbook to a person's harness tells
       // it to go provision a company instead of doing the work it was given.
       // The assistant toolset gets its own contract: relaying to a person,
       // not doing the work.
-      instructions: toolset === "human" ? HUMAN_PLAYBOOK : selectPlaybook({ agentId: config.agentId, toolset }),
+      instructions: toolset === "human" ? HUMAN_PLAYBOOK : toolset === "cloud" ? CLOUD_PLAYBOOK : selectPlaybook({ agentId: config.agentId, toolset }),
     },
   );
 
@@ -173,7 +248,9 @@ export function createAgentDashServer(
   // forbids on this surface. Only the playbook survives: it is the contract
   // the assistant is supposed to read. Listings advertise nothing else and
   // reads of anything else fail closed.
-  const assistantOnly = toolset === "assistant" || toolset === "human";
+  // The cloud toolset is in the same position: before connect there is no
+  // instance whose resources could be read.
+  const assistantOnly = toolset === "assistant" || toolset === "human" || toolset === "cloud";
   const resources = assistantOnly
     ? listResources().filter((resource) => resource.uri === "agentdash://playbook")
     : listResources();
@@ -202,7 +279,7 @@ export function createAgentDashServer(
     if (derivation) return derivation;
     if (uri === "agentdash://playbook") {
       return {
-        contents: [{ uri, mimeType: "text/markdown", text: toolset === "human" ? HUMAN_PLAYBOOK : selectPlaybook({ agentId: config.agentId, toolset }) }],
+        contents: [{ uri, mimeType: "text/markdown", text: toolset === "human" ? HUMAN_PLAYBOOK : toolset === "cloud" ? CLOUD_PLAYBOOK : selectPlaybook({ agentId: config.agentId, toolset }) }],
       };
     }
     if (uri === "agentdash://dashboard") {
@@ -249,12 +326,15 @@ export function createAgentDashServer(
 }
 
 export async function runServer(): Promise<void> {
-  const config = readConfigFromEnv();
   const toolset = parseToolset(process.env.AGENTDASH_TOOLSET);
+  // A cloud session has no instance yet: it learns the URL at connect.
+  const config = readConfigFromEnv(process.env, { requireApiUrl: toolset !== "cloud" });
   if (toolset === "human") await verifyHumanConnection(config);
-  const server = createAgentDashServer(config, { toolset });
+  const cloudUrl = toolset === "cloud" ? normalizeCloudUrl(process.env.AGENTDASH_CLOUD_URL) : undefined;
+  const edgeDomain = process.env.AGENTDASH_CLOUD_EDGE_DOMAIN?.trim() || undefined;
+  const server = createAgentDashServer(config, { toolset, ...(cloudUrl ? { cloud: { cloudUrl, ...(edgeDomain ? { edgeDomain } : {}) } } : {}) });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // eslint-disable-next-line no-console
-  console.error(`AgentDash MCP Server v${SERVER_VERSION} running on stdio (${config.apiUrl}, toolset=${toolset})`);
+  console.error(`AgentDash MCP Server v${SERVER_VERSION} running on stdio (${cloudUrl ?? config.apiUrl}, toolset=${toolset})`);
 }

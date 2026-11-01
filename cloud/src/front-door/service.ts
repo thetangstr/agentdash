@@ -14,11 +14,11 @@
 // Every answer that could tell a stranger whether an email has an account is
 // the same for both cases; the difference is only in what gets mailed.
 import { randomBytes } from "node:crypto";
-import { and, asc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { CloudConfig } from "../config.js";
 import { sha256Hex } from "../crypto.js";
 import type { CloudDb } from "../db/client.js";
-import { accounts, boxEvents, boxes, cloudSessions, emailTokens, inviteCodes, jobs, operatorAudit, signupRequests, waitlist, type BoxState } from "../db/schema.js";
+import { accounts, agentHandles, boxEvents, boxes, cloudSessions, emailTokens, inviteCodes, jobs, operatorAudit, signupRequests, waitlist, type BoxState } from "../db/schema.js";
 import { claimLinkForBox } from "../jobs/claim.js";
 import { requestProvision, ProvisionRequestError, type ProvisionRequestResult } from "../jobs/queue.js";
 import type { Logger } from "../logger.js";
@@ -94,7 +94,7 @@ export interface BoxView {
 }
 
 /** Provisioner step names (railway/provisioner.ts) to the five steps the page shows. */
-const STEP_INDEX: Record<string, number> = {
+export const STEP_INDEX: Record<string, number> = {
   reserve: 0, project: 0,
   postgres: 1,
   web: 2, variables: 2, snapshots: 2, service_settings: 2,
@@ -270,7 +270,24 @@ export function frontDoor(deps: FrontDoorDeps) {
       };
     },
 
-    async signup(body: Record<string, unknown>, visitor: Visitor): Promise<{ ok: true } | Refusal> {
+    /**
+     * `channel: "agent"` (cloud MCP toolset, doc/plans/2026-10-31-cloud-mcp-toolset.md):
+     * the same signup, started by an agent for a person. An agent cannot pass
+     * Turnstile, so the agent channel never runs the bot check and is always
+     * recorded as unverified-human: its box needs an operator's approval
+     * (`needs_approval`), exactly like a browser signup without Turnstile,
+     * unless it carries a valid hosted admission code, which grants that
+     * approval only after the person verifies their email. Every other check
+     * (email policy, slug, per-IP, per-email and per-domain limits) is shared.
+     *
+     * `signupRequestId` is null whenever no signup was recorded (the address
+     * already has a workspace, or is blocked); the public answer is the same.
+     */
+    async signup(
+      body: Record<string, unknown>,
+      visitor: Visitor,
+      channel: "browser" | "agent" = "browser",
+    ): Promise<{ ok: true; signupRequestId: string | null } | Refusal> {
       if (mailer.configured === false) return refuse(503, "signup_unavailable", "Signup is not open yet. Try again soon.");
       const email = normaliseEmail(body.email);
       if (!email) return refuse(400, "invalid_email", "Enter a valid email address.");
@@ -279,21 +296,27 @@ export function frontDoor(deps: FrontDoorDeps) {
       const slug = typeof body.slug === "string" ? body.slug.trim().toLowerCase() : "";
       if (body.acceptTerms !== true) return refuse(400, "terms_required", "Accept the terms to continue.");
 
-      if (!(await botCheck(body.turnstileToken, visitor.ip))) {
+      if (channel === "browser" && !(await botCheck(body.turnstileToken, visitor.ip))) {
         return refuse(400, "bot_check_failed", "We could not confirm you are human. Reload the page and try again.");
-      }
-      if (visitor.ip && !(await takeHit(db, LIMITS.signupPerIp, visitor.ip))) {
-        return refuse(429, "rate_limited", "Too many signups from your network. Try again in an hour.");
       }
 
       let hostedInviteId: string | null = null;
+      let invitationRefused = false;
       if (body.invitationCode !== undefined && body.invitationCode !== "") {
         const code = parseHostedCode(body.invitationCode);
-        if (!code) return invitationUnavailable();
-        const invitation = await findHostedInvitation(db, config.dataKeys, code);
-        if (!hostedInvitationAvailable(invitation, now())) return invitationUnavailable();
-        hostedInviteId = invitation!.id;
+        const invitation = code ? await findHostedInvitation(db, config.dataKeys, code) : null;
+        if (code && hostedInvitationAvailable(invitation, now())) hostedInviteId = invitation!.id;
+        else invitationRefused = true;
       }
+      // An agent behind a shared egress (a hosted assistant) would share one
+      // address with every other user; a valid admission code exempts it from
+      // the per-address limit, and the per-code limit below bounds it instead.
+      // A refused code still pays the address's hit first.
+      const ipLimited = !(channel === "agent" && hostedInviteId);
+      if (visitor.ip && ipLimited && !(await takeHit(db, LIMITS.signupPerIp, visitor.ip))) {
+        return refuse(429, "rate_limited", "Too many signups from your network. Try again in an hour.");
+      }
+      if (invitationRefused) return invitationUnavailable();
 
       const domain = emailDomain(email);
       if (isDisposableDomain(domain, { extra: fd.disposableExtra, allow: fd.disposableAllow })) {
@@ -316,7 +339,8 @@ export function frontDoor(deps: FrontDoorDeps) {
             isNull(signupRequests.verifiedAt),
             // GH #836 re-review: holds count over a rolling day, so a name is never blocked for good.
             gt(signupRequests.createdAt, new Date(now().getTime() - SLUG_HOLD_WINDOW_MS)),
-            visitor.ip ? sql`(${accounts.email} = ${email} or ${signupRequests.ip} = ${visitor.ip})` : sql`${accounts.email} = ${email}`,
+            // An agent's address may be a shared egress: its holds count by email only.
+            visitor.ip && channel === "browser" ? sql`(${accounts.email} = ${email} or ${signupRequests.ip} = ${visitor.ip})` : sql`${accounts.email} = ${email}`,
           ));
         if ((holds?.n ?? 0) >= MAX_SLUG_HOLDS) {
           return refuse(429, "slug_hold_limit", "You have asked for this name several times without confirming. Check your inbox for the link, or pick another name.");
@@ -331,43 +355,75 @@ export function frontDoor(deps: FrontDoorDeps) {
       if (!(await takeHit(db, LIMITS.signupPerEmail, email))) {
         return refuse(429, "rate_limited", "We already sent you a few links. Check your inbox, or try again in an hour.");
       }
+      if (channel === "agent") {
+        if (hostedInviteId && !(await takeHit(db, LIMITS.agentSignupPerCode, hostedInviteId))) {
+          return refuse(429, "rate_limited", "This admission code was used for several signups in the last hour. Ask the person to check their inbox, or try again later.");
+        }
+        if (!(await takeHit(db, LIMITS.agentSignupPerEmail, email))) {
+          return refuse(429, "rate_limited", "A verification link was already sent to this address. Ask the person to check their inbox, or try again in an hour.");
+        }
+        if (!hostedInviteId && !(await takeHit(db, LIMITS.agentSignupWithoutCode, "all"))) {
+          return refuse(429, "agent_signups_busy", "Too many agent signups without an admission code right now. Try again later, or use an admission code.");
+        }
+      }
 
       await db.insert(accounts).values({ email, signupIp: visitor.ip }).onConflictDoNothing();
       const [acct] = await db.select().from(accounts).where(eq(accounts.email, email));
       if (!acct) throw new Error("account upsert failed");
       // Same answer as a new signup: a blocked or deleted address learns nothing, and gets nothing.
+      /**
+       * Cloud MCP toolset review: an address that may not sign up again still
+       * gets a signup row, with no link behind it, so it holds the name and
+       * counts toward holds exactly like a real one. Without it, "is this name
+       * still free?" after a signup told anyone whether the address had an
+       * account. Only a real row has an email token: verify and resend never
+       * see a decoy.
+       */
+      const decoy = async (): Promise<string> => {
+        const [row] = await db.insert(signupRequests).values({
+          accountId: acct.id,
+          slug,
+          workspaceName,
+          ip: visitor.ip,
+          unverifiedHuman: channel === "agent" || !fd.turnstileSecret,
+          expiresAt: new Date(now().getTime() + MAGIC_LINK_MINUTES * 60_000),
+        }).returning({ id: signupRequests.id });
+        return row!.id;
+      };
       if (acct.status === "blocked" || acct.status === "deleted") {
         log.info("signup from a blocked or deleted account ignored", { accountId: acct.id });
-        return { ok: true };
+        return { ok: true, signupRequestId: await decoy() };
       }
 
+      let signupRequestId: string | null = null;
       try {
         if (acct.status === "active" && (await liveBoxes(acct.id)).length > 0) {
           const t = await issueToken(acct.id, "find");
           void sendQuietly(emails.alreadyHaveBox(email, { link: magicLink(t.token) }));
-          return { ok: true };
+          return { ok: true, signupRequestId: await decoy() };
         }
         const t = await issueToken(acct.id, "verify");
-        await db.insert(signupRequests).values({
+        const [request] = await db.insert(signupRequests).values({
           accountId: acct.id,
           emailTokenId: t.id,
           hostedInviteId,
           slug,
           workspaceName,
           ip: visitor.ip,
-          unverifiedHuman: !fd.turnstileSecret,
+          unverifiedHuman: channel === "agent" || !fd.turnstileSecret,
           expiresAt: t.expiresAt,
-        });
+        }).returning({ id: signupRequests.id });
+        signupRequestId = request!.id;
         void sendQuietly(emails.verify(email, { link: magicLink(t.token), slug }));
       } catch (err) {
         if (err instanceof MailNotConfigured) return refuse(503, "signup_unavailable", "Signup is not open yet. Try again soon.");
         throw err;
       }
-      return { ok: true };
+      return { ok: true, signupRequestId };
     },
 
     /** Consume a magic link atomically with account verification, box creation and admission. */
-    async verify(token: unknown): Promise<
+    async verify(token: unknown, verifier?: Visitor): Promise<
       | { ok: true; session: { token: string; maxAgeSeconds: number }; outcome: "box_requested" | "existing" | "signed_in"; provisioning?: ProvisionRequestResult }
       | Refusal
     > {
@@ -397,14 +453,20 @@ export function frontDoor(deps: FrontDoorDeps) {
             await tx.update(signupRequests).set({ verifiedAt: now() }).where(eq(signupRequests.id, request.id));
             return { kind: "existing" as const, session, request, boxId: existing.id, slug: existing.slug, state: existing.state, admitted };
           }
-          if (request.ip && (await boxesFromIpToday(request.ip, tx)) >= BOXES_PER_IP_PER_DAY) throw new AdmissionRefused(refuse(429, "ip_daily_limit", "A workspace was already created from your network today. Sign up again tomorrow."));
+          // Cloud MCP toolset: an agent's signup address may be a shared egress
+          // (a hosted assistant), so for an agent signup the one-box-a-day limit
+          // keys on the address of the person who clicked the link, which is
+          // recorded as the request's address from here on.
+          const [byAgent] = await tx.select({ id: agentHandles.id }).from(agentHandles).where(eq(agentHandles.signupRequestId, request.id));
+          const boxIp = byAgent ? (verifier?.ip ?? request.ip) : request.ip;
+          if (boxIp && (await boxesFromIpToday(boxIp, tx)) >= BOXES_PER_IP_PER_DAY) throw new AdmissionRefused(refuse(429, "ip_daily_limit", "A workspace was already created from your network today. Sign up again tomorrow."));
           const domain = emailDomain(acct.email);
           if (!isFreemail(domain) && (await boxesForDomainToday(domain, tx)) >= BOXES_PER_DOMAIN_PER_DAY) throw new AdmissionRefused(refuse(429, "domain_daily_limit", `Too many workspaces were created for ${domain} today. Sign up again tomorrow.`));
           const [taken] = await tx.select({ id: boxes.id }).from(boxes).where(eq(boxes.slug, request.slug));
           if (taken) throw new AdmissionRefused(refuse(409, "slug_taken", "Someone took that name while you were confirming. Start again with another name."));
           const [box] = await tx.insert(boxes).values({ accountId: acct.id, slug: request.slug }).returning();
           const admitted = request.hostedInviteId ? await approveHosted(tx, request.hostedInviteId, acct, box!) : false;
-          await tx.update(signupRequests).set({ verifiedAt: now(), boxId: box!.id }).where(eq(signupRequests.id, request.id));
+          await tx.update(signupRequests).set({ verifiedAt: now(), boxId: box!.id, ip: boxIp }).where(eq(signupRequests.id, request.id));
           await tx.insert(boxEvents).values({ boxId: box!.id, kind: "box_created", actor: "signup", detail: { by: "front_door", botCheck: !request.unverifiedHuman } });
           return { kind: "created" as const, session, request, boxId: box!.id, slug: box!.slug, admitted };
         });
@@ -538,7 +600,7 @@ export function frontDoor(deps: FrontDoorDeps) {
       const [pending] = await db
         .select()
         .from(signupRequests)
-        .where(and(eq(signupRequests.accountId, acct.id), isNull(signupRequests.verifiedAt)))
+        .where(and(eq(signupRequests.accountId, acct.id), isNull(signupRequests.verifiedAt), isNotNull(signupRequests.emailTokenId)))
         .orderBy(sql`${signupRequests.createdAt} desc`)
         .limit(1);
       if (!pending) return { ok: true };

@@ -1,17 +1,18 @@
 ---
 title: Connecting
-summary: stdio, streamable HTTP with an agent key, and OAuth 2.1 for assistants — and what agentdash-connect writes.
+summary: stdio, streamable HTTP with an agent key, OAuth 2.1 for assistants, and the AgentDash cloud's endpoint for getting a workspace — and what agentdash-connect writes.
 ---
 
-There are three ways in. The credential you hold decides which one applies.
+There are three ways into an instance, and one into the AgentDash cloud for an agent that does not have an instance yet. The credential you hold decides which one applies.
 
 | Transport | Where | Credential | Toolset |
 |---|---|---|---|
 | Streamable HTTP | `POST /api/mcp` on the instance | an agent key, as `Authorization: Bearer` | `agent` |
 | Streamable HTTP | `POST /api/mcp/assistant` on the instance | an OAuth access token (`pcpa_…`) | `assistant`, filtered by the grant's scopes |
 | stdio | the `agentdash-mcp` binary, run locally | any; see [Toolsets](/mcp/toolsets) | chosen by `AGENTDASH_TOOLSET` and the key |
+| Streamable HTTP | `POST https://www.agentdash.cloud/api/cloud/mcp` | none; the signup's handle is a tool argument | `cloud` |
 
-Sources: `server/src/routes/mcp.ts` (both HTTP endpoints), `server/src/routes/oauth.ts` (OAuth), `packages/mcp-server/src/index.ts` and `src/config.ts` (stdio).
+Sources: `server/src/routes/mcp.ts` (both instance HTTP endpoints), `server/src/routes/oauth.ts` (OAuth), `packages/mcp-server/src/index.ts` and `src/config.ts` (stdio), `cloud/src/routes/agent.ts` (the cloud endpoint).
 
 ## Streamable HTTP with an agent key
 
@@ -121,12 +122,14 @@ It reads its configuration from the environment (`readConfigFromEnv` in `package
 
 | Variable | Alias | Required | What it does |
 |---|---|---|---|
-| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes | The instance URL. `/api` is appended if missing. Startup fails without it. |
+| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes, except with `AGENTDASH_TOOLSET=cloud` | The instance URL. `/api` is appended if missing. Startup fails without it, unless the toolset is `cloud`, which learns its workspace's URL at connect. |
 | `PAPERCLIP_API_KEY` | `AGENTDASH_API_KEY` | no | The bearer credential. Its prefix decides the surface; see [Toolsets](/mcp/toolsets). Empty is allowed: a fresh install has no key yet and gets one through `agentdash_sign_up`. |
 | `PAPERCLIP_COMPANY_ID` | `AGENTDASH_COMPANY_ID` | no | The default company for tools that take a `companyId`. |
 | `PAPERCLIP_AGENT_ID` | — | no | Scopes the connection to one agent: tools default to it, and it selects `STEWARD_PLAYBOOK`. |
 | `PAPERCLIP_RUN_ID` | — | no | Sent as `X-Paperclip-Run-Id` on every write request (`src/client.ts`). |
-| `AGENTDASH_TOOLSET` | — | no | `setup`, `agent` (default), `assistant` or `human`. Case and surrounding space are ignored; any other value stops the server at startup. |
+| `AGENTDASH_TOOLSET` | — | no | `setup`, `agent` (default), `assistant`, `human` or `cloud`. Case and surrounding space are ignored; any other value stops the server at startup. |
+| `AGENTDASH_CLOUD_URL` | — | no | With `cloud`: the AgentDash cloud to call. Default `https://www.agentdash.cloud`; https only, except for localhost. |
+| `AGENTDASH_CLOUD_EDGE_DOMAIN` | — | no | With `cloud`: the domain workspaces live under (default `agentdash.cloud`). The session only moves to `https://<name>.<domain>`. |
 
 A Claude Code entry for a local build, in the same `mcpServers` shape as above:
 
@@ -146,4 +149,34 @@ A Claude Code entry for a local build, in the same `mcpServers` shape as above:
 }
 ```
 
-On startup the server writes one line to stderr naming the version, the API URL and the toolset. More on the binary: [agentdash-mcp](/cli/agentdash-mcp).
+On startup the server writes one line to stderr naming the version, the API URL (the cloud URL for `cloud`) and the toolset. More on the binary: [agentdash-mcp](/cli/agentdash-mcp).
+
+## Getting a workspace on the AgentDash cloud
+
+An agent with no instance can get the person it works for their own cloud workspace, then set it up, with the [cloud toolset](/mcp/tools/cloud). Two transports serve the same four tools:
+
+- **stdio**, for an agent that runs a local MCP server: `AGENTDASH_TOOLSET=cloud`, no key and no `PAPERCLIP_API_URL`. The tools call `POST https://www.agentdash.cloud/api/cloud/agent/<op>`.
+
+  ```json
+  {
+    "mcpServers": {
+      "agentdash-cloud": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["<path-to-checkout>/packages/mcp-server/dist/stdio.js"],
+        "env": { "AGENTDASH_TOOLSET": "cloud" }
+      }
+    }
+  }
+  ```
+
+- **Streamable HTTP**, for a remote agent or a connector: `POST https://www.agentdash.cloud/api/cloud/mcp`, with no credential. Like the instance endpoints it is stateless, answers JSON, and answers `GET` and `DELETE` with `405`; a browser-originated request must come from `https://www.agentdash.cloud` or is answered `403`.
+
+The journey, in the order the tools run it:
+
+1. `agentdash_cloud_start` runs the same signup as the `/start` page, so the same checks and limits apply. The person receives the verification email and clicks it; the agent gets back a handle, once. An agent cannot pass the page's bot check, so a signup started by an agent always waits for approval after verification, unless the person has a hosted admission code (`AGD-HOST-…`), which approves it.
+2. `agentdash_cloud_status` follows the signup: `email_pending`, `waitlisted`, `provisioning` (with the step), `awaiting_claim`, `active` or `failed`. The claim link stays in the person's email; they set their own password on the workspace.
+3. `agentdash_cloud_connect` asks the workspace for an approval request and returns its `approvalUrl` (the workspace's `/cli-auth/<id>` page) and a `confirmationCode`. The person signs in there, checks that the page shows the same code, and approves "the agent that set up this workspace". The next call delivers the workspace key, a board key acting as the person, exactly once.
+4. Over stdio the same session then talks to the workspace with the setup tools added (`notifications/tools/list_changed`): continue with `agentdash_setup_status`. To stay signed in on later sessions, run the server with `AGENTDASH_TOOLSET=setup`, `PAPERCLIP_API_URL` set to the workspace and `PAPERCLIP_API_KEY` set to the key. Over the hosted endpoint, store the key as a secret, or connect an OAuth-capable client to the workspace's own `/api/mcp/assistant` instead.
+
+The handle expires after 7 days, reads only its own signup, and can do nothing but connect once the workspace is claimed. The security model is in `doc/plans/2026-10-31-cloud-mcp-toolset.md`.
