@@ -204,7 +204,7 @@ Minimum checks:
 
 Carry these into the next stable changelog's "Upgrade Guide", then delete them here.
 
-- **Better Auth 1.7: Microsoft sign-in accounts move from `sub` to `oid`.** Migration `0153_microsoft_account_oid_backfill` runs at startup and re-keys each `account` row with `provider_id = 'microsoft'` from its stored id token. That token's `sub` must equal the row's key, and the new key is the token's `oid`. Google and password rows are untouched, and re-running it changes nothing. The startup log reports `agentdash: migration 0153 ...` with counts. It names, by `account.id`, any row it left unchanged: a row with no usable stored token, or one whose oid another row already holds. Better Auth 1.7 also refuses sign-in on any key shared by two rows, so the migration names those too. Fix a named row before Microsoft users rely on it: re-key it to the user's `oid` from a Microsoft Entra export, or remove the duplicate. Otherwise that user signs in by email instead. Rolling back below this release needs the reverse (`account_id` back to the stored token's `sub`), or Microsoft sign-in fails on the old version.
+None pending.
 
 ## Rollback
 
