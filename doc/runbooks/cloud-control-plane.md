@@ -348,3 +348,15 @@ Issuance reveals the new invitation once. Handle that output privately; do not p
 Keep `waitlist_mode=true` and the established capacity/spend controls. An approved invitation can remain pending while provisioning is off or the daily cap is full. Its approval survives interruption between verification and queueing, and the release sweep can enqueue it later without another code. Do not approve the entire waiting list or remove the daily cap to make an invitation appear successful.
 
 Deploy the additive cloud invitation migration through `cloud-migrate` first, then `cloud-control`; publish the capability-aware frontend afterward. The frontend hides invitation entry when the deployed API lacks `invitationCodesEnabled`, allowing a staged rollout. Rollback the application only; retain additive columns and admission records. Before announcing beta delivery, verify no-code waitlisting, invalid-code refusal and one owned real invited email → instance → claim flow against the intended release. Fake-mailer/provisioner tests prove source behavior only.
+
+## 11. Agent signups and the cloud MCP endpoint
+
+Design: `doc/plans/2026-10-31-cloud-mcp-toolset.md`. Agents use the same front door through `POST /api/cloud/agent/<op>` (stdio `agentdash-mcp` with `AGENTDASH_TOOLSET=cloud`) and `POST /api/cloud/mcp` (hosted, stateless streamable HTTP). Both arrive through www's `/api/cloud/*` rewrite and middleware, so per-visitor limits key on the agent's address as for the browser.
+
+- **Gates:** an agent signup never runs Turnstile and is always recorded `unverified_human`: without a hosted admission code it needs `admin waitlist approve`, even with the waitlist off; with one it is approved after the person verifies. The kill switch and daily cap apply as always. Issue codes for agent-driven signups with `admin invites add-hosted`.
+- **Send limits:** on top of the browser's, agents get 2 verification links an hour per address and a shared cap of 60 an hour for every agent signup without a code (`LIMITS.agentSignup*` in `cloud/src/front-door/rate-limit.ts`). A caller over the shared cap sees `agent_signups_busy`; rows in `rate_events` bucket `agent_signup_nocode` show the load.
+- **Handles:** `agent_handles` holds one row per agent signup: the handle's SHA-256, never the handle; 7-day expiry. Connect state (the box's CLI-auth challenge) is sealed under a key derived from the handle and erased once the key is delivered. `box_events` records `agent_connect_requested` and `agent_connected` (handle id only).
+- **Connect:** cloud-control calls `POST https://<slug>.<edge domain>/api/cli-auth/challenges` on a claimed box and polls it; the person approves at the box's `/cli-auth/<id>`. A box that is down or suspended answers `box_unreachable`; the agent retries.
+- **Deploy:** `cloud-migrate` (migration `0014_agent_handles`), then `cloud-control`, whose image now builds `@agentdash/mcp-server` before itself. No new variables.
+- **Turn it off:** there is no separate switch; the kill switch stops provisioning for agent signups as for every other. To stop agent signups entirely, revert the release.
+

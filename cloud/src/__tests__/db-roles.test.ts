@@ -129,7 +129,7 @@ describe("role split", () => {
   });
 
   it("the runtime role cannot DELETE from any table; removal is a state change (GH #799)", async () => {
-    for (const t of ["boxes", "accounts", "jobs", "settings", "waitlist", "email_tokens", "invite_codes", "railway_workspaces", "rate_events", "signup_requests", "cloud_sessions"]) {
+    for (const t of ["boxes", "accounts", "jobs", "settings", "waitlist", "email_tokens", "invite_codes", "railway_workspaces", "rate_events", "signup_requests", "cloud_sessions", "agent_handles"]) {
       expect(await denied(rt.unsafe(`delete from ${t}`)), t).toBe("42501");
     }
   });

@@ -209,6 +209,7 @@
               "mcp/tools/setup",
               "mcp/tools/assistant",
               "mcp/tools/human",
+              "mcp/tools/cloud",
               "mcp/tools/bridge"
             ]
           }

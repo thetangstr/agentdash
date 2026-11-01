@@ -79,8 +79,20 @@ export function normalizeApiUrl(apiUrl: string): string {
  * PAPERCLIP_* variables are canonical; AGENTDASH_* variables are accepted as
  * aliases (first non-empty wins, PAPERCLIP_* checked first).
  */
-export function readConfigFromEnv(env: NodeJS.ProcessEnv = process.env): PaperclipMcpConfig {
-  const apiUrl = firstNonEmpty(env.PAPERCLIP_API_URL, env.AGENTDASH_API_URL);
+/**
+ * AgentDash (cloud toolset): the instance URL before there is an instance. A
+ * cloud session learns its workspace's URL at agentdash_cloud_connect; until
+ * then no tool talks to an instance, and `.invalid` (RFC 6761) guarantees a
+ * stray call fails instead of reaching anything.
+ */
+export const NO_INSTANCE_API_URL = "https://no-instance-yet.invalid/api";
+
+export function readConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { requireApiUrl?: boolean } = {},
+): PaperclipMcpConfig {
+  const apiUrl = firstNonEmpty(env.PAPERCLIP_API_URL, env.AGENTDASH_API_URL)
+    ?? (options.requireApiUrl === false ? NO_INSTANCE_API_URL : null);
   if (!apiUrl) {
     throw new Error("Missing PAPERCLIP_API_URL (or AGENTDASH_API_URL)");
   }

@@ -18,12 +18,14 @@ Read by `readConfigFromEnv` in `packages/mcp-server/src/config.ts`, plus `AGENTD
 
 | Variable | Alias | Required | What it does |
 |---|---|---|---|
-| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes | The instance URL; `/api` is appended if missing. |
+| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes, except with `AGENTDASH_TOOLSET=cloud` | The instance URL; `/api` is appended if missing. A cloud session has no instance until `agentdash_cloud_connect` gives it one. |
 | `PAPERCLIP_API_KEY` | `AGENTDASH_API_KEY` | no | The bearer credential. Its prefix decides the surface (below). |
 | `PAPERCLIP_COMPANY_ID` | `AGENTDASH_COMPANY_ID` | no | The default company for tools that take a `companyId`. |
 | `PAPERCLIP_AGENT_ID` | — | no | Scopes the connection to one agent; tools default to it and it selects the agent playbook. |
 | `PAPERCLIP_RUN_ID` | — | no | Sent as `X-Paperclip-Run-Id` on every write (`src/client.ts`). |
-| `AGENTDASH_TOOLSET` | — | no | `setup`, `agent` (default), `assistant` or `human`. |
+| `AGENTDASH_TOOLSET` | — | no | `setup`, `agent` (default), `assistant`, `human` or `cloud`. |
+| `AGENTDASH_CLOUD_URL` | — | no | With `AGENTDASH_TOOLSET=cloud`: the AgentDash cloud the tools call (`POST <url>/api/cloud/agent/<op>`). Default `https://www.agentdash.cloud`; https only, except for a localhost URL (`normalizeCloudUrl` in `src/cloud.ts`). |
+| `AGENTDASH_CLOUD_EDGE_DOMAIN` | — | no | With `cloud`: the domain workspaces live under. Default: the cloud URL's host without `www.`, else `agentdash.cloud`. A connect answer naming any other host is not followed (`isWorkspaceApi`). |
 
 ## Toolset selection
 
@@ -33,9 +35,10 @@ Read by `readConfigFromEnv` in `packages/mcp-server/src/config.ts`, plus `AGENTD
 | empty, or `pcp_…` | `setup` | [setup](/mcp/tools/setup) |
 | `pcp_…` or `pcpa_…` | `assistant` | [assistant](/mcp/tools/assistant), unfiltered: stdio has no OAuth grant |
 | `pcp_board_…` | `human` | [human](/mcp/tools/human); any other key, or a set `PAPERCLIP_AGENT_ID` or `PAPERCLIP_RUN_ID`, stops startup |
-| anything else (a bridge endpoint token) | anything but `human` | [bridge](/mcp/tools/bridge) |
+| any (normally empty) | `cloud` | [cloud](/mcp/tools/cloud); after `agentdash_cloud_connect` delivers the workspace key, the [setup](/mcp/tools/setup) tools too, against the workspace |
+| anything else (a bridge endpoint token) | anything but `human` or `cloud` | [bridge](/mcp/tools/bridge) |
 
-The rules, and why a bridge token and a control-plane key never share a surface, are on [Toolsets](/mcp/toolsets) (`buildToolSurface` in `src/index.ts`, `isControlPlaneCredential` in `src/config.ts`). An empty key is allowed so a fresh install can sign up through `agentdash_sign_up`, which mints a board key and upgrades the session in place.
+The rules, and why a bridge token and a control-plane key never share a surface, are on [Toolsets](/mcp/toolsets) (`buildToolSurface` in `src/index.ts`, `isControlPlaneCredential` in `src/config.ts`). An empty key is allowed so a fresh install can sign up through `agentdash_sign_up`, which mints a board key and upgrades the session in place; `agentdash_cloud_connect` upgrades a cloud session the same way, pointing it at the new workspace as well.
 
 ## Development
 

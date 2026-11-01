@@ -21,6 +21,16 @@ export const LIMITS = {
   findPerEmail: { bucket: "find_email", limit: 3, windowMs: 3_600_000 },
   resendPerIp: { bucket: "resend_ip", limit: 10, windowMs: 3_600_000 },
   resendPerEmail: { bucket: "resend_email", limit: 3, windowMs: 3_600_000 },
+  // AgentDash (cloud MCP toolset): an agent signup never passes Turnstile, which
+  // on /start also guards sending the verification email. So agents get a
+  // tighter per-email limit, and signups without an admission code share one
+  // hourly cap across every address, bounding mail an unchecked caller can
+  // trigger. A valid admission code is exempt from the shared cap.
+  agentSignupPerEmail: { bucket: "agent_signup_email", limit: 2, windowMs: 3_600_000 },
+  agentSignupWithoutCode: { bucket: "agent_signup_nocode", limit: 60, windowMs: 3_600_000 },
+  // A code is checked at signup but spent only at verification, so one code
+  // could start unlimited cap-exempt signups; bound it per code.
+  agentSignupPerCode: { bucket: "agent_signup_code", limit: 3, windowMs: 3_600_000 },
 } satisfies Record<string, LimitRule>;
 
 /**

@@ -438,6 +438,51 @@ export const signupRequests = pgTable(
   ],
 );
 
+/**
+ * AgentDash (cloud MCP toolset, doc/plans/2026-10-31-cloud-mcp-toolset.md): an
+ * agent's handle on one signup it started for a person
+ * (`agentdash_cloud_start`). The handle (`agdh_` + 32 random bytes) is shown
+ * once and stored only as its SHA-256. It reads that signup's status and, once
+ * the box is claimed, asks the person to approve the agent on the box; it can
+ * do nothing else, and nothing after `expires_at`.
+ *
+ * `signup_request_id` is null when the signup created no request (an address
+ * that already has a workspace, or a blocked one): the answer to the agent is
+ * the same either way, so a handle cannot tell anyone whether an email has an
+ * account.
+ *
+ * The connect columns hold the box's CLI-auth challenge while the person
+ * decides. `connect_sealed` is the challenge secret and the pending board key,
+ * encrypted under a key derived from the handle itself (and then under
+ * CLOUD_DATA_KEY), so the control plane cannot open it without the handle,
+ * which it does not keep. It is erased when the key is delivered (once) or the
+ * challenge ends.
+ */
+export const agentHandles = pgTable(
+  "agent_handles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tokenHash: text("token_hash").notNull(),
+    signupRequestId: uuid("signup_request_id").references(() => signupRequests.id),
+    /** The address that started the signup (rate limits, audit). */
+    ip: text("ip"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    connectChallengeId: text("connect_challenge_id"),
+    connectSealed: text("connect_sealed"),
+    connectExpiresAt: timestamp("connect_expires_at", { withTimezone: true }),
+    /** How many approval requests this handle has made on the box (bounded). */
+    connectRequests: integer("connect_requests").notNull().default(0),
+    /** When the box credential was delivered. Set once; no further requests after it. */
+    connectedAt: timestamp("connected_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("agent_handles_token_hash_uq").on(t.tokenHash),
+    uniqueIndex("agent_handles_signup_request_uq").on(t.signupRequestId),
+  ],
+);
+
 /** A short-lived front-door session, set when a magic link is used. Only the token's hash is stored. */
 export const cloudSessions = pgTable(
   "cloud_sessions",

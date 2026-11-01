@@ -14,6 +14,7 @@ import { RailwayClient } from "./railway/client.js";
 import { frontDoor as makeFrontDoor, type FrontDoor } from "./front-door/service.js";
 import { logMailer, type Mailer, resendMailer, unconfiguredMailer } from "./front-door/mailer.js";
 import { publicRoutes } from "./routes/public.js";
+import { agentDoor } from "./front-door/agent.js";
 import { inviteService, inviteValidateRoutes } from "./invites.js";
 import { type Alerter, logAlerter } from "./jobs/alerts.js";
 import { monitorRoutes } from "./routes/monitor.js";
@@ -46,6 +47,8 @@ export function createApp(opts: {
   alerter?: Alerter;
   /** SC-8 (GH #769): test hooks; built from config when omitted. */
   stripe?: { forwarder?: StripeForwarder; railway?: RailwayClient | null; endpoints?: StripeEndpointsClient | null };
+  /** Cloud MCP toolset: test hooks for the agent front door (a fake box, a clock). */
+  agent?: { boxFetch?: typeof fetch; now?: () => Date };
 }): Express {
   const { db, config, log } = opts;
   const frontDoor = opts.frontDoor ?? makeFrontDoor({ db, log, config, mailer: mailerFromConfig(config, log) });
@@ -73,7 +76,9 @@ export function createApp(opts: {
   });
 
   // AgentDash (SC-7, GH #768): the public front door, reached through www's /api/cloud rewrite.
-  app.use("/api/cloud", publicRoutes({ frontDoor, config }));
+  // AgentDash (cloud MCP toolset): agents use the same front door, at /api/cloud/agent/* and /api/cloud/mcp.
+  const agent = agentDoor({ db, log, config, frontDoor, ...opts.agent });
+  app.use("/api/cloud", publicRoutes({ frontDoor, config, agent: { door: agent, log } }));
   // AgentDash (SC-9, GH #770): the self-hosted invite validator, reached through www's rewrite.
   app.use("/api", inviteValidateRoutes({ db, log, config }));
   // Every other /api path on www used to reach the old shared instance; it is gone (spec §7 step 2).
