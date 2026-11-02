@@ -24,11 +24,17 @@ export interface MonitorRouteDeps {
   transports: Array<{ name: string; alerter: Alerter }>;
 }
 
+/** Where ops alerts go, by transport name; `paging` is false when only the log hears them. */
+export function alertingSummary(transports: MonitorRouteDeps["transports"]): { transports: string[]; paging: boolean } {
+  const names = transports.map((t) => t.name);
+  return { transports: names, paging: names.some((n) => n !== "log") };
+}
+
 export function monitorRoutes(db: CloudDb, log: Logger, deps: MonitorRouteDeps): ExpressRouter {
   const router = Router();
 
   router.get("/fleet/status", async (_req, res) => {
-    res.json(await fleetStatus(db, { edgeLive: deps.edgeLive }));
+    res.json({ ...(await fleetStatus(db, { edgeLive: deps.edgeLive })), alerting: alertingSummary(deps.transports) });
   });
 
   const bySlug = (fn: (slug: string) => Promise<unknown>) => async (req: Request, res: Response) => {

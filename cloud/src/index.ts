@@ -61,6 +61,12 @@ async function main() {
   if (config.resendApiKey && config.alertEmailFrom && config.alertEmailTo.length) {
     transports.push({ name: "email", alerter: resendEmailAlerter({ apiKey: config.resendApiKey, from: config.alertEmailFrom, to: config.alertEmailTo }) });
   }
+  // AgentDash: the log alone pages nobody, so a failed job would wait unseen; say so at boot
+  // (and in `fleet status`, ./routes/monitor.ts).
+  if (config.alertEmailTo.length && !config.resendApiKey) log.warn("CLOUD_ALERT_EMAIL_TO is set without CLOUD_RESEND_API_KEY: alert email is off");
+  if (!transports.some((t) => t.name !== "log")) {
+    log.warn("ops alerts reach the log only: nobody is paged when a job fails; set CLOUD_ALERT_EMAIL_TO or CLOUD_ALERT_WEBHOOK_URL");
+  }
   const alerter = combineAlerters(log, transports.map((t) => t.alerter));
 
   // AgentDash (SC-8, GH #769): Stripe fan-out, the shared box key and per-box Resend keys.

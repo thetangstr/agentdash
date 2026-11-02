@@ -39,7 +39,7 @@ export const USAGE = `usage: pnpm --filter @agentdash/cloud-control admin <comma
   boxes retry <slug>         resume a failed box's provision job at its failed step
   boxes abandon <slug>       give up on a failed or unclaimed box: guarded delete of its Railway project
   fleet edge-backfill        once the edge router is live: give running boxes their edge secret (next deploy)
-  fleet status               fleet summary: boxes, health, firing alerts, failed jobs, router 5xx,
+  fleet status               fleet summary: boxes, health, firing alerts, where alerts go, failed jobs, router 5xx,
                              certificates, spend, idle policy
   box health <slug>          one box: health per path, recent polls, alerts, idle state and next step
   box suspend <slug>         queue a suspend (web deployment removed; data stays)

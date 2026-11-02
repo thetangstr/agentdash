@@ -24,6 +24,7 @@ import { HEALTH_FAILURE_THRESHOLD, pollFleetHealth } from "../monitor/health.js"
 import { DAY_MS, sweepIdle } from "../monitor/idle.js";
 import { loadMonitorConfig, pruneFleetHistory, runExclusive } from "../monitor/service.js";
 import { boxProjectDescription } from "../railway/names.js";
+import { alertingSummary } from "../routes/monitor.js";
 import { boxHealthReport, fleetStatus, operatorSuspend, operatorWake } from "../monitor/status.js";
 import { resumeHandler, suspendHandler } from "../monitor/suspend.js";
 import { parseSettingValue, SETTING_DEFAULTS, settingsService } from "../settings.js";
@@ -810,6 +811,12 @@ describe("operator surface", () => {
     }
     expect(calls).toEqual(["GET /fleet/status", "GET /boxes/acme/health", "POST /boxes/acme/suspend", "POST /boxes/acme/wake", "GET /alerts", "POST /alerts/test"]);
     expect(await runAdmin(["box", "health"], env, io)).toBe(64);
+  });
+
+  it("fleet status says when only the log hears alerts", () => {
+    const quiet: Alerter = { send: async () => {} };
+    expect(alertingSummary([{ name: "log", alerter: quiet }])).toEqual({ transports: ["log"], paging: false });
+    expect(alertingSummary([{ name: "log", alerter: quiet }, { name: "email", alerter: quiet }])).toEqual({ transports: ["log", "email"], paging: true });
   });
 
   it("validates the new settings", () => {
