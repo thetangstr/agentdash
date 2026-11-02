@@ -750,6 +750,57 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     ]));
   });
 
+  it("does not put an issue in your inbox just because you opened it", async () => {
+    const companyId = randomUUID();
+    const reader = "user-reader";
+    const author = "user-author";
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const someoneElsesIssueId = randomUUID();
+    const ownIssueId = randomUUID();
+
+    await db.insert(issues).values([
+      {
+        id: someoneElsesIssueId,
+        companyId,
+        title: "Somebody else's work",
+        status: "todo",
+        priority: "medium",
+        createdByUserId: author,
+        createdAt: new Date("2026-03-26T10:00:00.000Z"),
+        updatedAt: new Date("2026-03-26T10:00:00.000Z"),
+      },
+      {
+        id: ownIssueId,
+        companyId,
+        title: "Their own work",
+        status: "todo",
+        priority: "medium",
+        createdByUserId: reader,
+        createdAt: new Date("2026-03-26T11:00:00.000Z"),
+        updatedAt: new Date("2026-03-26T11:00:00.000Z"),
+      },
+    ]);
+
+    // Opening it is the entire interaction: no comment, no assignment. This is
+    // what an administrator does dozens of times while reading the board, and
+    // it used to enrol them in every one of those issues permanently.
+    await svc.markRead(companyId, someoneElsesIssueId, reader);
+
+    const inbox = await svc.list(companyId, { touchedByUserId: reader });
+
+    expect(
+      inbox.map((issue) => issue.id),
+      "reading is not participating -- only their own issue is theirs",
+    ).toEqual([ownIssueId]);
+  });
+
   it("resurfaces archived issue when status/updatedAt changes after archiving", async () => {
     const companyId = randomUUID();
     const userId = "user-1";
