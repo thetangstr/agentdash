@@ -51,6 +51,20 @@ export interface IngestOptions {
   now?: () => Date;
   /** Rule 13 withdrawal detection scans every known comment id, so it runs on this cadence, not every tick. */
   withdrawalCheckIntervalMs?: number;
+  /**
+   * The pause between two ticks of one scheduled pass, taken outside the
+   * company lock, so other ledger writers (snapshots, dispositions, contract
+   * declarations) get the lock while a long history is read. 0 in tests.
+   */
+  passYieldMs?: number;
+  /** After a failed scheduled pass the company waits this long, doubling per further failure... */
+  failureBackoffMs?: number;
+  /** ...up to this. */
+  failureBackoffMaxMs?: number;
+  /** Replace a source's reader (tests: a source that fails or times out partway through a pass). */
+  readers?: Partial<Record<SourceName, (typeof SOURCE_READERS)[SourceName]>>;
+  /** How the pass waits between ticks (tests). */
+  pause?: (ms: number) => Promise<void>;
 }
 
 export interface SourceTickStats {
@@ -78,6 +92,8 @@ export interface CompanyTickStats {
 export interface ScheduledCompanyStats extends CompanyTickStats {
   /** Ticks this scheduled pass ran for the company (more than one while history is being read). */
   passes: number;
+  /** The longest single tick: how long the company lock was held at most, and what the statement timeout bounds. */
+  maxTickMs: number;
   /** False when the pass stopped at its bound with rows still waiting; the next scheduled pass goes on from the cursor. */
   caughtUp: boolean;
 }
@@ -85,6 +101,9 @@ export interface ScheduledCompanyStats extends CompanyTickStats {
 const DEFAULT_ROW_BUDGET = 5000;
 const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
 const DEFAULT_WITHDRAWAL_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_PASS_YIELD_MS = 2000;
+const DEFAULT_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+const DEFAULT_FAILURE_BACKOFF_MAX_MS = 60 * 60 * 1000;
 /** Operator-triggered backfill is bounded so a request cannot run for minutes. */
 export const MAX_BACKFILL_PASSES = 20;
 /** Advisory-lock key prefix; the key is the 64-bit `hashtextextended` of prefix + companyId (collisions negligible). */
@@ -113,7 +132,18 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
   const sources = opts.sources ?? (Object.keys(SOURCE_READERS) as SourceName[]);
   const now = opts.now ?? (() => new Date());
   const withdrawalCheckIntervalMs = Math.max(0, opts.withdrawalCheckIntervalMs ?? DEFAULT_WITHDRAWAL_CHECK_INTERVAL_MS);
+  const passYieldMs = Math.max(0, opts.passYieldMs ?? DEFAULT_PASS_YIELD_MS);
+  const failureBackoffMs = Math.max(0, opts.failureBackoffMs ?? DEFAULT_FAILURE_BACKOFF_MS);
+  const failureBackoffMaxMs = Math.max(failureBackoffMs, opts.failureBackoffMaxMs ?? DEFAULT_FAILURE_BACKOFF_MAX_MS);
+  const pause = opts.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const readerOf = (source: SourceName) => opts.readers?.[source] ?? SOURCE_READERS[source];
   let inFlight = false;
+  /**
+   * Companies whose last scheduled pass failed (a statement timeout or any
+   * other error), with the time before which the schedule leaves them alone.
+   * In memory: a restart tries again at once.
+   */
+  const backoff = new Map<string, { failures: number; until: number; error: string }>();
 
   async function loadCursors(q: LedgerDb, companyId: string): Promise<Record<string, Cursor>> {
     const rows = await q.select().from(evaluationIngestState).where(eq(evaluationIngestState.companyId, companyId));
@@ -151,7 +181,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       let withdrawalChecked = false;
       for (const source of sources) {
         const t0 = Date.now();
-        const result = await SOURCE_READERS[source](tx, companyId, cursors[source] ?? {}, rowBudget);
+        const result = await readerOf(source)(tx, companyId, cursors[source] ?? {}, rowBudget);
         let events = result.events;
         let nextCursor: Cursor = result.nextCursor;
         let checkedNow = false;
@@ -196,6 +226,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
 
   function addTick(total: ScheduledCompanyStats, stats: CompanyTickStats): void {
     total.passes++;
+    total.maxTickMs = Math.max(total.maxTickMs, stats.durationMs);
     total.scanned += stats.scanned;
     total.inserted += stats.inserted;
     total.skipped += stats.skipped;
@@ -220,7 +251,10 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
    * full budget, up to MAX_BACKFILL_PASSES ticks: the first scheduled pass
    * reads the history, and a history larger than the bound goes on at the
    * next interval from the cursor. Each tick is its own transaction under the
-   * company lock, so nothing else waits for the whole backfill.
+   * company lock, and the pass pauses `passYieldMs` between ticks outside it,
+   * so other ledger writers, which try the lock once or retry briefly, get it
+   * while a long history is read. A tick that fails ends the pass (the ticks
+   * before it stay committed) and the caller backs the company off.
    */
   async function scheduledPass(companyId: string): Promise<ScheduledCompanyStats> {
     const total: ScheduledCompanyStats = {
@@ -233,6 +267,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       withdrawalChecked: false,
       perSource: {},
       passes: 0,
+      maxTickMs: 0,
       caughtUp: false,
     };
     for (;;) {
@@ -243,8 +278,28 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
         break;
       }
       if (total.passes >= MAX_BACKFILL_PASSES) break;
+      if (passYieldMs > 0) await pause(passYieldMs);
     }
     return total;
+  }
+
+  /** The wait after the n-th failure in a row: doubling from `failureBackoffMs`, capped at `failureBackoffMaxMs`. */
+  function backoffDelayMs(failures: number): number {
+    return Math.min(failureBackoffMaxMs, failureBackoffMs * 2 ** Math.min(Math.max(0, failures - 1), 30));
+  }
+
+  function recordFailure(companyId: string, err: unknown): void {
+    const failures = (backoff.get(companyId)?.failures ?? 0) + 1;
+    const delayMs = backoffDelayMs(failures);
+    const until = now().getTime() + delayMs;
+    // A query error wraps the database's own message (e.g. "canceling statement due to statement timeout") in `cause`.
+    const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : null;
+    const error = (cause ?? (err instanceof Error ? err.message : String(err))).slice(0, 300);
+    backoff.set(companyId, { failures, until, error });
+    logger.warn(
+      { err, companyId, failures, retryInMs: delayMs, retryAt: new Date(until).toISOString() },
+      "evaluation_ingest: company pass failed; backing off",
+    );
   }
 
   return {
@@ -263,7 +318,8 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
      * The scheduled pass over every company (`scheduledPass`: catches up on
      * history, bounded). Errors are logged per company and never stop the
      * loop; a lock collision ends that company's pass, and its committed ticks
-     * stay. Skips when a pass is in flight.
+     * stay. A company whose pass failed is left alone until its backoff ends
+     * (doubling, capped). Skips when a pass is in flight.
      */
     async tickAll(): Promise<ScheduledCompanyStats[]> {
       if (inFlight) {
@@ -275,13 +331,17 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
         const rows = await db.select({ id: companies.id }).from(companies);
         const out: ScheduledCompanyStats[] = [];
         for (const { id } of rows) {
+          const waiting = backoff.get(id);
+          if (waiting && now().getTime() < waiting.until) continue;
           try {
             out.push(await scheduledPass(id));
+            backoff.delete(id);
           } catch (err) {
             if (err instanceof Error && /already running/.test(err.message)) {
+              // Another writer holds the lock: not a failure, the next interval tries again.
               logger.warn({ companyId: id }, "evaluation_ingest: company locked by another pass; skipped");
             } else {
-              logger.error({ err, companyId: id }, "evaluation_ingest: company tick failed");
+              recordFailure(id, err);
             }
           }
         }
@@ -326,6 +386,12 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
 
     async cursors(companyId: string) {
       return loadCursors(db, companyId);
+    },
+
+    /** A company the schedule is backing off after failed passes, or null. */
+    backoffOf(companyId: string): { failures: number; until: Date; error: string } | null {
+      const entry = backoff.get(companyId);
+      return entry ? { failures: entry.failures, until: new Date(entry.until), error: entry.error } : null;
     },
 
     get running() {
