@@ -84,7 +84,7 @@ export const STEWARD_TOOLS = {
 } as const;
 
 export const NAV_LINKS = [
-  { label: "How it works", href: "/#how-it-works" },
+  { label: "How it works", href: "/how-it-works" },
   { label: "Demo", href: "/demo" },
   { label: "What’s new", href: "/whats-new" },
   { label: "MCP setup", href: "/mcp" },
