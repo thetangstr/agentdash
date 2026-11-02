@@ -1001,6 +1001,20 @@ describe("hosted workspace: the agents' model", () => {
     });
   });
 
+  it("setup_status keeps the classic path on an older server without adapter-status", async () => {
+    routeFetch([
+      [/\/api\/health$/, { status: "ok", adapterReady: false }],
+      [/\/companies\/[^/]+\/agents$/, [{ id: AGENT_ID, role: "chief_of_staff", status: "idle" }]],
+      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, tasks: { open: 0 } }],
+      [/\/approvals\?status=pending$/, []],
+    ]);
+
+    const result = parseText(await getTool("agentdash_setup_status").execute({}));
+
+    expect(result.agentModel).toBeNull();
+    expect(result).toMatchObject({ phase: "setup_adapter", nextAction: "agentdash_setup_adapter" });
+  });
+
   it("setup_adapter with preset hermes sets the box's Hermes provider for the user's only company", async () => {
     const key = "sk-or-v1-mcptestkey0123456789";
     const fetchMock = routeFetch([
@@ -1055,11 +1069,10 @@ describe("hosted workspace: the agents' model", () => {
   });
 
   it("asks for companyId when the user belongs to several companies", async () => {
-    routeFetch([
+    const fetchMock = routeFetch([
       [/\/onboarding\/adapter-status$/, adapterStatusBody({})],
       [/\/api\/companies$/, [{ id: COMPANY_ID }, { id: "99999999-9999-4999-8999-999999999999" }]],
     ]);
-
     const response = await getTool("agentdash_setup_adapter", makeClient({ companyId: null })).execute({
       preset: "hermes",
       provider: "zai",
@@ -1067,6 +1080,7 @@ describe("hosted workspace: the agents' model", () => {
     });
 
     expect(String(parseText(response).error)).toContain("Pass companyId");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/onboarding/setup-adapter"))).toBe(false);
   });
 
   it("needs a key with a provider, and keeps provider/model to the hermes preset", async () => {
@@ -1078,6 +1092,9 @@ describe("hosted workspace: the agents' model", () => {
 
     const wrongPreset = await tool.execute({ preset: "claude", provider: "zai", apiKey: "k-0123456789" });
     expect(parseText(wrongPreset).error).toBe('provider and model go with preset "hermes".');
+
+    const keyNoProvider = await tool.execute({ preset: "hermes", apiKey: "k-0123456789" });
+    expect(String(parseText(keyNoProvider).error)).toContain("pass the provider the key is for");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

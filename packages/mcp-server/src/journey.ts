@@ -145,8 +145,8 @@ export function computeNextAction(snapshot: SetupStatusSnapshot): NextAction {
         nextAction: "agentdash_setup_status",
         nextActionReason:
           "This hosted workspace's agents have no model yet, and only the instance admin can add "
-          + "one. Ask the human to have the admin add a provider key in the AgentDash web UI, then "
-          + "re-check agentdash_setup_status.",
+          + "one. Ask the human to have the admin add a provider key in the AgentDash web UI, and "
+          + "re-check agentdash_setup_status only after the human says it's done (don't poll).",
       };
     }
     return {
@@ -661,6 +661,12 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         }
         if (provider || model) {
           throw new Error('provider and model go with preset "hermes".');
+        }
+        if (preset === "hermes" && apiKey) {
+          // Without a provider the hermes preset takes no key: refuse before sending it anywhere.
+          throw new Error(
+            'With preset "hermes", pass the provider the key is for (from agentdash_setup_status agentModel.options).',
+          );
         }
         const result = await client.requestJson<{
           status: { adapter: string; ready: boolean; preset: string; reason: string | null };
