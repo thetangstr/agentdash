@@ -38,6 +38,10 @@ const mockUnbound = vi.hoisted(() => ({
   exportMarkdownUrl: vi.fn((c: string, p: string, r: string) => `/api/companies/${c}/agent-profiles/${p}/revisions/${r}/export.md`),
 }));
 
+// Who may set a host command is the server's answer (`/me/capabilities`).
+const mockCapabilities = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("../../api/capabilities", () => ({ capabilitiesApi: mockCapabilities }));
+
 vi.mock("../../api/agent-profiles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/agent-profiles")>();
   return { ...actual, unboundAgentProfilesApi: mockUnbound };
@@ -51,7 +55,7 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const { UnboundDraftView, UNBOUND_RESTRICTED_TEXT } = await import("./UnboundDraftView");
-const { UNBOUND_DRAFT_INTRO_TEXT, PROCESS_COMMAND_HINT, PROCESS_COMMAND_MISSING_TEXT } = await import("./UnboundDraftEditor");
+const { UNBOUND_DRAFT_INTRO_TEXT, PROCESS_COMMAND_HINT, PROCESS_COMMAND_MISSING_TEXT, PROCESS_COMMAND_ADMIN_ONLY_TEXT } = await import("./UnboundDraftEditor");
 const { HIRE_NEEDS_APPROVAL_TEXT } = await import("./brief-shared");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -506,7 +510,8 @@ describe("UnboundDraftView — Request hire", () => {
   });
 
   // A process agent needs a command, and no profile field carries one: the hire request gives it.
-  it("asks for the command of a process agent and files it with the hire", async () => {
+  it("asks an instance admin for a process agent's command, arguments and folder, and files them as a direct hire would", async () => {
+    mockCapabilities.get.mockResolvedValue({ isInstanceAdmin: true, membershipRole: "owner", capabilities: {} });
     mockUnbound.get.mockResolvedValue(view({ latestDraft: revision({ body: body({ runtime: { adapterType: "process" } }) }) }));
     const node = await render(null);
     await click(byTestId(node, "unbound-step-review"));
@@ -526,15 +531,32 @@ describe("UnboundDraftView — Request hire", () => {
         details: { code: AGENT_PROFILE_HIRE_INVALID, issues: [{ path: "adapterConfig.command", message: "A process agent needs adapterConfig.command" }] },
       }),
     );
-    await type(command, "  /usr/local/bin/collect  ");
+    await type(command, "  python3  ");
     expect(request.getAttribute("aria-disabled")).toBe("false");
+    // No shell runs the command: the script and its flags are arguments, as on the direct-hire form.
+    await type(field(review, "Arguments (optional)"), "/opt/agent/run.py, --quiet");
+    await type(field(review, "Folder (optional)"), " /opt/agent ");
     await click(request);
     expect(mockUnbound.propose).toHaveBeenCalledWith("company-1", "profile-1", "rev-1", {
       role: "general",
-      adapterConfig: { command: "/usr/local/bin/collect" },
+      adapterConfig: { command: "python3", args: ["/opt/agent/run.py", "--quiet"], cwd: "/opt/agent", timeoutSec: 0, graceSec: 15 },
     });
     // A refusal of the command names the field the form shows, not the validator's path.
     expect(byTestId(node, "unbound-hire-error").textContent).toContain("Command: A process agent needs adapterConfig.command");
+  });
+
+  it("tells someone who isn't an instance admin that one sets the command, and requests nothing", async () => {
+    mockCapabilities.get.mockResolvedValue({ isInstanceAdmin: false, membershipRole: "owner", capabilities: {} });
+    mockUnbound.get.mockResolvedValue(view({ latestDraft: revision({ body: body({ runtime: { adapterType: "process" } }) }) }));
+    const node = await render(null);
+    await click(byTestId(node, "unbound-step-review"));
+    const review = panel(node, "review");
+    expect(review.querySelector("[data-testid='unbound-hire-command']")).toBeNull();
+    expect(byTestId(review, "unbound-hire-command-admin-only").textContent).toBe(PROCESS_COMMAND_ADMIN_ONLY_TEXT);
+    const request = byTestId<HTMLButtonElement>(review, "unbound-request-hire");
+    expect(request.getAttribute("aria-disabled")).toBe("true");
+    await click(request);
+    expect(mockUnbound.propose).not.toHaveBeenCalled();
   });
 
   it("asks for no command for any other adapter", async () => {

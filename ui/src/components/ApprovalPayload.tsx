@@ -199,6 +199,32 @@ function HireProfileSection({ payload }: { payload: Record<string, unknown> }) {
   );
 }
 
+/**
+ * AgentDash: a process agent runs a command on the host. Whoever approves the
+ * hire decides what will run, so the card shows it (the command with its
+ * arguments, and the folder) rather than leaving it in the raw payload.
+ */
+function ProcessCommandLines({ payload }: { payload: Record<string, unknown> }) {
+  if (payload.adapterType !== "process") return null;
+  const config = payload.adapterConfig && typeof payload.adapterConfig === "object" ? (payload.adapterConfig as Record<string, unknown>) : {};
+  const command = typeof config.command === "string" ? config.command.trim() : "";
+  if (!command) return null;
+  const args = Array.isArray(config.args) ? config.args.filter((arg): arg is string => typeof arg === "string") : [];
+  const cwd = typeof config.cwd === "string" && config.cwd.trim() ? config.cwd.trim() : null;
+  return (
+    <>
+      <div className="flex items-start gap-2" data-testid="hire-agent-command">
+        <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs pt-0.5">Runs</span>
+        <code className="min-w-0 break-all font-mono text-xs">{[command, ...args].join(" ")}</code>
+      </div>
+      <div className="flex items-start gap-2">
+        <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs pt-0.5">In folder</span>
+        {cwd ? <code className="min-w-0 break-all font-mono text-xs">{cwd}</code> : <span className="text-muted-foreground">The server's own folder</span>}
+      </div>
+    </>
+  );
+}
+
 export function HireAgentPayload({ payload }: { payload: Record<string, unknown> }) {
   // AgentDash (c4-hire-ux): the human title carries the job ("Bookkeeper");
   // the role slug and adapter are internal detail and render under Technical
@@ -225,6 +251,7 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
           <span>{modelLine}</span>
         </div>
       )}
+      <ProcessCommandLines payload={payload} />
       <SkillList values={payload.desiredSkills} />
       <HireProfileSection payload={payload} />
     </div>

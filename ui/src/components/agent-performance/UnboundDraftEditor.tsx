@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AGENT_PROFILE_HIRE_INVALID,
   AGENT_ROLES,
@@ -8,7 +8,11 @@ import {
   type UnboundAgentProfileProposalResult,
 } from "@paperclipai/shared";
 import { unboundAgentProfilesApi } from "@/api/agent-profiles";
+import { capabilitiesApi } from "@/api/capabilities";
 import { ApiError } from "@/api/client";
+import { buildProcessConfig } from "@/adapters/process/build-config";
+import { defaultCreateValues } from "@/components/agent-config-defaults";
+import { capabilitiesQueryKey } from "@/hooks/useCapability";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,14 +77,24 @@ const STEP_INDEX: Record<(typeof UNBOUND_STEPS)[number]["key"], number> = { work
 
 /**
  * A process agent runs a command, and no profile field carries one: the hire
- * request gives it (`adapterConfig.command`), checked as a direct hire's is.
+ * request gives it, as the direct-hire form does (command, comma-separated
+ * arguments, folder; `buildProcessConfig`), and the server checks it as a
+ * direct hire's. Only an instance admin may choose what runs on the host.
  */
 export const PROCESS_COMMAND_HINT =
-  "The command this agent runs each time it works. It runs on the host, so only an instance admin can set it. The people deciding the hire see it.";
+  "What this agent runs each time it works. It runs on the host, so only an instance admin can set it. The hire request shows it to the people deciding.";
+export const PROCESS_ARGS_HINT = "Comma-separated, e.g. /opt/agent/run.py, --quiet. The command gets no shell, so put each argument here.";
+export const PROCESS_CWD_HINT = "Leave empty to run it in the server's own folder.";
 export const PROCESS_COMMAND_MISSING_TEXT = "Give the command the process agent runs.";
+export const PROCESS_COMMAND_ADMIN_ONLY_TEXT =
+  "A process agent runs a command on the host, and only an instance admin can set it. Ask an instance admin to request this hire, or choose another adapter.";
 
 /** Hire validator paths that aren't profile fields, in the words the form uses. */
-const HIRE_FIELD_TEXT: Record<string, string> = { "adapterConfig.command": "Command" };
+const HIRE_FIELD_TEXT: Record<string, string> = {
+  "adapterConfig.command": "Command",
+  "adapterConfig.args": "Arguments",
+  "adapterConfig.cwd": "Folder",
+};
 
 const NEW_HIRE_OBLIGATION_HINT =
   "A new hire has no routines yet: use assigned work, a deliverable or a goal, and bind a routine after the hire.";
@@ -120,6 +134,40 @@ export function profileGaps(body: AgentOperatingProfileV1): HireCheck[] {
     if (item.performance.criteria.length === 0) out.push({ text: `${name}: how we will judge the work (no criteria yet)`, step: STEP_INDEX.boundaries });
   });
   return out;
+}
+
+function CommandInput({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-describedby={`${id}-hint`}
+        spellCheck={false}
+        placeholder={placeholder}
+        className="font-mono"
+      />
+      <p id={`${id}-hint`} className="text-xs text-text-secondary">
+        {hint}
+      </p>
+    </div>
+  );
 }
 
 function SubSection({ id, title, description, children }: { id: string; title: string; description?: string; children: ReactNode }) {
@@ -192,6 +240,8 @@ export function UnboundDraftEditor({
   const [expectedBenefit, setExpectedBenefit] = useState("");
   const [risks, setRisks] = useState("");
   const [command, setCommand] = useState("");
+  const [commandArgs, setCommandArgs] = useState("");
+  const [commandCwd, setCommandCwd] = useState("");
   const [hireProblem, setHireProblem] = useState<{ text: string; issues: string[]; stale: boolean } | null>(null);
   const stepButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const stepHeadings = useRef<Array<HTMLHeadingElement | null>>([]);
@@ -227,8 +277,17 @@ export function UnboundDraftEditor({
   const blockers = hireBlockers(body);
   const gaps = profileGaps(body);
   const needsCommand = body.runtime?.adapterType === "process";
-  const commandMissing = needsCommand && !command.trim();
-  const canRequestHire = !dirty && !jsonBlocked && !conflict && blockers.length === 0 && !commandMissing;
+  // Who may set a host command: the server's answer (instance admin, or the local board). Unknown until it answers.
+  const capabilities = useQuery({
+    queryKey: capabilitiesQueryKey(companyId),
+    queryFn: () => capabilitiesApi.get(companyId),
+    enabled: needsCommand && mayPropose,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const mayChooseCommand = capabilities.data?.isInstanceAdmin === true;
+  const commandBlocked = needsCommand && (!mayChooseCommand || !command.trim());
+  const canRequestHire = !dirty && !jsonBlocked && !conflict && blockers.length === 0 && !commandBlocked;
 
   const propose = useMutation({
     mutationFn: () =>
@@ -238,7 +297,17 @@ export function UnboundDraftEditor({
         ...(expectedBenefit.trim() ? { expectedBenefit: expectedBenefit.trim() } : {}),
         ...(risks.trim() ? { risks: risks.trim() } : {}),
         ...(sourceIssueId ? { sourceIssueId } : {}),
-        ...(needsCommand ? { adapterConfig: { command: command.trim() } } : {}),
+        ...(needsCommand
+          ? {
+              adapterConfig: buildProcessConfig({
+                ...defaultCreateValues,
+                adapterType: "process",
+                command: command.trim(),
+                args: commandArgs,
+                cwd: commandCwd.trim(),
+              }),
+            }
+          : {}),
       }),
     onSuccess: (result) => {
       setHireProblem(null);
@@ -324,7 +393,11 @@ export function UnboundDraftEditor({
             <SubSection id="unbound-review-blockers" title="Before a hire can be requested">
               {blockers.length === 0 ? (
                 <p className="text-sm text-text-secondary" data-testid="unbound-review-no-blockers">
-                  {commandMissing && mayPropose ? "A process agent needs its command: give it under Request hire below." : "Nothing blocks a hire request."}
+                  {needsCommand && mayPropose && mayChooseCommand && !command.trim()
+                    ? "A process agent needs its command: give it under Request hire below."
+                    : needsCommand && mayPropose && capabilities.isSuccess && !mayChooseCommand
+                      ? PROCESS_COMMAND_ADMIN_ONLY_TEXT
+                      : "Nothing blocks a hire request."}
                 </p>
               ) : (
                 <CheckList items={blockers} onGo={(target) => goTo(target, { focusHeading: true })} testId="unbound-review-blockers-list" />
@@ -346,22 +419,22 @@ export function UnboundDraftEditor({
             </SubSection>
             {mayPropose ? (
               <SubSection id="unbound-review-hire" title="Request hire" description={HIRE_NEEDS_APPROVAL_TEXT}>
-                {needsCommand ? (
-                  <div className="space-y-1.5">
-                    <Label htmlFor={`${uid}-command`}>Command</Label>
-                    <Input
-                      id={`${uid}-command`}
-                      value={command}
-                      onChange={(event) => setCommand(event.target.value)}
-                      aria-describedby={`${uid}-command-hint`}
-                      spellCheck={false}
-                      className="font-mono"
-                      data-testid="unbound-hire-command"
+                {needsCommand && mayChooseCommand ? (
+                  <div className="space-y-4" data-testid="unbound-hire-command">
+                    <CommandInput id={`${uid}-command`} label="Command" hint={PROCESS_COMMAND_HINT} value={command} onChange={setCommand} placeholder="e.g. python3" />
+                    <CommandInput
+                      id={`${uid}-command-args`}
+                      label="Arguments (optional)"
+                      hint={PROCESS_ARGS_HINT}
+                      value={commandArgs}
+                      onChange={setCommandArgs}
                     />
-                    <p id={`${uid}-command-hint`} className="text-xs text-text-secondary">
-                      {PROCESS_COMMAND_HINT}
-                    </p>
+                    <CommandInput id={`${uid}-command-cwd`} label="Folder (optional)" hint={PROCESS_CWD_HINT} value={commandCwd} onChange={setCommandCwd} />
                   </div>
+                ) : needsCommand && capabilities.isSuccess ? (
+                  <p className="text-sm text-text-primary" data-testid="unbound-hire-command-admin-only">
+                    {PROCESS_COMMAND_ADMIN_ONLY_TEXT}
+                  </p>
                 ) : null}
                 <div className="space-y-1.5">
                   <Label htmlFor={`${uid}-role`}>Role</Label>
@@ -395,8 +468,12 @@ export function UnboundDraftEditor({
                   <p id={requestHireHintId} className="text-xs text-text-secondary" data-testid="unbound-request-hire-hint">
                     {dirty || jsonBlocked || conflict
                       ? "Save the draft first: a hire is requested for what was saved."
-                      : blockers.length === 0 && commandMissing
-                        ? PROCESS_COMMAND_MISSING_TEXT
+                      : blockers.length === 0 && commandBlocked
+                        ? capabilities.isPending
+                          ? "Checking who can set the command…"
+                          : mayChooseCommand
+                            ? PROCESS_COMMAND_MISSING_TEXT
+                            : PROCESS_COMMAND_ADMIN_ONLY_TEXT
                         : "Fix what blocks a hire request (listed above) and save the draft."}
                   </p>
                 ) : null}

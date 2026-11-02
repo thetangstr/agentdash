@@ -463,6 +463,17 @@ describe("hire_agent with a draft profile (APM gate 5)", () => {
     return container;
   }
 
+  // Whoever approves a process hire decides what runs on the host: the card says what.
+  it("shows a process hire's command, arguments and folder", () => {
+    const withFolder = render(hirePayload({ adapterType: "process", adapterConfig: { command: "python3", args: ["/opt/agent/run.py", "--quiet"], cwd: "/opt/agent" } }));
+    expect(withFolder.querySelector("[data-testid='hire-agent-command']")?.textContent).toBe("Runspython3 /opt/agent/run.py --quiet");
+    expect(withFolder.textContent).toContain("In folder/opt/agent");
+    const noFolder = render(hirePayload({ adapterType: "process", adapterConfig: { command: "/usr/local/bin/collect" } }));
+    expect(noFolder.textContent).toContain("In folderThe server's own folder");
+    const other = render(hirePayload({ adapterType: "claude_local", adapterConfig: { command: "claude" } }));
+    expect(other.querySelector("[data-testid='hire-agent-command']")).toBeNull();
+  });
+
   it("shows the attached profile and links to the draft", async () => {
     const { HIRE_PROFILE_APPLY_TEXT } = await import("./ApprovalPayload");
     const node = render(hirePayload());
