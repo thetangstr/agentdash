@@ -228,6 +228,9 @@ describe("SC-3 settings (GH #764)", () => {
     expect(() => loadConfig({ ...base, CLOUD_ALERT_WEBHOOK_URL: "http://hooks.example.test/x" })).toThrow(/https/);
     const c = loadConfig({ ...base, CLOUD_ALERT_WEBHOOK_URL: "https://hooks.example.test/x", CLOUD_ALERT_EMAIL_TO: "ops@example.test, oncall@example.test", CLOUD_RESEND_API_KEY: "re_fake_key_123" });
     expect(c.alertEmailTo).toEqual(["ops@example.test", "oncall@example.test"]);
+    // No sender of its own: alert email goes from the front door's sender, so the address alone turns it on.
+    expect(c.alertEmailFrom).toBe(c.frontDoor.mailFrom);
+    expect(loadConfig({ ...base, CLOUD_ALERT_EMAIL_FROM: "Ops <ops@example.test>" }).alertEmailFrom).toBe("Ops <ops@example.test>");
     expect(JSON.stringify(c)).not.toContain("re_fake_key_123");
   });
 

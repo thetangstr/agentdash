@@ -52,7 +52,10 @@ www's `/start`, `/start/verify`, `/start/progress` and `/find` call `/api/cloud/
 
 | Variable | Value |
 |---|---|
-| `CLOUD_RESEND_API_KEY` | the Resend key (already used for alerts). Without it `/start` and `/find` answer 503 |
+| `CLOUD_RESEND_API_KEY` | the Resend key (it also sends alert email). Without it `/start` and `/find` answer 503 |
+| `CLOUD_ALERT_EMAIL_TO` | comma-separated addresses that get ops alerts (a job failed or went dead, a box is unhealthy, …). **Set it, or the webhook:** with neither, alerts reach only the log, nobody is paged, cloud-control warns at boot and `admin fleet status` shows `"alerting": {"paging": false}` |
+| `CLOUD_ALERT_EMAIL_FROM` | default `CLOUD_MAIL_FROM` |
+| `CLOUD_ALERT_WEBHOOK_URL` | optional, https only; receives `{text, alert}` |
 | `CLOUD_MAIL_FROM` | default `AgentDash <no-reply@agentdash.cloud>` (agentdash.cloud is a verified Resend domain) |
 | `CLOUD_PUBLIC_SITE_URL` | default `https://www.agentdash.cloud` (links in emails) |
 | `CLOUD_VERCEL_PROXY_SECRET` | `openssl rand -hex 32`; the **same value** as the Vercel project's env var below. Only with it does the control plane believe `X-AgentDash-Client-IP` (compared in constant time); without it every limit keys on the connecting address, which through Vercel is Vercel's, so per-visitor limits collapse into one shared bucket until it is set |
@@ -63,6 +66,7 @@ www's `/start`, `/start/verify`, `/start/progress` and `/find` call `/api/cloud/
 1. `cloud-migrate` first (migrations `0006_front_door`: `signup_requests`, `cloud_sessions`, `rate_events`; and `0007_prune_rate_events`), then `cloud-control`.
 2. Set the variables above on `cloud-control` (not the Turnstile pair until #759 is done). Keep `waitlist_mode=true`, `daily_cap=10`.
 2b. **Vercel:** add `CLOUD_VERCEL_PROXY_SECRET` (the same value, Production scope only, marked sensitive) to the www project's environment variables. Never put it in `vercel.json`, a command line or a log.
+2c. `admin alerts test` reports `email` (or `webhook`) `ok: true`, and the test alert arrives.
 3. `curl -s https://cloud-control-production.up.railway.app/api/cloud/config` answers `{"turnstileSiteKey":null,"signupOpen":true,"waitlist":true,…}`.
 4. Deploy www (Vercel) with the `/api/cloud/:path*` rewrite; `curl -s https://www.agentdash.cloud/api/cloud/config` gives the same answer.
 5. Sign up at `https://www.agentdash.cloud/start` from a private window: the verify email arrives from no-reply@agentdash.cloud, the link lands on "You're on the list", and `admin waitlist list` shows the entry. Check the `signup_requests.ip` of that row is your address, not a Vercel one; if it is Vercel's, the middleware is not running or the two secrets differ. Also check that `curl -s -X POST https://cloud-control-production.up.railway.app/api/cloud/signup -H 'Content-Type: application/json' -H 'X-AgentDash-Client-IP: 203.0.113.9' -d '{}'` is keyed by your own address (it is refused as `invalid_email`; the point is that no row or limit ever records 203.0.113.9).

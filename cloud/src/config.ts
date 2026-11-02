@@ -230,6 +230,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
   if (!/^ghcr\.io\/[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(imageRepo)) throw new ConfigError("CLOUD_BOX_IMAGE_REPO must be ghcr.io/<owner>/<repo>");
   const sourceRepo = (env.CLOUD_BOX_SOURCE_REPO ?? "thetangstr/agentdash").trim();
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(sourceRepo)) throw new ConfigError("CLOUD_BOX_SOURCE_REPO must be <owner>/<repo>");
+  const frontDoor = loadFrontDoorConfig(env);
   return {
     port,
     databaseUrl: new Secret(required(env, "DATABASE_URL")),
@@ -247,7 +248,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     railwayWorkspaceId: workspaceId,
     alertWebhookUrl: webhook,
     alertEmailTo: emailTo,
-    alertEmailFrom: env.CLOUD_ALERT_EMAIL_FROM?.trim() || null,
+    // AgentDash: without a sender of its own, alert email goes from the front door's verified one, so
+    // CLOUD_ALERT_EMAIL_TO alone turns paging on (it was silently off without CLOUD_ALERT_EMAIL_FROM).
+    alertEmailFrom: env.CLOUD_ALERT_EMAIL_FROM?.trim() || frontDoor.mailFrom,
     resendApiKey: resend ? new Secret(resend) : null,
     escrowPublicKey,
     edgeDomain,
@@ -255,7 +258,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig {
     boxSourceRepo: sourceRepo,
     edgeLive: (env.CLOUD_EDGE_LIVE ?? "").trim().toLowerCase() === "true",
     volumeBackupLimit: volumeBackupLimit(env),
-    frontDoor: loadFrontDoorConfig(env),
+    frontDoor,
     billing: (() => {
       try {
         return loadBillingConfig(env);
