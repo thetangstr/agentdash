@@ -139,6 +139,14 @@ agentdash_setup_adapter with their choice; it configures the running server
 and persists the choice. Re-check agentdash_setup_status to confirm
 adapterReady before continuing.
 
+HOSTED WORKSPACE: the agents run on Hermes, and their model is set per
+workspace. agentdash_setup_status reports it as agentModel, routes you to
+create the workspace first, then to phase setup_agent_model. Show the customer
+the providers in agentModel.options (the same list as the web wizard), ask
+which one and for an API key from it, and call agentdash_setup_adapter with
+preset "hermes", that provider and the key (model is optional). The key is
+checked with one small call to the provider and never echoed back.
+
 Interview the customer conversationally (deep-interview) to understand their
 business, goals, and constraints before confirming any plan. Use
 agentdash_start_interview and agentdash_interview_turn; only call
@@ -204,6 +212,7 @@ running (or wire it into launchd per `doc/LAUNCH.md`).
 | MCP tools error "connection refused" / server not up | `cd ~/agentdash && pnpm dev` (or the launchd service); re-check `curl http://localhost:3100/api/health`. `agentdash_install_checklist` still works without the server. |
 | `401` from authenticated tools | The `PAPERCLIP_API_KEY` is missing, stale, or a placeholder. Get the real agent key (bootstrap output, or the agent's Keys panel in the UI) and re-add the MCP server with it (section 2). |
 | `phase: setup_adapter` / `adapterReady: false` | Expected on a fresh install — no model is configured yet. Ask the customer which provider (Claude/OpenAI/Gemini + key, or stub) and call `agentdash_setup_adapter`; it hot-applies the env and persists it. No server restart needed. The interview follow-ups + team plan use the real model once `adapterReady` is true. |
+| `phase: setup_agent_model` | A hosted workspace whose agents have no model yet. Ask which provider from `agentModel.options` and for its API key, then call `agentdash_setup_adapter` with `preset: "hermes"` and the provider. If `agentModel.canConfigure` is false, only the instance admin can set it. |
 | Interview stalls mid-way | Call `agentdash_setup_status` — it reports the resumable state and `nextAction`. |
 | Agent tries a gated action and hangs | Check `/approvals`; a pending card is waiting for you. |
 

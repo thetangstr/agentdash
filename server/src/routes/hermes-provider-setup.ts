@@ -18,8 +18,10 @@ import {
   configureHermesProvider,
   HERMES_PROVIDER_SPECS,
   parseHermesProviderInput,
+  refuseHostedPlanKey,
   type HermesProviderSetupDeps,
 } from "../services/hermes-provider-setup.js";
+import { isHostedBox } from "../services/license.js";
 import { advisoryLock, companySecretStore, listCompanyHermesAgentIds } from "../services/hermes-provider-db.js";
 import { assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
 
@@ -40,6 +42,7 @@ export function createHermesProviderSetupHandler(db: Db, deps: HermesProviderSet
     assertCompanyAccess(req, companyId);
 
     const input = parseHermesProviderInput(body);
+    refuseHostedPlanKey(input, isHostedBox());
     const actorUserId = req.actor.userId ?? null;
     const result = await configureHermesProvider(
       companyId,

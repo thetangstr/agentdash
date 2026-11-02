@@ -892,3 +892,192 @@ describe("operating tools", () => {
     expect(tool.description).toMatch(/approved/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Hosted workspaces: the agents' model (the box's Hermes provider)
+// ---------------------------------------------------------------------------
+
+const PROVIDER_OPTIONS = [
+  { provider: "zai", label: "Z.AI / Zhipu (GLM)", defaultModel: "glm-5.3-flash", keyHint: "API key from z.ai or open.bigmodel.cn" },
+  { provider: "openrouter", label: "OpenRouter", defaultModel: "z-ai/glm-5.2", keyHint: "sk-or-…" },
+];
+
+function adapterStatusBody(hermes: Record<string, unknown>) {
+  return {
+    status: { adapter: "hermes_local", ready: false, preset: "hermes", reason: "Hermes provider key not configured" },
+    options: [],
+    hermesProvider: {
+      required: true,
+      configured: false,
+      provider: null,
+      model: null,
+      configuredAt: null,
+      canConfigure: true,
+      options: PROVIDER_OPTIONS,
+      ...hermes,
+    },
+  };
+}
+
+describe("hosted workspace: the agents' model", () => {
+  const base: SetupStatusSnapshot = {
+    serverHealthy: true,
+    bootstrapStatus: null,
+    adapterReady: false,
+    apiKeyConfigured: true,
+    companyId: COMPANY_ID,
+    agentCount: 1,
+    nonCosAgentCount: 0,
+    pausedAgentCount: 0,
+    planReady: false,
+    pendingApprovals: 0,
+    openTasks: 0,
+  };
+  const hostedUnset = {
+    required: true,
+    configured: false,
+    canConfigure: true,
+    provider: null,
+    model: null,
+    options: PROVIDER_OPTIONS,
+  };
+
+  it("routes a hosted box with no agent model to setup_agent_model, not the classic presets", () => {
+    const next = computeNextAction({ ...base, agentModel: hostedUnset });
+    expect(next.phase).toBe("setup_agent_model");
+    expect(next.nextAction).toBe("agentdash_setup_adapter");
+    expect(next.nextActionReason).toContain('preset "hermes"');
+    expect(next.nextActionReason).not.toMatch(/stub/);
+  });
+
+  it("creates the workspace first when a hosted box has no company yet", () => {
+    const next = computeNextAction({ ...base, agentModel: hostedUnset, companyId: null, agentCount: 0 });
+    expect(next).toMatchObject({ phase: "bootstrap", nextAction: "agentdash_start_interview" });
+  });
+
+  it("says only the instance admin can set it when this user can't", () => {
+    const next = computeNextAction({ ...base, agentModel: { ...hostedUnset, canConfigure: false } });
+    expect(next.phase).toBe("setup_agent_model");
+    expect(next.nextAction).toBe("agentdash_setup_status");
+    expect(next.nextActionReason).toContain("instance admin");
+  });
+
+  it("moves on to the interview once the agents' model is set", () => {
+    const next = computeNextAction({
+      ...base,
+      adapterReady: true,
+      agentModel: { ...hostedUnset, configured: true, provider: "zai", model: "glm-5.3-flash" },
+    });
+    expect(next.phase).toBe("interview");
+  });
+
+  it("leaves self-hosted installs (model not required) on the classic adapter gate", () => {
+    const next = computeNextAction({ ...base, agentModel: { ...hostedUnset, required: false } });
+    expect(next).toMatchObject({ phase: "setup_adapter", nextAction: "agentdash_setup_adapter" });
+  });
+
+  it("setup_status reports the agents' model from adapter-status, without key material", async () => {
+    routeFetch([
+      [/\/api\/health$/, { status: "ok", adapterReady: false }],
+      [/\/onboarding\/adapter-status$/, adapterStatusBody({})],
+      [/\/companies\/[^/]+\/agents$/, [{ id: AGENT_ID, role: "chief_of_staff", status: "idle" }]],
+      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, tasks: { open: 0 } }],
+      [/\/approvals\?status=pending$/, []],
+      [/\/conversations\/companies\/[^/]+\/inbox$/, { id: CONVERSATION_ID }],
+      [/\/conversations\/[^/]+\/messages/, []],
+    ]);
+
+    const result = parseText(await getTool("agentdash_setup_status").execute({}));
+
+    expect(result.phase).toBe("setup_agent_model");
+    expect(result.nextAction).toBe("agentdash_setup_adapter");
+    expect(result.agentModel).toEqual({
+      required: true,
+      configured: false,
+      canConfigure: true,
+      provider: null,
+      model: null,
+      options: PROVIDER_OPTIONS,
+    });
+  });
+
+  it("setup_adapter with preset hermes sets the box's Hermes provider for the user's only company", async () => {
+    const key = "sk-or-v1-mcptestkey0123456789";
+    const fetchMock = routeFetch([
+      [/\/onboarding\/adapter-status$/, adapterStatusBody({})],
+      [/\/api\/companies$/, [{ id: COMPANY_ID }]],
+      [/\/onboarding\/setup-adapter$/, {
+        status: { adapter: "hermes_local", ready: true, preset: "hermes", reason: null },
+        hermesProvider: { configured: true, provider: "openrouter", label: "OpenRouter", model: "z-ai/glm-5.2" },
+        profilesUpdated: 1,
+        applied: ["OPENROUTER_API_KEY", "model.provider", "model.default"],
+      }, 201],
+    ]);
+
+    const response = await getTool("agentdash_setup_adapter", makeClient({ companyId: null })).execute({
+      preset: "hermes",
+      provider: "openrouter",
+      apiKey: key,
+    });
+    const result = parseText(response);
+
+    const post = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/onboarding/setup-adapter"))!;
+    expect(JSON.parse((post[1] as RequestInit).body as string)).toEqual({
+      preset: "hermes",
+      provider: "openrouter",
+      apiKey: key,
+      companyId: COMPANY_ID,
+    });
+    expect(result).toMatchObject({
+      provider: "openrouter",
+      label: "OpenRouter",
+      model: "z-ai/glm-5.2",
+      companyId: COMPANY_ID,
+      agentModelConfigured: true,
+      adapterReady: true,
+    });
+    expect(JSON.stringify(response)).not.toContain(key);
+  });
+
+  it("refuses a provider the box doesn't list, before sending the key anywhere", async () => {
+    const fetchMock = routeFetch([[/\/onboarding\/adapter-status$/, adapterStatusBody({})]]);
+
+    const response = await getTool("agentdash_setup_adapter").execute({
+      preset: "hermes",
+      provider: "minimax",
+      apiKey: "some-key-0123456789",
+    });
+
+    expect(parseText(response).error).toBe(
+      "provider must be one of this box's: zai (Z.AI / Zhipu (GLM)), openrouter (OpenRouter)",
+    );
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/onboarding/setup-adapter"))).toBe(false);
+  });
+
+  it("asks for companyId when the user belongs to several companies", async () => {
+    routeFetch([
+      [/\/onboarding\/adapter-status$/, adapterStatusBody({})],
+      [/\/api\/companies$/, [{ id: COMPANY_ID }, { id: "99999999-9999-4999-8999-999999999999" }]],
+    ]);
+
+    const response = await getTool("agentdash_setup_adapter", makeClient({ companyId: null })).execute({
+      preset: "hermes",
+      provider: "zai",
+      apiKey: "some-key-0123456789",
+    });
+
+    expect(String(parseText(response).error)).toContain("Pass companyId");
+  });
+
+  it("needs a key with a provider, and keeps provider/model to the hermes preset", async () => {
+    const fetchMock = routeFetch([]);
+    const tool = getTool("agentdash_setup_adapter");
+
+    const noKey = await tool.execute({ preset: "hermes", provider: "zai" });
+    expect(String(parseText(noKey).error)).toContain("apiKey is required");
+
+    const wrongPreset = await tool.execute({ preset: "claude", provider: "zai", apiKey: "k-0123456789" });
+    expect(parseText(wrongPreset).error).toBe('provider and model go with preset "hermes".');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
