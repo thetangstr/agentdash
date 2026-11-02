@@ -32,5 +32,7 @@ export const issueComments = pgTable(
       table.createdAt,
     ),
     bodySearchIdx: index("issue_comments_body_search_idx").using("gin", table.body.op("gin_trgm_ops")),
+    // AgentDash: the evaluation ingest's keyset read (services/evaluation/sources.ts) orders by this key per company.
+    companyCreatedIdIdx: index("issue_comments_company_created_id_idx").on(table.companyId, table.createdAt, table.id),
   }),
 );
