@@ -92,10 +92,42 @@ export function provenanceFor(map: AgentProfileProvenanceMap | null | undefined,
   }
 }
 
-export function storedProvenanceText(entry: AgentProfileProvenanceEntry | null): string {
-  if (!entry) return "Source not recorded";
-  const base = PROVENANCE_STATE_TEXT[entry.state];
-  if (entry.state === "missing") return base;
+/** Revision states a person decided to approve: every field in the revision was approved with it. */
+const APPROVED_REVISION_STATES: ReadonlySet<AgentProfileRevisionState> = new Set<AgentProfileRevisionState>([
+  "approved",
+  "applied",
+  "application_failed",
+  "refused_stale",
+  "superseded",
+]);
+
+export function revisionWasApproved(state: AgentProfileRevisionState | null | undefined): boolean {
+  return !!state && APPROVED_REVISION_STATES.has(state);
+}
+
+/** What the screen knows about the field a label sits next to. */
+export interface ProvenanceFieldState {
+  /** The field shows no value. Left out for a section label, whose emptiness isn't known here. */
+  empty?: boolean;
+  /** The revision was approved by a person (`revisionWasApproved`). */
+  approved?: boolean;
+}
+
+/**
+ * The label for a stored field, matched to the field as shown. The stored map
+ * is written when a draft is seeded or edited and can lag the body (an API
+ * save that leaves `provenance` out keeps the old map), so the field's own
+ * state wins: an empty field is "Missing", a filled one never is, and a value
+ * proposed or drafted from a brief reads "Approved" once its revision was.
+ */
+export function storedProvenanceText(entry: AgentProfileProvenanceEntry | null, field: ProvenanceFieldState = {}): string {
+  if (field.empty === true) return PROVENANCE_STATE_TEXT.missing;
+  if (!entry || (entry.state === "missing" && field.empty === false)) return "Source not recorded";
+  if (entry.state === "missing") return PROVENANCE_STATE_TEXT.missing;
+  const approved = field.approved === true && (entry.state === "proposed" || entry.state === "from_brief");
+  // A brief is named by its state ("From the brief"); its document id is never shown.
+  if (entry.state === "from_brief") return approved ? "Approved — from the brief" : PROVENANCE_STATE_TEXT.from_brief;
+  const base = approved ? "Approved" : PROVENANCE_STATE_TEXT[entry.state];
   const from = entry.sourceRef ? ` — from ${describeSource(entry.sourceRef)}` : "";
   return `${base}${from}`;
 }
@@ -104,11 +136,13 @@ export function StoredProvenanceLabel({
   map,
   pointer,
   id,
+  empty,
+  approved,
 }: {
   map: AgentProfileProvenanceMap | null | undefined;
   pointer: string;
   id?: string;
-}) {
+} & ProvenanceFieldState) {
   const entry = provenanceFor(map, pointer);
   return (
     <Badge
@@ -118,7 +152,7 @@ export function StoredProvenanceLabel({
       data-testid="agent-pm-provenance"
       title={entry?.at ? `Recorded ${formatDateTime(entry.at)}` : undefined}
     >
-      {storedProvenanceText(entry)}
+      {storedProvenanceText(entry, { empty, approved })}
     </Badge>
   );
 }

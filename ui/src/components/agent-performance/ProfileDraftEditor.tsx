@@ -187,8 +187,14 @@ function FieldShell({
   hint,
   adminDecides,
   error,
+  empty,
   children,
-}: FieldBase & { error?: string | null; children: (ids: { id: string; describedBy: string }) => ReactNode }) {
+}: FieldBase & {
+  error?: string | null;
+  /** The field's value is empty; its label then says "Missing" whatever was stored (and a filled field never does). */
+  empty?: boolean;
+  children: (ids: { id: string; describedBy: string }) => ReactNode;
+}) {
   const ids = useFieldIds(pointer);
   const describedBy = [ids.provenanceId, hint ? ids.hintId : null, error ? ids.errorId : null].filter(Boolean).join(" ");
   return (
@@ -198,7 +204,7 @@ function FieldShell({
           {label}
           {adminDecides ? <span className="font-normal text-text-secondary">(a company admin decides)</span> : null}
         </Label>
-        <StoredProvenanceLabel id={ids.provenanceId} map={provenance} pointer={pointer} />
+        <StoredProvenanceLabel id={ids.provenanceId} map={provenance} pointer={pointer} empty={empty} />
       </div>
       {children({ id: ids.id, describedBy })}
       {hint ? (
@@ -222,7 +228,7 @@ function TextField({
   ...base
 }: FieldBase & { value: string; onChange: (value: string) => void; multiline?: boolean }) {
   return (
-    <FieldShell {...base}>
+    <FieldShell {...base} empty={!value.trim()}>
       {({ id, describedBy }) =>
         multiline ? (
           <Textarea id={id} aria-describedby={describedBy} value={value} onChange={(event) => onChange(event.target.value)} rows={3} />

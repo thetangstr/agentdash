@@ -535,7 +535,9 @@ describe("AgentProfileTab — active revision", () => {
 
     expect(node.textContent).toContain("Revision 1 · Active");
     const labels = Array.from(node.querySelectorAll("[data-testid='agent-profile-active-body'] [data-testid='agent-pm-provenance']")).map((el) => el.textContent);
-    expect(labels).toContain("Proposed — from the agent record (name)");
+    // The revision is applied: what was proposed was approved with it.
+    expect(labels).toContain("Approved — from the agent record (name)");
+    expect(labels.some((label) => label?.startsWith("Proposed"))).toBe(false);
     expect(labels).toContain("Confirmed by a person");
     expect(labels).toContain("Missing");
     expect(labels).toContain("Source not recorded");
@@ -551,6 +553,41 @@ describe("AgentProfileTab — active revision", () => {
     expect(diff).toContain("Changed: Identity › Title");
     expect(diff).toContain("“Revenue analyst”");
     expect(diff).toContain("“Head of revenue”");
+  });
+
+  // A label matches the field as shown: the stored map can lag the body (an API save that
+  // leaves provenance out keeps it), so a filled field never reads "Missing" and an empty one always does.
+  it("labels each field by what it shows, not by a stale stored label", async () => {
+    const active = revision({
+      id: "rev-1",
+      revisionNumber: 1,
+      state: "applied",
+      body: body({
+        identity: {
+          name: "Ivy",
+          title: "",
+          summary: "Keeps the pipeline report current",
+          audience: "The marketing and sales teams",
+          style: { tone: "", uncertaintyRule: "" },
+        },
+      }),
+      provenance: {
+        "/identity/audience": { state: "missing" },
+        "/identity/title": { state: "proposed", sourceRef: "agent.title" },
+      },
+    });
+    mockPerf.profile.mockResolvedValue(view({ profileId: "profile-1", active, derived: null }));
+    mockProfiles.revisions.mockResolvedValue([summary(active)]);
+    const node = await render();
+    const fact = (label: string) =>
+      Array.from(node.querySelectorAll<HTMLElement>("[data-testid='agent-profile-active-body'] dt")).find((dt) => dt.textContent === label)
+        ?.nextElementSibling as HTMLElement | undefined;
+    const audience = fact("Who it serves")!;
+    expect(audience.textContent).toContain("The marketing and sales teams");
+    expect(audience.querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Source not recorded");
+    const title = fact("Title")!;
+    expect(title.textContent).toContain("Not recorded");
+    expect(title.querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Missing");
   });
 
   // Gate 4 (P4.2/P4.3): a revision the performance manager proposed is marked, from the
@@ -743,7 +780,11 @@ describe("AgentProfileTab — draft editor", () => {
     const rows = editor.querySelectorAll("[data-testid='agent-profile-edit-responsibility']");
     expect(rows).toHaveLength(1);
     expect((field(rows[0] as HTMLElement, "Key") as HTMLInputElement).value).toBe("responsibility-2");
-    expect(rows[0].querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Confirmed by a person");
+    // The added row's label moved with it: its key is the person's; its title is still empty, so missing.
+    const label = (pointer: string) =>
+      rows[0].querySelector(`[data-testid='agent-profile-field'][data-pointer='${pointer}'] [data-testid='agent-pm-provenance']`)?.textContent;
+    expect(label("/responsibilities/0/key")).toBe("Confirmed by a person");
+    expect(label("/responsibilities/0/title")).toBe("Missing");
   });
 
   it("asks for approval only for a saved draft, then reports it without applying", async () => {

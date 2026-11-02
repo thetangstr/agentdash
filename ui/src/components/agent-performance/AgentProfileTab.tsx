@@ -24,7 +24,7 @@ import {
   Section,
   ViewStatus,
 } from "./shared";
-import { REVISION_STATE_TEXT, refusalText } from "./profile-shared";
+import { REVISION_STATE_TEXT, refusalText, revisionWasApproved } from "./profile-shared";
 import { ProfileApplicationStatus } from "./ProfileApplicationStatus";
 import { ProfileBodyView } from "./ProfileBodyView";
 import { ProfileDraftEditor } from "./ProfileDraftEditor";
@@ -520,7 +520,12 @@ function ProfileTabContent({
               agent works from.
             </p>
           </Banner>
-          <ProfileBodyView body={active.body} provenance={active.provenance} testId="agent-profile-active-body" />
+          <ProfileBodyView
+            body={active.body}
+            provenance={active.provenance}
+            approved={revisionWasApproved(active.state)}
+            testId="agent-profile-active-body"
+          />
         </div>
       ) : derived ? (
         <DerivedProfileView profile={derived} accountable={accountable} />
