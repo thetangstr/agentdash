@@ -86,11 +86,15 @@ restart.
    (the agent's adapter env), never on the board. The provisioning
    administrator becomes the evaluator's accountable human (D12).
 2. Set on the instance environment and restart:
-   `AGENTDASH_EVALUATION_INGEST_ENABLED=true` (interval default 5 min, floor
-   60 s) and `AGENTDASH_EVALUATION_SNAPSHOT_ENABLED=true` (interval default one
+   `AGENTDASH_EVALUATION_SNAPSHOT_ENABLED=true` (interval default one
    day, floor one hour; `AGENTDASH_EVALUATION_SNAPSHOT_INTERVAL_MS` to change).
-3. Backfill the ledger once: `POST …/evaluation/ingest/run?backfill=true`
-   (administrator; bounded passes; repeat until `exhausted: true`).
+   Ingest needs nothing: since 2026-11-02 it runs by default (interval default
+   5 min, floor 60 s, `AGENTDASH_EVALUATION_INGEST_INTERVAL_MS` to change;
+   `AGENTDASH_EVALUATION_INGEST_ENABLED=false` turns it off).
+3. The first scheduled ingest pass backfills the ledger (bounded passes; a
+   larger history goes on at the next pass). To fill it now instead:
+   `POST …/evaluation/ingest/run?backfill=true` (administrator; bounded
+   passes; repeat until `exhausted: true`).
 4. Store the first cards by hand rather than waiting a day:
    `POST …/evaluation/scorecards/snapshot?reviewItems=true` with
    `{ "kind": "project", "id": "<milestone>" }` for each candidate. Read the

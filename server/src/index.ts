@@ -1004,10 +1004,13 @@ export async function startServer(): Promise<StartedServer> {
     runHealerHandle.unref?.();
   }
   
-  // AgentDash: Company Evaluator (Stage 1 shadow) — ingest on its own interval,
-  // off by default. Reads control-plane rows into the append-only ledger; never
+  // AgentDash: Company Evaluator — ingest on its own interval, on unless
+  // AGENTDASH_EVALUATION_INGEST_ENABLED=false. Reads control-plane rows into the
+  // append-only ledger that agent and milestone cards are computed from; never
   // on the heartbeat scheduler tick and never on the request path (spec §11).
-  const evaluationIngestEnabled = process.env.AGENTDASH_EVALUATION_INGEST_ENABLED === "true";
+  // A company whose ledger was never filled gets its history on the first
+  // scheduled pass (bounded; see `scheduledPass` in services/evaluation/ingest.ts).
+  const evaluationIngestEnabled = process.env.AGENTDASH_EVALUATION_INGEST_ENABLED !== "false";
   const evaluationIngestIntervalMs = (() => {
     const parsed = Number(process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS);
     const floor = 60 * 1000;
@@ -1039,7 +1042,7 @@ export async function startServer(): Promise<StartedServer> {
     evaluationSnapshotHandle.unref?.();
   }
   if (!evaluationIngestEnabled) {
-    logger.info({ reason: "AGENTDASH_EVALUATION_INGEST_ENABLED!=true" }, "evaluation_ingest: schedule skipped");
+    logger.info({ reason: "AGENTDASH_EVALUATION_INGEST_ENABLED=false" }, "evaluation_ingest: schedule skipped");
   } else {
     const ingest = evaluationIngest(db);
     logger.info({ intervalMs: evaluationIngestIntervalMs }, "evaluation_ingest: schedule enabled");
@@ -1050,9 +1053,12 @@ export async function startServer(): Promise<StartedServer> {
           const inserted = stats.reduce((n, s) => n + s.inserted, 0);
           const scanned = stats.reduce((n, s) => n + s.scanned, 0);
           const maxMs = stats.reduce((m, s) => Math.max(m, s.durationMs), 0);
+          const maxPasses = stats.reduce((m, s) => Math.max(m, s.passes), 0);
+          // Companies whose history is still being read: the next pass goes on from the cursor.
+          const catchingUp = stats.filter((s) => !s.caughtUp).length;
           // Ingest lag (now minus the oldest event time inserted this tick) is the shadow run's health gauge.
           const maxLagMs = stats.reduce<number | null>((m, s) => (s.maxLagMs == null ? m : Math.max(m ?? 0, s.maxLagMs)), null);
-          logger.info({ companies: stats.length, scanned, inserted, maxDurationMs: maxMs, maxLagMs }, "evaluation_ingest: tick");
+          logger.info({ companies: stats.length, scanned, inserted, maxDurationMs: maxMs, maxPasses, catchingUp, maxLagMs }, "evaluation_ingest: tick");
         })
         .catch((err) => {
           logger.error({ err }, "evaluation_ingest: scheduled tick failed");

@@ -74,6 +74,14 @@ export interface CompanyTickStats {
   perSource: Record<string, SourceTickStats>;
 }
 
+/** One company's share of a scheduled pass: one or more ticks, summed (`tickAll`). */
+export interface ScheduledCompanyStats extends CompanyTickStats {
+  /** Ticks this scheduled pass ran for the company (more than one while history is being read). */
+  passes: number;
+  /** False when the pass stopped at its bound with rows still waiting; the next scheduled pass goes on from the cursor. */
+  caughtUp: boolean;
+}
+
 const DEFAULT_ROW_BUDGET = 5000;
 const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
 const DEFAULT_WITHDRAWAL_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -181,6 +189,64 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
     });
   }
 
+  /** A tick that read a full budget from any source may have left rows behind it. */
+  function moreWaiting(stats: CompanyTickStats): boolean {
+    return Object.values(stats.perSource).some((s) => s.scanned >= rowBudget);
+  }
+
+  function addTick(total: ScheduledCompanyStats, stats: CompanyTickStats): void {
+    total.passes++;
+    total.scanned += stats.scanned;
+    total.inserted += stats.inserted;
+    total.skipped += stats.skipped;
+    total.durationMs += stats.durationMs;
+    if (stats.maxLagMs != null) total.maxLagMs = Math.max(total.maxLagMs ?? 0, stats.maxLagMs);
+    total.withdrawalChecked ||= stats.withdrawalChecked;
+    for (const [source, s] of Object.entries(stats.perSource)) {
+      const t = (total.perSource[source] ??= { scanned: 0, produced: 0, inserted: 0, skipped: 0, durationMs: 0 });
+      t.scanned += s.scanned;
+      t.produced += s.produced;
+      t.inserted += s.inserted;
+      t.skipped += s.skipped;
+      t.durationMs += s.durationMs;
+    }
+  }
+
+  /**
+   * The scheduled pass for one company. A tick reads at most `rowBudget` rows
+   * per source, so a company whose ledger was never filled (an install that
+   * ran before ingest was on by default) would take one interval per budget
+   * to reach today. Instead the pass keeps ticking while a source returned a
+   * full budget, up to MAX_BACKFILL_PASSES ticks: the first scheduled pass
+   * reads the history, and a history larger than the bound goes on at the
+   * next interval from the cursor. Each tick is its own transaction under the
+   * company lock, so nothing else waits for the whole backfill.
+   */
+  async function scheduledPass(companyId: string): Promise<ScheduledCompanyStats> {
+    const total: ScheduledCompanyStats = {
+      companyId,
+      scanned: 0,
+      inserted: 0,
+      skipped: 0,
+      durationMs: 0,
+      maxLagMs: null,
+      withdrawalChecked: false,
+      perSource: {},
+      passes: 0,
+      caughtUp: false,
+    };
+    for (;;) {
+      const stats = await tickOnce(companyId);
+      addTick(total, stats);
+      if (!moreWaiting(stats)) {
+        total.caughtUp = true;
+        break;
+      }
+      if (total.passes >= MAX_BACKFILL_PASSES) break;
+    }
+    return total;
+  }
+
   return {
     /** One ingest pass for one company. Serialised with every other pass on this company, on any instance. */
     async tick(companyId: string): Promise<CompanyTickStats> {
@@ -193,8 +259,13 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       }
     },
 
-    /** One pass over every company; errors are logged per company and never stop the loop. Skips when a pass is in flight. */
-    async tickAll(): Promise<CompanyTickStats[]> {
+    /**
+     * The scheduled pass over every company (`scheduledPass`: catches up on
+     * history, bounded). Errors are logged per company and never stop the
+     * loop; a lock collision ends that company's pass, and its committed ticks
+     * stay. Skips when a pass is in flight.
+     */
+    async tickAll(): Promise<ScheduledCompanyStats[]> {
       if (inFlight) {
         logger.warn({}, "evaluation_ingest: previous pass still running; skipping this tick");
         return [];
@@ -202,10 +273,10 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       inFlight = true;
       try {
         const rows = await db.select({ id: companies.id }).from(companies);
-        const out: CompanyTickStats[] = [];
+        const out: ScheduledCompanyStats[] = [];
         for (const { id } of rows) {
           try {
-            out.push(await tickOnce(id));
+            out.push(await scheduledPass(id));
           } catch (err) {
             if (err instanceof Error && /already running/.test(err.message)) {
               logger.warn({ companyId: id }, "evaluation_ingest: company locked by another pass; skipped");

@@ -9,6 +9,8 @@ const ORIGINAL_RUN_HEALER_ENABLED = process.env.RUN_HEALER_ENABLED;
 const ORIGINAL_RUN_HEALER_SCAN_INTERVAL_MS = process.env.RUN_HEALER_SCAN_INTERVAL_MS;
 const ORIGINAL_STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const ORIGINAL_AGENTDASH_BILLING_DISABLED = process.env.AGENTDASH_BILLING_DISABLED;
+const ORIGINAL_EVALUATION_INGEST_ENABLED = process.env.AGENTDASH_EVALUATION_INGEST_ENABLED;
+const ORIGINAL_EVALUATION_INGEST_INTERVAL_MS = process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS;
 
 const {
   createAppMock,
@@ -16,6 +18,8 @@ const {
   createDbMock,
   detectPortMock,
   deriveAuthTrustedOriginsMock,
+  evaluationIngestMock,
+  evaluationIngestTickAllMock,
   feedbackExportServiceMock,
   feedbackServiceFactoryMock,
   fakeServer,
@@ -46,6 +50,8 @@ const {
     close: vi.fn(),
   };
   const loadConfigMock = vi.fn();
+  const evaluationIngestTickAllMock = vi.fn(async () => []);
+  const evaluationIngestMock = vi.fn(() => ({ tickAll: evaluationIngestTickAllMock }));
 
   return {
     createAppMock,
@@ -53,6 +59,8 @@ const {
     createDbMock,
     detectPortMock,
     deriveAuthTrustedOriginsMock,
+    evaluationIngestMock,
+    evaluationIngestTickAllMock,
     feedbackExportServiceMock,
     feedbackServiceFactoryMock,
     fakeServer,
@@ -224,6 +232,11 @@ vi.mock("../services/index.js", () => ({
 
 vi.mock("../services/run-healer/service.js", () => ({
   runHealerService: runHealerServiceMock,
+}));
+
+vi.mock("../services/evaluation/ingest.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/evaluation/ingest.js")>()),
+  evaluationIngest: evaluationIngestMock,
 }));
 
 vi.mock("../storage/index.js", () => ({
@@ -509,5 +522,75 @@ describe("startServer run-healer scheduler", () => {
     // sweeps is not a lease.
     const healerIntervals = setIntervalSpy.mock.calls.filter((call) => call[1] === 24680);
     expect(healerIntervals).toHaveLength(0);
+  });
+});
+
+function restoreEvaluationIngestEnv() {
+  if (ORIGINAL_EVALUATION_INGEST_ENABLED === undefined) delete process.env.AGENTDASH_EVALUATION_INGEST_ENABLED;
+  else process.env.AGENTDASH_EVALUATION_INGEST_ENABLED = ORIGINAL_EVALUATION_INGEST_ENABLED;
+  if (ORIGINAL_EVALUATION_INGEST_INTERVAL_MS === undefined) delete process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS;
+  else process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS = ORIGINAL_EVALUATION_INGEST_INTERVAL_MS;
+}
+
+// AgentDash: the evaluation ingest fills the ledger agent scorecards are drawn
+// from. It runs on its own interval unless AGENTDASH_EVALUATION_INGEST_ENABLED
+// is "false"; no install path sets the variable, so the default is what ships.
+describe("startServer evaluation ingest scheduler", () => {
+  // A distinctive interval (above the one-minute floor), so the ingest's timer
+  // is found by its own cadence rather than by position.
+  const INTERVAL_MS = 61_234;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    restoreEvaluationIngestEnv();
+    delete process.env.AGENTDASH_EVALUATION_INGEST_ENABLED;
+    process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS = String(INTERVAL_MS);
+    loadConfigMock.mockReturnValue(buildTestConfig());
+    process.env.BETTER_AUTH_SECRET = "test-secret";
+  });
+
+  afterEach(() => {
+    restoreEvaluationIngestEnv();
+    vi.restoreAllMocks();
+  });
+
+  it("schedules the ingest when the variable is unset, and each tick runs the scheduled pass", async () => {
+    const timer = { unref: vi.fn() };
+    const setIntervalSpy = vi
+      .spyOn(globalThis, "setInterval")
+      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+        return Object.assign(timer, { handler, timeout }) as unknown as ReturnType<typeof setInterval>;
+      });
+
+    await startServer();
+
+    expect(evaluationIngestMock).toHaveBeenCalledTimes(1);
+    const ingestTimers = setIntervalSpy.mock.calls.filter((call) => call[1] === INTERVAL_MS);
+    expect(ingestTimers).toHaveLength(1);
+    expect(timer.unref).toHaveBeenCalled();
+    (ingestTimers[0]![0] as () => void)();
+    await Promise.resolve();
+    expect(evaluationIngestTickAllMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules it for any value other than \"false\"", async () => {
+    process.env.AGENTDASH_EVALUATION_INGEST_ENABLED = "true";
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+
+    await startServer();
+
+    expect(evaluationIngestMock).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy.mock.calls.filter((call) => call[1] === INTERVAL_MS)).toHaveLength(1);
+  });
+
+  it("does not construct or schedule the ingest when AGENTDASH_EVALUATION_INGEST_ENABLED=false", async () => {
+    process.env.AGENTDASH_EVALUATION_INGEST_ENABLED = "false";
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+
+    await startServer();
+
+    expect(evaluationIngestMock).not.toHaveBeenCalled();
+    expect(setIntervalSpy.mock.calls.filter((call) => call[1] === INTERVAL_MS)).toHaveLength(0);
+    expect(evaluationIngestTickAllMock).not.toHaveBeenCalled();
   });
 });
