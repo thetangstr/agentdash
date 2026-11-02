@@ -51,7 +51,7 @@ vi.mock("@/lib/router", () => ({
 }));
 
 const { UnboundDraftView, UNBOUND_RESTRICTED_TEXT } = await import("./UnboundDraftView");
-const { UNBOUND_DRAFT_INTRO_TEXT } = await import("./UnboundDraftEditor");
+const { UNBOUND_DRAFT_INTRO_TEXT, PROCESS_COMMAND_HINT, PROCESS_COMMAND_MISSING_TEXT } = await import("./UnboundDraftEditor");
 const { HIRE_NEEDS_APPROVAL_TEXT } = await import("./brief-shared");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -503,6 +503,47 @@ describe("UnboundDraftView — Request hire", () => {
     expect(alert.textContent).toContain("Runtime › Adapter: a hire needs the adapter type the new agent runs on");
     expect(alert.textContent).toContain("Responsibility “Overdue invoices” › Obligation: a new hire has no routines yet");
     expect(alert.textContent).toContain("name: already taken");
+  });
+
+  // A process agent needs a command, and no profile field carries one: the hire request gives it.
+  it("asks for the command of a process agent and files it with the hire", async () => {
+    mockUnbound.get.mockResolvedValue(view({ latestDraft: revision({ body: body({ runtime: { adapterType: "process" } }) }) }));
+    const node = await render(null);
+    await click(byTestId(node, "unbound-step-review"));
+    const review = panel(node, "review");
+    expect(byTestId(review, "unbound-review-no-blockers").textContent).toBe("A process agent needs its command: give it under Request hire below.");
+    const request = byTestId<HTMLButtonElement>(review, "unbound-request-hire");
+    expect(request.getAttribute("aria-disabled")).toBe("true");
+    expect(byTestId(review, "unbound-request-hire-hint").textContent).toBe(PROCESS_COMMAND_MISSING_TEXT);
+    await click(request);
+    expect(mockUnbound.propose).not.toHaveBeenCalled();
+
+    const command = field(review, "Command");
+    expect(review.textContent).toContain(PROCESS_COMMAND_HINT);
+    mockUnbound.propose.mockRejectedValue(
+      new ApiError("This draft cannot be filed as a hire", 422, {
+        error: "This draft cannot be filed as a hire",
+        details: { code: AGENT_PROFILE_HIRE_INVALID, issues: [{ path: "adapterConfig.command", message: "A process agent needs adapterConfig.command" }] },
+      }),
+    );
+    await type(command, "  /usr/local/bin/collect  ");
+    expect(request.getAttribute("aria-disabled")).toBe("false");
+    await click(request);
+    expect(mockUnbound.propose).toHaveBeenCalledWith("company-1", "profile-1", "rev-1", {
+      role: "general",
+      adapterConfig: { command: "/usr/local/bin/collect" },
+    });
+    // A refusal of the command names the field the form shows, not the validator's path.
+    expect(byTestId(node, "unbound-hire-error").textContent).toContain("Command: A process agent needs adapterConfig.command");
+  });
+
+  it("asks for no command for any other adapter", async () => {
+    const node = await render(null);
+    await click(byTestId(node, "unbound-step-review"));
+    expect(node.querySelector("[data-testid='unbound-hire-command']")).toBeNull();
+    mockUnbound.propose.mockResolvedValue({ revision: revision({ state: "proposed" }), approvalId: "approval-8", agentId: "agent-pending", payload: {} });
+    await click(byTestId(node, "unbound-request-hire"));
+    expect(mockUnbound.propose).toHaveBeenCalledWith("company-1", "profile-1", "rev-1", { role: "general" });
   });
 
   it("offers a reload when the draft changed state elsewhere (409)", async () => {
