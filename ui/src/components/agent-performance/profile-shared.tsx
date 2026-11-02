@@ -295,12 +295,24 @@ function truncate(text: string, max: number): string {
 }
 
 /**
+ * An id as its name when the screen has one, else the id. `withId` keeps a
+ * short id after the name, "Finance (e3133a1b)": two projects can share a
+ * name, and someone deciding on access must tell them apart.
+ */
+export function namedId(id: string, names?: ProfileNameLookup, withId = false): string {
+  const name = names?.(id) ?? null;
+  if (!name) return id;
+  return withId ? `${name} (${id.slice(0, 8)})` : name;
+}
+
+/**
  * A short, readable rendering of a diff value. Never a wall of JSON. An id the
  * screen has a name for (`names`: a listed project, a reports-to agent, a
- * person) is shown as that name; an id it has no name for stays as it is.
+ * person) is shown as that name (with a short id when `withIds`); an id it
+ * has no name for stays as it is.
  */
-export function diffValueText(value: unknown, names?: ProfileNameLookup): string {
-  const named = (item: string) => names?.(item) ?? item;
+export function diffValueText(value: unknown, names?: ProfileNameLookup, withIds = false): string {
+  const named = (item: string) => namedId(item, names, withIds);
   if (value === undefined) return "—";
   if (value === null) return "none";
   if (typeof value === "string") return value.trim() === "" ? "(empty)" : `“${truncate(named(value), 160)}”`;
@@ -340,6 +352,7 @@ export function ProfileDiffList({
   emptyText = "No differences.",
   annotate,
   names,
+  withIds = false,
   testId = "agent-profile-diff",
 }: {
   diff: AgentProfileDiffEntry[];
@@ -350,6 +363,8 @@ export function ProfileDiffList({
   annotate?: (entry: AgentProfileDiffEntry) => ReactNode;
   /** Names for the ids in the values (`useProfileNames`). */
   names?: ProfileNameLookup;
+  /** Keep a short id after each name (an approval: same-named projects must stay distinguishable). */
+  withIds?: boolean;
   testId?: string;
 }) {
   if (diff.length === 0) {
@@ -372,20 +387,20 @@ export function ProfileDiffList({
           </p>
           {entry.op === "reorder" ? (
             <p className="mt-1 text-text-secondary">
-              {beforeLabel}: {diffValueText(entry.before, names)} · {afterLabel}: {diffValueText(entry.after, names)}
+              {beforeLabel}: {diffValueText(entry.before, names, withIds)} · {afterLabel}: {diffValueText(entry.after, names, withIds)}
             </p>
           ) : (
             <dl className="mt-1 grid gap-x-3 gap-y-0.5 text-text-secondary sm:grid-cols-[auto_1fr]">
               {entry.op !== "add" ? (
                 <>
                   <dt>{beforeLabel}</dt>
-                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.before, names)}</dd>
+                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.before, names, withIds)}</dd>
                 </>
               ) : null}
               {entry.op !== "remove" ? (
                 <>
                   <dt>{afterLabel}</dt>
-                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.after, names)}</dd>
+                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.after, names, withIds)}</dd>
                 </>
               ) : null}
             </dl>

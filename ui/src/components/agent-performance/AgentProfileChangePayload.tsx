@@ -6,7 +6,7 @@ import type {
   AgentProfileFieldAuthorityEntry,
 } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
-import { FIELD_AUTHORITY_TEXT, ProfileDiffList } from "./profile-shared";
+import { FIELD_AUTHORITY_TEXT, ProfileDiffList, namedId } from "./profile-shared";
 import { ManagerFiledBadge, PERFORMANCE_MANAGER_ADVISORY_TEXT, isManagerFiledPayload } from "./manager-shared";
 import type { ProfileNameLookup } from "./profile-names";
 
@@ -21,7 +21,8 @@ import type { ProfileNameLookup } from "./profile-names";
 // (`proposedBy.capacity`) is marked "Proposed by the performance manager",
 // with what that role may and may not do.
 // Ids in the diff, the clip and the proposer are shown as names when the page
-// has them (`names`), and as ids only when it doesn't.
+// has them (`names`), each with a short id: two projects can share a name, and
+// the approver must tell them apart. An id with no name is shown as it is.
 
 type Payload = Partial<AgentProfileChangePayload>;
 
@@ -113,7 +114,7 @@ function AccessChangeRow({ change, names }: { change: AgentProfileAccessChange; 
           It asks for more than the admin's ceiling allows, so the agent gets only what the ceiling allows
           {change.clip?.detail ? `: ${change.clip.detail}` : "."}
           {change.clip?.values && change.clip.values.length > 0
-            ? ` Beyond the ceiling: ${change.clip.values.map((value) => names?.(value) ?? value).join(", ")}.`
+            ? ` Beyond the ceiling: ${change.clip.values.map((value) => namedId(value, names, true)).join(", ")}.`
             : ""}
           {" "}Approving it as asked needs a company admin, who raises the ceiling as a separate recorded step.
         </p>
@@ -148,7 +149,12 @@ export function AgentProfileChangePayloadView({ payload, names }: { payload: Rec
   const byManager = isManagerFiledPayload(p);
   // "Chief of Staff, an agent" when the page has the name; "an agent (1a2b3c4d)" when it doesn't.
   const agentName = p.proposedBy?.kind === "agent" ? (names?.(p.proposedBy.agentId) ?? null) : null;
-  const agentText = p.proposedBy?.kind === "agent" ? (agentName ? `${agentName}, an agent` : `an agent (${p.proposedBy.agentId.slice(0, 8)})`) : "";
+  const agentText =
+    p.proposedBy?.kind === "agent"
+      ? agentName
+        ? `${agentName}, an agent (${p.proposedBy.agentId.slice(0, 8)})`
+        : `an agent (${p.proposedBy.agentId.slice(0, 8)})`
+      : "";
   const personName = p.proposedBy?.kind === "user" ? (names?.(p.proposedBy.userId) ?? null) : null;
   const proposer =
     p.proposedBy?.kind === "agent" && byManager
@@ -156,7 +162,7 @@ export function AgentProfileChangePayloadView({ payload, names }: { payload: Rec
       : p.proposedBy?.kind === "agent"
       ? `${agentText.charAt(0).toUpperCase()}${agentText.slice(1)}. The proposing agent can never decide its own proposal.`
       : p.proposedBy?.kind === "user"
-        ? `${personName ?? `A person (${p.proposedBy.userId})`}. A person with the required authority may approve their own draft; it is recorded as a self-approval.`
+        ? `${personName ? `${personName} (${p.proposedBy.userId.slice(0, 8)})` : `A person (${p.proposedBy.userId})`}. A person with the required authority may approve their own draft; it is recorded as a self-approval.`
         : null;
 
   return (
@@ -221,6 +227,7 @@ export function AgentProfileChangePayloadView({ payload, names }: { payload: Rec
           afterLabel="Proposed"
           emptyText="No field changes are recorded in this request."
           names={names}
+          withIds
           annotate={(entry) => {
             const index = diff.indexOf(entry);
             const authority = authorityFor(entry, index, fieldAuthority);
