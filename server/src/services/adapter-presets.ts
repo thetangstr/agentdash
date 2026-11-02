@@ -282,6 +282,27 @@ export function mergeEnvFile(path: string, assignments: Array<{ key: string; val
   writeFileSync(path, out.join("\n"), "utf8");
 }
 
+/**
+ * Turn off the stub placeholder (PAPERCLIP_E2E_SKIP_LLM) without changing which
+ * adapter runs, in the process and in the env file. Used when a hosted box gets
+ * a real model through the Hermes provider step: left on, stub mode keeps the
+ * interview and Chief of Staff chat on canned replies. Returns whether it was on.
+ */
+export function clearStubMode(): boolean {
+  if (process.env.PAPERCLIP_E2E_SKIP_LLM !== "true") return false;
+  delete process.env.PAPERCLIP_E2E_SKIP_LLM;
+  const path = envFilePath();
+  if (existsSync(path)) {
+    try {
+      // With no assignments, mergeEnvFile drops the stub flag and keeps every other line.
+      mergeEnvFile(path, []);
+    } catch (err) {
+      logger.warn({ err }, "[adapter-presets] could not remove stub mode from the env file; cleared in-process only");
+    }
+  }
+  return true;
+}
+
 export function applyAdapterPreset(input: ApplyAdapterPresetInput): ApplyAdapterPresetResult {
   const preset = input.preset;
   const template = PRESET_ENV[preset];

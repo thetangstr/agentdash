@@ -13,13 +13,15 @@ import type { Db } from "@paperclipai/db";
 import { badRequest } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "../services/activity-log.js";
-import { readAdapterStatus } from "../services/adapter-presets.js";
+import { clearStubMode, readAdapterStatus } from "../services/adapter-presets.js";
 import {
   configureHermesProvider,
   HERMES_PROVIDER_SPECS,
   parseHermesProviderInput,
+  refuseHostedPlanKey,
   type HermesProviderSetupDeps,
 } from "../services/hermes-provider-setup.js";
+import { isHostedBox } from "../services/license.js";
 import { advisoryLock, companySecretStore, listCompanyHermesAgentIds } from "../services/hermes-provider-db.js";
 import { assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
 
@@ -40,6 +42,7 @@ export function createHermesProviderSetupHandler(db: Db, deps: HermesProviderSet
     assertCompanyAccess(req, companyId);
 
     const input = parseHermesProviderInput(body);
+    refuseHostedPlanKey(input, isHostedBox());
     const actorUserId = req.actor.userId ?? null;
     const result = await configureHermesProvider(
       companyId,
@@ -49,7 +52,17 @@ export function createHermesProviderSetupHandler(db: Db, deps: HermesProviderSet
       { secrets: companySecretStore(db), lock: advisoryLock(db), ...deps.setup },
     );
 
-    const details = { provider: result.provider, model: result.model, profilesUpdated: result.profilesUpdated };
+    // On a hosted box Hermes is the only runtime, so a stub placeholder applied
+    // earlier would keep the interview and Chief of Staff chat canned after a
+    // real model is set. The first real provider turns it off.
+    const stubCleared = isHostedBox() && clearStubMode();
+
+    const details = {
+      provider: result.provider,
+      model: result.model,
+      profilesUpdated: result.profilesUpdated,
+      ...(stubCleared ? { stubModeCleared: true } : {}),
+    };
     await log(db, {
       companyId,
       actorType: "user",
@@ -63,7 +76,7 @@ export function createHermesProviderSetupHandler(db: Db, deps: HermesProviderSet
 
     // The default adapter is read from the deployment's configuration
     // (AGENTDASH_DEFAULT_ADAPTER, hermes_local in the hosted image); this route
-    // does not change process-wide settings.
+    // changes no process-wide setting except clearing a hosted box's stub mode.
     res.status(201).json({
       status: readAdapterStatus(),
       hermesProvider: {
@@ -74,7 +87,12 @@ export function createHermesProviderSetupHandler(db: Db, deps: HermesProviderSet
       },
       profilesUpdated: result.profilesUpdated,
       // Names only, never values.
-      applied: [HERMES_PROVIDER_SPECS[result.provider].envVar, "model.provider", "model.default"],
+      applied: [
+        HERMES_PROVIDER_SPECS[result.provider].envVar,
+        "model.provider",
+        "model.default",
+        ...(stubCleared ? ["PAPERCLIP_E2E_SKIP_LLM (cleared)"] : []),
+      ],
     });
   };
 }

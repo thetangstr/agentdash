@@ -3,7 +3,7 @@ title: "Setup toolset"
 summary: "The install and onboarding tools: what an agent standing up a fresh instance is given."
 ---
 
-> Generated at commit `92bec8fe1` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `d8d292bfe` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **17 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface(client, config, "setup")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/journey.ts`.
@@ -38,12 +38,15 @@ Founding-user signup for a FRESH authenticated-mode install — works ONLY while
 
 ## `agentdash_setup_adapter`
 
-Configure the model adapter your agents will run on — a required onboarding step before the interview can produce a real team plan. Offer the human the choices from the preset menu (Claude / OpenAI / Gemini — each needs an API key — or 'stub' for a no-key placeholder that produces canned plans). Ask the human which provider and collect the key in conversation (NEVER invent a key). After applying, re-check agentdash_setup_status to confirm adapterReady before continuing the interview.
+Set the model AgentDash runs on, a required onboarding step. On a hosted workspace (agentdash_setup_status shows agentModel.required), pass preset "hermes" with a provider from agentModel.options and the human's API key for it: this is the model the hired agents and the Chief of Staff run on, checked with one small call to the provider and stored only on the box. On a self-hosted install, pick from the preset menu instead (Claude / OpenAI / Gemini, each needing an API key, or 'stub' for a no-key placeholder that produces canned plans). Ask the human which provider and collect the key in conversation (NEVER invent a key); it is never echoed back. Then re-check agentdash_setup_status.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `preset` | `"claude"` \| `"openai"` \| `"gemini"` \| `"stub"` | yes | claude=ANTHROPIC_API_KEY; openai=OPENAI_COMPAT_API_KEY (api.openai.com); gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans. |
-| `apiKey` | string | no | The provider API key. Required for claude/openai/gemini. Omit for stub. Collected from the human — NEVER invented. |
+| `preset` | `"claude"` \| `"openai"` \| `"gemini"` \| `"stub"` \| `"hermes"` | yes | claude=ANTHROPIC_API_KEY; openai=OPENAI_COMPAT_API_KEY (api.openai.com); gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans; hermes=the agents' model: with a provider, sets the box's Hermes provider (hosted workspaces); without one, selects a self-hosted Hermes that holds its own keys. |
+| `apiKey` | string | no | The provider API key. Required for claude/openai/gemini and for hermes with a provider. Omit for stub. Collected from the human — NEVER invented. |
+| `provider` | string | no | With preset hermes: a provider id from agentdash_setup_status agentModel.options (the box's own list, the same one the web wizard shows). |
+| `model` | string | no | With preset hermes and a provider: a model id. Omit for the provider's default. |
+| `companyId` | string \| null | no | With preset hermes and a provider: the workspace whose agents use the model. Omit when the user belongs to exactly one company. |
 
 ## `agentdash_start_interview`
 

@@ -69,11 +69,12 @@ export interface HermesProviderSpec {
 export const HERMES_PROVIDER_SPECS: Record<HermesProviderId, HermesProviderSpec> = {
   zai: {
     id: "zai",
-    label: "Z.AI (GLM)",
+    label: "Z.AI / Zhipu (GLM)",
     hermesProvider: "zai",
     envVar: "GLM_API_KEY",
     defaultModel: "glm-5.3-flash",
-    keyHint: "API key from z.ai",
+    // The key check tries both platforms (ZAI_BASE_URLS).
+    keyHint: "API key from z.ai or open.bigmodel.cn",
   },
   openrouter: {
     id: "openrouter",
@@ -131,6 +132,7 @@ export type HermesProviderErrorCode =
   | "provider_rate_limited"
   | "provider_error"
   | "provider_owned_by_other_company"
+  | "provider_plan_key_not_allowed"
   | "hermes_config_failed";
 
 export class HermesProviderSetupError extends HttpError {
@@ -245,6 +247,23 @@ export function parseHermesProviderInput(body: unknown): HermesProviderInput {
     model = record.model.trim();
   }
   return { provider: provider as HermesProviderId, apiKey, model };
+}
+
+/**
+ * AgentDash (hosted model providers, 2026-11-02): an Alibaba Qwen Token Plan
+ * key (`sk-sp-…`) is licensed for interactive use in coding tools only, and a
+ * hosted box runs agents unattended, so it is refused under every provider
+ * before any provider is called. Self-hosted installs are unchanged.
+ */
+export function refuseHostedPlanKey(input: HermesProviderInput, hosted: boolean): void {
+  if (!hosted || !input.apiKey.startsWith("sk-sp-")) return;
+  throw new HermesProviderSetupError(
+    422,
+    "provider_plan_key_not_allowed",
+    "This looks like an Alibaba Qwen Token Plan key (sk-sp-…). Token Plan keys are for interactive use in " +
+      "coding tools only, so a hosted workspace can't run agents on one. Use a pay-as-you-go API key from " +
+      "one of the listed providers.",
+  );
 }
 
 // ---------------------------------------------------------------------------
