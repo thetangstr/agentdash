@@ -21,6 +21,36 @@ interface ActivityFormatOptions {
   agentMap?: Map<string, Agent>;
   userProfileMap?: Map<string, CompanyUserProfile>;
   currentUserId?: string | null;
+  /**
+   * The row's actor is the agent the row is about (`isAgentRowAboutItself`):
+   * the verb then says "its" and stands alone, and the row adds no name.
+   */
+  aboutItself?: boolean;
+}
+
+/** Refusal rows whose actor and subject can be one agent: its own access rules refused it. */
+const SELF_REFUSAL_ACTIONS = new Set(["authz.refused", "access.would_refuse"]);
+
+/**
+ * An agent's refusal row about itself: the actor is the agent the row names.
+ * "Builder was refused a project by the access rules of Builder" said the
+ * name twice; the row reads "Builder was refused a project by its access
+ * rules" instead. A refusal another party caused (contact refused by an
+ * agent's inbound rules) keeps naming the agent whose rules refused it.
+ */
+export function isAgentRowAboutItself(event: {
+  action: string;
+  actorType: string;
+  actorId: string;
+  entityType: string;
+  entityId: string;
+}): boolean {
+  return (
+    SELF_REFUSAL_ACTIONS.has(event.action) &&
+    event.actorType === "agent" &&
+    event.entityType === "agent" &&
+    event.actorId === event.entityId
+  );
 }
 
 /**
@@ -749,11 +779,22 @@ const ACCESS_POLICY_DIMENSION_OBJECTS: Record<string, string> = {
   "talk.inbound": "contact",
 };
 
-function formatAccessPolicyRefusedVerb(details: ActivityDetails): string | null {
+function formatAccessPolicyRefusedVerb(details: ActivityDetails, aboutItself: boolean): string | null {
   if (details?.reasonCode !== "ACCESS_POLICY_REFUSED") return null;
   const dimension = typeof details.dimension === "string" ? details.dimension : "";
   const object = ACCESS_POLICY_DIMENSION_OBJECTS[dimension];
-  return object ? `was refused ${object} by the access rules of` : "was refused by the access rules of";
+  const rules = aboutItself ? "by its access rules" : "by the access rules of";
+  return object ? `was refused ${object} ${rules}` : `was refused ${rules}`;
+}
+
+/**
+ * Profile rows (`agent_profile.*`) are about a revision, a profile or an
+ * application; the row names the agent they belong to instead. A draft for
+ * a role nobody holds yet has no agent, and says so.
+ */
+function formatProfileVerb(action: string, details: ActivityDetails): string | null {
+  if (action === "agent_profile.draft_saved" && details?.unbound === true) return "saved a draft profile for a new role";
+  return null;
 }
 
 function formatDetailAwareVerb(
@@ -761,7 +802,9 @@ function formatDetailAwareVerb(
   details: ActivityDetails,
   options: ActivityFormatOptions,
 ): string | null {
-  if (action === "authz.refused") return formatAccessPolicyRefusedVerb(details);
+  if (action === "authz.refused") return formatAccessPolicyRefusedVerb(details, options.aboutItself === true);
+  const profileVerb = formatProfileVerb(action, details);
+  if (profileVerb) return profileVerb;
   const approvalVerb = APPROVAL_ACTION_VERBS[action];
   if (approvalVerb) return approvalVerb(approvalObject(details));
   if (action === "company.updated") return formatCompanyUpdatedVerb(details);
