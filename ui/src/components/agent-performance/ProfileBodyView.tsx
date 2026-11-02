@@ -4,13 +4,15 @@ import type { AgentOperatingProfileV1, AgentProfileProvenanceMap } from "@paperc
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { EmptyNote, Fact, FactList, Section } from "./shared";
 import { StoredProvenanceLabel, describeAccessRequest } from "./profile-shared";
+import type { ProfileNameLookup } from "./profile-names";
 
 // AgentDash: Agent Performance Management gate 2 — a stored profile revision,
 // read-only, in the overview LLD §6 order: work it owns, how it works, what
 // it knows, style, runtime (advanced, collapsed). Every field carries its
 // provenance label as text, matched to the field as shown (an empty field is
 // missing, a filled one never is, and an approved revision's proposals read
-// "Approved").
+// "Approved"). Projects, agents and people are named when the screen has
+// their names (`names`); an id shows only when it has none.
 
 function blank(value: string | undefined | null): boolean {
   return !value || !value.trim();
@@ -46,10 +48,10 @@ function ProvenancedFact({
   );
 }
 
-function principalText(ref: { userId?: string; agentId?: string } | undefined): string | null {
+function principalText(ref: { userId?: string; agentId?: string } | undefined, names?: ProfileNameLookup): string | null {
   if (!ref) return null;
-  if (ref.agentId) return `Agent ${ref.agentId}`;
-  if (ref.userId) return `Person ${ref.userId}`;
+  if (ref.agentId) return names?.(ref.agentId) ?? `Agent ${ref.agentId}`;
+  if (ref.userId) return names?.(ref.userId) ?? `Person ${ref.userId}`;
   return null;
 }
 
@@ -76,17 +78,20 @@ export function ProfileBodyView({
   body,
   provenance,
   approved = false,
+  names,
   testId = "agent-profile-body",
 }: {
   body: AgentOperatingProfileV1;
   provenance: AgentProfileProvenanceMap;
   /** A person approved this revision (`revisionWasApproved`): proposed values read "Approved". */
   approved?: boolean;
+  /** Names for listed projects, agents and people (`useProfileNames`). */
+  names?: ProfileNameLookup;
   testId?: string;
 }) {
   const [runtimeOpen, setRuntimeOpen] = useState(false);
   const { identity, rhythm, runtime } = body;
-  const reportsTo = principalText(rhythm.reportTo);
+  const reportsTo = principalText(rhythm.reportTo, names);
   return (
     <div className="space-y-8" data-testid={testId}>
       <Section id={`${testId}-work`} title="Work it owns">
@@ -141,8 +146,8 @@ export function ProfileBodyView({
                       <ProvenancedFact label="Escalation" pointer={`${base}/escalation`} provenance={provenance} empty={blank(item.escalation.when)} approved={approved}>
                         {item.escalation.when.trim()
                           ? `${item.escalation.when}${
-                              principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId })
-                                ? ` → ${principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId })}`
+                              principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId }, names)
+                                ? ` → ${principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId }, names)}`
                                 : ""
                             }`
                           : textOrMissing(null)}
@@ -189,7 +194,7 @@ export function ProfileBodyView({
             <StoredProvenanceLabel map={provenance} pointer="/access" approved={approved} />
           </div>
           <FactList>
-            {describeAccessRequest(body.access).map((line) => (
+            {describeAccessRequest(body.access, names).map((line) => (
               <Fact key={line.label} label={line.label}>
                 {line.value}
               </Fact>

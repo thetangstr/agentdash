@@ -29,6 +29,7 @@ import { ProfileApplicationStatus } from "./ProfileApplicationStatus";
 import { ProfileBodyView } from "./ProfileBodyView";
 import { ProfileDraftEditor } from "./ProfileDraftEditor";
 import { ProfileHistory } from "./ProfileHistory";
+import { useProfileNames } from "./profile-names";
 
 // AgentDash: Agent Performance Management — the Profile tab.
 //
@@ -310,6 +311,7 @@ function ProfileTabContent({
 }) {
   const queryClient = useQueryClient();
   const viewKey = agentPerformanceQueryKeys.profile(companyId, agentId);
+  const names = useProfileNames(companyId);
   const [announcement, setAnnouncement] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const statusHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -484,7 +486,7 @@ function ProfileTabContent({
               Export Markdown (saved draft)
             </a>
           </Button>
-          <ProfileBodyView body={latestDraft.body} provenance={latestDraft.provenance} testId="agent-profile-draft-readonly-body" />
+          <ProfileBodyView body={latestDraft.body} provenance={latestDraft.provenance} names={names} testId="agent-profile-draft-readonly-body" />
         </section>
       ) : null}
 
@@ -524,6 +526,7 @@ function ProfileTabContent({
             body={active.body}
             provenance={active.provenance}
             approved={revisionWasApproved(active.state)}
+            names={names}
             testId="agent-profile-active-body"
           />
         </div>
@@ -533,7 +536,7 @@ function ProfileTabContent({
         <EmptyNote>No profile is available for this agent.</EmptyNote>
       )}
 
-      {view.profileId ? <ProfileHistory companyId={companyId} agentId={agentId} activeRevisionId={active?.id ?? null} /> : null}
+      {view.profileId ? <ProfileHistory companyId={companyId} agentId={agentId} activeRevisionId={active?.id ?? null} names={names} /> : null}
     </div>
   );
 }

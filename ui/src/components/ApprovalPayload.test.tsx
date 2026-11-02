@@ -333,6 +333,43 @@ describe("agent_profile_change renderer (APM gate 2)", () => {
     expect(proposer).toContain("It never approves, applies, changes an agent's access or edits an active profile.");
   });
 
+  // The approval page has the company's agents, people and projects: ids in the diff are named, unknown ones stay ids.
+  it("names the projects, agents and people the change lists by id, and keeps an id it has no name for", () => {
+    const PROJECT = "e3133a1b-0000-4000-8000-000000000001";
+    const UNKNOWN = "f0000000-0000-4000-8000-000000000002";
+    const PERSON = "55555555-5555-4555-8555-555555555555";
+    const known = new Map([
+      [PROJECT, "Website relaunch"],
+      [PERSON, "Yang"],
+      ["44444444-4444-4444-8444-444444444444", "Chief of Staff"],
+    ]);
+    const p = payload({
+      diff: [
+        { op: "replace", pointer: "/access/see/projects/ids", before: [PROJECT], after: [PROJECT, UNKNOWN] },
+        { op: "add", pointer: "/rhythm/reportTo/userId", after: PERSON },
+        { op: "replace", pointer: "/access/see/projects", before: { mode: "listed", ids: [PROJECT] }, after: { mode: "all", ids: [] } },
+      ],
+      fieldAuthority: [],
+      accessChanges: [
+        { dimension: "see.projects", change: "widens", clippedByCeiling: true, clip: { dimension: "see.projects", detail: "Asks for more", values: [PROJECT] }, detail: null },
+      ],
+    });
+    act(() => {
+      root.render(<ApprovalPayloadRenderer type="agent_profile_change" payload={p as unknown as Record<string, unknown>} names={(id) => known.get(id) ?? null} />);
+    });
+    const node = container.querySelector<HTMLElement>("[data-testid='agent-profile-change-payload']")!;
+    const entries = Array.from(node.querySelectorAll("[data-testid='agent-profile-diff-entry']")).map((li) => li.textContent ?? "");
+    expect(entries[0]).toContain(`Website relaunch, ${UNKNOWN}`);
+    expect(entries[1]).toContain("“Yang”");
+    expect(entries[2]).toContain("Website relaunch");
+    expect(node.textContent).not.toContain(PROJECT);
+    expect(node.textContent).not.toContain(PERSON);
+    expect(node.querySelector("[data-testid='agent-profile-change-access']")?.textContent).toContain("Beyond the ceiling: Website relaunch.");
+    expect(node.querySelector("[data-testid='agent-profile-change-proposer']")?.textContent).toContain(
+      "Chief of Staff, an agent. The proposing agent can never decide its own proposal.",
+    );
+  });
+
   it("does not mark an ordinary agent's or a person's proposal as the performance manager's", () => {
     const byAgent = renderPayload(payload() as unknown as Record<string, unknown>);
     expect(byAgent.querySelector("[data-testid='agent-profile-change-manager-filed']")).toBeNull();

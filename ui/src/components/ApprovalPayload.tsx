@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { AgentProfileChangePayloadView } from "./agent-performance/AgentProfileChangePayload";
+import type { ProfileNameLookup } from "./agent-performance/profile-names";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
@@ -397,10 +398,13 @@ export function ApprovalPayloadRenderer({
   type,
   payload,
   hidePrimaryTitle = false,
+  names,
 }: {
   type: string;
   payload: Record<string, unknown>;
   hidePrimaryTitle?: boolean;
+  /** Names for the projects, agents and people a profile change lists by id; ids show where it has none. */
+  names?: ProfileNameLookup;
 }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
@@ -410,6 +414,6 @@ export function ApprovalPayloadRenderer({
   if (type === "request_board_approval") {
     return <BoardApprovalPayload payload={payload} hideTitle={hidePrimaryTitle} />;
   }
-  if (type === "agent_profile_change") return <AgentProfileChangePayloadView payload={payload} />;
+  if (type === "agent_profile_change") return <AgentProfileChangePayloadView payload={payload} names={names} />;
   return <CeoStrategyPayload payload={payload} />;
 }

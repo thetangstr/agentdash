@@ -331,6 +331,7 @@ afterEach(() => {
   root = null;
   container = null;
   vi.clearAllMocks();
+  mockClient.get.mockImplementation(defaultApprovalGet);
 });
 
 function noApplicationCalls() {
@@ -588,6 +589,29 @@ describe("AgentProfileTab — active revision", () => {
     const title = fact("Title")!;
     expect(title.textContent).toContain("Not recorded");
     expect(title.querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Missing");
+  });
+
+  it("names listed projects and people where the app has their names, and keeps the id where it doesn't", async () => {
+    const PROJECT = "e3133a1b-0000-4000-8000-000000000001";
+    const UNKNOWN = "f0000000-0000-4000-8000-000000000002";
+    const access = { ...DEFAULT_AGENT_GOVERNANCE_POLICY, policyVersion: 2, see: { projects: { mode: "listed", ids: [PROJECT, UNKNOWN] } } };
+    const active = revision({ id: "rev-1", revisionNumber: 1, state: "applied", body: body({ access } as Partial<AgentOperatingProfileV1>) });
+    mockPerf.profile.mockResolvedValue(view({ profileId: "profile-1", active, derived: null }));
+    mockProfiles.revisions.mockResolvedValue([summary(active)]);
+    const lists: Record<string, unknown> = {
+      "/companies/company-1/projects": [{ id: PROJECT, name: "Website relaunch" }],
+      "/companies/company-1/agents": [{ id: "agent-1", name: "Ivy" }],
+      "/companies/company-1/user-directory": { users: [{ principalId: "user-yang", status: "active", user: { name: "Yang" } }] },
+    };
+    mockClient.get.mockImplementation(((path: string) => (path in lists ? Promise.resolve(lists[path]) : defaultApprovalGet(path))) as typeof defaultApprovalGet);
+    const node = await render();
+    await flush();
+    const text = node.querySelector("[data-testid='agent-profile-active-body']")?.textContent ?? "";
+    expect(text).toContain(`2 listed projects (Website relaunch, ${UNKNOWN})`);
+    expect(text).not.toContain(PROJECT);
+    // Reports to and the escalation contact are people the directory names.
+    expect(text).toContain("Yang");
+    expect(text).not.toContain("Person user-yang");
   });
 
   // Gate 4 (P4.2/P4.3): a revision the performance manager proposed is marked, from the
