@@ -8,6 +8,7 @@ each GitHub Release and the in-app Changelog, so this is the one release log.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1102.0](v2026.1102.0.md) | 2026-11-02 | An agent sets up AgentDash Cloud for a person over MCP (start, approve, connect, then the setup tools); a failed provisioning job pages a person; no migrations for installs or boxes | Pending stable publication |
 | [v2026.1031.0](v2026.1031.0.md) | 2026-10-31 | Agents become the evaluated subject: versioned operating profiles applied after approval, per-agent access enforced off/shadow/enforce, agent scorecards, performance manager, start from a brief; better-auth 1.7 and zod 4 security upgrades; migrations `0153`–`0156` | Pending stable publication |
 | [v2026.1014.1](v2026.1014.1.md) | 2026-10-14 | An agent's memory and lessons are private to the agent, its steward and administrators: withheld from run records, run logs and feedback bundles, old runs cleaned; Memory section on the agent page; migration `0152` | Pending stable publication |
 | [v2026.1014.0](v2026.1014.0.md) | 2026-10-14 | Agent self-wakes, agent mentions and agent review hand-offs pause at the daily token ceiling; correct ceiling lift time; plain feature-flag wording; no migrations | Pending stable publication |
