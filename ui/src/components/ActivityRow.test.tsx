@@ -176,4 +176,58 @@ describe("ActivityRow", () => {
     );
     expect(container.textContent).not.toContain("Removed references");
   });
+
+  // AgentDash (APM): profile rows are written against a revision, which has no name;
+  // "Board applied a profile change to 2m ago" left the agent out.
+  it("names the agent a profile change belongs to, and links to its Profile tab", () => {
+    const event = {
+      ...rowEvent("agent_profile.applied", { revisionNumber: 2 }),
+      entityType: "agent_profile_revision",
+      entityId: "revision-2",
+      agentId: "agent-1",
+    } as ActivityEvent;
+    act(() =>
+      root.render(<ActivityRow event={event} agentMap={AGENTS} entityNameMap={new Map([["agent:agent-1", "Scout"]])} />),
+    );
+    expect(container.textContent).toContain("Board");
+    expect(container.textContent).toContain("applied a profile change to Scout");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("/agents/agent-1/profile");
+  });
+
+  it("says a draft for a new role is for a new role", () => {
+    const event = {
+      ...rowEvent("agent_profile.draft_saved", { unbound: true, revisionNumber: 1 }),
+      entityType: "agent_profile_revision",
+      entityId: "revision-1",
+      agentId: null,
+    } as ActivityEvent;
+    act(() =>
+      root.render(<ActivityRow event={event} agentMap={AGENTS} entityNameMap={new Map()} />),
+    );
+    expect(container.textContent).toContain("Board");
+    expect(container.textContent).toContain("saved a draft profile for a new role");
+  });
+
+  // "Builder was refused a project by the access rules of Builder" said the name twice.
+  it("words an agent's own access refusal once, with its name first", () => {
+    const refusal = (actorId: string, actorType: "agent" | "user", dimension: string) =>
+      ({
+        ...rowEvent("authz.refused", { reasonCode: "ACCESS_POLICY_REFUSED", dimension }),
+        actorType,
+        actorId,
+        entityType: "agent",
+        entityId: "agent-1",
+        agentId: "agent-1",
+      }) as ActivityEvent;
+    const names = new Map([["agent:agent-1", "Scout"]]);
+    act(() => root.render(<ActivityRow event={refusal("agent-1", "agent", "see.projects")} agentMap={AGENTS} entityNameMap={names} />));
+    // The actor's name, then the verb, and no name after it.
+    expect(container.textContent).toContain("was refused a project by its access rules");
+    expect(container.textContent?.match(/Scout/g)).toHaveLength(1);
+
+    // Someone else's contact refused by the agent's inbound rules still names whose rules.
+    act(() => root.render(<ActivityRow event={refusal("user-1", "user", "talk.inbound")} agentMap={AGENTS} entityNameMap={names} />));
+    expect(container.textContent).toContain("Board");
+    expect(container.textContent).toContain("was refused contact by the access rules of Scout");
+  });
 });

@@ -333,6 +333,49 @@ describe("agent_profile_change renderer (APM gate 2)", () => {
     expect(proposer).toContain("It never approves, applies, changes an agent's access or edits an active profile.");
   });
 
+  // The approval page has the company's agents, people and projects: ids in the diff are named, each with a short id
+  // (two projects can share a name, and the approver must tell them apart); an id with no name stays as it is.
+  it("names the projects, agents and people the change lists by id, keeping a short id beside each name", () => {
+    const PROJECT = "e3133a1b-0000-4000-8000-000000000001";
+    const UNKNOWN = "f0000000-0000-4000-8000-000000000002";
+    const PERSON = "55555555-5555-4555-8555-555555555555";
+    const FINANCE_A = "aaaaaaa1-0000-4000-8000-000000000003";
+    const FINANCE_B = "bbbbbbb2-0000-4000-8000-000000000004";
+    const known = new Map([
+      [PROJECT, "Website relaunch"],
+      [PERSON, "Yang"],
+      [FINANCE_A, "Finance"],
+      [FINANCE_B, "Finance"],
+      ["44444444-4444-4444-8444-444444444444", "Chief of Staff"],
+    ]);
+    const p = payload({
+      diff: [
+        { op: "replace", pointer: "/access/see/projects/ids", before: [PROJECT], after: [PROJECT, UNKNOWN, FINANCE_A, FINANCE_B] },
+        { op: "add", pointer: "/rhythm/reportTo/userId", after: PERSON },
+        { op: "replace", pointer: "/access/see/projects", before: { mode: "listed", ids: [PROJECT] }, after: { mode: "all", ids: [] } },
+      ],
+      fieldAuthority: [],
+      accessChanges: [
+        { dimension: "see.projects", change: "widens", clippedByCeiling: true, clip: { dimension: "see.projects", detail: "Asks for more", values: [PROJECT] }, detail: null },
+      ],
+    });
+    act(() => {
+      root.render(<ApprovalPayloadRenderer type="agent_profile_change" payload={p as unknown as Record<string, unknown>} names={(id) => known.get(id) ?? null} />);
+    });
+    const node = container.querySelector<HTMLElement>("[data-testid='agent-profile-change-payload']")!;
+    const entries = Array.from(node.querySelectorAll("[data-testid='agent-profile-diff-entry']")).map((li) => li.textContent ?? "");
+    expect(entries[0]).toContain(`Website relaunch (e3133a1b), ${UNKNOWN}, Finance (aaaaaaa1), Finance (bbbbbbb2)`);
+    expect(entries[1]).toContain("“Yang (55555555)”");
+    expect(entries[2]).toContain("Website relaunch (e3133a1b)");
+    // The full id gives way to the name and its short id; one with no name is shown whole.
+    expect(node.textContent).not.toContain(PROJECT);
+    expect(node.textContent).toContain(UNKNOWN);
+    expect(node.querySelector("[data-testid='agent-profile-change-access']")?.textContent).toContain("Beyond the ceiling: Website relaunch (e3133a1b).");
+    expect(node.querySelector("[data-testid='agent-profile-change-proposer']")?.textContent).toContain(
+      "Chief of Staff, an agent (44444444). The proposing agent can never decide its own proposal.",
+    );
+  });
+
   it("does not mark an ordinary agent's or a person's proposal as the performance manager's", () => {
     const byAgent = renderPayload(payload() as unknown as Record<string, unknown>);
     expect(byAgent.querySelector("[data-testid='agent-profile-change-manager-filed']")).toBeNull();
@@ -425,6 +468,17 @@ describe("hire_agent with a draft profile (APM gate 5)", () => {
     });
     return container;
   }
+
+  // Whoever approves a process hire decides what runs on the host: the card says what.
+  it("shows a process hire's command, arguments and folder", () => {
+    const withFolder = render(hirePayload({ adapterType: "process", adapterConfig: { command: "python3", args: ["/opt/agent/run.py", "--quiet"], cwd: "/opt/agent" } }));
+    expect(withFolder.querySelector("[data-testid='hire-agent-command']")?.textContent).toBe("Runspython3 /opt/agent/run.py --quiet");
+    expect(withFolder.textContent).toContain("In folder/opt/agent");
+    const noFolder = render(hirePayload({ adapterType: "process", adapterConfig: { command: "/usr/local/bin/collect" } }));
+    expect(noFolder.textContent).toContain("In folderThe server's own folder");
+    const other = render(hirePayload({ adapterType: "claude_local", adapterConfig: { command: "claude" } }));
+    expect(other.querySelector("[data-testid='hire-agent-command']")).toBeNull();
+  });
 
   it("shows the attached profile and links to the draft", async () => {
     const { HIRE_PROFILE_APPLY_TEXT } = await import("./ApprovalPayload");

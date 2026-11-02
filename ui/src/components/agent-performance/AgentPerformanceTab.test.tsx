@@ -52,7 +52,7 @@ const { RESTRICTED_VIEW_TEXT } = await import("./shared");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const WITHHELD = { section: "paired-harness assessments", reason: "Shown once evidence access rules ship (gate 3)" };
+const WITHHELD = { section: "paired-harness assessments", reason: "Counted on the performance card, for people allowed to read them" };
 const SPEND_WITHHELD = { section: "agent spend", reason: "Spend is shown to company admins and members who can manage agents" };
 const PROJECTS_WITHHELD = {
   section: "work in projects you can't see",
@@ -84,7 +84,7 @@ function emptyProjection(): AgentPerformanceProjection {
       automated: { value: 0, of: 0 },
       human: { value: 0, of: 0 },
       use: { value: null, note: "No use records yet" },
-      outcome: { value: null, note: "Goal metric history arrives in gate 3" },
+      outcome: { value: null, note: "Goal outcomes are counted on the performance card, not here" },
       accountable: [],
     },
     cost: {
@@ -290,7 +290,7 @@ describe("AgentPerformanceTab", () => {
     expect(header).toContain(CURRENT_DEFINITIONS_LABEL);
     expect(CURRENT_DEFINITIONS_LABEL).toBe("Current definitions; history unknown");
     expect(block(node, "agent-performance-withheld")).toContain(
-      "paired-harness assessments — Shown once evidence access rules ship (gate 3)",
+      "paired-harness assessments — Counted on the performance card, for people allowed to read them",
     );
     expect(node.textContent).toContain("ATTRIBUTION_CURRENT_ASSIGNEE");
   });
@@ -325,7 +325,7 @@ describe("AgentPerformanceTab", () => {
     expect(use).toBe("Unknown — No use records yet");
     expect(use).not.toMatch(/\b0\b/);
     expect(factRow(node, "agent-performance-acceptance", "Moved the result")).toBe(
-      "Unknown — Goal metric history arrives in gate 3",
+      "Unknown — Goal outcomes are counted on the performance card, not here",
     );
     expect(factRow(node, "agent-performance-cost", "Corrections by people")).toBe(
       "Unknown — Corrections are not recorded for this agent",

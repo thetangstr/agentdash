@@ -3441,7 +3441,8 @@ export function agentRoutes(
   /**
    * AgentDash (APM gate 5, P5.1): propose an unbound draft profile as a hire.
    * The draft gives the new agent's name, title, summary and adapter type;
-   * the body gives role and the other hire fields. Validated by the hire
+   * the body gives role, the adapter settings (`adapterConfig`, e.g. a process
+   * agent's command) and the other hire fields. Validated by the hire
    * validator (`createAgentHireSchema`) and filed through `fileAgentHire`, so
    * every check a hire request makes applies — including the requester's own
    * authority to hire. The approval always exists (whatever the company's

@@ -148,7 +148,7 @@ describe("buildAgentPerformanceProjection", () => {
       owed: { source: "current_definitions", historyKnown: false, routines: [] },
     });
     expect(projection.withheld).toEqual([
-      { section: "paired-harness assessments", reason: "Shown once evidence access rules ship (gate 3)" },
+      { section: "paired-harness assessments", reason: "Counted on the performance card, for people allowed to read them" },
     ]);
     expect(projection.gaps.map((g) => g.code)).toEqual(["ATTRIBUTION_CURRENT_ASSIGNEE"]);
     expect(buildAgentPerformanceProjection(baseInput({ throughSeq: null })).throughSeq).toBeNull();
@@ -266,7 +266,7 @@ describe("buildAgentPerformanceProjection", () => {
     expect(projection.acceptance.automated).toMatchObject({ value: 2, of: 3 });
     expect(projection.acceptance.human).toMatchObject({ value: 3, of: 4 });
     expect(projection.acceptance.use).toEqual({ value: null, of: null, note: "No use records yet" });
-    expect(projection.acceptance.outcome).toEqual({ value: null, of: null, note: "Goal metric history arrives in gate 3" });
+    expect(projection.acceptance.outcome).toEqual({ value: null, of: null, note: "Goal outcomes are counted on the performance card, not here" });
     expect(projection.gaps.find((g) => g.code === "UNATTRIBUTED_JUDGE")?.message).toMatch(/^2 verdict/);
   });
 
@@ -372,7 +372,7 @@ describe("buildAgentPerformanceProjection", () => {
   it("names withheld restricted-project work without a count", () => {
     const projection = buildAgentPerformanceProjection(baseInput({ projectsWithheld: true }));
     expect(projection.withheld).toEqual([
-      { section: "paired-harness assessments", reason: "Shown once evidence access rules ship (gate 3)" },
+      { section: "paired-harness assessments", reason: "Counted on the performance card, for people allowed to read them" },
       {
         section: "work in projects you can't see",
         reason: "Issues, verdicts, runs, spend and questions in restricted projects you can't read are left out of every count",

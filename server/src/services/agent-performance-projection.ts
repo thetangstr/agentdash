@@ -561,7 +561,7 @@ export function buildAgentPerformanceProjection(input: AgentPerformanceProjectio
   const { refusedAttempts, byCode } = tallyRefusals(input.refusalCounts);
 
   const withheld: AgentPerformanceProjection["withheld"] = [
-    { section: "paired-harness assessments", reason: "Shown once evidence access rules ship (gate 3)" },
+    { section: "paired-harness assessments", reason: "Counted on the performance card, for people allowed to read them" },
   ];
   if (input.projectsWithheld) withheld.push(PROJECTS_WITHHELD_ENTRY);
 
@@ -585,7 +585,7 @@ export function buildAgentPerformanceProjection(input: AgentPerformanceProjectio
       ),
       human: count(passedBy.person, byJudge.person, "Verdicts passed by a person, out of all verdicts by people"),
       use: count(null, null, "No use records yet"),
-      outcome: count(null, null, "Goal metric history arrives in gate 3"),
+      outcome: count(null, null, "Goal outcomes are counted on the performance card, not here"),
       accountable: buildAccountable(input.accountable),
     },
     cost: {

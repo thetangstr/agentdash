@@ -49,5 +49,7 @@ export const costEvents = pgTable(
       table.companyId,
       table.heartbeatRunId,
     ),
+    // AgentDash: the evaluation ingest's keyset read (services/evaluation/sources.ts) orders by this key per company.
+    companyCreatedIdIdx: index("cost_events_company_created_id_idx").on(table.companyId, table.createdAt, table.id),
   }),
 );

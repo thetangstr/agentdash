@@ -513,21 +513,43 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
 }
 
 /** T0: terminal heartbeat runs → run.finished. sourceVersion = status + finish time, so a retried run is a new fact. */
+/**
+ * The run columns the ingest maps, and nothing else: a run row also carries
+ * its result JSON, log excerpts and the whole wake context, which a 5,000-row
+ * read must not pull. Only the context's `issueId` is read (when it is a string).
+ */
+const HEARTBEAT_RUN_INGEST_COLUMNS = {
+  id: heartbeatRuns.id,
+  agentId: heartbeatRuns.agentId,
+  status: heartbeatRuns.status,
+  exitCode: heartbeatRuns.exitCode,
+  errorCode: heartbeatRuns.errorCode,
+  livenessState: heartbeatRuns.livenessState,
+  invocationSource: heartbeatRuns.invocationSource,
+  triggerDetail: heartbeatRuns.triggerDetail,
+  retryOfRunId: heartbeatRuns.retryOfRunId,
+  startedAt: heartbeatRuns.startedAt,
+  finishedAt: heartbeatRuns.finishedAt,
+  updatedAt: heartbeatRuns.updatedAt,
+  usageJson: heartbeatRuns.usageJson,
+  contextIssueId: sql<string | null>`case when jsonb_typeof(${heartbeatRuns.contextSnapshot} -> 'issueId') = 'string' then ${heartbeatRuns.contextSnapshot} ->> 'issueId' end`,
+  cursorTime: sql<string>`${heartbeatRuns.updatedAt}::text`,
+};
+
 export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
   const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, heartbeatRuns.updatedAt, heartbeatRuns.id, (predicate, take, direction) =>
     tx
-      .select(withCursorTime(heartbeatRuns, heartbeatRuns.updatedAt))
+      .select(HEARTBEAT_RUN_INGEST_COLUMNS)
       .from(heartbeatRuns)
       .where(and(eq(heartbeatRuns.companyId, companyId), inArray(heartbeatRuns.status, [...TERMINAL_RUN_STATUSES]), ...(predicate ? [predicate] : [])))
       .orderBy(...ordered(direction, heartbeatRuns.updatedAt, heartbeatRuns.id))
       .limit(take),
     (r) => r.id,
   );
-  const issueIds = rows.map((r) => (r.contextSnapshot as Record<string, unknown> | null)?.issueId).filter((x): x is string => typeof x === "string");
+  const issueIds = rows.map((r) => r.contextIssueId).filter((x): x is string => typeof x === "string");
   const scope = await resolveIssueScope(tx, companyId, issueIds);
   const events: EvaluationEventInput[] = rows.map((r) => {
-    const ctx = (r.contextSnapshot ?? {}) as Record<string, unknown>;
-    const issueId = typeof ctx.issueId === "string" ? ctx.issueId : null;
+    const issueId = r.contextIssueId ?? null;
     const sc = issueId ? scope.get(issueId) : undefined;
     const usage = (r.usageJson ?? null) as Record<string, unknown> | null;
     const finished = r.finishedAt ?? r.updatedAt;
@@ -672,7 +694,22 @@ export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor
 export async function readCostEvents(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
   const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, costEvents.createdAt, costEvents.id, (predicate, take, direction) =>
     tx
-      .select(withCursorTime(costEvents, costEvents.createdAt))
+      .select({
+        id: costEvents.id,
+        projectId: costEvents.projectId,
+        goalId: costEvents.goalId,
+        agentId: costEvents.agentId,
+        issueId: costEvents.issueId,
+        heartbeatRunId: costEvents.heartbeatRunId,
+        provider: costEvents.provider,
+        model: costEvents.model,
+        inputTokens: costEvents.inputTokens,
+        cachedInputTokens: costEvents.cachedInputTokens,
+        outputTokens: costEvents.outputTokens,
+        costCents: costEvents.costCents,
+        occurredAt: costEvents.occurredAt,
+        cursorTime: sql<string>`${costEvents.createdAt}::text`,
+      })
       .from(costEvents)
       .where(predicate ? and(eq(costEvents.companyId, companyId), predicate) : eq(costEvents.companyId, companyId))
       .orderBy(...ordered(direction, costEvents.createdAt, costEvents.id))

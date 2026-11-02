@@ -78,5 +78,7 @@ export const heartbeatRuns = pgTable(
       table.status,
       table.processStartedAt,
     ),
+    // AgentDash: the evaluation ingest's keyset read (services/evaluation/sources.ts) orders by this key per company.
+    companyUpdatedIdIdx: index("heartbeat_runs_company_updated_id_idx").on(table.companyId, table.updatedAt, table.id),
   }),
 );

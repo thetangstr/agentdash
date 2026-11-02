@@ -485,6 +485,56 @@ describeEmbeddedPostgres("APM gate 5 — start from a brief (P5.1)", () => {
       expect(await counts(s.company.id)).toEqual(before);
     });
 
+    // A process agent needs adapterConfig.command, which no profile field carries: the hire request gives it,
+    // and it goes through the same checks a direct `POST /agent-hires` body's adapterConfig does.
+    it("files a process draft when the hire request gives the command, under a direct hire's rules", async () => {
+      const s = await seed();
+      const instanceAdmin = { ...s.owner, isInstanceAdmin: true };
+      const draft = await createUnbound(s, s.owner, unboundBody((body) => (body.runtime = { adapterType: "process" })));
+      const propose = `${draftPath(s, draft.profileId)}/revisions/${draft.id}/propose`;
+      const before = await counts(s.company.id);
+
+      // The validator's own completeness rule: an empty command is still refused, and the draft is released.
+      const blank = await send(instanceAdmin, "post", propose, { role: "general", adapterConfig: { command: "  " } });
+      expect(blank.status, JSON.stringify(blank.body)).toBe(422);
+      expect(blank.body.details).toMatchObject({ code: "AGENT_PROFILE_HIRE_INVALID", issues: [{ path: "adapterConfig.command" }] });
+      // The host-execution rule: only an instance admin chooses the binary an agent runs; agents never do.
+      for (const [label, actor] of [["company owner", s.owner], ["performance manager", s.manager!]] as const) {
+        const refused = await send(actor, "post", propose, { role: "general", adapterConfig: { command: "/usr/bin/true" } });
+        expect(refused.status, `${label}: ${JSON.stringify(refused.body)}`).toBe(403);
+        expect((await pendingRevision(draft.id)).state, label).toBe("draft");
+      }
+      expect(await counts(s.company.id)).toEqual(before);
+
+      const proposed = await send(instanceAdmin, "post", propose, { role: "general", adapterConfig: { command: "/usr/bin/true" } });
+      expect(proposed.status, JSON.stringify(proposed.body)).toBe(201);
+      const agentId = proposed.body.agentId as string;
+      const [pendingAgent] = await db.select().from(agents).where(eq(agents.id, agentId));
+      expect(pendingAgent).toMatchObject({ status: "pending_approval", adapterType: "process", adapterConfig: { command: "/usr/bin/true" } });
+      const [approval] = await db.select().from(approvals).where(eq(approvals.id, proposed.body.approvalId as string));
+      expect(approval!.payload).toMatchObject({ adapterType: "process", adapterConfig: { command: "/usr/bin/true" }, profileRevisionId: draft.id });
+
+      // Approved: the profile applies and the command stays (the profile never carries one).
+      const approved = await send(instanceAdmin, "post", `/api/approvals/${approval!.id}/approve`, decision(approval!));
+      expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+      const [hired] = await db.select().from(agents).where(eq(agents.id, agentId));
+      expect(hired).toMatchObject({ status: "idle", adapterType: "process" });
+      expect((hired!.adapterConfig as Record<string, unknown>).command).toBe("/usr/bin/true");
+      expect((await pendingRevision(draft.id)).state).toBe("applied");
+    });
+
+    // The local runtimes need no adapter setting at hire time: their defaults run.
+    it("files a draft whose runtime is claude_local, codex_local or hermes_local with no adapter settings", async () => {
+      for (const adapterType of ["claude_local", "codex_local", "hermes_local"]) {
+        const s = await seed();
+        const draft = await createUnbound(s, s.owner, unboundBody((body) => (body.runtime = { adapterType })));
+        const res = await send(s.owner, "post", `${draftPath(s, draft.profileId)}/revisions/${draft.id}/propose`, { role: "general" });
+        expect(res.status, `${adapterType}: ${JSON.stringify(res.body)}`).toBe(201);
+        const [pendingAgent] = await db.select().from(agents).where(eq(agents.id, res.body.agentId as string));
+        expect(pendingAgent, adapterType).toMatchObject({ status: "pending_approval", adapterType });
+      }
+    });
+
     it("files hire_agent through the hire path; the approved hire binds the profile and applies it with the hire's authority", async () => {
       const s = await seed();
       const draft = await createUnbound(s, s.manager!);

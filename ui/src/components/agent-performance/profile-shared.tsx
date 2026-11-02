@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { accessPolicyRefusalOf, accessPolicyRefusalSentence } from "@/lib/access-policy-refusal";
 import { formatCents, formatDateTime } from "@/lib/utils";
 import { describeSource } from "./shared";
+import type { ProfileNameLookup } from "./profile-names";
 
 // AgentDash: Agent Performance Management gate 2 — pieces the Profile tab and
 // the `agent_profile_change` approval renderer share: provenance labels for
@@ -92,10 +93,42 @@ export function provenanceFor(map: AgentProfileProvenanceMap | null | undefined,
   }
 }
 
-export function storedProvenanceText(entry: AgentProfileProvenanceEntry | null): string {
-  if (!entry) return "Source not recorded";
-  const base = PROVENANCE_STATE_TEXT[entry.state];
-  if (entry.state === "missing") return base;
+/** Revision states a person decided to approve: every field in the revision was approved with it. */
+const APPROVED_REVISION_STATES: ReadonlySet<AgentProfileRevisionState> = new Set<AgentProfileRevisionState>([
+  "approved",
+  "applied",
+  "application_failed",
+  "refused_stale",
+  "superseded",
+]);
+
+export function revisionWasApproved(state: AgentProfileRevisionState | null | undefined): boolean {
+  return !!state && APPROVED_REVISION_STATES.has(state);
+}
+
+/** What the screen knows about the field a label sits next to. */
+export interface ProvenanceFieldState {
+  /** The field shows no value. Left out for a section label, whose emptiness isn't known here. */
+  empty?: boolean;
+  /** The revision was approved by a person (`revisionWasApproved`). */
+  approved?: boolean;
+}
+
+/**
+ * The label for a stored field, matched to the field as shown. The stored map
+ * is written when a draft is seeded or edited and can lag the body (an API
+ * save that leaves `provenance` out keeps the old map), so the field's own
+ * state wins: an empty field is "Missing", a filled one never is, and a value
+ * proposed or drafted from a brief reads "Approved" once its revision was.
+ */
+export function storedProvenanceText(entry: AgentProfileProvenanceEntry | null, field: ProvenanceFieldState = {}): string {
+  if (field.empty === true) return PROVENANCE_STATE_TEXT.missing;
+  if (!entry || (entry.state === "missing" && field.empty === false)) return "Source not recorded";
+  if (entry.state === "missing") return PROVENANCE_STATE_TEXT.missing;
+  const approved = field.approved === true && (entry.state === "proposed" || entry.state === "from_brief");
+  // A brief is named by its state ("From the brief"); its document id is never shown.
+  if (entry.state === "from_brief") return approved ? "Approved — from the brief" : PROVENANCE_STATE_TEXT.from_brief;
+  const base = approved ? "Approved" : PROVENANCE_STATE_TEXT[entry.state];
   const from = entry.sourceRef ? ` — from ${describeSource(entry.sourceRef)}` : "";
   return `${base}${from}`;
 }
@@ -104,11 +137,13 @@ export function StoredProvenanceLabel({
   map,
   pointer,
   id,
+  empty,
+  approved,
 }: {
   map: AgentProfileProvenanceMap | null | undefined;
   pointer: string;
   id?: string;
-}) {
+} & ProvenanceFieldState) {
   const entry = provenanceFor(map, pointer);
   return (
     <Badge
@@ -118,7 +153,7 @@ export function StoredProvenanceLabel({
       data-testid="agent-pm-provenance"
       title={entry?.at ? `Recorded ${formatDateTime(entry.at)}` : undefined}
     >
-      {storedProvenanceText(entry)}
+      {storedProvenanceText(entry, { empty, approved })}
     </Badge>
   );
 }
@@ -259,23 +294,40 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** A short, readable rendering of a diff value. Never a wall of JSON. */
-export function diffValueText(value: unknown): string {
+/**
+ * An id as its name when the screen has one, else the id. `withId` keeps a
+ * short id after the name, "Finance (e3133a1b)": two projects can share a
+ * name, and someone deciding on access must tell them apart.
+ */
+export function namedId(id: string, names?: ProfileNameLookup, withId = false): string {
+  const name = names?.(id) ?? null;
+  if (!name) return id;
+  return withId ? `${name} (${id.slice(0, 8)})` : name;
+}
+
+/**
+ * A short, readable rendering of a diff value. Never a wall of JSON. An id the
+ * screen has a name for (`names`: a listed project, a reports-to agent, a
+ * person) is shown as that name (with a short id when `withIds`); an id it
+ * has no name for stays as it is.
+ */
+export function diffValueText(value: unknown, names?: ProfileNameLookup, withIds = false): string {
+  const named = (item: string) => namedId(item, names, withIds);
   if (value === undefined) return "—";
   if (value === null) return "none";
-  if (typeof value === "string") return value.trim() === "" ? "(empty)" : `“${truncate(value, 160)}”`;
+  if (typeof value === "string") return value.trim() === "" ? "(empty)" : `“${truncate(named(value), 160)}”`;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) {
     if (value.length === 0) return "(none)";
     if (value.every((item) => typeof item === "string" || typeof item === "number")) {
-      return truncate(value.join(", "), 200);
+      return truncate(value.map((item) => (typeof item === "string" ? named(item) : String(item))).join(", "), 200);
     }
     return `${value.length} item${value.length === 1 ? "" : "s"}`;
   }
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
     if (typeof record.title === "string") return `“${truncate(record.title, 120)}”`;
-    return truncate(JSON.stringify(value), 200);
+    return truncate(JSON.stringify(value, (_key, item: unknown) => (typeof item === "string" ? named(item) : item)), 200);
   }
   return String(value);
 }
@@ -299,6 +351,8 @@ export function ProfileDiffList({
   afterLabel = "After",
   emptyText = "No differences.",
   annotate,
+  names,
+  withIds = false,
   testId = "agent-profile-diff",
 }: {
   diff: AgentProfileDiffEntry[];
@@ -307,6 +361,10 @@ export function ProfileDiffList({
   afterLabel?: string;
   emptyText?: string;
   annotate?: (entry: AgentProfileDiffEntry) => ReactNode;
+  /** Names for the ids in the values (`useProfileNames`). */
+  names?: ProfileNameLookup;
+  /** Keep a short id after each name (an approval: same-named projects must stay distinguishable). */
+  withIds?: boolean;
   testId?: string;
 }) {
   if (diff.length === 0) {
@@ -329,20 +387,20 @@ export function ProfileDiffList({
           </p>
           {entry.op === "reorder" ? (
             <p className="mt-1 text-text-secondary">
-              {beforeLabel}: {diffValueText(entry.before)} · {afterLabel}: {diffValueText(entry.after)}
+              {beforeLabel}: {diffValueText(entry.before, names, withIds)} · {afterLabel}: {diffValueText(entry.after, names, withIds)}
             </p>
           ) : (
             <dl className="mt-1 grid gap-x-3 gap-y-0.5 text-text-secondary sm:grid-cols-[auto_1fr]">
               {entry.op !== "add" ? (
                 <>
                   <dt>{beforeLabel}</dt>
-                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.before)}</dd>
+                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.before, names, withIds)}</dd>
                 </>
               ) : null}
               {entry.op !== "remove" ? (
                 <>
                   <dt>{afterLabel}</dt>
-                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.after)}</dd>
+                  <dd className="min-w-0 break-words text-text-primary">{diffValueText(entry.after, names, withIds)}</dd>
                 </>
               ) : null}
             </dl>
@@ -404,11 +462,14 @@ export const FIELD_AUTHORITY_TEXT: Record<AgentProfileFieldAuthority, string> = 
 // Access request summary
 // ---------------------------------------------------------------------------
 
-function listScopeText(scope: AgentAccessListScope | undefined, noun: string): string {
+function listScopeText(scope: AgentAccessListScope | undefined, noun: string, names?: ProfileNameLookup): string {
   if (!scope) return "not limited by the profile";
   if (scope.mode === "all") return `every ${noun}`;
   if (scope.ids.length === 0) return `no ${noun}s`;
-  const shown = scope.ids.slice(0, 5).join(", ");
+  const shown = scope.ids
+    .slice(0, 5)
+    .map((id) => names?.(id) ?? id)
+    .join(", ");
   const more = scope.ids.length > 5 ? ` and ${scope.ids.length - 5} more` : "";
   return `${scope.ids.length} listed ${noun}${scope.ids.length === 1 ? "" : "s"} (${shown}${more})`;
 }
@@ -431,10 +492,10 @@ function contactText(scope: AgentAccessContactScope | undefined): string {
   }
 }
 
-/** One line per dimension, in plain words. Omitted V2 dimensions say so instead of vanishing. */
-export function describeAccessRequest(access: AgentAccessPolicy): Array<{ label: string; value: string }> {
+/** One line per dimension, in plain words. Omitted V2 dimensions say so instead of vanishing. Listed projects are named when `names` has them. */
+export function describeAccessRequest(access: AgentAccessPolicy, names?: ProfileNameLookup): Array<{ label: string; value: string }> {
   const lines: Array<{ label: string; value: string }> = [];
-  lines.push({ label: "See projects", value: listScopeText(access.see?.projects, "project") });
+  lines.push({ label: "See projects", value: listScopeText(access.see?.projects, "project", names) });
   if (access.see?.connections) {
     lines.push({
       label: "Read through connections",

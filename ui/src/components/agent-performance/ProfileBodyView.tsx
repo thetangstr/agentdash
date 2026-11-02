@@ -4,11 +4,19 @@ import type { AgentOperatingProfileV1, AgentProfileProvenanceMap } from "@paperc
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { EmptyNote, Fact, FactList, Section } from "./shared";
 import { StoredProvenanceLabel, describeAccessRequest } from "./profile-shared";
+import type { ProfileNameLookup } from "./profile-names";
 
 // AgentDash: Agent Performance Management gate 2 — a stored profile revision,
 // read-only, in the overview LLD §6 order: work it owns, how it works, what
 // it knows, style, runtime (advanced, collapsed). Every field carries its
-// provenance label as text.
+// provenance label as text, matched to the field as shown (an empty field is
+// missing, a filled one never is, and an approved revision's proposals read
+// "Approved"). Projects, agents and people are named when the screen has
+// their names (`names`); an id shows only when it has none.
+
+function blank(value: string | undefined | null): boolean {
+  return !value || !value.trim();
+}
 
 function textOrMissing(value: string | undefined | null): ReactNode {
   return value && value.trim() ? value : <span className="text-text-secondary">Not recorded</span>;
@@ -18,27 +26,32 @@ function ProvenancedFact({
   label,
   pointer,
   provenance,
+  empty,
+  approved,
   children,
 }: {
   label: string;
   pointer: string;
   provenance: AgentProfileProvenanceMap;
+  /** The value shown is empty: the label says "Missing" whatever was stored. */
+  empty: boolean;
+  approved: boolean;
   children: ReactNode;
 }) {
   return (
     <Fact label={label}>
       <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
         <span className="min-w-0">{children}</span>
-        <StoredProvenanceLabel map={provenance} pointer={pointer} />
+        <StoredProvenanceLabel map={provenance} pointer={pointer} empty={empty} approved={approved} />
       </div>
     </Fact>
   );
 }
 
-function principalText(ref: { userId?: string; agentId?: string } | undefined): string | null {
+function principalText(ref: { userId?: string; agentId?: string } | undefined, names?: ProfileNameLookup): string | null {
   if (!ref) return null;
-  if (ref.agentId) return `Agent ${ref.agentId}`;
-  if (ref.userId) return `Person ${ref.userId}`;
+  if (ref.agentId) return names?.(ref.agentId) ?? `Agent ${ref.agentId}`;
+  if (ref.userId) return names?.(ref.userId) ?? `Person ${ref.userId}`;
   return null;
 }
 
@@ -64,28 +77,35 @@ function criteriaText(performance: AgentOperatingProfileV1["responsibilities"][n
 export function ProfileBodyView({
   body,
   provenance,
+  approved = false,
+  names,
   testId = "agent-profile-body",
 }: {
   body: AgentOperatingProfileV1;
   provenance: AgentProfileProvenanceMap;
+  /** A person approved this revision (`revisionWasApproved`): proposed values read "Approved". */
+  approved?: boolean;
+  /** Names for listed projects, agents and people (`useProfileNames`). */
+  names?: ProfileNameLookup;
   testId?: string;
 }) {
   const [runtimeOpen, setRuntimeOpen] = useState(false);
   const { identity, rhythm, runtime } = body;
+  const reportsTo = principalText(rhythm.reportTo, names);
   return (
     <div className="space-y-8" data-testid={testId}>
       <Section id={`${testId}-work`} title="Work it owns">
         <FactList>
-          <ProvenancedFact label="Name" pointer="/identity/name" provenance={provenance}>
+          <ProvenancedFact label="Name" pointer="/identity/name" provenance={provenance} empty={blank(identity.name)} approved={approved}>
             {identity.name}
           </ProvenancedFact>
-          <ProvenancedFact label="Title" pointer="/identity/title" provenance={provenance}>
+          <ProvenancedFact label="Title" pointer="/identity/title" provenance={provenance} empty={blank(identity.title)} approved={approved}>
             {textOrMissing(identity.title)}
           </ProvenancedFact>
-          <ProvenancedFact label="Summary" pointer="/identity/summary" provenance={provenance}>
+          <ProvenancedFact label="Summary" pointer="/identity/summary" provenance={provenance} empty={blank(identity.summary)} approved={approved}>
             {textOrMissing(identity.summary)}
           </ProvenancedFact>
-          <ProvenancedFact label="Who it serves" pointer="/identity/audience" provenance={provenance}>
+          <ProvenancedFact label="Who it serves" pointer="/identity/audience" provenance={provenance} empty={blank(identity.audience)} approved={approved}>
             {textOrMissing(identity.audience)}
           </ProvenancedFact>
         </FactList>
@@ -103,33 +123,45 @@ export function ProfileBodyView({
                       <p className="font-medium text-text-primary">
                         {item.title} <span className="font-mono text-xs font-normal text-text-secondary">{item.key}</span>
                       </p>
-                      <StoredProvenanceLabel map={provenance} pointer={`${base}/title`} />
+                      <StoredProvenanceLabel map={provenance} pointer={`${base}/title`} empty={blank(item.title)} approved={approved} />
                     </div>
                     <FactList>
-                      <ProvenancedFact label="Outcome" pointer={`${base}/outcome`} provenance={provenance}>
+                      <ProvenancedFact label="Outcome" pointer={`${base}/outcome`} provenance={provenance} empty={blank(item.outcome)} approved={approved}>
                         {textOrMissing(item.outcome)}
                       </ProvenancedFact>
-                      <ProvenancedFact label="Obligation" pointer={`${base}/obligation`} provenance={provenance}>
+                      <ProvenancedFact label="Obligation" pointer={`${base}/obligation`} provenance={provenance} empty={false} approved={approved}>
                         {obligationText(item.obligation)}
                       </ProvenancedFact>
-                      <ProvenancedFact label="Deliverable" pointer={`${base}/deliverable`} provenance={provenance}>
+                      <ProvenancedFact
+                        label="Deliverable"
+                        pointer={`${base}/deliverable`}
+                        provenance={provenance}
+                        empty={blank(item.deliverable.what) && blank(item.deliverable.destination)}
+                        approved={approved}
+                      >
                         {item.deliverable.what.trim() || item.deliverable.destination.trim()
                           ? `${item.deliverable.what || "—"} → ${item.deliverable.destination || "—"}`
                           : textOrMissing(null)}
                       </ProvenancedFact>
-                      <ProvenancedFact label="Escalation" pointer={`${base}/escalation`} provenance={provenance}>
+                      <ProvenancedFact label="Escalation" pointer={`${base}/escalation`} provenance={provenance} empty={blank(item.escalation.when)} approved={approved}>
                         {item.escalation.when.trim()
                           ? `${item.escalation.when}${
-                              principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId })
-                                ? ` → ${principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId })}`
+                              principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId }, names)
+                                ? ` → ${principalText({ userId: item.escalation.toUserId, agentId: item.escalation.toAgentId }, names)}`
                                 : ""
                             }`
                           : textOrMissing(null)}
                       </ProvenancedFact>
-                      <ProvenancedFact label="Not owned" pointer={`${base}/notOwned`} provenance={provenance}>
+                      <ProvenancedFact label="Not owned" pointer={`${base}/notOwned`} provenance={provenance} empty={!item.notOwned?.length} approved={approved}>
                         {item.notOwned && item.notOwned.length > 0 ? item.notOwned.join("; ") : textOrMissing(null)}
                       </ProvenancedFact>
-                      <ProvenancedFact label="How the work is judged" pointer={`${base}/performance`} provenance={provenance}>
+                      <ProvenancedFact
+                        label="How the work is judged"
+                        pointer={`${base}/performance`}
+                        provenance={provenance}
+                        empty={item.performance.criteria.length === 0}
+                        approved={approved}
+                      >
                         {criteriaText(item.performance)}
                       </ProvenancedFact>
                     </FactList>
@@ -143,26 +175,26 @@ export function ProfileBodyView({
 
       <Section id={`${testId}-rhythm`} title="How it works">
         <FactList>
-          <ProvenancedFact label="Time zone" pointer="/rhythm/timezone" provenance={provenance}>
+          <ProvenancedFact label="Time zone" pointer="/rhythm/timezone" provenance={provenance} empty={blank(rhythm.timezone)} approved={approved}>
             {rhythm.timezone}
           </ProvenancedFact>
-          <ProvenancedFact label="Quiet hours" pointer="/rhythm/quietHours" provenance={provenance}>
+          <ProvenancedFact label="Quiet hours" pointer="/rhythm/quietHours" provenance={provenance} empty={blank(rhythm.quietHours)} approved={approved}>
             {textOrMissing(rhythm.quietHours)}
           </ProvenancedFact>
-          <ProvenancedFact label="Reports to" pointer="/rhythm/reportTo" provenance={provenance}>
-            {textOrMissing(principalText(rhythm.reportTo))}
+          <ProvenancedFact label="Reports to" pointer="/rhythm/reportTo" provenance={provenance} empty={reportsTo === null} approved={approved}>
+            {textOrMissing(reportsTo)}
           </ProvenancedFact>
-          <ProvenancedFact label="Report cadence" pointer="/rhythm/reportCadence" provenance={provenance}>
+          <ProvenancedFact label="Report cadence" pointer="/rhythm/reportCadence" provenance={provenance} empty={blank(rhythm.reportCadence)} approved={approved}>
             {textOrMissing(rhythm.reportCadence)}
           </ProvenancedFact>
         </FactList>
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 className="text-sm font-medium text-text-primary">What it may do (requested access)</h4>
-            <StoredProvenanceLabel map={provenance} pointer="/access" />
+            <StoredProvenanceLabel map={provenance} pointer="/access" approved={approved} />
           </div>
           <FactList>
-            {describeAccessRequest(body.access).map((line) => (
+            {describeAccessRequest(body.access, names).map((line) => (
               <Fact key={line.label} label={line.label}>
                 {line.value}
               </Fact>
@@ -173,7 +205,7 @@ export function ProfileBodyView({
 
       <Section id={`${testId}-knows`} title="What it knows">
         <FactList>
-          <ProvenancedFact label="Sources" pointer="/knowledge" provenance={provenance}>
+          <ProvenancedFact label="Sources" pointer="/knowledge" provenance={provenance} empty={body.knowledge.length === 0} approved={approved}>
             {body.knowledge.length === 0 ? (
               textOrMissing(null)
             ) : (
@@ -186,7 +218,7 @@ export function ProfileBodyView({
               </ul>
             )}
           </ProvenancedFact>
-          <ProvenancedFact label="Skills" pointer="/skills" provenance={provenance}>
+          <ProvenancedFact label="Skills" pointer="/skills" provenance={provenance} empty={body.skills.length === 0} approved={approved}>
             {body.skills.length === 0 ? <span className="text-text-secondary">None recorded</span> : body.skills.join(", ")}
           </ProvenancedFact>
         </FactList>
@@ -194,13 +226,19 @@ export function ProfileBodyView({
 
       <Section id={`${testId}-style`} title="Style">
         <FactList>
-          <ProvenancedFact label="Tone" pointer="/identity/style/tone" provenance={provenance}>
+          <ProvenancedFact label="Tone" pointer="/identity/style/tone" provenance={provenance} empty={blank(identity.style.tone)} approved={approved}>
             {textOrMissing(identity.style.tone)}
           </ProvenancedFact>
-          <ProvenancedFact label="When it is unsure" pointer="/identity/style/uncertaintyRule" provenance={provenance}>
+          <ProvenancedFact
+            label="When it is unsure"
+            pointer="/identity/style/uncertaintyRule"
+            provenance={provenance}
+            empty={blank(identity.style.uncertaintyRule)}
+            approved={approved}
+          >
             {textOrMissing(identity.style.uncertaintyRule)}
           </ProvenancedFact>
-          <ProvenancedFact label="Example" pointer="/identity/style/example" provenance={provenance}>
+          <ProvenancedFact label="Example" pointer="/identity/style/example" provenance={provenance} empty={blank(identity.style.example)} approved={approved}>
             {textOrMissing(identity.style.example)}
           </ProvenancedFact>
         </FactList>
@@ -216,16 +254,28 @@ export function ProfileBodyView({
           </h3>
           <CollapsibleContent className="mt-3">
             <FactList>
-              <ProvenancedFact label="Adapter" pointer="/runtime/adapterType" provenance={provenance}>
+              <ProvenancedFact label="Adapter" pointer="/runtime/adapterType" provenance={provenance} empty={blank(runtime?.adapterType)} approved={approved}>
                 {runtime?.adapterType ? <code className="font-mono text-xs">{runtime.adapterType}</code> : textOrMissing(null)}
               </ProvenancedFact>
-              <ProvenancedFact label="Model" pointer="/runtime/model" provenance={provenance}>
+              <ProvenancedFact label="Model" pointer="/runtime/model" provenance={provenance} empty={blank(runtime?.model)} approved={approved}>
                 {runtime?.model ? <code className="font-mono text-xs">{runtime.model}</code> : textOrMissing(null)}
               </ProvenancedFact>
-              <ProvenancedFact label="Execution environment" pointer="/runtime/environmentId" provenance={provenance}>
+              <ProvenancedFact
+                label="Execution environment"
+                pointer="/runtime/environmentId"
+                provenance={provenance}
+                empty={blank(runtime?.environmentId)}
+                approved={approved}
+              >
                 {runtime?.environmentId ? <code className="font-mono text-xs">{runtime.environmentId}</code> : textOrMissing(null)}
               </ProvenancedFact>
-              <ProvenancedFact label="Heartbeat" pointer="/runtime/heartbeat" provenance={provenance}>
+              <ProvenancedFact
+                label="Heartbeat"
+                pointer="/runtime/heartbeat"
+                provenance={provenance}
+                empty={runtime?.heartbeat?.intervalSec == null && runtime?.heartbeat?.wakeOnDemand == null}
+                approved={approved}
+              >
                 {runtime?.heartbeat?.intervalSec != null
                   ? `Every ${runtime.heartbeat.intervalSec} seconds`
                   : textOrMissing(null)}
