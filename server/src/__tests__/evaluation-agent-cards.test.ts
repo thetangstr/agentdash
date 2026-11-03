@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { activityLog, agents, createDb, evaluationEvents, evaluationScorecards, issues, projects } from "@paperclipai/db";
 import { AGENT_CASE_FILTER_NONE, evaluationCriterionRefKey, type AgentCardView, type EvaluationCriterionRef } from "@paperclipai/shared";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
@@ -12,8 +12,10 @@ import { profileBody, responsibility, seedActiveProfile } from "./helpers/respon
 import { errorHandler } from "../middleware/index.js";
 import { evaluationRoutes } from "../routes/evaluation.js";
 import { evaluationAgentRoutes } from "../routes/evaluation-agents.js";
-import { agentCardService } from "../services/evaluation/agent-cards.js";
+import { agentCardService, agentCardSummaryOf } from "../services/evaluation/agent-cards.js";
 import { evaluationLedger, type EvaluationEventInput } from "../services/evaluation/ledger.js";
+import type { EvaluationViewer } from "../services/evaluation/access-class.js";
+import * as evaluationSources from "../services/evaluation/sources.js";
 import { evaluationSnapshotCadence } from "../services/evaluation/schedule.js";
 import { buildAgentContractV2 } from "../services/evaluation/agent-contract.js";
 import { documentService } from "../services/documents.js";
@@ -378,7 +380,106 @@ describeEmbeddedPostgres("agent cards (APM gate 3, P3.3)", () => {
     expect(JSON.stringify(detail.body.card.worker)).not.toContain(openIssue);
     const cases = await call(outsider(), "get", `${base()}/agents/${agentId}/cases`);
     expect(JSON.stringify(cases.body.rows)).not.toContain(openIssue);
+    const list = await call(outsider(), "get", `${base()}/agents`);
+    expect(list.status).toBe(200);
+    const summary = list.body.agents.find((row: { agentId: string }) => row.agentId === agentId);
+    expect(summary).toMatchObject({ obligations: [{ responsibilityKey: "work", owed: 0, delivered: 0 }] });
+    expect(JSON.stringify(list.body)).not.toContain(openIssue);
     await db.update(issues).set({ projectId: openProject }).where(eq(issues.id, openIssue));
+  });
+
+  async function listReadFixture() {
+    const localCompanyId = (await addCompany(db, "Shared card reads", "default")).id;
+    const localOwner = await addUser(db, localCompanyId, "owner");
+    const svc = agentCardService(db);
+    const ledger = evaluationLedger(db);
+    const workers: Array<{ id: string; issueId: string; snapshot: Awaited<ReturnType<typeof svc.snapshotAgentCard>> }> = [];
+    for (let i = 0; i < 3; i++) {
+      const worker = await addAgent(db, localCompanyId, { name: `Worker ${i}`, accountableUserId: localOwner });
+      const [item] = await db.insert(issues).values({ companyId: localCompanyId, title: `Work ${i}`, assigneeAgentId: worker.id }).returning();
+      await ledger.append([{
+        companyId: localCompanyId, subjectAgentId: worker.id, actorType: "system", sourceTable: "issues", sourceId: item!.id,
+        sourceVersion: "initial", eventType: "issue.snapshot", eventTime: at(2 + i),
+        // A later card forces the restricted reader down the shared projection path.
+        accessClass: i === 2 ? `private_agent:${worker.id}` : "company",
+        payload: { issueId: item!.id, status: "todo", assigneeAgentId: worker.id },
+      }]);
+      workers.push({ id: worker.id, issueId: item!.id, snapshot: await svc.snapshotAgentCard(localCompanyId, worker.id, { asOf: at(10 + i), fallbackUserId: localOwner }) });
+    }
+    const viewer = (kind: "admin" | "full-readable" | "restricted"): EvaluationViewer => ({
+      companyId: localCompanyId, principal: { type: "board", userId: localOwner }, admin: kind === "admin",
+      readableProjectIds: "all", hiddenProjectIds: new Set(), pairingReceiptIds: new Set(),
+      privateAgentIds: kind === "restricted" ? new Set() : new Set(workers.map((worker) => worker.id)),
+    });
+    return { svc, companyId: localCompanyId, workers, viewer };
+  }
+
+  it.each(["admin", "full-readable", "restricted"] as const)("loads one ledger window for a nonempty %s card list, preserving each stored cut", async (kind) => {
+    const f = await listReadFixture();
+    const viewer = f.viewer(kind);
+    // Count executed SQL, not a mocked ledger method: this fixture fits in one ledger page.
+    const queries = vi.spyOn(db.$client, "unsafe");
+    let listed;
+    try {
+      listed = await f.svc.listAgentCards(viewer);
+      const ledgerQueries = queries.mock.calls.map(([query]) => query).filter((query) => /from "evaluation_events"/.test(query));
+      expect(ledgerQueries).toHaveLength(1);
+    } finally { queries.mockRestore(); }
+    expect(listed).toHaveLength(3);
+    expect(new Set(listed.map((row) => row.stored!.throughSeq)).size).toBe(3);
+    for (const worker of f.workers) {
+      const detail = await f.svc.getAgentCard(viewer, worker.id);
+      expect(detail).not.toBeNull();
+      expect(listed.find((row) => row.agentId === worker.id)).toEqual(agentCardSummaryOf(detail!, {
+        ...detail!.stored!, throughSeq: worker.snapshot.throughSeq,
+      }, `worker-${f.workers.indexOf(worker)}`));
+      expect(await f.svc.verifyAgentCard(f.companyId, worker.id)).toMatchObject({ ok: true, status: "agree", storedHash: worker.snapshot.cardHash, replayHash: worker.snapshot.cardHash });
+    }
+  });
+
+  it("narrows shared rows to each historical cut before current authority checks and ignores future profile facts", async () => {
+    const f = await listReadFixture();
+    const first = f.workers[0]!;
+    const future = f.workers[2]!;
+    const futureRevision = randomUUID();
+    await evaluationLedger(db).append([{
+      companyId: f.companyId, subjectAgentId: first.id, actorType: "system", sourceTable: "agent_profile_revisions", sourceId: futureRevision,
+      sourceVersion: "future", eventType: "profile.revision_changed", eventTime: at(20),
+      payload: { agentId: first.id, revisionId: futureRevision, state: "applied", responsibilities: [{ key: "future-work", obligation: { kind: "assigned" }, deadline: null }] },
+    }]);
+    // Advance only a different agent's latest card, so the shared max-cut includes the future profile.
+    await f.svc.snapshotAgentCard(f.companyId, future.id, { asOf: at(30), fallbackUserId: null });
+    const before = await f.svc.getAgentCard(f.viewer("restricted"), first.id);
+    const scopes = vi.spyOn(evaluationSources, "resolveIssueScope");
+    let listed;
+    try {
+      listed = await f.svc.listAgentCards(f.viewer("restricted"));
+      // SQL does not promise card row order. The oldest cut must resolve only its own issue.
+      expect(scopes.mock.calls.every(([, company]) => company === f.companyId)).toBe(true);
+      const scopedIssues = scopes.mock.calls.map(([, , ids]) => ids).sort((a, b) => a.length - b.length);
+      expect(scopedIssues[0]).toEqual([first.issueId]);
+      expect(scopedIssues.every((ids) => !ids.includes(future.issueId))).toBe(true);
+    } finally { scopes.mockRestore(); }
+    const after = await f.svc.getAgentCard(f.viewer("restricted"), first.id);
+    expect(after).toEqual({ ...before!, nativeOutputCheckedAt: after!.nativeOutputCheckedAt });
+    expect(JSON.stringify(after)).not.toContain("future-work");
+    expect(listed.find((row) => row.agentId === first.id)).toEqual(agentCardSummaryOf(after!, { ...after!.stored!, throughSeq: first.snapshot.throughSeq }, "worker-0"));
+  });
+
+  it("does not read a ledger window, agent names or native heads for an empty visible list", async () => {
+    const f = await listReadFixture();
+    const queries = vi.spyOn(db.$client, "unsafe");
+    try {
+      expect(await f.svc.listAgentCards(f.viewer("admin"), { visibleAgentIds: new Set() })).toEqual([]);
+      expect(queries.mock.calls.map(([query]) => query)).toHaveLength(1);
+      expect(queries.mock.calls[0]![0]).toContain('from "evaluation_scorecards"');
+    } finally { queries.mockRestore(); }
+    const emptyCompanyId = (await addCompany(db, "No cards", "default")).id;
+    const emptyQueries = vi.spyOn(db.$client, "unsafe");
+    try {
+      expect(await f.svc.listAgentCards({ ...f.viewer("admin"), companyId: emptyCompanyId })).toEqual([]);
+      expect(emptyQueries.mock.calls).toHaveLength(1);
+    } finally { emptyQueries.mockRestore(); }
   });
 
   it("keeps old formulas and hashes in unrestricted/restricted list, detail, cases and verify", async () => {
@@ -477,6 +578,14 @@ describeEmbeddedPostgres("agent cards (APM gate 3, P3.3)", () => {
     const latestHistorical = await call(owner(), "get", url);
     expect(latestHistorical.body.card).toMatchObject({ nativeOutputStatus: "stale", stored: { cardHash: latestHash } });
     expect(latestHistorical.body.card.worker.acceptance.body.facts.automatedAcceptance.yes).toBe(1);
+    // Listing shares a newer company cut, but freshness still cites this card's delivery-time proof.
+    const headReads = vi.spyOn(evaluationSources, "readNativeDocumentHeads");
+    try {
+      const list = await call(owner(), "get", `${base()}/agents`);
+      expect(list.status).toBe(200);
+      expect(list.body.agents.find((row: { agentId: string }) => row.agentId === worker.id)).toMatchObject({ stored: { cardHash: latestHash } });
+      expect(headReads.mock.calls.some(([, , ids]) => ids?.size === 1 && ids.has(item!.id))).toBe(true);
+    } finally { headReads.mockRestore(); }
     const latestVerified = await call(owner(), "get", `${url}/verify`);
     expect(latestVerified.body.verify).toMatchObject({ ok: true, status: "agree", storedHash: latestHash, replayHash: latestHash });
     const verified = await call(owner(), "get", `${url}/verify?version=1`);

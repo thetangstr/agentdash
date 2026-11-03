@@ -486,7 +486,7 @@ function CostBody({ body, ui, personName }: { body: AgentCardCostSection; ui: Dr
       {body.byPerson === null ? (
         <EmptyNote>Visible to company admins and the agent's accountable person.</EmptyNote>
       ) : body.byPerson.length === 0 ? (
-        <EmptyNote>Nobody spent time on this agent in this window.</EmptyNote>
+        <EmptyNote>No person-time records for this agent in this window.</EmptyNote>
       ) : (
         <ul className="space-y-1 text-sm" data-testid="agent-card-by-person">
           {body.byPerson.map((row) => (

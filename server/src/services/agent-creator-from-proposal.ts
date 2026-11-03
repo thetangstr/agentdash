@@ -209,6 +209,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 // from the canonical default bundle: seconds precedence and legacy fallback;
 // a request deadline does not prove remote work stopped or authorize a retry.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
+  // AgentDash: system-hire-model is server-owned configuration for plan and
+  // reviewer hires; this header adds no worker procedure or model authority.
   // AgentDash: native-output-proof is inherited from the canonical default bundle below.
   // The per-hire context grants no acceptance authority and must retain that shared contract.
   const userVoice = transcript

@@ -230,7 +230,11 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
   // the role slug and adapter are internal detail and render under Technical
   // details on the page, not here.
   const title = firstNonEmptyString(payload.title, humanizeAgentRole(stringValue(payload.role)));
-  const modelLine = hermesModelLine(payload);
+  const adapterConfig = payload.adapterConfig && typeof payload.adapterConfig === "object"
+    ? payload.adapterConfig as Record<string, unknown> : {};
+  const modelLine = hermesModelLine(payload) ?? stringValue(adapterConfig.model);
+  const modelSelection = payload.modelSelection && typeof payload.modelSelection === "object"
+    ? payload.modelSelection as Record<string, unknown> : {};
   return (
     <div className="mt-3 space-y-1.5 text-sm">
       <div className="flex items-center gap-2">
@@ -250,6 +254,9 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
           <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs">Model</span>
           <span>{modelLine}</span>
         </div>
+      )}
+      {typeof modelSelection.warning === "string" && (
+        <p className="text-muted-foreground">{modelSelection.warning}</p>
       )}
       <ProcessCommandLines payload={payload} />
       <SkillList values={payload.desiredSkills} />

@@ -162,6 +162,29 @@ describeEmbeddedPostgres("cos reviewer auto-hire (embedded postgres)", () => {
     await tempDb?.cleanup();
   });
 
+  it("persists a same-company model on a pending reviewer and its approval", async () => {
+    vi.stubEnv("AGENTDASH_DEFAULT_ADAPTER", "codex_local");
+    try {
+      const company = await seedCompany(db);
+      const [chief] = await db.insert(agents).values({
+        companyId: company.id, name: "Chief", role: "chief_of_staff", status: "idle",
+        adapterType: "codex_local", adapterConfig: { model: "working-company-model", env: { PRIVATE_KEY: "do-not-copy" } },
+      }).returning();
+      const result = await cosReviewerAutoHire(db, { provisionReviewer: vi.fn() })
+        .evaluateAndHireIfNeeded(company.id, "neutrality_conflict");
+      expect(result.hired).toBe(true);
+      const [reviewer] = await db.select().from(agents).where(eq(agents.id, result.reviewerAgentId!));
+      expect(reviewer.status).toBe("pending_approval");
+      expect(reviewer.adapterConfig).toEqual({ model: "working-company-model" });
+      expect(reviewer.metadata).toMatchObject({ systemHireModel: { source: "company_agent", agentId: chief.id } });
+      const [approval] = await db.select().from(approvals).where(eq(approvals.id, result.approvalId!));
+      expect(approval.payload).toMatchObject({ adapterConfig: { model: "working-company-model" }, modelSelection: { source: "company_agent", agentId: chief.id } });
+      expect(JSON.stringify(approval.payload)).not.toContain("do-not-copy");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("serializes concurrent evaluations to the cap on real connections", async () => {
     const company = await seedCompany(db);
     process.env.AGENTDASH_REVIEWER_MAX_CONCURRENT_HIRES = "1";

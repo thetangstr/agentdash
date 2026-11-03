@@ -380,7 +380,10 @@ export function agentCardService(db: Db) {
 
   /** The view of one card for one viewer; `rows` may be passed in when several cards share one load. */
   async function viewFor(viewer: EvaluationViewer, card: AgentCardV1, stored: AgentCardView["stored"], sideEffectFree: boolean, preloaded?: EvaluationEventRow[], actor?: AgentCardActor): Promise<AgentCardView> {
-    const rawRows = preloaded ?? await ledger.windowUpTo(card.companyId, card.replay.throughSeq);
+    // A list shares its maximum cut; narrow before authority, projection and proof selection.
+    const rawRows = preloaded
+      ? preloaded.filter((row) => Number(row.seq) <= card.replay.throughSeq)
+      : await ledger.windowUpTo(card.companyId, card.replay.throughSeq);
     const scopedRows = await currentReadableRows(viewer, rawRows);
     let rows: EvaluationEventRow[] | null = scopedRows;
     const load = async () => scopedRows;
@@ -595,13 +598,9 @@ export function agentCardService(db: Db) {
           ),
         );
       const visible = rows.filter((r) => !opts.visibleAgentIds || opts.visibleAgentIds.has(r.milestoneId));
-      // one window load for every card this viewer needs recomputed
-      const needsRows = visible.some((r) => {
-        const card = r.card as unknown as AgentCardV1;
-        return !(viewer.admin || card.accessClasses.every((c) => viewerReadsClass(viewer, c)));
-      });
+      // Every view needs captured rows for native proof checks, even when it reads every class.
       const maxCut = visible.reduce((m, r) => Math.max(m, Number(r.throughSeq)), 0);
-      const shared = needsRows ? await ledger.windowUpTo(viewer.companyId, maxCut) : undefined;
+      const shared = visible.length > 0 ? await ledger.windowUpTo(viewer.companyId, maxCut) : undefined;
       // links use the agent's url key today (its current name), not the name stored on the card
       const ids = visible.map((r) => r.milestoneId);
       const names = new Map<string, string>();
