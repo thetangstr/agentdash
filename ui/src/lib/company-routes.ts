@@ -80,6 +80,7 @@ const GLOBAL_ROUTE_ROOTS = new Set([
   "share",
   "tests",
   "demo",
+  "how-it-works",
   "consulting",
   "about",
   // AgentDash: release posts are global marketing pages, never company prefixes.

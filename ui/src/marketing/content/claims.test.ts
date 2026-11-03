@@ -85,3 +85,64 @@ describe("launch-week copy guardrails", () => {
     ]);
   });
 });
+
+// The /how-it-works story is approved copy about shipped features (releases/v2026.1031.0.md). Its lines
+// are pinned verbatim so a change is deliberate, and the illustration must not show money or say more
+// than the copy does.
+describe("how-it-works copy guardrails", () => {
+  const APPROVED_LINES = [
+    "Tell the Chief of Staff about the business. It drafts a team plan.",
+    "You confirm the plan. Hires beyond it wait for your approval.",
+    "Each agent has an operating profile: its job, written by a person.",
+    "A change to a profile is a proposal. It applies only after it's approved.",
+    "Access rules set what an agent can see, do, and who it can talk to.",
+    "Start in shadow: AgentDash logs what it would refuse, and refuses nothing.",
+    "Switch to enforce: out-of-scope actions are refused, with the reason.",
+    "Its accountable person, steward and admins are always reachable.",
+    "Every agent gets a scorecard from real records: work owed, quality, cost.",
+    "What isn't known shows as unknown, not as a guess.",
+    "A performance manager reads the scorecards and recommends changes.",
+    "Only people decide. A pause recommendation never pauses an agent.",
+    "Agents managed like staff. People stay in charge.",
+  ];
+  const storyFiles = [
+    "how-it-works/story.ts", "how-it-works/StorySection.tsx", "how-it-works/scenes/cards.ts",
+    "how-it-works/scenes/lanes.ts", "pages/HowItWorks.tsx",
+  ];
+  const storyCopy = storyFiles.map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
+
+  it("keeps the approved caption lines verbatim, every chapter live, and the example names", async () => {
+    const { STORY, storyLines } = await import("../how-it-works/story");
+    expect(storyLines()).toEqual(APPROVED_LINES);
+    expect(STORY.chapters.map((c) => [c.label, c.status])).toEqual([
+      ["Plan", "Live"], ["Profile", "Live"], ["Access", "Live"], ["Scorecard", "Live"], ["Decide", "Live"],
+    ]);
+    expect(STORY.names).toEqual({ you: "You", cos: "Chief of Staff", agents: ["Research", "Sales", "Support"] });
+  });
+
+  it("labels the illustration as one, directly under the stage", async () => {
+    const { ILLUSTRATION_NOTE } = await import("../how-it-works/story");
+    expect(ILLUSTRATION_NOTE).toBe("An illustration of how AgentDash works, not a recording. Names are examples.");
+    expect(readFileSync(join(ROOT, "how-it-works/StorySection.tsx"), "utf8")).toMatch(/hiw-story__stage[\s\S]*ILLUSTRATION_NOTE[\s\S]*hiw-story__foot/);
+  });
+
+  it("shows no money, prices or budgets in the story or its visuals", () => {
+    expect(storyCopy).not.toMatch(/\$\s?\d|\bUSD\b|\bbudget|\bspend|per[- ](seat|month)|\bprice/i);
+  });
+
+  it("never shows a pause taking effect or a refusal in shadow mode", () => {
+    const scenes = ["how-it-works/scenes/cards.ts", "how-it-works/scenes/lanes.ts"].map((f) => readFileSync(join(ROOT, f), "utf8"));
+    for (const s of scenes) {
+      expect(s).toMatch(/not paused/);
+      expect(s).not.toMatch(/["'>](Paused|Agent paused)\b/);
+      expect(s).toMatch(/[Nn]othing refused/);
+    }
+  });
+
+  it("states the qualifiers that keep the mechanism list honest", () => {
+    const page = readFileSync(join(ROOT, "pages/HowItWorks.tsx"), "utf8");
+    expect(page).toMatch(/Access rules stay off until an admin turns them on/);
+    expect(page).toMatch(/depends\s+on the version its operator has installed/);
+    expect(page).toMatch(/releases\/v2026\.1031\.0\.md/);
+  });
+});
