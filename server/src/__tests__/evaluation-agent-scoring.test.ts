@@ -509,16 +509,16 @@ describe("APM gate 3 (P3.3): acceptance facts are judge-type-specific (LLD §1)"
 
   it("an independent-agent-only pass is automated acceptance, not human", () => {
     const { automated, human, byJudge } = read([...setup(), verdict("agent", "passed", day(1, 6))]);
-    expect(automated).toMatchObject({ yes: 1, no: 0, unknown: 0, of: 1 });
+    expect(automated).toMatchObject({ yes: 0, no: 0, unknown: 1, of: 1 });
     expect(human).toMatchObject({ yes: 0, no: 0, unknown: 1, of: 1 });
     expect(byJudge.independent_agent).toEqual({ pass: 1, fail: 0, unknown: 0 });
     expect(byJudge.person).toEqual({ pass: 0, fail: 0, unknown: 1 });
     expect(byJudge.evaluator.pass).toBe(0);
   });
 
-  it("an item is in both only when both kinds of judge passed it", () => {
+  it("both judge observations remain visible while only the human decision grants human acceptance", () => {
     const { automated, human, byJudge, card } = read([...setup(), verdict("person", "passed", day(1, 6)), verdict("agent", "passed", day(1, 7))]);
-    expect(automated).toMatchObject({ yes: 1, of: 1 });
+    expect(automated).toMatchObject({ yes: 0, unknown: 1, of: 1 });
     expect(human).toMatchObject({ yes: 1, of: 1 });
     expect(byJudge.person.pass).toBe(1);
     expect(byJudge.independent_agent.pass).toBe(1);
@@ -528,7 +528,7 @@ describe("APM gate 3 (P3.3): acceptance facts are judge-type-specific (LLD §1)"
   it("a kind that decided without passing fails on its own column; the criterion stays satisfied by the other", () => {
     const { automated, human, byJudge, card } = read([...setup(), verdict("person", "passed", day(1, 6)), verdict("agent", "revision_requested", day(1, 7))]);
     expect(human).toMatchObject({ yes: 1, of: 1 });
-    expect(automated).toMatchObject({ yes: 0, no: 1, of: 1 });
+    expect(automated).toMatchObject({ yes: 0, no: 0, unknown: 1, of: 1 });
     expect(byJudge.person.pass).toBe(1);
     expect(byJudge.independent_agent).toEqual({ pass: 0, fail: 1, unknown: 0 });
     expect(card.worker.decisions.body.disagreements.map((d) => d.judgments.map((j) => [j.judge, j.result]))).toEqual([[["person", "pass"], ["independent_agent", "fail"]]]);
@@ -822,4 +822,97 @@ it("fixture sanity: every viewer projection keeps the base timeline untouched", 
   score(rows, { asOf: day(3, 20), from: day(1) });
   const tl2 = buildTimeline(orderEvents(rows));
   expect(tl2.items.size).toBe(tl1.items.size);
+});
+
+// Immutable native-output rubric. These cases catch promotion of prose/report labels,
+// partial coverage, stale revisions and permission approvals into output acceptance.
+describe("native output acceptance rubric v1", () => {
+  const I = uid(0xface);
+  const digest = "a".repeat(64);
+  const exact = { kind: "record", record: `document.sha256:result:${digest}` };
+  const fixture = (checks: Array<Record<string, unknown>> = [exact]) => [
+    ...profile({ revisionId: REV1, at: day(0), contractId: uid(0xfa01), responsibilities: [{ key: "work", obligation: { kind: "assigned" }, criteria: checks.map((check, i) => ({ id: `c${i}`, text: "Required output", check, source: "human" })) }] }),
+    ...issue({ id: I, identifier: "NATIVE-1", assignee: AG, created: day(1), started: day(1, 1), review: day(1, 2), done: day(1, 3) }),
+    mapping({ id: uid(0xfa02), issueId: I, key: "work", from: day(1) }),
+  ];
+  const document = (sha256: string, at = day(1, 2), extra: Record<string, unknown> = {}) => row({ type: "issue.document_revision" as EvaluationEventType, at, projectId: P, sourceTable: "document_revisions", payload: { issueId: I, key: "result", documentId: uid(0xfa03), revisionId: uid(0xfa04), revisionNumber: 1, sha256, createdByAgentId: AG, createdByRunId: uid(0xfa05), ...extra } });
+  const acceptance = (events: Row[], asOf = day(3)) => score(events, { asOf, from: day(0) }).worker.acceptance.body.facts;
+  it("accepts the persisted digest while keeping synthetic review separate", () => {
+    const result = acceptance([...fixture(), document(digest)]);
+    expect(result.automatedAcceptance).toEqual({ yes: 1, no: 0, unknown: 0, of: 1 });
+    expect(result.humanAcceptance.yes).toBe(0);
+  });
+  it.each([
+    ["missing", [], "unknown"],
+    ["wrong", [document("b".repeat(64))], "no"],
+    ["new wrong revision", [document(digest), document("b".repeat(64), day(2), { revisionNumber: 2 })], "no"],
+    ["removed", [document(digest), row({ type: "issue.document_removed" as EvaluationEventType, at: day(2), sourceTable: "activity_log", payload: { issueId: I, key: "result", documentId: uid(0xfa03) } })], "unknown"],
+    ["same-time removal", [document(digest), row({ type: "issue.document_removed" as EvaluationEventType, at: day(1, 2), sourceTable: "activity_log", payload: { issueId: I, key: "result", documentId: uid(0xfa03) } })], "unknown"],
+  ] as const)("keeps %s output fail-closed", (_name, proof, expected) => {
+    expect(acceptance([...fixture(), ...proof]).automatedAcceptance[expected]).toBe(1);
+  });
+  it("requires every automated criterion while keeping named-human/use separate", () => {
+    expect(acceptance([...fixture([exact, { kind: "record", record: "unsupported.check" }]), document(digest)]).automatedAcceptance.unknown).toBe(1);
+    expect(acceptance([...fixture([exact, { kind: "human_attest", attesterUserId: JUDGE }, { kind: "record", record: "use.confirmed" }]), document(digest)]).automatedAcceptance.yes).toBe(1);
+    expect(acceptance(fixture([])).automatedAcceptance.unknown).toBe(1);
+  });
+  it("requires both exact proofs and retains conflicting report observations", () => {
+    const second = { kind: "record", record: `document.sha256:summary:${digest}` };
+    const correct = [...fixture([exact, second]), document(digest), document(digest, day(1, 2), { key: "summary", documentId: uid(0xfb01), revisionId: uid(0xfb02) })];
+    expect(acceptance(correct).automatedAcceptance.yes).toBe(1);
+    const changed = document("c".repeat(64), day(2), { key: "summary", documentId: uid(0xfb01), revisionId: uid(0xfb03), revisionNumber: 2 });
+    const reports = row({ type: "assessment.automated", at: day(2, 1), payload: { issueId: I, agentId: AG, checks: [{ criterionId: "c0", outcome: "pass", evidenceCount: 99 }, { criterionId: "c1", outcome: "pass", evidenceCount: 99 }] } });
+    expect(acceptance([...correct, changed, reports]).automatedAcceptance.no).toBe(1);
+    expect(score([...correct, changed, reports], { asOf: day(3), from: day(0) }).worker.decisions.body.disagreements).toHaveLength(1);
+  });
+  it("rejects caller trust labels and ambiguous same-time native revisions", () => {
+    const forged = { ...document(digest), sourceTable: "agent_corrections", payload: { ...document(digest).payload, verified: true } };
+    expect(acceptance([...fixture(), forged]).automatedAcceptance.unknown).toBe(1);
+    expect(acceptance([...fixture(), document(digest), document("b".repeat(64), day(1, 2), { revisionId: uid(0xfb04), revisionNumber: 2 })]).automatedAcceptance.unknown).toBe(1);
+  });
+  it("checks the revised contract digest and preserves artifact authorship without claiming causal credit", () => {
+    const ownerOutput = document(digest, day(1, 2), { createdByAgentId: RV, createdByRunId: null });
+    expect(acceptance([...fixture(), ownerOutput]).automatedAcceptance.yes).toBe(1);
+    expect(ownerOutput.payload.createdByAgentId).toBe(RV);
+    const otherCheck = { kind: "record", record: `document.sha256:result:${"b".repeat(64)}` };
+    expect(acceptance([...fixture([otherCheck]), ownerOutput]).automatedAcceptance.no).toBe(1);
+  });
+  it("keeps legacy pass labels observable without acceptance credit", () => {
+    const events = [...fixture([{ kind: "record", record: "harness.criterion_passed" }]), row({ type: "assessment.automated", at: day(2), payload: { issueId: I, agentId: AG, checks: [{ criterionId: "c0", outcome: "pass", evidenceCount: 99 }], outcome: "pass" } })];
+    const card = score(events, { asOf: day(3), from: day(0) });
+    expect(card.worker.quality.body.criteria[0]!.byJudge.harness.pass).toBe(1);
+    expect(card.worker.acceptance.body.facts.automatedAcceptance.unknown).toBe(1);
+  });
+  it("does not count a permission approval as human result acceptance", () => {
+    expect(acceptance([...fixture(), row({ type: "approval.decided", at: day(2), actor: ["user", JUDGE], payload: { issueId: I, type: "permission_grant", decision: "approved", approvalId: uid(0xfa06) } })]).humanAcceptance.unknown).toBe(1);
+  });
+  it("keeps synthetic owner actions out of genuine human effort counts", () => {
+    const events = [...fixture(), document(digest), row({ type: "issue.execution_decision", at: day(2), payload: { issueId: I, actorUserId: "local-board", outcome: "approved" } }), row({ type: "correction.recorded", at: day(2), actor: ["user", "synthetic-owner"], payload: { issueId: I, agentId: AG } })];
+    const cost = score(events, { asOf: day(3), from: day(0) }).worker.cost.body;
+    expect(cost.humanReviewActions).toBe(0);
+    expect(cost.humanCorrections).toBe(0);
+  });
+  it("replays the pinned historical output after a subsequent change", () => {
+    const events = [...fixture(), document(digest)];
+    const before = score(events, { asOf: day(1, 4), from: day(0) });
+    const changed = document("b".repeat(64), day(2), { revisionNumber: 2 });
+    const replay = scoreAgent({ companyId: CO, agentId: AG, events: [...events, changed], throughSeq: before.replay.throughSeq, asOf: before.replay.asOf, window: before.replay.window, dependencies: [] });
+    expect(agentCardHash(replay)).toBe(agentCardHash(before));
+    expect(acceptance([...events, changed]).automatedAcceptance.no).toBe(1);
+  });
+});
+
+describe("historical agent formula provenance", () => {
+  it("preserves old formula and hash without recomputing restricted history", () => {
+    const card = score(threeDays(), { asOf: day(4), from: day(1) });
+    const old = { ...card, formulaVersion: "agent-metrics/1", accessClasses: ["company", `project:${R}`] } as AgentCardV1;
+    const viewer = { companyId: CO, admin: false, principal: { type: "board", userId: OUT }, hiddenProjectIds: new Set([R]), readableProjectIds: new Set(), privateAgentIds: new Set(), pairingReceiptIds: new Set() } as unknown as EvaluationViewer;
+    let recomputed = false;
+    const view = projectAgentCardView({ card: old, stored: { version: 1, cardHash: "original-hash", storedAt: day(4).toISOString() }, sideEffectFree: true, viewer, readableCard: () => { recomputed = true; return card; }, dependencyReadable: () => false, canSeePeople: false });
+    expect(recomputed).toBe(false);
+    expect(view.formulaVersion).toBe("agent-metrics/1");
+    expect(view.formulaMismatch).toBe(true);
+    expect(view.stored?.cardHash).toBe("original-hash");
+    expect(view.worker.acceptance.visibility).toBe("not_visible");
+  });
 });

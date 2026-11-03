@@ -537,6 +537,30 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
   const evaluatorJudgment = (pred: EvaluationTypedPredicate, item: DeliveredItem): { result: AgentJudgmentResult; refs: string[]; tier: EvaluationSourceTier } | null => {
     const unknown = { result: "unknown" as const, refs: [] as string[], tier: "T0" as EvaluationSourceTier };
     switch (pred.kind) {
+      case "document_sha256": {
+        if (item.ref.kind !== "issue") return unknown;
+        const observed = rows.filter((r) =>
+          (r.eventType === "issue.document_revision" || r.eventType === "issue.document_removed") &&
+          str(payloadOf(r), "issueId") === item.ref.id && str(payloadOf(r), "key") === pred.key,
+        );
+        if (!observed.length) return unknown;
+        const revisions = observed.filter((r) => r.eventType === "issue.document_revision");
+        if (!revisions.length) return unknown;
+        const latestRevisionTime = Math.max(...revisions.map((r) => r.eventTime.getTime()));
+        const revisionsAtHead = revisions.filter((r) => r.eventTime.getTime() === latestRevisionTime);
+        const documentIds = new Set(revisionsAtHead.map((r) => str(payloadOf(r), "documentId")));
+        const applicable = observed.filter((r) => r.eventType === "issue.document_revision" || documentIds.has(str(payloadOf(r), "documentId")));
+        const latestTime = Math.max(...applicable.map((r) => r.eventTime.getTime()));
+        const latest = applicable.filter((r) => r.eventTime.getTime() === latestTime);
+        // A deletion or conflicting same-time revision cannot be ordered safely by ledger ingest order.
+        if (latest.some((r) => r.eventType === "issue.document_removed")) return { ...unknown, refs: latest.map((r) => r.id) };
+        const versions = new Set(latest.map((r) => `${str(payloadOf(r), "documentId")}:${str(payloadOf(r), "revisionId")}:${str(payloadOf(r), "sha256")}`));
+        if (versions.size !== 1) return { ...unknown, refs: latest.map((r) => r.id) };
+        const proof = latest[0]!;
+        const p = payloadOf(proof);
+        if (proof.sourceTable !== "document_revisions" || !str(p, "documentId") || !str(p, "revisionId") || !/^[0-9a-f]{64}$/.test(str(p, "sha256") ?? "")) return unknown;
+        return { result: str(p, "sha256") === pred.sha256 ? "pass" : "fail", refs: [proof.id], tier: "T0" };
+      }
       case "record": {
         const it = item.issue;
         switch (pred.predicate) {
@@ -887,7 +911,9 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
               judge: j.judge,
               at: j.at,
               evidenceRefs: refs,
-              note: null,
+              note: predicate.kind === "document_sha256" && j.judge === "evaluator"
+                ? "Server-verified persisted native document revision. Authorship is recorded separately from final-state verification."
+                : "Recorded judgment or context observation. This supplies no verified native output acceptance.",
               accessClasses: classesOf(caseIds),
             });
           }
@@ -1055,10 +1081,18 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
     const js = allJudgments.get(itemKey(d.ref)) ?? [];
     // judge-type-specific (LLD §1): automated acceptance reads only automated judges, so a person's verdict that
     // satisfies a `verdict.passed` criterion is a human acceptance and never an automated one
-    const automated = js.filter((j) => j.judge === "evaluator" || j.judge === "harness" || j.judge === "independent_agent");
-    const auto = automated.some((j) => j.result === "fail") ? "no" : automated.some((j) => j.result === "pass") ? "yes" : "unknown";
+    // Only server-verified native output qualifies. Report judgments stay in quality.
+    // Enumerate the applicable contract, so one proof never hides another required check.
+    const required = d.keys.flatMap((key) => responsibilityOf(d.contract, key)?.criteria ?? [])
+      .map((criterion) => evaluationTypedPredicate(criterion.check))
+      .filter((predicate) => predicate.kind !== "human_attest" && !(predicate.kind === "record" && (predicate.predicate === "use.confirmed" || predicate.predicate === "deliverable.approved")));
+    const verified = required.map((predicate) => predicate.kind === "document_sha256" ? evaluatorJudgment(predicate, d) : null);
+    const auto = verified.some((proof) => proof?.result === "fail") ? "no"
+      : required.length > 0 && verified.every((proof) => proof?.result === "pass") ? "yes" : "unknown";
+    const proofRefs = verified.flatMap((proof) => proof?.refs ?? []);
+    acceptanceClasses.rows(proofRefs);
     tallyFact(facts.automatedAcceptance, auto);
-    factCase("automated", d, auto, automated.map((j) => j.eventId));
+    factCase("automated", d, auto, proofRefs);
     // human acceptance: the latest human decision on the item decides (a real, non-synthetic person's; never an agent's)
     const human: Array<{ at: number; yes: boolean; id: string }> = [];
     // person judgments read off a verdict, escalation or the named approvals are the decisions read directly below
@@ -1072,7 +1106,7 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
         else if (v.outcome === "failed" || v.outcome === "revision_requested") human.push({ at: v.time.getTime(), yes: false, id: v.eventId });
       }
       for (const a of it.approvals) {
-        if (a.kind !== "decided" || a.actorType !== "user" || isSyntheticUser(a.actorId)) continue;
+        if (a.kind !== "decided" || a.type !== "verdict_escalation" || a.actorType !== "user" || isSyntheticUser(a.actorId)) continue;
         if (a.decision === "approved") human.push({ at: a.time.getTime(), yes: true, id: a.eventId });
         else if (a.decision === "rejected" || a.decision === "revision_requested") human.push({ at: a.time.getTime(), yes: false, id: a.eventId });
       }
@@ -1102,7 +1136,8 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
     const uv = uses.length > 0 || useJs.some((j) => j.result === "pass") ? "yes" : useJs.some((j) => j.result === "fail") ? "no" : "unknown";
     tallyFact(facts.use, uv);
     factCase("use", d, uv, useRefs);
-    // outcome: a goal the responsibility links to reached its result (context, not a causal share)
+    // Legacy outcome field records linked-goal status context. Measured business impact,
+    // causal attribution and delayed outcomes require separate evidence.
     const goals = sortStrings(d.keys.flatMap((k) => responsibilityOf(d.contract, k)?.outcomeLinks.map((l) => l.goalId) ?? []));
     let ov: "yes" | "no" | "unknown" = "unknown";
     const outcomeRefs: string[] = [];
@@ -1164,7 +1199,7 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
     }
     return x;
   };
-  for (const q of answered) if (q.resolver) person(q.resolver).questions++;
+  for (const q of answered) if (q.resolver && !isSyntheticUser(q.resolver)) person(q.resolver).questions++;
   // P1 (LLD §6.3): steps the contract expects are not interventions; only unplanned human edits, corrections or completions are
   let humanReviewActions = 0;
   let humanCorrections = 0;
@@ -1173,11 +1208,13 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
     if (!it) continue;
     const expected = new Set(d.keys.flatMap((k) => responsibilityOf(d.contract, k)?.expectedHumanSteps ?? []));
     const review = (u: string | null, id: string) => {
+      if (isSyntheticUser(u)) return;
       humanReviewActions++;
       costClasses.row(id);
       if (u) person(u).reviews++;
     };
     const correction = (u: string | null, id: string) => {
+      if (isSyntheticUser(u)) return;
       humanCorrections++;
       costClasses.row(id);
       if (u) person(u).corrections++;
@@ -1209,7 +1246,7 @@ function computeAgent(input: ScoreAgentInput): { card: AgentCardV1; cases: Store
   for (const r of rows) {
     if (r.eventType !== "correction.recorded" || !inWindow(r.eventTime.getTime())) continue;
     const p = payloadOf(r);
-    if (str(p, "agentId") !== agentId || r.actorType !== "user") continue;
+    if (str(p, "agentId") !== agentId || r.actorType !== "user" || isSyntheticUser(r.actorId)) continue;
     humanCorrections++;
     costClasses.row(r.id);
     if (r.actorId) person(r.actorId).corrections++;

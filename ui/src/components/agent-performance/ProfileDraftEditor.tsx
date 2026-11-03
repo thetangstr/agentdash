@@ -1,6 +1,13 @@
 import { useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  EVALUATION_COVERAGE_CLASSES,
+  EVALUATION_EXPECTED_HUMAN_STEPS,
+  EVALUATION_RECORD_PREDICATES,
+  evaluationTypedPredicate,
+  sha256Hex,
+  issueDocumentKeySchema,
+  type EvaluationAcceptanceCriterion,
   AGENT_PROFILE_DRAFT_CONFLICT,
   AGENT_PROFILE_KNOWLEDGE_KINDS,
   AGENT_PROFILE_OBLIGATION_KINDS,
@@ -21,6 +28,9 @@ import {
 } from "@paperclipai/shared";
 import { agentProfilesApi, type ProposeAgentProfileResult } from "@/api/agent-profiles";
 import { ApiError } from "@/api/client";
+import { accessApi } from "@/api/access";
+import { goalsApi } from "@/api/goals";
+import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -240,6 +250,32 @@ function TextField({
   );
 }
 
+function documentDraftPredicate(record: string): { key: string; sha256: string } {
+  const value = record.slice("document.sha256:".length);
+  const separator = value.lastIndexOf(":");
+  const encodedKey = value.slice(0, separator);
+  let key = encodedKey;
+  try { key = decodeURIComponent(encodedKey); } catch { /* Keep invalid input editable. */ }
+  return { key, sha256: value.slice(separator + 1) };
+}
+
+/** Expected text is local editing state. Saved profiles retain the digest, never a second raw copy. */
+function ExactDocumentProof({ predicate, pointer, provenance, onChange }: {
+  predicate: { key: string; sha256: string }; pointer: string; provenance: AgentProfileProvenanceMap; onChange: (record: string) => void;
+}) {
+  const [expectedText, setExpectedText] = useState<string | null>(null);
+  return <div className="space-y-3">
+    <TextField label="Document key" pointer={`${pointer}/document-key`} provenance={provenance} value={predicate.key}
+      onChange={(key) => onChange(`document.sha256:${encodeURIComponent(key)}:${predicate.sha256}`)} />
+    <TextField label="Expected text" pointer={`${pointer}/expected-text`} provenance={provenance} multiline value={expectedText ?? ""}
+      hint="Enter the exact expected document body, including whitespace. Saved text is represented by its SHA-256 digest. Leave this field untouched to preserve a saved digest."
+      onChange={(text) => { setExpectedText(text); onChange(`document.sha256:${encodeURIComponent(predicate.key)}:${sha256Hex(text)}`); }} />
+    {predicate.sha256 ? <p className="break-all text-xs text-text-secondary">Saved digest <code>{predicate.sha256}</code></p>
+      : <p className="text-xs text-text-secondary">Enter expected text before saving this new proof.</p>}
+    <p className="text-xs text-text-secondary">The server verifies the persisted native document revision. Exact matching is optional and does not measure semantic quality or human acceptance.</p>
+  </div>;
+}
+
 interface ParseSchema<T> {
   safeParse(value: unknown):
     | { success: true; data: T }
@@ -362,7 +398,8 @@ export interface ProfileDraftEditing {
   conflict: AgentProfileRevisionDto | null;
   savePending: boolean;
   headingRef: RefObject<HTMLHeadingElement | null>;
-  update: (path: Path, value: unknown) => void;
+  update: (path: Path, value: unknown, sourceRef?: string) => void;
+  removeCriterion: (responsibilityIndex: number, criterionIndex: number) => void;
   setJsonValidity: (key: string, valid: boolean) => void;
   addResponsibility: () => void;
   removeResponsibility: (index: number) => void;
@@ -398,12 +435,14 @@ export function useProfileDraftEditing({
   const dirty = useMemo(() => canonicalProfileJson(body) !== savedJson, [body, savedJson]);
   const jsonBlocked = Object.keys(invalidJson).length > 0;
 
-  function update(path: Path, value: unknown) {
+  function update(path: Path, value: unknown, sourceRef?: string) {
     const pointer = toPointer(path);
     setSnapshot((current) => ({
       ...current,
       body: setIn(current.body, path, value) as AgentOperatingProfileV1,
-      provenance: markEdited(current.provenance, pointer, isEmptyValue(value)),
+      provenance: sourceRef
+        ? { ...current.provenance, [pointer]: { state: "proposed", sourceRef } }
+        : markEdited(current.provenance, pointer, isEmptyValue(value)),
     }));
     setAnnouncement("");
   }
@@ -440,6 +479,15 @@ export function useProfileDraftEditing({
     setInvalidJson((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${rowId}:`))));
   }
 
+  function removeCriterion(responsibilityIndex: number, criterionIndex: number) {
+    const path = ["responsibilities", responsibilityIndex, "performance", "criteria"] as const;
+    setSnapshot((current) => ({
+      ...current,
+      body: setIn(current.body, path, current.body.responsibilities[responsibilityIndex]!.performance.criteria.filter((_, i) => i !== criterionIndex)) as AgentOperatingProfileV1,
+      provenance: removeIndexedProvenance(current.provenance, toPointer(path), criterionIndex),
+    }));
+  }
+
   function addKnowledge() {
     update(["knowledge", body.knowledge.length], { source: "", kind: "document" });
   }
@@ -454,11 +502,30 @@ export function useProfileDraftEditing({
 
   function localIssues(): string[] {
     const parsed = agentOperatingProfileV1Schema.safeParse(body);
-    if (parsed.success) return [];
-    return parsed.error.issues.slice(0, 20).map((issue) => {
+    const criterionIssues: string[] = [];
+    body.responsibilities.forEach((responsibility, responsibilityIndex) => {
+      responsibility.performance.criteria.forEach((criterion, criterionIndex) => {
+        if (!criterion.text.trim()) {
+          criterionIssues.push(`Criterion ${criterion.id} needs readable criterion text before saving.`);
+        }
+        const checkPointer = `/responsibilities/${responsibilityIndex}/performance/criteria/${criterionIndex}/check`;
+        const editedCheck = Object.entries(provenance).some(([pointer, entry]) =>
+          (pointer === checkPointer || pointer.startsWith(`${checkPointer}/`)) && entry.state === "owner_confirmed",
+        );
+        if (editedCheck && criterion.check?.kind === "record" && criterion.check.record.startsWith("document.sha256:")) {
+          const proof = evaluationTypedPredicate(criterion.check);
+          if (proof.kind !== "document_sha256" || !issueDocumentKeySchema.safeParse(proof.key).success) criterionIssues.push(`Criterion ${criterion.id} needs a valid document key and exact text digest before saving.`);
+        }
+        if (editedCheck && criterion.check?.kind === "metric" && criterion.check.metricKey.startsWith("goal:") && evaluationTypedPredicate(criterion.check).kind !== "goal_metric") {
+          criterionIssues.push(`Criterion ${criterion.id} needs a valid goal ID before saving.`);
+        }
+      });
+    });
+    if (parsed.success) return criterionIssues;
+    return [...criterionIssues, ...parsed.error.issues.slice(0, 20).map((issue) => {
       const label = pointerLabel(toPointer(issue.path as Array<string | number>), body);
       return `${label}: ${issue.message}`;
-    });
+    })];
   }
 
   const save = useMutation({
@@ -535,6 +602,7 @@ export function useProfileDraftEditing({
     savePending: save.isPending,
     headingRef,
     update,
+    removeCriterion,
     setJsonValidity,
     addResponsibility,
     removeResponsibility,
@@ -710,19 +778,203 @@ function ResponsibilityPartFields({
         />
       );
     case "performance":
-      return (
-        <JsonField
-          label="How we will judge the work (structured)"
-          pointer={`${ptr}/performance`}
-          provenance={provenance}
-          value={item.performance}
-          schema={responsibilityContractSchema}
-          hint="Criteria, coverage, judges and thresholds a person agrees to. Feedback is not acceptance."
-          onChange={(v) => update([...base, "performance"], v)}
-          onValidity={(valid) => setJsonValidity(`${rowId}:performance`, valid)}
-        />
-      );
+      return <ResponsibilityPerformanceEditor editing={editing} index={index} />;
   }
+}
+
+// AgentDash: typed owner setup shared by bound and unbound profile drafts.
+const RECORD_PROOF_LABELS: Record<typeof EVALUATION_RECORD_PREDICATES[number], string> = {
+  "verdict.passed": "Review verdict passed",
+  "pr.merged": "Pull request merged",
+  "ci.green": "Continuous-integration checks passed",
+  "dod.present": "Task definition of done recorded",
+  "deliverable.shipped": "Deliverable shipped",
+  "deliverable.checks_passed": "Independent deliverable checks passed",
+  "deliverable.approved": "Deliverable approved by named humans",
+  "harness.criterion_passed": "Verified harness check passed for this criterion",
+  "obligation.on_time": "Delivered within the agreed deadline",
+  "use.confirmed": "Downstream use confirmed",
+};
+
+const WORK_FAMILY_SUGGESTIONS = {
+  software: { label: "Software", text: "The required continuous-integration checks pass", record: "ci.green" },
+  research: { label: "Knowledge work and research", text: "An independent check verifies the stated sources and conclusions", record: "harness.criterion_passed" },
+  operations: { label: "Operations", text: "The obligation is delivered within its agreed deadline", record: "obligation.on_time" },
+  delivery: { label: "Content and delivery", text: "The deliverable is shipped to its agreed destination", record: "deliverable.shipped" },
+  support: { label: "Customer support", text: "The response follows the agreed policy and records evidence of the customer's resolution", record: null },
+  other: { label: "Other / custom work", text: "Define the expected result and the evidence that will demonstrate it", record: null },
+} as const;
+
+function MetricTargetField({ value, onChange, ...base }: FieldBase & { value: number; onChange: (value: number) => void }) {
+  const [text, setText] = useState(() => Number.isFinite(value) ? String(value) : "");
+  const valid = text.trim() !== "" && Number.isFinite(Number(text));
+  return (
+    <FieldShell {...base} error={valid ? null : "Enter a finite numeric target before saving."}>
+      {({ id, describedBy }) => (
+        <Input id={id} aria-describedby={describedBy} aria-invalid={!valid} inputMode="decimal" value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+            onChange(event.target.value.trim() === "" ? Number.NaN : Number(event.target.value));
+          }} />
+      )}
+    </FieldShell>
+  );
+}
+
+function ReferencePicker({ options, value, onChange, loading, unavailable, ...base }: FieldBase & {
+  options: Array<{ id: string; label: string }>;
+  value: string;
+  onChange: (value: string) => void;
+  loading: boolean;
+  unavailable: boolean;
+}) {
+  return (
+    <FieldShell {...base} hint={unavailable ? "Choices are unavailable in your current scope. The saved reference is preserved." : loading ? "Loading available choices…" : undefined}>
+      {({ id, describedBy }) => (
+        <select id={id} aria-describedby={describedBy} className={SELECT_CLASS} value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">Choose {base.label.toLowerCase()}</option>
+          {value && !options.some((option) => option.id === value) ? <option value={value}>Saved reference — see advanced ID</option> : null}
+          {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+      )}
+    </FieldShell>
+  );
+}
+
+function ResponsibilityPerformanceEditor({ editing, index }: { editing: ProfileDraftEditing; index: number }) {
+  const { body, provenance, update, rowIds, setJsonValidity, removeCriterion } = editing;
+  const performance = body.responsibilities[index]!.performance;
+  const base = ["responsibilities", index, "performance"] as const;
+  const ptr = toPointer(base);
+  const [family, setFamily] = useState<keyof typeof WORK_FAMILY_SUGGESTIONS>("software");
+  const familyId = useId();
+  const suggestion = WORK_FAMILY_SUGGESTIONS[family];
+  const people = useQuery({
+    queryKey: queryKeys.access.companyUserDirectory(editing.draft.companyId),
+    queryFn: () => accessApi.listUserDirectory(editing.draft.companyId),
+    enabled: performance.criteria.some((criterion) => criterion.check?.kind === "human_attest"),
+    retry: false,
+  });
+  const goals = useQuery({
+    queryKey: queryKeys.goals.list(editing.draft.companyId),
+    queryFn: () => goalsApi.list(editing.draft.companyId),
+    enabled: performance.criteria.some((criterion) => criterion.check?.kind === "metric" && criterion.check.metricKey.startsWith("goal:")),
+    retry: false,
+  });
+  const humanChoices = people.isError ? [] : (people.data?.users ?? []).map((person) => ({
+    id: person.principalId,
+    label: person.user?.name ?? person.user?.email ?? "Unnamed company member",
+  }));
+  const goalChoices = goals.isError || !Array.isArray(goals.data) ? [] : goals.data.map((goal) => ({ id: goal.id, label: goal.title }));
+  function addCriterion(fromTemplate: boolean) {
+    const source = fromTemplate ? `template:${family}` : "human";
+    const criterion: EvaluationAcceptanceCriterion = {
+      id: crypto.randomUUID(), text: fromTemplate ? suggestion.text : "", source,
+      ...(fromTemplate && suggestion.record ? { check: { kind: "record" as const, record: suggestion.record } } : {}),
+    };
+    update([...base, "criteria", performance.criteria.length], criterion, fromTemplate ? source : "manual-draft");
+  }
+  return (
+    <section className="space-y-4" aria-label="How we will judge the work" data-testid="responsibility-performance-editor">
+      <h5 className="text-sm font-medium">How we will judge the work</h5>
+      <p className="text-xs text-text-secondary">Define prospective checks here. Acceptance stays pending until evidence is recorded. A successful run, task completion, project progress and business outcomes are separate observations.</p>
+      <div className="space-y-2 rounded-md border border-border-soft p-3" data-testid="performance-template-preview">
+        <Label htmlFor={familyId}>Work-family suggestions</Label>
+        <select id={familyId} className={SELECT_CLASS} value={family} onChange={(event) => setFamily(event.target.value as keyof typeof WORK_FAMILY_SUGGESTIONS)}>
+          {Object.entries(WORK_FAMILY_SUGGESTIONS).map(([key, entry]) => <option key={key} value={key}>{entry.label}</option>)}
+        </select>
+        <p className="text-sm">{suggestion.text}</p>
+        <p className="text-xs text-text-secondary">Preview only. Adding keeps this proposed and records its template source. Thresholds need a separate owner decision.</p>
+        <Button type="button" variant="outline" size="sm" onClick={() => addCriterion(true)}>Add suggestion</Button>
+      </div>
+      {performance.criteria.length === 0 ? <p className="text-sm text-text-secondary">No criteria defined. Acceptance is pending.</p> : null}
+      {performance.criteria.map((criterion, criterionIndex) => {
+        const criterionBase = [...base, "criteria", criterionIndex] as const;
+        const criterionPtr = toPointer(criterionBase);
+        const predicate = evaluationTypedPredicate(criterion.check);
+        const check = criterion.check;
+        const proofType = !check ? "none"
+          : check.kind === "record" && check.record.startsWith("document.sha256:") ? "document_sha256"
+          : check.kind === "record" && (predicate.kind === "record" || check.record === "") ? "record"
+          : check.kind === "human_attest" ? "human_attest"
+          : check.kind === "metric" && check.metricKey.startsWith("goal:") ? "goal_metric"
+          : "unsupported";
+        return (
+          <div key={criterion.id} className="space-y-3 rounded-md border border-border-soft p-3" data-testid="performance-criterion">
+            <p className="break-all text-xs text-text-secondary">Stable criterion ID <span className="font-mono">{criterion.id}</span> · Source {criterion.source}</p>
+            <TextField label="Criterion text" pointer={`${criterionPtr}/text`} provenance={provenance} value={criterion.text} onChange={(value) => update([...criterionBase, "text"], value)} />
+            <FieldShell label="Proof type" pointer={`${criterionPtr}/check`} provenance={provenance}>
+              {({ id, describedBy }) => <select id={id} aria-describedby={describedBy} className={SELECT_CLASS} value={proofType} onChange={(event) => {
+                const kind = event.target.value;
+                update([...criterionBase, "check"], kind === "none" ? undefined : kind === "document_sha256" ? { kind: "record", record: "document.sha256:result:" } : kind === "record" ? { kind, record: "" } : kind === "human_attest" ? { kind, attesterUserId: "" } : { kind: "metric", metricKey: "goal:", target: Number.NaN, unit: "" });
+              }}>
+                <option value="none">Unmeasurable — no proof defined</option>
+                <option value="record">Known recorded fact</option>
+                <option value="document_sha256">Exact document output</option>
+                <option value="human_attest">Named human</option>
+                <option value="goal_metric">Goal metric</option>
+                {proofType === "unsupported" ? <option value="unsupported">Unsupported check preserved</option> : null}
+              </select>}
+            </FieldShell>
+            {check?.kind === "record" && (proofType === "record" || check.record === "") ? (
+              <FieldShell
+                label="Recorded fact"
+                pointer={`${criterionPtr}/check/record`}
+                provenance={provenance}
+                hint="CI success and DoD presence each prove only the named fact. Other requirements and final-answer correctness need separate verification."
+              >
+                {({ id, describedBy }) => <select id={id} aria-describedby={describedBy} className={SELECT_CLASS} value={check.record} onChange={(event) => update([...criterionBase, "check", "record"], event.target.value)}>
+                  <option value="">Choose a recorded fact</option>
+                  {!EVALUATION_RECORD_PREDICATES.includes(check.record as typeof EVALUATION_RECORD_PREDICATES[number]) && check.record ? <option value={check.record}>{check.record}</option> : null}
+                  {EVALUATION_RECORD_PREDICATES.map((record) => <option key={record} value={record}>{RECORD_PROOF_LABELS[record]}</option>)}
+                </select>}
+              </FieldShell>
+            ) : null}
+            {proofType === "document_sha256" && check?.kind === "record" ? <ExactDocumentProof key={criterion.id} predicate={documentDraftPredicate(check.record)} pointer={`${criterionPtr}/check`} provenance={provenance} onChange={(record) => update([...criterionBase, "check"], { kind: "record", record })} /> : null}
+            {check?.kind === "human_attest" ? (
+              <>
+                <ReferencePicker label="Human reviewer" pointer={`${criterionPtr}/check/attesterUserId`} provenance={provenance}
+                  value={check.attesterUserId} options={humanChoices} loading={people.isPending} unavailable={people.isError}
+                  onChange={(value) => update([...criterionBase, "check", "attesterUserId"], value)} />
+                <p className="text-xs text-text-secondary">The named independent human must record revision-bound acceptance. Selecting a reviewer records no attestation.</p>
+                <details><summary className="cursor-pointer text-xs">Advanced reviewer reference</summary>
+                  <TextField label="Attester user ID" pointer={`${criterionPtr}/check/attesterUserId`} provenance={provenance} value={check.attesterUserId} onChange={(value) => update([...criterionBase, "check", "attesterUserId"], value)} />
+                </details>
+              </>
+            ) : null}
+            {check?.kind === "metric" && check.metricKey.startsWith("goal:") ? <>
+              <ReferencePicker label="Goal" pointer={`${criterionPtr}/check/metricKey`} provenance={provenance}
+                value={check.metricKey.slice(5)} options={goalChoices} loading={goals.isPending} unavailable={goals.isError}
+                onChange={(value) => update([...criterionBase, "check", "metricKey"], `goal:${value}`)} />
+              <details><summary className="cursor-pointer text-xs">Advanced goal reference</summary>
+                <TextField label="Goal ID" pointer={`${criterionPtr}/check/metricKey`} provenance={provenance} value={check.metricKey.slice(5)} onChange={(value) => update([...criterionBase, "check", "metricKey"], `goal:${value}`)} />
+              </details>
+              <MetricTargetField label="Goal target" pointer={`${criterionPtr}/check/target`} provenance={provenance} value={check.target} onChange={(value) => update([...criterionBase, "check", "target"], value)} />
+              <TextField label="Goal unit" pointer={`${criterionPtr}/check/unit`} provenance={provenance} value={check.unit} onChange={(value) => update([...criterionBase, "check", "unit"], value)} />
+            </> : null}
+            {check?.kind === "metric" && check.metricKey.startsWith("goal:") && predicate.kind !== "goal_metric" ? <p className="text-xs text-text-secondary">The goal reference is incomplete or unsupported. Choose a valid goal ID before saving changes to this proof.</p> : null}
+            {proofType === "unsupported" && check ? <p className="break-all text-xs text-text-secondary">Unsupported check preserved. The guided editor cannot configure this check. Its evidence may remain undecidable. Stored value {JSON.stringify(check)}</p> : null}
+            {predicate.kind === "none" ? <p className="text-xs text-text-secondary">Unmeasurable. This criterion cannot receive acceptance credit without a supported proof.</p> : null}
+            {check?.kind === "record" && check.record === "harness.criterion_passed" ? <p className="text-xs text-text-secondary">Harness setup is required separately. A receipt needs verified artifact evidence bound to this criterion and work revision. Actual client coverage and human calibration remain pending. Selecting this fact configures no harness or external grader.</p> : null}
+            <Button type="button" variant="ghost" size="sm" onClick={() => removeCriterion(index, criterionIndex)}>Remove criterion</Button>
+          </div>
+        );
+      })}
+      <Button type="button" variant="outline" size="sm" onClick={() => addCriterion(false)}>Add criterion</Button>
+      <fieldset className="space-y-2"><legend className="text-sm font-medium">Required evidence coverage</legend>
+        {EVALUATION_COVERAGE_CLASSES.map((coverage) => <label key={coverage} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={performance.coverage.includes(coverage)} onChange={(event) => update([...base, "coverage"], event.target.checked ? [...performance.coverage, coverage] : performance.coverage.filter((value) => value !== coverage))} />{coverage.replaceAll("_", " ")}</label>)}
+      </fieldset>
+      <fieldset className="space-y-2"><legend className="text-sm font-medium">Expected human steps</legend>
+        {EVALUATION_EXPECTED_HUMAN_STEPS.map((step) => <label key={step} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={performance.expectedHumanSteps.includes(step)} onChange={(event) => update([...base, "expectedHumanSteps"], event.target.checked ? [...performance.expectedHumanSteps, step] : performance.expectedHumanSteps.filter((value) => value !== step))} />{step.replaceAll("_", " ")}</label>)}
+      </fieldset>
+      <details><summary className="cursor-pointer text-sm font-medium">Advanced performance settings</summary>
+        <p className="my-2 text-xs text-text-secondary">Existing judges, deadlines, outcome links and owner thresholds are preserved. Change these deliberately through the draft approval flow.</p>
+        {(["deadline", "outcomeLinks", "judges", "thresholds"] as const).map((key) => <JsonField key={key} label={`${key} (structured)`} pointer={`${ptr}/${key}`} provenance={provenance} value={performance[key] ?? null}
+          schema={{ safeParse: (value) => responsibilityContractSchema.shape[key].safeParse(value === null && key === "deadline" ? undefined : value) }}
+          onChange={(value) => update([...base, key], value)} onValidity={(valid) => setJsonValidity(`${rowIds[index]}:performance:${key}`, valid)} />)}
+      </details>
+    </section>
+  );
 }
 
 export function ProfileResponsibilityFields({

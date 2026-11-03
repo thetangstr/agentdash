@@ -46,6 +46,7 @@ import { criterionToken, selectCalibrationSample, syncCalibrationReviewItems, ty
 import { withCompanyLock } from "./ingest.js";
 import { evaluationLedger, hashCanonical, orderEvents, type EvaluationEventInput, type EvaluationEventRow, type LedgerDb } from "./ledger.js";
 import { evaluationReplay } from "./replay.js";
+import { readNativeDocumentHeads, nativeDocumentHeadsMatch, resolveIssueScope } from "./sources.js";
 import { cardHash, FORMULA_VERSION as MILESTONE_FORMULA_VERSION, openFromLedger, scoreMilestone } from "./scoring/card.js";
 import { buildTimeline } from "./scoring/timeline.js";
 
@@ -158,6 +159,7 @@ export interface AgentCardViewInput {
   viewer: EvaluationViewer;
   /** The same card recomputed over only the rows this viewer may read (called only when the viewer can't read every class). */
   readableCard: () => AgentCardV1;
+  forceRestricted?: boolean;
   /** Whether the viewer may read every row a cited milestone result rests on. */
   dependencyReadable: (citation: AgentCardDependencyCitation) => boolean;
   /** Burden details that name people: admins and the accountable user only (LLD §11). */
@@ -184,15 +186,21 @@ function sectionView<T>(stored: AgentCardStoredSection<unknown>, body: T, viewer
  */
 export function projectAgentCardView(input: AgentCardViewInput): AgentCardView {
   const { card, viewer } = input;
-  const readsAll = viewer.admin || card.accessClasses.every((c) => viewerReadsClass(viewer, c));
-  const body = readsAll ? card : input.readableCard();
+  const readsAll = !input.forceRestricted && (viewer.admin || card.accessClasses.every((c) => viewerReadsClass(viewer, c)));
+  const formulaMismatch = card.formulaVersion !== AGENT_METRICS_VERSION;
+  const unavailableHistory = formulaMismatch && !readsAll;
+  const body = readsAll || formulaMismatch ? card : input.readableCard();
+  const projectSection: typeof sectionView = (stored, value, reader, all) => unavailableHistory
+    ? { visibility: "not_visible", note: "Historical formula unavailable for a restricted view. Compute a new card." }
+    : sectionView(stored, value, reader, all);
   const accountable = card.worker.acceptance.body.accountable.filter((a) => readsAll || input.dependencyReadable(a.citation));
   const dependencies = card.replay.dependencies.filter((d) => readsAll || input.dependencyReadable(d));
   const cost = { ...body.worker.cost.body, byPerson: input.canSeePeople ? body.worker.cost.body.byPerson : null };
   return {
     kind: "agent_card_view",
     cardVersion: AGENT_CARD_VERSION,
-    formulaVersion: AGENT_METRICS_VERSION,
+    formulaVersion: card.formulaVersion,
+    formulaMismatch,
     companyId: card.companyId,
     agentId: card.subjectRef.id,
     agentName: card.agentName,
@@ -202,18 +210,18 @@ export function projectAgentCardView(input: AgentCardViewInput): AgentCardView {
     replay: { ...card.replay, dependencies },
     restricted: !viewer.admin,
     // fatal classes first, whatever the averages (LLD §6.4)
-    fatal: sectionView(card.fatal, body.fatal.body, viewer, readsAll),
+    fatal: projectSection(card.fatal, body.fatal.body, viewer, readsAll),
     worker: {
-      obligations: sectionView(card.worker.obligations, body.worker.obligations.body, viewer, readsAll),
-      quality: sectionView(card.worker.quality, body.worker.quality.body, viewer, readsAll),
-      acceptance: sectionView(card.worker.acceptance, { ...body.worker.acceptance.body, accountable }, viewer, readsAll),
-      cost: sectionView(card.worker.cost, cost, viewer, readsAll),
-      bounds: sectionView(card.worker.bounds, body.worker.bounds.body, viewer, readsAll),
-      decisions: sectionView(card.worker.decisions, body.worker.decisions.body, viewer, readsAll),
+      obligations: projectSection(card.worker.obligations, body.worker.obligations.body, viewer, readsAll),
+      quality: projectSection(card.worker.quality, body.worker.quality.body, viewer, readsAll),
+      acceptance: projectSection(card.worker.acceptance, { ...body.worker.acceptance.body, accountable }, viewer, readsAll),
+      cost: projectSection(card.worker.cost, cost, viewer, readsAll),
+      bounds: projectSection(card.worker.bounds, body.worker.bounds.body, viewer, readsAll),
+      decisions: projectSection(card.worker.decisions, body.worker.decisions.body, viewer, readsAll),
     },
-    reviewer: sectionView(card.reviewer, body.reviewer.body, viewer, readsAll),
-    gaps: sectionView(card.gaps, body.gaps.body, viewer, readsAll),
-    markers: body.markers,
+    reviewer: projectSection(card.reviewer, body.reviewer.body, viewer, readsAll),
+    gaps: projectSection(card.gaps, body.gaps.body, viewer, readsAll),
+    markers: [...body.markers, ...(formulaMismatch ? ["formula_changed: stored historical formula"] : [])],
     viewer: input.permissions ?? AGENT_CARD_NO_PERMISSIONS,
   };
 }
@@ -227,6 +235,8 @@ export function agentUrlKeyOf(agent: { id: string; name: string | null }): strin
 export function agentCardSummaryOf(view: AgentCardView, stored: { version: number; storedAt: string; cardHash: string; throughSeq: number } | null, urlKey?: string): AgentCardSummary {
   const obligations = view.worker.obligations;
   return {
+    formulaVersion: view.formulaVersion,
+    formulaMismatch: view.formulaMismatch,
     agentId: view.agentId,
     agentName: view.agentName,
     urlKey: urlKey ?? agentUrlKeyOf({ id: view.agentId, name: view.agentName }),
@@ -354,15 +364,29 @@ export function agentCardService(db: Db) {
     };
   }
 
+  /** Narrow historical rows by current issue scope before projection or case counts. */
+  async function currentReadableRows(viewer: EvaluationViewer, rows: EvaluationEventRow[]) {
+    const classReadable = rows.filter(viewerClassFilter(viewer));
+    if (viewer.admin) return classReadable;
+    const issueIdOf = (row: EvaluationEventRow) => typeof row.payload?.issueId === "string" ? row.payload.issueId : null;
+    const scope = await resolveIssueScope(db, viewer.companyId, classReadable.map(issueIdOf).filter((id): id is string => !!id));
+    return classReadable.filter((row) => {
+      const issueId = issueIdOf(row);
+      if (!issueId) return true;
+      const current = scope.get(issueId);
+      return !!current && (!current.projectId || viewer.readableProjectIds === "all" || viewer.readableProjectIds.has(current.projectId));
+    });
+  }
+
   /** The view of one card for one viewer; `rows` may be passed in when several cards share one load. */
   async function viewFor(viewer: EvaluationViewer, card: AgentCardV1, stored: AgentCardView["stored"], sideEffectFree: boolean, preloaded?: EvaluationEventRow[], actor?: AgentCardActor): Promise<AgentCardView> {
-    const readsAll = viewer.admin || card.accessClasses.every((c) => viewerReadsClass(viewer, c));
-    let rows: EvaluationEventRow[] | null = null;
-    const load = async () => (rows ??= preloaded ?? (await ledger.windowUpTo(card.companyId, card.replay.throughSeq)));
-    if (!readsAll) await load();
+    const rawRows = preloaded ?? await ledger.windowUpTo(card.companyId, card.replay.throughSeq);
+    const scopedRows = await currentReadableRows(viewer, rawRows);
+    let rows: EvaluationEventRow[] | null = scopedRows;
+    const load = async () => scopedRows;
     const filter = viewerClassFilter(viewer);
-    const byId = rows ? new Map((rows as EvaluationEventRow[]).map((r) => [r.id, r] as const)) : new Map<string, EvaluationEventRow>();
-    const tl = rows ? buildTimeline(orderEvents((rows as EvaluationEventRow[]).filter((r) => Number(r.seq) <= card.replay.throughSeq))) : null;
+    const readableIds = new Set(scopedRows.map((row) => row.id));
+    const tl = buildTimeline(orderEvents(rawRows.filter((row) => Number(row.seq) <= card.replay.throughSeq)));
     const agent = await agentRow(card.companyId, card.subjectRef.id);
     const accountable = card.contract.accountableUserId ?? agent?.accountableUserId ?? null;
     const userId = viewer.principal.type === "board" ? viewer.principal.userId : null;
@@ -371,6 +395,7 @@ export function agentCardService(db: Db) {
       stored,
       sideEffectFree,
       viewer,
+      forceRestricted: scopedRows.length !== rawRows.length,
       readableCard: () =>
         scoreAgent({
           companyId: card.companyId,
@@ -382,15 +407,30 @@ export function agentCardService(db: Db) {
           dependencies: [],
         }),
       dependencyReadable: (citation) => {
-        if (!rows || !tl) return true;
         const ref: EvaluationMilestoneRef = { kind: citation.kind, id: citation.id };
-        return milestoneDependencyRowIds(rows, tl, ref).every((id) => {
-          const r = byId.get(id);
-          return !!r && filter(r);
-        });
+        return milestoneDependencyRowIds(rawRows, tl, ref).every((id) => readableIds.has(id));
       },
       canSeePeople: viewer.admin || (!!userId && userId === accountable),
     });
+    // Captured history is immutable. Live head status is a separate, scoped projection.
+    if (!view.formulaMismatch) {
+      const readableRows = (await load()).filter(filter);
+      const acceptanceCases = agentCaseRows({ companyId: card.companyId, agentId: card.subjectRef.id,
+        events: readableRows, throughSeq: card.replay.throughSeq, asOf: card.replay.asOf,
+        window: card.replay.window, dependencies: [],
+      }).filter((row) => row.section === "acceptance" && row.fact === "automated" && row.item?.kind === "issue");
+      // Each case cites proof from its delivery-time contract, including keys removed by later profiles.
+      const itemIds = new Set(acceptanceCases.map((row) => row.item!.id));
+      const proofIds = new Set(acceptanceCases.flatMap((row) => row.evidenceRefs));
+      const heads = await readNativeDocumentHeads(db, card.companyId, itemIds);
+      const current = nativeDocumentHeadsMatch(readableRows.filter((row) => proofIds.has(row.id)), heads, itemIds);
+      view.nativeOutputCheckedAt = new Date().toISOString();
+      view.nativeOutputStatus = current ? (stored ? "captured" : "current") : "stale";
+      if (!current) {
+        view.markers.push("Native document heads changed since the captured ledger cut. Refresh evidence before current acceptance.");
+        if (!stored) view.worker.acceptance = { visibility: "not_visible", note: "Current output proof is unavailable until native document evidence catches up." };
+      }
+    }
     if (!actor) return view;
     return { ...view, viewer: await permissionsFor(actor, card.companyId, card.subjectRef.id, view) };
   }
@@ -513,7 +553,7 @@ export function agentCardService(db: Db) {
     async getAgentCard(viewer: EvaluationViewer, agentId: string, opts?: { version?: number; actor?: AgentCardActor }): Promise<AgentCardView | null> {
       const row = await storedRow(viewer.companyId, agentId, opts?.version);
       if (!row) return null;
-      return viewFor(viewer, row.card as unknown as AgentCardV1, storedOf(row), true, undefined, opts?.actor);
+      return viewFor(viewer, { ...(row.card as unknown as AgentCardV1), formulaVersion: row.formulaVersion }, storedOf(row), true, undefined, opts?.actor);
     },
 
     /** The `viewer` flags with no card to show (none stored yet): snapshot and the agent-level guards; no criterion to attest. */
@@ -570,7 +610,7 @@ export function agentCardService(db: Db) {
       }
       const out: AgentCardSummary[] = [];
       for (const r of visible) {
-        const card = r.card as unknown as AgentCardV1;
+        const card = { ...(r.card as unknown as AgentCardV1), formulaVersion: r.formulaVersion };
         const view = await viewFor(viewer, card, storedOf(r), true, shared);
         out.push(agentCardSummaryOf(view, { ...storedOf(r), throughSeq: Number(r.throughSeq) }, agentUrlKeyOf({ id: r.milestoneId, name: names.get(r.milestoneId) ?? null })));
       }
@@ -589,13 +629,18 @@ export function agentCardService(db: Db) {
       const row = await storedRow(viewer.companyId, agentId, filter.version);
       if (!row) return { agentId, version: null, throughSeq: null, rows: [], total: 0, nextCursor: null, restricted: !viewer.admin };
       const card = row.card as unknown as AgentCardV1;
+      if (row.formulaVersion !== AGENT_METRICS_VERSION) return {
+        agentId, version: row.version, throughSeq: Number(row.throughSeq), rows: [], total: 0, nextCursor: null,
+        restricted: !viewer.admin, formulaVersion: row.formulaVersion, formulaMismatch: true,
+        unavailableReason: "Historical cases require their original formula. Compute a new card.",
+      };
       const all = await ledger.windowUpTo(viewer.companyId, card.replay.throughSeq);
-      const readable = viewerClassFilter(viewer);
+      const scopedRows = await currentReadableRows(viewer, all);
       const cases = agentCaseRows({
         companyId: card.companyId,
         agentId,
         // the same rows the viewer's card is computed from, so its cases match its numbers
-        events: viewer.admin ? all : all.filter(readable),
+        events: scopedRows,
         throughSeq: card.replay.throughSeq,
         asOf: card.replay.asOf,
         window: card.replay.window,
@@ -617,6 +662,9 @@ export function agentCardService(db: Db) {
       return {
         agentId,
         version: row.version,
+        formulaVersion: row.formulaVersion,
+        formulaMismatch: false,
+        evidenceContext: "captured",
         throughSeq: card.replay.throughSeq,
         rows: page,
         total: visible.length,

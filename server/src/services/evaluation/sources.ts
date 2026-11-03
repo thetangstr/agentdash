@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, desc, eq, getTableColumns, inArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -10,6 +11,9 @@ import {
   costEvents,
   deliverableRuns,
   deliverables,
+  documents,
+  documentRevisions,
+  issueDocuments,
   evaluationEvents,
   goals,
   heartbeatRuns,
@@ -35,7 +39,7 @@ import {
   type EvaluationEventType,
   type EvaluationHandoffType,
 } from "@paperclipai/shared";
-import { clampEventTime, hashCanonical, type EvaluationEventInput } from "./ledger.js";
+import { clampEventTime, hashCanonical, type EvaluationEventInput, type EvaluationEventRow } from "./ledger.js";
 import { redactRunLogText } from "../run-log-redaction.js";
 
 /**
@@ -215,9 +219,10 @@ type IssueRow = {
 /**
  * Resolve project/goal scope for issues. A descendant that carries no
  * projectId inherits the nearest ancestor's (spec §3), followed up to
- * MAX_PARENT_DEPTH parents.
+ * MAX_PARENT_DEPTH parents. Access callers can require a fully resolved ancestry,
+ * excluding unresolved chains instead of treating their scope as company-visible.
  */
-export async function resolveIssueScope(tx: Tx, companyId: string, issueIds: string[]): Promise<Map<string, IssueScope>> {
+export async function resolveIssueScope(tx: Pick<Db, "select">, companyId: string, issueIds: string[], options: { requireResolvedAncestry?: boolean } = {}): Promise<Map<string, IssueScope>> {
   const wanted = [...new Set(issueIds.filter((x) => typeof x === "string" && x.length === 36))];
   const out = new Map<string, IssueScope>();
   if (wanted.length === 0) return out;
@@ -263,6 +268,8 @@ export async function resolveIssueScope(tx: Tx, companyId: string, issueIds: str
       }
       walk = parent;
     }
+    // Access checks must not treat a missing, foreign, cyclic or depth-limited ancestor as public.
+    if (options.requireResolvedAncestry && !projectId && walk?.parentId) continue;
     out.set(id, {
       projectId: projectId ?? null,
       goalId: goalId ?? null,
@@ -447,6 +454,9 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
       } else {
         payload = { ...payload, changedKeys: Object.keys(details).filter((k) => k !== "_previous" && k !== "identifier").sort() };
       }
+    } else if (r.action === "issue.document_deleted" && isIssue) {
+      eventType = "issue.document_removed";
+      payload = { ...issueRef, key: details.key ?? null, documentId: details.documentId ?? null, reason: "deleted" };
     } else if (r.action === "issue.blockers_updated") {
       eventType = "issue.blockers_updated";
       payload = { ...issueRef, blockedByIssueIds: details.blockedByIssueIds ?? null, previous: previous.blockedByIssueIds ?? null };
@@ -1923,7 +1933,89 @@ export async function readExecutionDecisions(tx: Tx, companyId: string, cursor: 
   return { events, scanned, nextCursor };
 }
 
+
+/** Server-owned current heads. No API payload can supply a digest or trust flag. */
+export async function readNativeDocumentHeads(db: Pick<Db, "select">, companyId: string, itemIds?: ReadonlySet<string>) {
+  if (itemIds?.size === 0) return [];
+  const heads = await db.select({
+    issueId: issueDocuments.issueId, key: issueDocuments.key, documentId: documents.id,
+    revisionId: documentRevisions.id, revisionNumber: documentRevisions.revisionNumber,
+    body: documentRevisions.body, latestBody: documents.latestBody,
+    projectId: issues.projectId, goalId: issues.goalId,
+  }).from(issueDocuments)
+    .innerJoin(documents, and(eq(documents.id, issueDocuments.documentId), eq(documents.companyId, companyId)))
+    .innerJoin(documentRevisions, and(eq(documentRevisions.id, documents.latestRevisionId), eq(documentRevisions.companyId, companyId), eq(documentRevisions.documentId, documents.id)))
+    .innerJoin(issues, and(eq(issues.id, issueDocuments.issueId), eq(issues.companyId, companyId)))
+    .where(and(eq(issueDocuments.companyId, companyId), itemIds ? inArray(issueDocuments.issueId, [...itemIds]) : undefined));
+  const scope = await resolveIssueScope(db, companyId, heads.map((head) => head.issueId));
+  return heads.filter((head) => head.body === head.latestBody).map(({ body, latestBody: _latestBody, ...head }) => ({
+    ...head, projectId: scope.get(head.issueId)?.projectId ?? null, goalId: scope.get(head.issueId)?.goalId ?? null, sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+  }));
+}
+
+/** Read-only freshness guard. The caller scopes item IDs before comparison and returns no head identifiers. */
+export function nativeDocumentHeadsMatch(events: EvaluationEventRow[], heads: Awaited<ReturnType<typeof readNativeDocumentHeads>>, itemIds: ReadonlySet<string>): boolean {
+  const latest = new Map<string, EvaluationEventRow>();
+  for (const event of [...events].sort((a, b) => a.eventTime.getTime() - b.eventTime.getTime() || Number(a.seq) - Number(b.seq))) {
+    if ((event.eventType !== "issue.document_revision" && event.eventType !== "issue.document_removed") || !itemIds.has(String(event.payload?.issueId))) continue;
+    const key = `${event.payload?.issueId}:${event.payload?.key}`;
+    const previous = latest.get(key);
+    if (event.eventType === "issue.document_removed" && previous?.eventType === "issue.document_revision" && previous.payload?.documentId !== event.payload?.documentId) continue;
+    latest.set(key, event);
+  }
+  for (const event of latest.values()) {
+    const head = heads.find((head) => head.issueId === event.payload?.issueId && head.key === event.payload?.key);
+    if (event.eventType === "issue.document_removed") { if (head) return false; continue; }
+    if (!head || head.documentId !== event.payload?.documentId || head.revisionId !== event.payload?.revisionId || head.sha256 !== event.payload?.sha256 || head.projectId !== event.projectId) return false;
+  }
+  return true;
+}
+
+/** Native immutable revisions, with an authoritative reconciliation for deletion's audit crash window. */
+export async function readNativeDocumentRevisions(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, documentRevisions.createdAt, documentRevisions.id, (predicate, take, direction) =>
+    tx.select({ ...withCursorTime(documentRevisions, documentRevisions.createdAt), issueId: issueDocuments.issueId, key: issueDocuments.key })
+      .from(documentRevisions)
+      .innerJoin(issueDocuments, and(eq(issueDocuments.documentId, documentRevisions.documentId), eq(issueDocuments.companyId, companyId)))
+      .where(and(eq(documentRevisions.companyId, companyId), predicate))
+      .orderBy(...ordered(direction, documentRevisions.createdAt, documentRevisions.id)).limit(take), (row) => row.id);
+  const scope = await resolveIssueScope(tx, companyId, rows.map((row) => row.issueId));
+  const prior = await tx.select().from(evaluationEvents).where(and(eq(evaluationEvents.companyId, companyId), inArray(evaluationEvents.eventType, ["issue.document_revision", "issue.document_removed"]))).orderBy(asc(evaluationEvents.seq));
+  const heads = await readNativeDocumentHeads(tx, companyId);
+  const events: EvaluationEventInput[] = rows.map((row) => {
+    const sc = scope.get(row.issueId);
+    const inherited = prior.find((event) => event.payload?.documentId === row.documentId && event.accessClass !== "company");
+    const sha256 = createHash("sha256").update(row.body, "utf8").digest("hex");
+    return {
+      companyId, projectId: sc?.projectId ?? null, goalId: sc?.goalId ?? null,
+      ...(inherited ? { accessClass: inherited.accessClass as EvaluationEventInput["accessClass"] } : {}),
+      actorType: row.createdByAgentId ? "agent" : row.createdByUserId ? "user" : "system",
+      actorId: row.createdByAgentId ?? row.createdByUserId, subjectAgentId: row.createdByAgentId,
+      sourceTable: "document_revisions", sourceId: row.id, sourceVersion: sha256, sourceRowHash: sha256,
+      eventType: "issue.document_revision", eventTime: row.createdAt,
+      payload: { issueId: row.issueId, key: row.key, documentId: row.documentId, revisionId: row.id,
+        revisionNumber: row.revisionNumber, sha256, createdByAgentId: row.createdByAgentId,
+        createdByUserId: row.createdByUserId, createdByRunId: row.createdByRunId },
+    };
+  });
+  // The ledger is append-only. Retain the original access class even when a source is gone or moved.
+  const latest = new Map<string, typeof prior[number]>();
+  for (const event of [...prior].sort((a, b) => a.eventTime.getTime() - b.eventTime.getTime() || Number(a.seq) - Number(b.seq))) latest.set(`${event.payload?.issueId}:${event.payload?.key}`, event);
+  for (const event of latest.values()) {
+    if (event.eventType !== "issue.document_revision") continue;
+    const head = heads.find((head) => head.issueId === event.payload?.issueId && head.key === event.payload?.key);
+    if (head && head.documentId === event.payload?.documentId && head.projectId === event.projectId) continue;
+    events.push({ companyId, projectId: event.projectId, goalId: event.goalId, accessClass: event.accessClass as EvaluationEventInput["accessClass"],
+      actorType: "system", sourceTable: "document_revisions", sourceId: event.sourceId, sourceVersion: `missing:${event.id}`,
+      eventType: "issue.document_removed", eventTime: new Date(),
+      payload: { issueId: event.payload?.issueId, key: event.payload?.key, documentId: event.payload?.documentId, reason: "missing_or_replaced_head" },
+    });
+  }
+  return { events, scanned, nextCursor };
+}
+
 export const SOURCE_READERS = {
+  document_revisions: readNativeDocumentRevisions,
   agents: readAgentSnapshots,
   goals: readGoalSnapshots,
   projects: readProjectSnapshots,

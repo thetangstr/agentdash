@@ -1,3 +1,4 @@
+import { IssueResponsibilitySection } from "@/components/agent-performance/IssueResponsibilitySection";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type Ref } from "react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
@@ -4051,6 +4052,7 @@ export function IssueDetail() {
         <TabsContent value="reviews" className="space-y-4">
           {detailTab === "reviews" ? (
             <>
+              <IssueResponsibilitySection key={`${issue.companyId}:${issue.id}:${issue.assigneeAgentId ?? "unassigned"}`} companyId={issue.companyId} issueId={issue.id} assigneeAgentId={issue.assigneeAgentId ?? null} />
               <IssueDoDSection
                 companyId={issue.companyId}
                 issueId={issue.id}

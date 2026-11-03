@@ -7,6 +7,7 @@ import { mapIssueResponsibilitySchema } from "@paperclipai/shared";
 import { badRequest, forbidden, HttpError, notFound } from "../errors.js";
 import { isEvaluatorPrincipal } from "../services/agent-performance-authz.js";
 import {
+  authorizeMapping,
   currentResponsibility,
   mapIssueResponsibility,
   responsibilityHistory,
@@ -20,8 +21,9 @@ import { assertAgentIdVisible, assertIssueIdVisible, isCanonicalUuid } from "./v
  * issue's work counts toward (evaluation LLD §5.2; gate 2 spec P2.4).
  *
  *   GET  /api/companies/:companyId/issues/:issueId/responsibility
- *     `{ current, history }`: the current mapping (null when unmapped) and
- *     every interval, oldest first. Anyone who can see the issue.
+ *     `{ current, history, viewer }`: the current mapping (null when unmapped),
+ *     every interval oldest first, and authority to map the assigned agent.
+ *     Company, issue and every referenced agent's visibility are checked before disclosure.
  *   POST /api/companies/:companyId/issues/:issueId/responsibility
  *     `{ agentId, responsibilityKey, reason? }`. Closes the current mapping and
  *     opens a new one; the key must be in the agent's ACTIVE profile (422
@@ -34,6 +36,16 @@ import { assertAgentIdVisible, assertIssueIdVisible, isCanonicalUuid } from "./v
  * company, or in a project the caller can't see, is 404; so is an agent the
  * caller can't see.
  */
+function mappingActor(req: Request): ResponsibilityMappingActor {
+  if (req.actor.type === "agent" && req.actor.agentId) {
+    return { type: "agent", agentId: req.actor.agentId, runId: req.actor.runId ?? null };
+  }
+  if (req.actor.type === "board") {
+    return { type: "user", userId: req.actor.userId ?? "board", source: req.actor.source ?? null, isInstanceAdmin: req.actor.isInstanceAdmin === true };
+  }
+  throw forbidden("Authentication required");
+}
+
 export function issueResponsibilityRoutes(db: Db) {
   const router = Router();
 
@@ -46,7 +58,7 @@ export function issueResponsibilityRoutes(db: Db) {
         : null;
     if (!match) throw notFound("Issue not found");
     const issue = await db
-      .select({ id: issues.id })
+      .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
       .from(issues)
       .where(and(match, eq(issues.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
@@ -63,7 +75,28 @@ export function issueResponsibilityRoutes(db: Db) {
       currentResponsibility(db, issue.id, { companyId }),
       responsibilityHistory(db, { companyId, issueId: issue.id }),
     ]);
-    res.json({ current, history });
+    // Refuse the complete projection when any mapped agent is hidden. Current
+    // and historical rows can name agents other than today's assignee.
+    const referencedAgentIds = new Set(history.map((entry) => entry.agentId));
+    if (current) referencedAgentIds.add(current.agentId);
+    if (issue.assigneeAgentId) referencedAgentIds.add(issue.assigneeAgentId);
+    for (const agentId of referencedAgentIds) {
+      await assertAgentIdVisible(db, req, agentId);
+    }
+    // AgentDash: an additive hint for the assigned agent, from the write guard.
+    // Scope and visibility precede both authority and any profile disclosure.
+    let canMapAssignee = false;
+    if (issue.assigneeAgentId) {
+      if (!isEvaluatorPrincipal(req)) {
+        try {
+          await authorizeMapping(db, { companyId, agentId: issue.assigneeAgentId, issueAssigneeAgentId: issue.assigneeAgentId }, mappingActor(req));
+          canMapAssignee = true;
+        } catch (error) {
+          if (!(error instanceof HttpError && error.status === 403)) throw error;
+        }
+      }
+    }
+    res.json({ current, history, viewer: { assigneeAgentId: issue.assigneeAgentId ?? null, canMapAssignee } });
   });
 
   router.post("/companies/:companyId/issues/:issueId/responsibility", async (req, res) => {
@@ -75,20 +108,7 @@ export function issueResponsibilityRoutes(db: Db) {
     const issue = await resolveIssue(req, companyId, req.params.issueId as string);
     await assertAgentIdVisible(db, req, parsed.data.agentId);
 
-    let actor: ResponsibilityMappingActor;
-    if (req.actor.type === "agent") {
-      if (!req.actor.agentId) throw forbidden("Agent authentication required");
-      actor = { type: "agent", agentId: req.actor.agentId, runId: req.actor.runId ?? null };
-    } else if (req.actor.type === "board") {
-      actor = {
-        type: "user",
-        userId: req.actor.userId ?? "board",
-        source: req.actor.source ?? null,
-        isInstanceAdmin: req.actor.isInstanceAdmin === true,
-      };
-    } else {
-      throw forbidden("Authentication required");
-    }
+    const actor = mappingActor(req);
 
     try {
       const mapped = await mapIssueResponsibility(

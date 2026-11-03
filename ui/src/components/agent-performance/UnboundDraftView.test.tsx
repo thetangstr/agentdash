@@ -343,6 +343,32 @@ describe("UnboundDraftView — the four steps", () => {
 // ---------------------------------------------------------------------------
 
 describe("UnboundDraftView — Save draft", () => {
+  it("shares typed criteria, proposed templates, validation and conflict reload through creation", async () => {
+    const node = await render();
+    await click(byTestId(node, "unbound-step-boundaries"));
+    const boundaries = panel(node, "boundaries");
+    await type(field(boundaries, "Work-family suggestions"), "research");
+    expect(boundaries.querySelectorAll('[data-testid="performance-criterion"]')).toHaveLength(0);
+    await click(button(boundaries, "Add suggestion"));
+    expect(boundaries.textContent).toContain("verified artifact evidence");
+    await type(field(boundaries, "Criterion text"), "");
+    await click(byTestId(node, "agent-profile-save"));
+    expect(mockUnbound.saveDraft).not.toHaveBeenCalled();
+    await type(field(boundaries, "Criterion text"), "Sources match the delivered report");
+    const theirs = revision();
+    theirs.body.responsibilities[0].performance.criteria = [{ id: "other-criterion", text: "Saved criterion", source: "human" }];
+    mockUnbound.saveDraft.mockRejectedValueOnce(new ApiError("Draft changed", 409, { code: AGENT_PROFILE_DRAFT_CONFLICT, current: theirs }));
+    await click(byTestId(node, "agent-profile-save"));
+    const input = mockUnbound.saveDraft.mock.calls[0][4];
+    expect(input.body.responsibilities[0].performance.criteria[0]).toMatchObject({ text: "Sources match the delivered report", source: "template:research", check: { kind: "record", record: "harness.criterion_passed" } });
+    expect(input.provenance["/responsibilities/0/performance/criteria/0"]).toEqual({ state: "proposed", sourceRef: "template:research" });
+    expect(input.provenance["/responsibilities/0/performance/criteria/0/text"].state).toBe("owner_confirmed");
+    expect((field(boundaries, "Criterion text") as HTMLInputElement).value).toBe("Sources match the delivered report");
+    await click(button(byTestId(node, "agent-profile-conflict"), "Use the saved draft"));
+    expect((field(panel(node, "boundaries"), "Criterion text") as HTMLInputElement).value).toBe("Saved criterion");
+    expect(mockUnbound.propose).not.toHaveBeenCalled();
+  });
+
   it("saves with If-Match, says 'Draft saved', and never requests a hire", async () => {
     const node = await render();
     const draft = revision();

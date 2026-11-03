@@ -783,7 +783,7 @@ describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
 
     const snap = await send(owner(), "post", `${cardsPath(s.analyst.id)}/snapshot`, {});
     expect(snap.status, JSON.stringify(snap.body)).toBe(201);
-    expect(snap.body.snapshot).toMatchObject({ version: 1, reused: false, formulaVersion: "agent-metrics/1" });
+    expect(snap.body.snapshot).toMatchObject({ version: 1, reused: false, formulaVersion: "agent-metrics/2" });
     expect(snap.body.verify).toMatchObject({ ok: true, status: "agree", version: 1 });
     const card = snap.body.card as AgentCardView;
     expect(card).toMatchObject({ kind: "agent_card_view", restricted: false, contract: { source: "declared" } });
@@ -805,20 +805,18 @@ describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
     // Human vs automated acceptance are separate facts, per item.
     const acceptance = (await caseRows(owner(), s.analyst.id, "&section=acceptance")).rows;
     const fact = (note: string, id: string) => acceptance.find((row) => row.note === note && row.item?.id === id)?.state;
-    // Corrected semantics (gate 3 walkthrough finding, item 3): the acceptance facts are judge-type-specific
-    // (evaluation LLD §1). This step used to expect item 1 to be an automated acceptance too, because the
-    // `verdict.passed` criterion was credited to the evaluator that read the person's verdict. The criterion is
-    // still satisfied by either verdict, but a verdict is its reviewer's judgment: a person's counts as human
-    // acceptance only, an independent agent's as automated acceptance only.
+    // Formula 2 keeps reviewer judgments visible without treating their labels as native output proof.
+    // A person's verdict can establish human acceptance. An independent agent's verdict remains an
+    // observed judgment; without verified output it establishes neither human nor automated acceptance.
     // item 1, passed by a person: human acceptance only — no automated judge passed it.
     expect([fact("human acceptance", item1), fact("automated acceptance", item1), fact("use", item1)]).toEqual(["pass", "unknown", "unknown"]);
-    // item 2, passed by an independent agent: automated only — no person accepted it.
-    expect([fact("human acceptance", item2), fact("automated acceptance", item2), fact("use", item2)]).toEqual(["unknown", "pass", "unknown"]);
+    // item 2 has a passing agent judgment, but no verified native output or person's acceptance.
+    expect([fact("human acceptance", item2), fact("automated acceptance", item2), fact("use", item2)]).toEqual(["unknown", "unknown", "unknown"]);
     const facts = visibleBody(card.worker.acceptance, "acceptance").facts;
     const restrictedItem = state.restricted!.analystIssue.id;
     expect(fact("human acceptance", restrictedItem)).toBe("unknown"); // the admin's card also holds the restricted delivery (ad-hoc, no criteria)
     expect(facts.humanAcceptance).toMatchObject({ yes: 1, no: 0, unknown: 2, of: 3 });
-    expect(facts.automatedAcceptance).toMatchObject({ yes: 1, no: 0, unknown: 2, of: 3 });
+    expect(facts.automatedAcceptance).toMatchObject({ yes: 0, no: 0, unknown: 3, of: 3 });
     expect(facts.use).toMatchObject({ yes: 0, unknown: 3, of: 3 });
     // The quality breakdown agrees: each verdict is under its reviewer's kind, none under the evaluator.
     const criterion = visibleBody(card.worker.quality, "quality").criteria.find((row) => row.criterion.criterionId === "reviewed")!;
@@ -878,7 +876,7 @@ describeEmbeddedPostgres("APM gate 3 exit walkthrough (P3.6)", () => {
     expect(facts.use).toMatchObject({ yes: 1, unknown: 2, of: 3 });
     // The other facts did not move: use implies no acceptance and acceptance implies no use.
     expect(facts.humanAcceptance).toMatchObject({ yes: 1, unknown: 2 });
-    expect(facts.automatedAcceptance).toMatchObject({ yes: 1, unknown: 2 }); // judge-type-specific, as in step 7
+    expect(facts.automatedAcceptance).toMatchObject({ yes: 0, unknown: 3 }); // use supplies no missing output proof
     const acceptance = (await caseRows(owner(), s.analyst.id, "&section=acceptance")).rows;
     expect(acceptance.find((row) => row.note === "use" && row.item?.id === item1)?.state).toBe("pass");
     expect(acceptance.find((row) => row.note === "use" && row.item?.id === item2)?.state).toBe("unknown");

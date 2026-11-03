@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
@@ -14,6 +15,9 @@ import { evaluationAgentRoutes } from "../routes/evaluation-agents.js";
 import { agentCardService } from "../services/evaluation/agent-cards.js";
 import { evaluationLedger, type EvaluationEventInput } from "../services/evaluation/ledger.js";
 import { evaluationSnapshotCadence } from "../services/evaluation/schedule.js";
+import { buildAgentContractV2 } from "../services/evaluation/agent-contract.js";
+import { documentService } from "../services/documents.js";
+import { evaluationIngest } from "../services/evaluation/ingest.js";
 
 // AgentDash: Agent Performance Management gate 3 (P3.3) — stored agent cards
 // on embedded Postgres: snapshot → verify round-trip, the reuse rule, findings
@@ -147,7 +151,7 @@ describeEmbeddedPostgres("agent cards (APM gate 3, P3.3)", () => {
   it("snapshot → verify agrees; a second snapshot with no new facts reuses the version; calibration items go to the named human, filtered by class", async () => {
     const svc = agentCardService(db);
     const first = await svc.snapshotAgentCard(companyId, agentId, { asOf: new Date(), fallbackUserId: ownerId });
-    expect(first).toMatchObject({ version: 1, reused: false, formulaVersion: "agent-metrics/1" });
+    expect(first).toMatchObject({ version: 1, reused: false, formulaVersion: "agent-metrics/2" });
     expect(await svc.verifyAgentCard(companyId, agentId)).toMatchObject({ ok: true, status: "agree", version: 1 });
     // the judge reads the open item but not the restricted one: one item, one withheld, never silently dropped
     const items = first.reviewItems as NonNullable<typeof first.reviewItems> & { withheld: Array<{ key: string }> };
@@ -368,4 +372,116 @@ describeEmbeddedPostgres("agent cards (APM gate 3, P3.3)", () => {
     const rows = await db.select().from(evaluationScorecards).where(and(eq(evaluationScorecards.companyId, companyId), eq(evaluationScorecards.milestoneId, other.id)));
     expect(rows.map((r) => [r.milestoneKind, r.version])).toEqual([["agent", 1]]);
   });
+  it("filters newly restricted current issue scope before old-source counts and cases", async () => {
+    await db.update(issues).set({ projectId: restrictedProject }).where(eq(issues.id, openIssue));
+    const detail = await call(outsider(), "get", `${base()}/agents/${agentId}`);
+    expect(JSON.stringify(detail.body.card.worker)).not.toContain(openIssue);
+    const cases = await call(outsider(), "get", `${base()}/agents/${agentId}/cases`);
+    expect(JSON.stringify(cases.body.rows)).not.toContain(openIssue);
+    await db.update(issues).set({ projectId: openProject }).where(eq(issues.id, openIssue));
+  });
+
+  it("keeps old formulas and hashes in unrestricted/restricted list, detail, cases and verify", async () => {
+    const stored = (await db.select().from(evaluationScorecards).where(and(eq(evaluationScorecards.companyId, companyId), eq(evaluationScorecards.milestoneId, agentId))).orderBy(sql`${evaluationScorecards.version} desc`))[0]!;
+    const old = { ...stored.card, formulaVersion: "agent-metrics/1" };
+    await db.update(evaluationScorecards).set({ card: old, formulaVersion: "agent-metrics/1", cardHash: "historical-original-hash" }).where(eq(evaluationScorecards.id, stored.id));
+    for (const actor of [owner(), outsider()]) {
+      const detail = await call(actor, "get", `${base()}/agents/${agentId}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body.card).toMatchObject({ formulaVersion: "agent-metrics/1", formulaMismatch: true, stored: { cardHash: "historical-original-hash" } });
+      if (actor.userId === outsiderId) expect(detail.body.card.worker.acceptance.visibility).toBe("not_visible");
+      const list = await call(actor, "get", `${base()}/agents`);
+      expect(list.status).toBe(200);
+      const summaries = list.body.agents ?? list.body.cards;
+      expect(summaries.find((card: { agentId: string }) => card.agentId === agentId)).toMatchObject({ formulaVersion: "agent-metrics/1", formulaMismatch: true });
+      const cases = await call(actor, "get", `${base()}/agents/${agentId}/cases`);
+      expect(cases.body).toMatchObject({ formulaVersion: "agent-metrics/1", formulaMismatch: true, rows: [], total: 0 });
+      expect(JSON.stringify(cases.body)).not.toContain(hiddenIssue);
+    }
+    expect(await agentCardService(db).verifyAgentCard(companyId, agentId, stored.version)).toMatchObject({ status: "formula_changed", ok: false });
+    const preserved = (await db.select().from(evaluationScorecards).where(eq(evaluationScorecards.id, stored.id)))[0]!;
+    expect(preserved.cardHash).toBe("historical-original-hash");
+    expect(preserved.card).toEqual(old);
+  });
+
+
+  it.each([
+    ["summary", "edit"], ["summary", "delete"], ["summary", "replace"],
+    [null, "edit"], [null, "delete"], [null, "replace"],
+  ] as const)("validates delivered output after the latest profile uses %s and its old document is changed by %s", async (latestKey, mutation) => {
+    const worker = await addAgent(db, companyId, { name: "Historical native output", accountableUserId: ownerId });
+    const output = "Accepted exact output\n";
+    const digest = createHash("sha256").update(output, "utf8").digest("hex");
+    const profile = (key: string | null) => {
+      const work = responsibility("work");
+      work.performance.criteria = key ? [{ id: "native-proof", text: "Exact output", source: "human", check: { kind: "record", record: `document.sha256:${key}:${digest}` } }] : [];
+      return profileBody([work]);
+    };
+    const originalBody = profile("result");
+    const original = await seedActiveProfile(db, { companyId, agentId: worker.id, body: originalBody });
+    const [item] = await db.insert(issues).values({ companyId, title: "Historical native result", status: "done", assigneeAgentId: worker.id }).returning();
+    const ledger = evaluationLedger(db);
+    const declaration = (body: ReturnType<typeof profile>, revisionId: string, time: Date): EvaluationEventInput => ({
+      companyId, actorType: "user", actorId: ownerId, sourceTable: "evaluation_contracts", sourceId: `agent:${worker.id}`, sourceVersion: `revision:${revisionId}`,
+      eventType: "contract.declared", eventTime: time,
+      payload: { companyId, contract: buildAgentContractV2({ companyId, agentId: worker.id, profileRevisionId: revisionId, accountableUserId: ownerId, body }) },
+    });
+    const eventBase = { companyId, subjectAgentId: worker.id, actorType: "agent" as const, actorId: worker.id };
+    await ledger.append([
+      declaration(originalBody, original.revisionId, at(0)),
+      { ...eventBase, sourceTable: "agent_profile_revisions", sourceId: original.revisionId, sourceVersion: "applied", eventType: "profile.revision_changed", eventTime: at(1), payload: { revisionId: original.revisionId, agentId: worker.id, state: "applied", responsibilities: [{ key: "work", obligation: { kind: "assigned" }, deadline: null }] } },
+      { ...eventBase, sourceTable: "agent_profile_applications", sourceId: randomUUID(), sourceVersion: "applied", eventType: "profile.application_changed", eventTime: at(1), payload: { agentId: worker.id, revisionId: original.revisionId, status: "applied" } },
+      { ...eventBase, sourceTable: "issues", sourceId: item!.id, sourceVersion: "todo", eventType: "issue.snapshot", eventTime: at(2), payload: { issueId: item!.id, status: "todo", assigneeAgentId: worker.id } },
+      { ...eventBase, sourceTable: "issue_responsibilities", sourceId: randomUUID(), sourceVersion: "open", eventType: "responsibility.interval", eventTime: at(2), payload: { mappingId: randomUUID(), issueId: item!.id, agentId: worker.id, responsibilityKey: "work", profileRevisionId: original.revisionId, validFrom: at(2).toISOString(), validTo: null, mappedBy: "human" } },
+      { ...eventBase, sourceTable: "activity_log", sourceId: randomUUID(), sourceVersion: "1", eventType: "issue.transition", eventTime: at(3), payload: { issueId: item!.id, from: "todo", to: "in_progress" } },
+      { ...eventBase, sourceTable: "activity_log", sourceId: randomUUID(), sourceVersion: "1", eventType: "issue.transition", eventTime: at(6), payload: { issueId: item!.id, from: "in_progress", to: "done" } },
+    ]);
+    const docs = documentService(db);
+    const written = await docs.upsertIssueDocument({ issueId: item!.id, key: "result", format: "markdown", body: output, createdByAgentId: worker.id });
+    await evaluationIngest(db, { sources: ["document_revisions"] }).tick(companyId);
+    const url = `${base()}/agents/${worker.id}`;
+    const captured = await call(owner(), "post", `${url}/snapshot`, {});
+    expect(captured.status).toBe(201);
+    expect(captured.body.card.worker.acceptance.body.facts.automatedAcceptance).toEqual({ yes: 1, no: 0, unknown: 0, of: 1 });
+    const storedHash = captured.body.snapshot.cardHash;
+    const nextBody = profile(latestKey);
+    const next = await seedActiveProfile(db, { companyId, agentId: worker.id, body: nextBody, revisionNumber: 2 });
+    await ledger.append([declaration(nextBody, next.revisionId, at(8))]);
+    const unchanged = await call(owner(), "get", `${url}/compute`);
+    expect(unchanged.body.card.contract.profileRevisionId).toBe(next.revisionId);
+    expect(unchanged.body.card.nativeOutputStatus).toBe("current");
+    expect(unchanged.body.card.worker.acceptance.body.facts.automatedAcceptance.yes).toBe(1);
+    const latestCaptured = await call(owner(), "post", `${url}/snapshot`, {});
+    expect(latestCaptured.status).toBe(201);
+    expect(latestCaptured.body.card.contract.profileRevisionId).toBe(next.revisionId);
+    const latestHash = latestCaptured.body.snapshot.cardHash;
+    if (mutation === "edit") {
+      await docs.upsertIssueDocument({ issueId: item!.id, key: "result", format: "markdown", body: "Wrong after profile change", baseRevisionId: written.document.latestRevisionId, createdByAgentId: worker.id });
+    } else {
+      // The service's atomic cascade delete precedes the route's audit write.
+      await docs.deleteIssueDocument(item!.id, "result");
+      if (mutation === "replace") {
+        const replaced = await docs.upsertIssueDocument({ issueId: item!.id, key: "result", format: "markdown", body: output, createdByAgentId: worker.id });
+        expect(replaced.document.id).not.toBe(written.document.id);
+        expect(replaced.document.latestRevisionNumber).toBe(1);
+      }
+    }
+    const beforeRead = await counts();
+    const current = await call(owner(), "get", `${url}/compute`);
+    expect(current.status).toBe(200);
+    expect(current.body.card.nativeOutputStatus).toBe("stale");
+    expect(current.body.card.worker.acceptance.visibility).toBe("not_visible");
+    const historical = await call(owner(), "get", `${url}?version=1`);
+    expect(historical.body.card).toMatchObject({ nativeOutputStatus: "stale", stored: { cardHash: storedHash } });
+    expect(historical.body.card.worker.acceptance.body.facts.automatedAcceptance.yes).toBe(1);
+    const latestHistorical = await call(owner(), "get", url);
+    expect(latestHistorical.body.card).toMatchObject({ nativeOutputStatus: "stale", stored: { cardHash: latestHash } });
+    expect(latestHistorical.body.card.worker.acceptance.body.facts.automatedAcceptance.yes).toBe(1);
+    const latestVerified = await call(owner(), "get", `${url}/verify`);
+    expect(latestVerified.body.verify).toMatchObject({ ok: true, status: "agree", storedHash: latestHash, replayHash: latestHash });
+    const verified = await call(owner(), "get", `${url}/verify?version=1`);
+    expect(verified.body.verify).toMatchObject({ ok: true, status: "agree", storedHash, replayHash: storedHash });
+    expect(await counts()).toEqual(beforeRead);
+  });
+
 });

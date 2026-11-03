@@ -949,3 +949,11 @@ A pending required question stays pinned to its original human owner. If that pe
 
 When configuring an agent with the HTTP request adapter (`http`), use `timeoutSec` for its request deadline. A finite numeric seconds value overrides the legacy `timeoutMs`, including `0` or a negative value that disables the deadline. Absent or nonnumeric/nonfinite seconds fall back to legacy milliseconds; numeric strings are not converted. Positive delays are capped at 2147483647 milliseconds. A request timeout does not prove the remote service stopped its work; inspect the existing run and report uncertainty in a card OR comment before proposing a retry. This guidance grants no new capability.
 <!-- /AgentDash: request-timeout-config -->
+
+<!-- AgentDash: native-output-proof — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Native document output proof
+
+An owner may declare an exact issue-document check using `{ "kind": "record", "record": "document.sha256:<encoded-key>:<sha256>" }` in a profile criterion. The key uses canonical `encodeURIComponent` encoding. The digest is SHA-256 of the exact persisted UTF-8 body, including whitespace. Write output through `PUT /api/issues/:id/documents/:key` and preserve the returned document and revision identity. The evaluator hashes native revisions itself. Completion prose, run exit status, CI/PR reports, agent verdicts and legacy harness labels remain observations and cannot grant verified output acceptance. Every required automated check needs supported proof. Named-human and use decisions remain separate. A permission approval grants no task-result acceptance.
+
+Current acceptance requires matching current document heads. Deletion, replacement, newer content or scope changes can make captured proof unavailable. Stored cards describe their pinned ledger cut and formula. Report pending proof or stale evidence in a card OR comment, with the actual document/revision and run references. Never fabricate proof flags or treat an automated local-board action as genuine human calibration.
+<!-- /AgentDash: native-output-proof -->

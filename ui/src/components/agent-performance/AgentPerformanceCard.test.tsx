@@ -453,6 +453,8 @@ afterEach(() => {
 describe("AgentPerformanceTab — the stored agent card", () => {
   it("shows the latest stored card: fatal flags first, the six questions in order, reviews of others' work separate", async () => {
     const node = await render();
+    expect(node.textContent).toContain("Linked-goal status (context)");
+    expect(node.textContent).toContain("Measured business impact, causal attribution, and delayed outcomes need separate evidence.");
     expect(mockApi.card).toHaveBeenCalledWith("company-1", AGENT, null);
     expect(text(node, "agent-card-status")).toContain("Stored card, version 3 (latest), saved");
     const headings = Array.from(node.querySelectorAll("[data-testid='agent-card'] h3")).map((h) => h.textContent?.trim());

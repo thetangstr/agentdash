@@ -236,8 +236,18 @@ describe("agent card replay inputs and versions", () => {
 
   it("pins the version constants and the six sections in question order", () => {
     expect(AGENT_CARD_VERSION).toBe("agent-card/1");
-    expect(AGENT_METRICS_VERSION).toBe("agent-metrics/1");
+    expect(AGENT_METRICS_VERSION).toBe("agent-metrics/2");
     expect(AGENT_CARD_SCORECARD_KIND).toBe("agent");
     expect([...AGENT_CARD_SECTIONS]).toEqual(["obligations", "quality", "acceptance", "cost", "bounds", "decisions"]);
+  });
+});
+
+
+describe("native document predicates", () => {
+  it("round-trips canonical percent-encoded keys and rejects malformed digests/encoding", () => {
+    const digest = "a".repeat(64);
+    expect(evaluationTypedPredicate({ kind: "record", record: `document.sha256:result:${digest}` })).toEqual({ kind: "document_sha256", key: "result", sha256: digest });
+    expect(evaluationTypedPredicate({ kind: "record", record: `document.sha256:a%3Ab:${digest}` })).toEqual({ kind: "document_sha256", key: "a:b", sha256: digest });
+    for (const record of [`document.sha256:a%3ab:${digest}`, `document.sha256:%ZZ:${digest}`, `document.sha256::${digest}`, "document.sha256:result:bad"]) expect(evaluationTypedPredicate({ kind: "record", record }).kind).toBe("unknown");
   });
 });

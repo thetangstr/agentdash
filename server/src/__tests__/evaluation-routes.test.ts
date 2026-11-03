@@ -30,6 +30,7 @@ vi.mock("../services/evaluation/access-class.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/evaluation/access-class.js")>();
   return {
     ...actual,
+    nativeDocumentViewerAccess: vi.fn(async () => ({ condition: undefined, reads: () => true, readsRevision: () => true })),
     resolveEvaluationViewer: vi.fn(async (_db: unknown, req: { actor: Record<string, unknown> }, companyId: string) => {
       const admin = req.actor.type === "board" && req.actor.isInstanceAdmin === true;
       return {
