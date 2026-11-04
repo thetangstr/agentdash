@@ -86,10 +86,10 @@ export function IssueResponsibilitySection({ companyId, issueId, assigneeAgentId
         {recorded.isError ? <p role="alert">{readFailure(recorded.error)}</p> : null}
         {recorded.data && !recorded.isError ? <Criteria responsibility={recorded.data.body.responsibilities.find((item) => item.key === current.responsibilityKey)} /> : null}
         {active && (current.agentId !== targetAgentId || current.profileRevisionId !== active.id) ? <p className="text-sm text-text-secondary">This mapping refers to a different agent or an earlier revision. Current criteria apply prospectively. Mapping the same agent and key again retains the recorded revision.</p> : null}
-        <Link className="text-sm underline" to={`/agents/${current.agentId}/profile`}>Mapped agent Profile</Link>
+        <Link className="inline-flex min-h-11 min-w-11 items-center text-sm underline" to={`/agents/${current.agentId}/profile`}>Mapped agent Profile</Link>
       </div> : <p className="text-sm">Unmapped. Choose which applied responsibility this work belongs to.</p>}
       <details data-testid="issue-responsibility-history">
-        <summary className="cursor-pointer text-sm font-medium">Mapping history</summary>
+        <summary className="min-h-11 min-w-11 cursor-pointer py-3 text-sm font-medium">Mapping history</summary>
         {mapping.data.history.length === 0 ? <p className="mt-2 text-sm text-text-secondary">No recorded mappings.</p> : (
           <ol className="mt-2 space-y-2 text-xs text-text-secondary">
             {mapping.data.history.map((entry) => (
@@ -102,7 +102,7 @@ export function IssueResponsibilitySection({ companyId, issueId, assigneeAgentId
         )}
       </details>
       {!targetAgentId ? <p className="text-sm">Assign an agent to this task before mapping its responsibility.</p> : <>
-        <div className="flex flex-wrap gap-4 text-sm"><Link className="underline" to={`/agents/${targetAgentId}/profile`}>Profile</Link><Link className="underline" to={`/agents/${targetAgentId}/performance`}>Performance</Link></div>
+        <div className="flex flex-wrap gap-4 text-sm"><Link className="inline-flex min-h-11 min-w-11 items-center underline" to={`/agents/${targetAgentId}/profile`}>Profile</Link><Link className="inline-flex min-h-11 min-w-11 items-center underline" to={`/agents/${targetAgentId}/performance`}>Performance</Link></div>
         <p className="text-xs text-text-secondary">To change criteria, edit a profile draft, request approval, then apply the approved revision. Performance access is checked separately.</p>
         {profile.isPending ? <p role="status">Loading active profile…</p> : null}
         {profile.isError ? <p role="alert">{readFailure(profile.error)}</p> : null}
