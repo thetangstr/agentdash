@@ -24,6 +24,7 @@ import {
 } from "./issue-mutation-actions.js";
 import type { heartbeatService } from "./heartbeat.js";
 import { DELIBERATE_PERSON_WAKE_REASONS } from "./run-facts.js";
+import { NOT_INVOKABLE_AGENT_STATUSES } from "./agent-wake-policy.js";
 
 // The route schema is shared so the API contract can name it; re-exported for existing importers.
 export { updateIssueRouteSchema };
@@ -1489,7 +1490,20 @@ export function issuePatchActions(db: Db, heartbeat: Runtime, hooks: {
       }
     }
 
-    for (const { agentId, wakeup } of wakeups.values()) await effect("wakeup", agentId, () => heartbeat.wakeup(agentId, wakeup));
+    for (const { agentId, wakeup } of wakeups.values()) await effect("wakeup", agentId, async () => {
+      try { return await heartbeat.wakeup(agentId, wakeup); }
+      catch (error) {
+        // A canonical lifecycle refusal is a known non-dispatch after the edit
+        // committed. Classify only automatic PATCH wakes; other effects and
+        // conflicts retain their accepted-but-unresolved recovery semantics.
+        if (error instanceof HttpError && error.status === 409 &&
+          error.message === "Agent is not invokable in its current state" &&
+          error.details !== null && typeof error.details === "object" &&
+          "status" in error.details && typeof error.details.status === "string" &&
+          NOT_INVOKABLE_AGENT_STATUSES.has(error.details.status)) return null;
+        throw error;
+      }
+    });
     const unresolved = outcomes.some(result => result.status === "unknown");
     return { unresolved, outcomes, status: !unresolved ? "confirmed" : outcomes.some(result => result.status === "confirmed") ? "partial" : "unknown" };
   }
