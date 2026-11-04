@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { HttpError } from '../errors.js';
 import type { Server } from 'node:http';
 import express from 'express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -338,6 +339,153 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
       expect(publishLiveEvent).not.toHaveBeenCalled();
       expect(effects.cancel).not.toHaveBeenCalled();
     } finally { spy.mockRestore(); }
+  });
+
+  async function realWakeFixture(status = 'paused') {
+    const f = await fixture();
+    await db.update(issues).set({ executionRunId: null }).where(eq(issues.id, f.issue.id));
+    await db.delete(heartbeatRuns).where(eq(heartbeatRuns.id, f.run.id));
+    await db.update(agents).set({ status, adapterType: 'process', adapterConfig: { command: process.execPath, args: ['-e', 'process.exit(97)'] } }).where(eq(agents.id, f.agent.id));
+    const real = await vi.importActual<typeof import('../services/heartbeat.js')>('../services/heartbeat.js');
+    const runtime = real.heartbeatService(db, { autoDispatchQueuedRuns: false });
+    const refusals: unknown[] = [];
+    effects.wake.mockImplementation(async (agentId, options) => {
+      try { return await runtime.wakeup(agentId, options); }
+      catch (error) { refusals.push(error); throw error; }
+    });
+    return { ...f, runtime, refusals };
+  }
+
+  async function wakeReadback(f: Awaited<ReturnType<typeof fixture>>) {
+    const [issue] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
+    const [agent] = await db.select().from(agents).where(eq(agents.id, f.agent.id));
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, f.company.id));
+    const audit = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+    return { issue, agent, runs, audit };
+  }
+
+  it('status-only HTTP PATCH keeps a real paused heartbeat refusal withheld after committing', async () => {
+    const f = await realWakeFixture();
+    const response = await patch(f, { status: 'in_progress' });
+    const body = await response.json(), state = await wakeReadback(f);
+    const refusal = f.refusals[0];
+    console.info('real PATCH wake refusal', {
+      responseStatus: response.status, issueStatus: state.issue.status, agentStatus: state.agent.status,
+      runCount: state.runs.length, typedHttpError: refusal instanceof HttpError,
+      errorStatus: refusal instanceof HttpError ? refusal.status : null,
+      errorMessage: refusal instanceof Error ? refusal.message : null,
+      details: refusal instanceof HttpError ? refusal.details : null,
+    });
+    expect(f.refusals).toHaveLength(1);
+    expect(refusal).toBeInstanceOf(HttpError);
+    expect(refusal).toMatchObject({ status: 409, message: 'Agent is not invokable in its current state', details: { status: 'paused' } });
+    expect(state.issue).toMatchObject({ status: 'in_progress', assigneeAgentId: f.agent.id, executionRunId: null });
+    expect(state.agent.status).toBe('paused');
+    expect(state.runs).toEqual([]);
+    expect(state.audit.filter(row => row.action === 'issue.updated')).toHaveLength(1);
+    expect(effects.wake).toHaveBeenCalledTimes(1);
+    expect(effects.cancel).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ status: 'in_progress', assigneeAgentId: f.agent.id });
+  });
+
+  it.each(['paused', 'terminated', 'pending_approval'])('withholds a real %s lifecycle refusal at the postcommit wake gate', async status => {
+    const f = await realWakeFixture('active');
+    effects.wake.mockImplementation(async (agentId, options) => {
+      expect((await wakeReadback(f)).issue.status).toBe('in_progress');
+      await db.update(agents).set({ status }).where(eq(agents.id, agentId));
+      try { return await f.runtime.wakeup(agentId, options); }
+      catch (error) { f.refusals.push(error); throw error; }
+    });
+    const response = await patch(f, { status: 'in_progress' });
+    expect(f.refusals).toHaveLength(1);
+    expect(f.refusals[0]).toBeInstanceOf(HttpError);
+    expect(f.refusals[0]).toMatchObject({ status: 409, message: 'Agent is not invokable in its current state', details: { status } });
+    const state = await wakeReadback(f);
+    expect(state.agent.status).toBe(status);
+    expect(state.runs).toEqual([]);
+    expect(state.audit.filter(row => row.action === 'issue.updated')).toHaveLength(1);
+    expect(effects.wake).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+  });
+
+  it('admits a real invokable status-only PATCH wake without dispatching a provider', async () => {
+    const f = await realWakeFixture('active');
+    const response = await patch(f, { status: 'in_progress' });
+    expect(response.status).toBe(200);
+    expect(f.refusals).toEqual([]);
+    const state = await wakeReadback(f);
+    expect(state.runs).toHaveLength(1);
+    expect(state.runs[0]).toMatchObject({ agentId: f.agent.id, status: 'running', processStartedAt: null, finishedAt: null, logRef: null });
+    expect(effects.wake).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the recognized real wake refusal as withheld and dispatches the accepted object once', async () => {
+    const f = await realWakeFixture();
+    const actions = issuePatchActions(db, heartbeatService(db));
+    const accepted = await actions.accept(context(f, { status: 'in_progress' }));
+    const result = await actions.dispatch(accepted);
+    expect(result).toMatchObject({ unresolved: false, status: 'confirmed' });
+    expect(result.outcomes).toContainEqual({ effect: 'wakeup', targetId: f.agent.id, status: 'withheld' });
+    expect(await actions.dispatch(accepted)).toBe(result);
+    expect(effects.wake).toHaveBeenCalledTimes(1);
+    expect((await wakeReadback(f)).runs).toEqual([]);
+  });
+
+  it.each(['pending_approval', 'terminated'])('explicit assignment to a %s agent remains refused before acceptance', async status => {
+    const f = await fixture();
+    await db.update(companyMemberships).set({ membershipRole: 'admin' }).where(eq(companyMemberships.companyId, f.company.id));
+    const [target] = await db.insert(agents).values({ companyId: f.company.id, name: 'Unavailable assignee', status }).returning();
+    const before = await snapshot(f);
+    const response = await patch(f, { assigneeAgentId: target.id });
+    expect(response.status).toBe(409);
+    expect(await snapshot(f)).toEqual(before);
+    expect(effects.wake).not.toHaveBeenCalled();
+  });
+
+  it.each(['paused', 'terminated', 'pending_approval'])('direct manual invocation still rejects a real %s agent', async status => {
+    const f = await realWakeFixture(status);
+    await expect(f.runtime.invoke(f.agent.id, 'on_demand', {}, 'manual')).rejects.toMatchObject({
+      status: 409, message: 'Agent is not invokable in its current state', details: { status },
+    });
+    const state = await wakeReadback(f);
+    expect(state.agent.status).toBe(status);
+    expect(state.runs).toEqual([]);
+    expect(state.issue.status).toBe('backlog');
+  });
+
+  it.each([
+    ['budget conflict', () => new HttpError(409, 'Budget hard stop', { scopeType: 'agent', scopeId: 'private-budget-scope' })],
+    ['other conflict', () => new HttpError(409, 'A different private conflict', { status: 'paused' })],
+    ['invokable status', () => new HttpError(409, 'Agent is not invokable in its current state', { status: 'active' })],
+    ['missing status', () => new HttpError(409, 'Agent is not invokable in its current state')],
+    ['different status code', () => new HttpError(403, 'Agent is not invokable in its current state', { status: 'paused' })],
+    ['untyped lookalike', () => Object.assign(new Error('Agent is not invokable in its current state'), { status: 409, details: { status: 'paused' } })],
+  ])('unrecognized wake %s still returns private accepted-but-unresolved HTTP500', async (_name, error) => {
+    const f = await fixture();
+    effects.wake.mockRejectedValueOnce(error());
+    const response = await patch(f, { status: 'in_progress' });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Issue update accepted, but follow-up effects are unresolved. Read the issue before retrying.' });
+    const state = await snapshot(f);
+    expect(state.issue.status).toBe('in_progress');
+    expect(state.audit.filter(row => row.action === 'issue.updated')).toHaveLength(1);
+    expect(effects.wake).toHaveBeenCalledTimes(1);
+    expect(effects.cancel).not.toHaveBeenCalled();
+  });
+
+  it.each(['publication', 'cancellation'])('a matching lifecycle409 in %s remains an unresolved non-wake effect', async effect => {
+    const f = await fixture();
+    const error = new HttpError(409, 'Agent is not invokable in its current state', { status: 'paused' });
+    if (effect === 'publication') vi.mocked(publishLiveEvent).mockImplementationOnce(() => { throw error; });
+    else effects.cancel.mockRejectedValueOnce(error);
+    const response = await patch(f, { title: 'Committed non-wake effect', comment: 'Private accepted text', interrupt: true });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Issue update accepted, but follow-up effects are unresolved. Read the issue before retrying.' });
+    const state = await snapshot(f);
+    expect(state.issue.title).toBe('Committed non-wake effect');
+    expect(state.comments).toHaveLength(1);
+    expect(effects.cancel).toHaveBeenCalledTimes(1);
   });
 
   it('postcommit failure after cancellation reports accepted uncertainty without repeat', async () => {

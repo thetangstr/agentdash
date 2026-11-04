@@ -125,6 +125,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 // including named-owner questions, private sharing and recovery boundaries.
 // AgentDash: issue-mutation-acceptance (comment and PATCH) recovery/no-blind-retry guidance is
 // inherited through this same managed canonical bundle for every hired worker.
+// Accepted edits may leave automatic wakes withheld for paused/terminated/pending-approval
+// assignees; the inherited guidance grants no resume/approval authority or proof of execution.
 // All named policy blocks, including workforce-learning and issue-current-authority, are inherited verbatim
 // from onboarding-assets/default/AGENTS.md via the canonical bundle loader.
 // Update that source for shared behavior; do not duplicate its mandate here.

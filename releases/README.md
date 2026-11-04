@@ -7,10 +7,15 @@ These can differ when notes are added after the payload commit: a Git tag and
 a passing release-log check do not prove that the installed UI includes its
 own notes. Verify the published body and the built Changelog separately.
 
+Notes may be bundled before stable publication. A version/date entry alone is
+not evidence that its release has been published. Publication is confirmed by
+the matching stable tag and GitHub Release.
+
 ## AgentDash releases
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1104.0](v2026.1104.0.md) | 2026-11-04 | Approved responsibility criteria, task mapping and persisted-output checks; native phone targets; public hosted-request guidance; canonical feedback access and withheld automatic wakes; no new migrations or dependencies | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1104.0) |
 | [v2026.1102.1](v2026.1102.1.md) | 2026-11-02 | Agent scorecards fill in by default, including past work; hires from a brief for every runtime; names instead of raw ids on profile and approval screens; a setup agent can set a hosted box's agent model; migration `0157` (indexes only) | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1102.1) |
 | [v2026.1102.0](v2026.1102.0.md) | 2026-11-02 | An agent sets up AgentDash Cloud for a person over MCP (start, approve, connect, then the setup tools); a failed provisioning job pages a person; no migrations for installs or boxes | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1102.0) |
 | [v2026.1031.0](v2026.1031.0.md) | 2026-10-31 | Agents become the evaluated subject: versioned operating profiles applied after approval, per-agent access enforced off/shadow/enforce, agent scorecards, performance manager, start from a brief; better-auth 1.7 and zod 4 security upgrades; migrations `0153`–`0156` | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1031.0) |
