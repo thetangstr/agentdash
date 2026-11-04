@@ -1,8 +1,11 @@
 # Release log
 
-Every AgentDash release has a notes file in this directory, `vYYYY.MDD.P.md`.
-This index lists all of them, newest first. The same files are the body of
-each GitHub Release and the in-app Changelog, so this is the one release log.
+Release notes live in this directory as `vYYYY.MDD.P.md`, indexed newest first.
+Stable publication reads the GitHub Release body from the release-control
+checkout. The in-app Changelog reads the notes bundled into its source build.
+These can differ when notes are added after the payload commit: a Git tag and
+a passing release-log check do not prove that the installed UI includes its
+own notes. Verify the published body and the built Changelog separately.
 
 ## AgentDash releases
 
@@ -92,9 +95,11 @@ Paperclip releases, not on `origin`, and are not part of this log.
    on the same line; only the date is read). `scripts/release.sh` refuses a
    stable cut without it.
 2. Add a row for it at the top of the table above.
-3. `.github/workflows/release.yml` publishes the file as the GitHub Release
-   body, and the UI bundles it into the in-app Changelog
-   (`ui/src/lib/release-notes.ts`).
+3. `.github/workflows/release.yml` publishes the file from its release-control
+   checkout as the GitHub Release body. The UI bundles the files available in
+   its payload checkout (`ui/src/lib/release-notes.ts`). Before publication,
+   check that the payload itself contains the intended notes and index entry;
+   verify the GitHub body and built Changelog separately.
 4. A change to the public API contract that removes, renames or narrows
    something goes under a `## Deprecated` or `## Breaking` heading when it is
    announced, and `## Removed` or `## Breaking` when it lands

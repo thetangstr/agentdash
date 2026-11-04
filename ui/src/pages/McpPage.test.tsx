@@ -29,10 +29,10 @@ function render() {
 }
 
 describe("McpPage", () => {
-  it("renders the MCP-access headline and the no-signup-forms pitch", () => {
+  it("introduces hosted workspace requests without promising automatic setup", () => {
     render();
     expect(container.textContent).toContain("Access AgentDash from any MCP client");
-    expect(container.textContent).toContain("No signup forms");
+    expect(container.textContent).toContain("Request a hosted workspace");
   });
 
   it("renders the one-line fresh-machine bootstrap command", () => {
@@ -50,28 +50,51 @@ describe("McpPage", () => {
     expect(container.textContent).toContain("packages/mcp-server/dist/stdio.js");
   });
 
-  it("shows no kickoff prompt — the server's own instructions steer the agent", () => {
+  it("shows the remote hosted endpoint and its four request tools before local installation", () => {
     render();
-    expect(container.textContent).toContain("Set up AgentDash for me.");
-    expect(container.textContent).toContain("No prompt to paste");
-    // The old pasted playbook must NOT be on the customer page.
-    expect(container.textContent).not.toContain("Read the\nagentdash://playbook resource first");
-    expect(container.textContent).not.toContain("BOUNDARIES:");
-    expect(container.textContent).not.toContain("Never hire agents beyond the confirmed plan.");
+    const hosted = [...container.querySelectorAll("section")].find((section) =>
+      section.querySelector("h2")?.textContent === "Request a hosted workspace",
+    );
+    expect(hosted).toBeTruthy();
+    expect(hosted!.querySelector("pre")?.textContent).toContain("https://www.agentdash.cloud/api/cloud/mcp");
+    expect([...hosted!.querySelectorAll("li code")].map((code) => code.textContent)).toEqual([
+      "agentdash_cloud_check_name", "agentdash_cloud_start", "agentdash_cloud_status", "agentdash_cloud_connect",
+    ]);
+    const bootstrap = [...container.querySelectorAll("pre")].find((pre) => pre.textContent?.includes("bootstrap-fresh-mac.sh"));
+    expect(bootstrap).toBeTruthy();
+    expect(hosted!.compareDocumentPosition(bootstrap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(hosted!.textContent).toMatch(/no local install or API key/i);
+    expect(hosted!.textContent).toMatch(/four request tools.*does not switch.*setup tools/i);
+    expect(hosted!.querySelector('a[href="/docs/mcp/connecting"]')).not.toBeNull();
+    expect(hosted!.querySelector('a[href="/docs/start/quickstart"]')).not.toBeNull();
+    expect(hosted!.querySelector('a[href="/start"]')).not.toBeNull();
+  });
+
+  it("makes the owner's verification, claim, access approval and model prerequisites visible", () => {
+    render();
+    const text = container.querySelector("main")!.textContent!;
+    expect(text).toMatch(/accept the terms/i);
+    expect(text).toMatch(/verify.*email/i);
+    expect(text).toMatch(/claim.*password/i);
+    expect(text).toMatch(/confirmation code.*approve/i);
+    expect(text).toMatch(/admission.*capacity/i);
+    expect(text).toMatch(/provider.*API key.*before the Chief of Staff can reply/i);
+    expect(text).toMatch(/provider usage is billed separately/i);
+    expect(container.querySelector('a[href="/terms"]')).not.toBeNull();
   });
 
   it("renders the tool catalog groups with journey tool names", () => {
     render();
-    expect(container.textContent).toContain("What your agent can do");
+    expect(container.textContent).toContain("Self-hosted workspace tools");
     expect(container.textContent).toContain("agentdash_install_checklist");
     expect(container.textContent).toContain("agentdash_get_dashboard");
     expect(container.textContent).toContain("agentdash_request_approval");
     expect(container.textContent).toContain("agentdash_confirm_plan");
   });
 
-  it("renders the four how-it-works steps", () => {
+  it("keeps the self-hosted setup steps separate", () => {
     render();
-    expect(container.textContent).toContain("Install");
+    expect(container.textContent).toContain("Self-hosted setup");
     expect(container.textContent).toContain("Sign up via chat");
     expect(container.textContent).toContain("Deep interview");
     expect(container.textContent).toContain("Team runs with approval gates");

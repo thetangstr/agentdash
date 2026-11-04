@@ -86,14 +86,40 @@ describe("PricingPage", () => {
     expect(container.textContent).not.toMatch(/overage/i);
   });
 
-  it("routes Free and Pro CTAs to sign-up and Team CTA to a mailto (no live Stripe dependency)", () => {
+  it("routes workspace CTAs directly to hosted signup and Team inquiries to the public contact", () => {
     render();
-    const signUpCtas = Array.from(container.querySelectorAll('a[href="/auth?mode=sign_up"]'));
-    expect(signUpCtas.length).toBeGreaterThan(0);
+    const signUpCtas = Array.from(container.querySelectorAll('a[href="/start"]'));
+    expect(signUpCtas.length).toBe(6);
+    expect(container.querySelector('a[href="/auth?mode=sign_up"]')).toBeNull();
+    expect(container.querySelector('a[href="/trial"]')).toBeNull();
     const mailtoCta = container.querySelector('a[href^="mailto:"]');
-    expect(mailtoCta).not.toBeNull();
+    expect(mailtoCta?.getAttribute("href")).toBe("mailto:edward@agentdash.cloud");
     // a sign-in affordance exists
     expect(container.querySelector('a[href="/auth"]')).not.toBeNull();
+  });
+
+  it("discloses hosted model requirements alongside plan pricing", () => {
+    render();
+    const text = container.textContent!;
+    expect(text).toMatch(/hosted agents.*(?:your|owner).*provider.*API key/i);
+    expect(text).toMatch(/before the Chief of Staff can reply/i);
+    expect(text).toMatch(/provider usage is billed separately/i);
+    expect(text).not.toMatch(/no setup/i);
+    expect(text).not.toMatch(/build a company in a minute/i);
+    expect(container.querySelector('a[href="/docs/start/quickstart"]')).not.toBeNull();
+  });
+
+  it("labels every hosted signup link accurately", () => {
+    render();
+    const signupLabels = [...container.querySelectorAll('a[href="/start"]')].map((entry) => entry.textContent?.trim());
+    expect(signupLabels).toEqual([
+      "Start free", "Start free", "Start 14-day trial", "Start free", "Create a workspace", "Create a workspace",
+    ]);
+  });
+
+  it("does not advertise the unavailable Test Drive as a plan entitlement", () => {
+    render();
+    expect(container.textContent).not.toMatch(/test drive/i);
   });
 
   it("renders the FAQ covering billing, runs, trial, and cancellation", () => {
