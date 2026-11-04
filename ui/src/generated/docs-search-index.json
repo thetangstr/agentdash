@@ -15,16 +15,19 @@
     {
       "slug": "start/quickstart",
       "title": "Start on AgentDash Cloud",
-      "summary": "Sign up for a hosted workspace, claim it, and get through the three setup steps",
+      "summary": "Sign up for a hosted workspace, use an invitation code or waitlist, claim it, and configure your model",
       "headings": [
         "1. Sign up",
+        "Invitation codes and waitlist admission",
         "2. Wait for your workspace",
         "3. Claim it",
         "4. Set it up",
+        "Your model provider and API key",
+        "Your repo and first issue",
         "Next",
         "Signing in later"
       ],
-      "firstParagraph": "AgentDash Cloud gives you your own workspace at your-name.agentdash.cloud, with a Chief of Staff agent already in it. Setup takes a few minutes, plus however long the waitlist is."
+      "firstParagraph": "AgentDash Cloud gives you your own workspace at your-name.agentdash.cloud, with a Chief of Staff agent already in it. Workspace creation takes a few minutes after admission and when capacity is available. Before the Chief of Staff can reply, you will need your own model provider…"
     },
     {
       "slug": "start/first-agent",

@@ -81,6 +81,20 @@ async function submit(times = 1) {
 }
 
 describe("hosted invitation signup", () => {
+  it("discloses the owner's model key and separate usage costs before signup submission", async () => {
+    await render(<Start />);
+    const disclosure = [...container.querySelectorAll("p")].find((p) =>
+      /provider.*API key/i.test(p.textContent ?? ""),
+    );
+    expect(disclosure).toBeTruthy();
+    expect(disclosure!.textContent).toMatch(/before the Chief of Staff can reply/i);
+    expect(disclosure!.textContent).toMatch(/provider usage is billed separately/i);
+    const submitButton = container.querySelector('button[type="submit"]')!;
+    expect(disclosure!.compareDocumentPosition(submitButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(disclosure!.querySelector('a[href="/docs/start/quickstart"]')).not.toBeNull();
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(posts).toHaveLength(0);
+  });
   it.each([undefined, false])("keeps old/disabled backends compatible (%s)", async (capability) => {
     enabled = capability;
     await render(<Start />);
