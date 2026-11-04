@@ -131,6 +131,8 @@ export function predicateText(predicate: EvaluationTypedPredicate): string {
   switch (predicate.kind) {
     case "none":
       return "No check: this criterion can't be measured yet";
+    case "document_sha256":
+      return `Exact native document ${predicate.key} · SHA-256 ${predicate.sha256}`;
     case "record":
       return `Checked from records (${predicate.predicate})`;
     case "status":

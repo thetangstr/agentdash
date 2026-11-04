@@ -179,7 +179,7 @@ export const agentAccessEnforcementApi = {
 /** Responsibility mapping (evaluation LLD §5.2): which responsibility an issue's work belongs to. */
 export const issueResponsibilityApi = {
   get: (companyId: string, issueId: string) =>
-    api.get<{ current: IssueResponsibilityDto | null; history: IssueResponsibilityDto[] }>(
+    api.get<{ current: IssueResponsibilityDto | null; history: IssueResponsibilityDto[]; viewer?: { assigneeAgentId: string | null; canMapAssignee: boolean } }>(
       `/companies/${encodeURIComponent(companyId)}/issues/${encodeURIComponent(issueId)}/responsibility`,
     ),
   map: (companyId: string, issueId: string, input: MapIssueResponsibility) =>

@@ -122,6 +122,7 @@ function AgentRow({ summary }: { summary: AgentCardSummary }) {
       <p className="text-xs text-muted-foreground">
         {summary.stored ? `Card v${summary.stored.version} stored ${fmtDate(summary.stored.storedAt)}` : "No stored card yet"}
       </p>
+      {summary.formulaMismatch ? <p>Historical formula {summary.formulaVersion}. Compute a new card for current evaluation.</p> : null}
       {summary.stored ? (
         <>
           <p>

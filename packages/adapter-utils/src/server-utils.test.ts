@@ -1,8 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   applyPaperclipWorkspaceEnv,
@@ -126,6 +128,38 @@ describe("materializePaperclipSkillCopy", () => {
 });
 
 describe("runChildProcess", () => {
+  it.each(["early-exit", "delayed-on-spawn", "failed-spawn", "failed-on-spawn", "roundtrip", "unexpected-stdin-error", "sync-stdin-error", "sync-closed-pipe", "sync-destroyed-pipe"])(
+    "keeps the parent alive and preserves the result for stdin %s",
+    async (scenario) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-stdin-"));
+      try {
+        const parent = await new Promise<{ code: number | string; stdout: string; stderr: string }>((resolve) => {
+          execFile(
+            process.execPath,
+            [
+              "--unhandled-rejections=strict",
+              "--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href,
+              fileURLToPath(new URL("./fixtures/stdin-parent.mjs", import.meta.url)),
+              scenario,
+            ],
+            {
+              cwd: root,
+              env: { HOME: root, PATH: path.dirname(process.execPath) },
+              timeout: 10_000,
+            },
+            (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }),
+          );
+        });
+
+        expect(parent.stderr).toBe("");
+        expect(parent.code).toBe(0);
+        expect(JSON.parse(parent.stdout)).toEqual({ scenario, parentSurvived: true });
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("does not arm a timeout when timeoutSec is 0", async () => {
     const result = await runChildProcess(
       randomUUID(),

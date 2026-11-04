@@ -120,7 +120,7 @@ export async function resolveActiveProfileResponsibility(
  * An agent maps only as the issue's assignee and only to itself, unless it is
  * the company's Chief of Staff (the planner), which may map any issue.
  */
-async function authorizeMapping(
+export async function authorizeMapping(
   db: Db,
   scope: { companyId: string; agentId: string; issueAssigneeAgentId: string | null },
   actor: ResponsibilityMappingActor,

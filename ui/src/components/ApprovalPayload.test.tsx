@@ -50,6 +50,23 @@ describe("ApprovalPayloadRenderer", () => {
     container.remove();
   });
 
+  it("shows a system hire's configured model and unresolved host-default warning before approval", () => {
+    const root = createRoot(container);
+    act(() => root.render(<HireAgentPayload payload={{
+      name: "Reviewer", adapterType: "codex_local", adapterConfig: { model: "company-model" },
+      modelSelection: { source: "company_agent", model: "company-model", agentId: "private-agent-id" },
+    }} />));
+    expect(container.textContent).toContain("company-model");
+    expect(container.textContent).not.toContain("private-agent-id");
+    act(() => root.render(<HireAgentPayload payload={{
+      name: "Reviewer", adapterType: "codex_local", adapterConfig: {},
+      modelSelection: { source: "host_default", model: null, warning: "This agent will use the host's Codex default." },
+    }} />));
+    expect(container.textContent).toContain("This agent will use the host's Codex default.");
+    expect(container.textContent).not.toContain("company-model");
+    act(() => root.unmount());
+  });
+
   it("renders request_board_approval payload fields without falling back to raw JSON", () => {
     const root = createRoot(container);
 

@@ -70,10 +70,10 @@ function isUnbound(row: AgentCaseRow): boolean {
 
 /** The acceptance fact a case row stands for. */
 const ACCEPTANCE_FACT_TEXT: Record<AgentAcceptanceFact, string> = {
-  automated: "Passed automated checks",
+  automated: "Automated acceptance",
   human: "Accepted by a person",
   use: "Used",
-  outcome: "Moved the result",
+  outcome: "Linked-goal status (context)",
 };
 
 function DispositionStatus({ message, error }: { message: string; error: string | null }) {

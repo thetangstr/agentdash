@@ -1,0 +1,13 @@
+{
+  "version": "native-runtime/1",
+  "formulaVersion": "agent-metrics/2",
+  "owed": 5,
+  "automatedAcceptance": { "yes": 1, "no": 1, "unknown": 1, "of": 3 },
+  "cases": {
+    "correct": { "issueStatus": "done", "obligation": "delivered_on_time", "automatedAcceptance": "pass", "runs": 1 },
+    "wrong": { "issueStatus": "done", "obligation": "delivered_on_time", "automatedAcceptance": "fail", "runs": 1 },
+    "approval": { "issueStatus": "blocked", "obligation": "blocked_on_person", "automatedAcceptance": null, "runs": 1 },
+    "missing": { "issueStatus": "todo", "obligation": "not_started", "automatedAcceptance": null, "runs": 0 },
+    "unverified": { "issueStatus": "done", "obligation": "delivered_on_time", "automatedAcceptance": "unknown", "runs": 1 }
+  }
+}

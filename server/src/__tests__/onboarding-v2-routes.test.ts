@@ -659,6 +659,32 @@ describe("POST /api/onboarding/confirm-plan", () => {
     vi.clearAllMocks();
   });
 
+  it("pins plan hires to an active company peer's model without copying its credentials", async () => {
+    mockAgents.list.mockResolvedValue([{
+      id: "cos1", companyId: "c1", role: "chief_of_staff", name: "CoS",
+      status: "idle", adapterType: "codex_local",
+      adapterConfig: { model: "company-codex-model", env: { PRIVATE_KEY: "do-not-copy" }, cwd: "/private/work" },
+    }]);
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      ...data, id: "agent-model", companyId,
+    }));
+    const planPayload = {
+      rationale: "ship", agents: [{ role: "engineer", name: "Ellie", adapterType: "codex_local", responsibilities: ["ship"], kpis: ["working release"] }],
+      alignmentToShortTerm: "ships", alignmentToLongTerm: "grows",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }]],
+    );
+    const res = await request(app).post("/api/onboarding/confirm-plan").send({ conversationId: "conv1" });
+    expect(res.status).toBe(201);
+    expect(mockAgents.create.mock.calls[0]![1]).toMatchObject({
+      adapterConfig: { model: "company-codex-model" },
+      metadata: { systemHireModel: { source: "company_agent", agentId: "cos1", model: "company-codex-model" } },
+    });
+    expect(mockAgents.create.mock.calls[0]![1].adapterConfig).toEqual({ model: "company-codex-model" });
+  });
+
   it("creates one agent per plan-card entry, posts a closing message, advances phase to ready", async () => {
     mockAgents.list.mockResolvedValue([
       { id: "cos1", role: "chief_of_staff", name: "CoS" },

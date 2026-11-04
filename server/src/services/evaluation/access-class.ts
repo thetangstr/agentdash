@@ -1,17 +1,19 @@
 import type { Request } from "express";
 import { and, eq, inArray, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentStewardships, agents, evaluationEvents, projectAccess, projects } from "@paperclipai/db";
+import { agentStewardships, agents, evaluationEvents, issues, projectAccess, projects } from "@paperclipai/db";
 import {
   formatEvaluationAccessClass,
+  isUuidLike,
   parseEvaluationAccessClass,
   type EvaluationAccessClass,
   type EvaluationEventType,
 } from "@paperclipai/shared";
 import { isCompanyAdministrator } from "../../routes/authz.js";
-import { resolveAgentV2ProjectScope, seesEverything } from "../../routes/visibility.js";
+import { issueVisibilityCondition, resolveAgentVisibility, resolveAgentV2ProjectScope, seesEverything } from "../../routes/visibility.js";
 import { accessService } from "../access.js";
 import type { EvaluationEventRow } from "./ledger.js";
+import { resolveIssueScope } from "./sources.js";
 
 /**
  * AgentDash: Agent Performance Management gate 3 — evidence access classes
@@ -335,4 +337,41 @@ export function viewerClassCondition(viewer: EvaluationViewer): SQL | undefined 
   if (hidden.length === 0) return classOk;
   // The live restricted-project rule, so a row ingested as `company` before its project was restricted stays hidden.
   return and(classOk, or(isNull(evaluationEvents.projectId), notInArray(evaluationEvents.projectId, hidden)))!;
+}
+
+const NATIVE_DOCUMENT_EVENT_TYPES = ["issue.document_revision", "issue.document_removed"] as const;
+
+/** Current issue authority narrows native receipts before SQL pagination/counting and on detail reads. */
+export async function nativeDocumentViewerAccess(db: Db, req: Request, viewer: EvaluationViewer) {
+  const nativeRows = await db.select({
+    issueId: sql<string | null>`${evaluationEvents.payload} ->> 'issueId'`,
+    revisionId: sql<string | null>`${evaluationEvents.payload} ->> 'revisionId'`,
+  }).from(evaluationEvents).where(and(
+    eq(evaluationEvents.companyId, viewer.companyId),
+    inArray(evaluationEvents.eventType, [...NATIVE_DOCUMENT_EVENT_TYPES]),
+    viewerClassCondition(viewer),
+  ));
+  const issueIds = [...new Set(nativeRows.map((row) => row.issueId).filter((id): id is string => !!id && isUuidLike(id)))];
+  let visibleIssueIds = new Set<string>();
+  if (issueIds.length > 0) {
+    await resolveAgentVisibility(db, req, viewer.companyId);
+    const visibleIssues = await db.select({ id: issues.id }).from(issues).where(and(
+      eq(issues.companyId, viewer.companyId), inArray(issues.id, issueIds), issueVisibilityCondition(req, viewer.companyId),
+    ));
+    const scopes = await resolveIssueScope(db, viewer.companyId, visibleIssues.map((issue) => issue.id), { requireResolvedAncestry: true });
+    visibleIssueIds = new Set([...scopes].filter(([, scope]) =>
+      !scope.projectId || viewer.readableProjectIds === "all" || viewer.readableProjectIds.has(scope.projectId),
+    ).map(([id]) => id));
+  }
+  const visibleRevisionIds = new Set(nativeRows.filter((row) => row.issueId && visibleIssueIds.has(row.issueId)).map((row) => row.revisionId));
+  return {
+    condition: or(
+      notInArray(evaluationEvents.eventType, [...NATIVE_DOCUMENT_EVENT_TYPES]),
+      visibleIssueIds.size > 0 ? inArray(sql`${evaluationEvents.payload} ->> 'issueId'`, [...visibleIssueIds]) : sql`false`,
+    )!,
+    reads: (event: Pick<EvaluationEventRow, "eventType" | "payload">) =>
+      !(NATIVE_DOCUMENT_EVENT_TYPES as readonly string[]).includes(event.eventType) ||
+      (typeof event.payload?.issueId === "string" && visibleIssueIds.has(event.payload.issueId)),
+    readsRevision: (revisionId: string | undefined) => !!revisionId && visibleRevisionIds.has(revisionId),
+  };
 }

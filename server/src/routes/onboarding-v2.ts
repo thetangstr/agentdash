@@ -52,6 +52,7 @@ import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
 import { listCompanyMemberNames, PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "../services/cos-plan-naming.js";
 import { applyModelTierStamp, hermesModelTierStamp, stampPlanModelTiers } from "../services/hermes-model-tiers.js";
+import { resolveSystemHireModel } from "../services/system-hire-model.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
 import {
   applyAdapterPreset,
@@ -835,7 +836,7 @@ export function onboardingV2Routes(db: Db) {
     // same write on the first confirm and on a retry that found the receipt
     // but not the approval — one helper keeps the payloads identical.
     const fileHireApproval = async (
-      hired: { id: string; name: string; role: string; title?: string | null; reportsTo?: string | null; adapterType?: string | null },
+      hired: { id: string; name: string; role: string; title?: string | null; reportsTo?: string | null; adapterType?: string | null; adapterConfig?: Record<string, unknown> | null; metadata?: Record<string, unknown> | null },
       fallbackAdapterType?: string,
     ): Promise<string> => {
       const approval = await approvalService(db).create(companyId, {
@@ -849,6 +850,12 @@ export function onboardingV2Routes(db: Db) {
           title: hired.title ?? null,
           reportsTo: hired.reportsTo ?? null,
           adapterType: hired.adapterType ?? fallbackAdapterType ?? null,
+          // Copy only the public model fields, including on approval repair.
+          adapterConfig: {
+            ...(typeof hired.adapterConfig?.model === "string" ? { model: hired.adapterConfig.model } : {}),
+            ...(typeof hired.adapterConfig?.provider === "string" ? { provider: hired.adapterConfig.provider } : {}),
+          },
+          modelSelection: hired.metadata?.systemHireModel ?? null,
           // AgentDash (review-1028): the resolved tier+model ride in the
           // payload so the approval card shows what the server applied.
           ...hermesModelTierStamp({
@@ -1006,8 +1013,14 @@ export function onboardingV2Routes(db: Db) {
       // hire strands the phase mid-flow if a later step fails, and the retry
       // would then replay the onboarding message and goals.
       if (index === 0 && !alreadyReady) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
-      const cos = (await txAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
+      const peers = await txAgents.list(companyId);
+      const cos = peers.find(a => a.role === 'chief_of_staff') ?? null;
       const planAgent = payload.agents[index];
+      const modelChoice = resolveSystemHireModel({
+        companyId, adapterType: planAgent.adapterType,
+        role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.title?.trim() || planAgent.role), peers,
+      });
+      const materializationPause = onboardingMaterializationPause();
       // AgentDash (scan 3, lane H): plan hires answer to the human who confirmed
       // the plan (autonomous, accountable = them) instead of "Needs a steward".
       // The membership is read inside the hire transaction.
@@ -1018,13 +1031,15 @@ export function onboardingV2Routes(db: Db) {
         // wording stays as the title.
         // AgentDash (scan 4, lane N): the CoS-written title, verbatim (trimmed).
         name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.title?.trim() || planAgent.role), adapterType: planAgent.adapterType,
-        workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
+        workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: modelChoice.adapterConfig, reportsTo: cos?.id ?? null,
         // AgentDash (c4-hire-ux): the person who confirmed the plan is the
         // creator — AgentDetail reads this for "Dana Whitfield, via Chief of
         // Staff" instead of the wrong "Hired by an agent".
         createdByUserId: req.actor.userId ?? null,
         ...hireAccountability,
-        ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
+        ...materializationPause,
+        metadata: { ...materializationPause.metadata, systemHireModel: modelChoice.selection },
+        spentMonthlyCents: 0, lastHeartbeatAt: null,
       }, acceptance);
       // AgentDash (scan 5, lane access): the plan-card hire path creates agents
       // inline, so the route owns the agent.created audit — same atomicity as

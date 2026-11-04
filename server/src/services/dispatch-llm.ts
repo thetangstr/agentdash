@@ -17,19 +17,12 @@ import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
 import { hermesModelTierForModel, resolveHermesModelTier } from "@paperclipai/shared";
 import { hermesModelTiersActive } from "./hermes-model-tiers.js";
+import { resolveCodexChatModel } from "../adapters/codex-models.js";
 
 // Default to PATH so every Mac mini install can use its own Hermes location.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
 const DEFAULT_HERMES_COMMAND = "hermes";
 const DEFAULT_CODEX_COMMAND = "codex";
-/**
- * Chat replies go through a model a ChatGPT-account login can actually use.
- *
- * The `-codex` family is refused outright on such an install ("not supported
- * when using Codex with a ChatGPT account"), and a Chief of Staff that cannot
- * answer a question is not a Chief of Staff.
- */
-const DEFAULT_CODEX_CHAT_MODEL = "gpt-5.6-terra";
 
 /**
  * Toolsets granted to Hermes when it answers a chat turn. `clarify` (ask a
@@ -659,10 +652,7 @@ export async function dispatchLLM(
 
   if (adapter === "codex_local") {
     const codexCmd = (process.env.AGENTDASH_CODEX_COMMAND ?? "").trim() || DEFAULT_CODEX_COMMAND;
-    const model =
-      (options?.model ?? "").trim() ||
-      (process.env.AGENTDASH_CODEX_CHAT_MODEL ?? "").trim() ||
-      DEFAULT_CODEX_CHAT_MODEL;
+    const model = (options?.model ?? "").trim() || resolveCodexChatModel();
     const prompt = buildFlatPrompt(input);
     logger.info({ adapter, codexCmd, model }, "[dispatch-llm] routing CoS reply through codex_local");
     try {

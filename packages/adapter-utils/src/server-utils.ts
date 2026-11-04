@@ -2218,16 +2218,13 @@ export async function runChildProcess(
         }) as ChildProcessWithEvents;
         const startedAt = new Date().toISOString();
         const processGroupId = resolveProcessGroupId(child);
-
-        const spawnPersistPromise =
-          typeof child.pid === "number" && child.pid > 0 && opts.onSpawn
-            ? opts.onSpawn({ pid: child.pid, processGroupId, startedAt }).catch((err) => {
-              onLogError(err, runId, "failed to record child process metadata");
-            })
-            : Promise.resolve();
-
+        const stdin = child.stdin;
         runningProcesses.set(runId, { child, graceSec: opts.graceSec, processGroupId });
 
+        let terminalFailure: { error: unknown } | null = null;
+        let processClosed = false;
+        let failureKillTimer: NodeJS.Timeout | null = null;
+        let timeoutKillTimer: NodeJS.Timeout | null = null;
         let timedOut = false;
         let stdout = "";
         let stderr = "";
@@ -2248,7 +2245,7 @@ export async function runChildProcess(
 
         const maybeArmTerminalResultCleanup = () => {
           const terminalCleanup = opts.terminalResultCleanup;
-          if (!terminalCleanup || terminalCleanupStarted || timedOut) return;
+          if (!terminalCleanup || terminalCleanupStarted || timedOut || terminalFailure) return;
           if (!terminalResultSeen) {
             const stdoutStart = Math.max(0, terminalResultStdoutScanOffset - TERMINAL_RESULT_SCAN_OVERLAP_CHARS);
             const stderrStart = Math.max(0, terminalResultStderrScanOffset - TERMINAL_RESULT_SCAN_OVERLAP_CHARS);
@@ -2287,11 +2284,52 @@ export async function runChildProcess(
                 timedOut = true;
                 clearTerminalCleanupTimers();
                 signalRunningProcess({ child, processGroupId }, "SIGTERM");
-                setTimeout(() => {
+                timeoutKillTimer = setTimeout(() => {
+                  timeoutKillTimer = null;
                   signalRunningProcess({ child, processGroupId }, "SIGKILL");
                 }, Math.max(1, opts.graceSec) * 1000);
               }, opts.timeoutSec * 1000)
             : null;
+
+        const clearProcessTimers = () => {
+          if (timeout) clearTimeout(timeout);
+          if (timeoutKillTimer) clearTimeout(timeoutKillTimer);
+          if (failureKillTimer) clearTimeout(failureKillTimer);
+          timeoutKillTimer = null;
+          failureKillTimer = null;
+          clearTerminalCleanupTimers();
+        };
+
+        // AgentDash: a transport failure must not leave a worker acting after
+        // its caller sees rejection. Keep tracking it until close, then drain
+        // logs and clean the target once before rejecting with the first error.
+        const failProcess = (error: unknown) => {
+          if (terminalFailure || processClosed) return;
+          terminalFailure = { error };
+          clearProcessTimers();
+          stdin?.destroy();
+          signalRunningProcess({ child, processGroupId }, "SIGTERM");
+          failureKillTimer = setTimeout(() => {
+            failureKillTimer = null;
+            signalRunningProcess({ child, processGroupId }, "SIGKILL");
+          }, Math.max(1, opts.graceSec) * 1000);
+        };
+
+        // A CLI may exit before reading a buffered prompt. Its actual close
+        // result remains authoritative for these expected closed-pipe errors.
+        const handleStdinError = (err: unknown) => {
+          const code = (err as NodeJS.ErrnoException | null | undefined)?.code;
+          if (code === "EPIPE" || code === "ERR_STREAM_DESTROYED") return;
+          failProcess(err);
+        };
+        stdin?.on("error", handleStdinError);
+
+        const spawnPersistPromise =
+          typeof child.pid === "number" && child.pid > 0 && opts.onSpawn
+            ? opts.onSpawn({ pid: child.pid, processGroupId, startedAt }).catch((err) => {
+              onLogError(err, runId, "failed to record child process metadata");
+            })
+            : Promise.resolve();
 
         child.stdout?.on("data", (chunk: unknown) => {
           const readable = child.stdout;
@@ -2325,27 +2363,22 @@ export async function runChildProcess(
             });
         });
 
-        const stdin = child.stdin;
         if (opts.stdin != null && stdin) {
-          void spawnPersistPromise.finally(() => {
-            if (child.killed || stdin.destroyed) return;
+          void spawnPersistPromise.then(() => {
+            if (terminalFailure || child.killed || stdin.destroyed) return;
             stdin.write(opts.stdin as string);
             stdin.end();
-          });
+          }).catch(handleStdinError);
         }
 
         child.on("error", (err: Error) => {
-          if (timeout) clearTimeout(timeout);
-          clearTerminalCleanupTimers();
-          runningProcesses.delete(runId);
-          void target.cleanup?.();
           const errno = (err as NodeJS.ErrnoException).code;
           const pathValue = mergedEnv.PATH ?? mergedEnv.Path ?? "";
           const msg =
             errno === "ENOENT"
               ? `Failed to start command "${command}" in "${opts.cwd}". Verify adapter command, working directory, and PATH (${pathValue}).`
               : `Failed to start command "${command}" in "${opts.cwd}": ${err.message}`;
-          reject(new Error(msg));
+          failProcess(new Error(msg));
         });
 
         child.on("exit", () => {
@@ -2353,13 +2386,19 @@ export async function runChildProcess(
         });
 
         child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-          if (timeout) clearTimeout(timeout);
-          clearTerminalCleanupTimers();
+          processClosed = true;
+          // A descendant can outlive the direct child and close its own pipes.
+          // Finish group termination before cancelling escalation on close.
+          if (terminalFailure || timedOut) signalRunningProcess({ child, processGroupId }, "SIGKILL");
+          clearProcessTimers();
           runningProcesses.delete(runId);
-          void logChain.finally(() => {
-            void Promise.resolve()
-              .then(() => target.cleanup?.())
-              .finally(() => {
+          void logChain
+            .finally(() => target.cleanup?.())
+            .then(() => {
+              if (terminalFailure) {
+                reject(terminalFailure.error);
+                return;
+              }
               resolve({
                 exitCode: code,
                 signal,
@@ -2369,8 +2408,7 @@ export async function runChildProcess(
                 pid: child.pid ?? null,
                 startedAt,
               });
-              });
-          });
+            }, (err) => reject(terminalFailure ? terminalFailure.error : err));
         });
       })
       .catch(reject);

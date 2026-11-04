@@ -14,6 +14,7 @@ import { approvalService } from "./approvals.js";
 import { companyService } from "./companies.js";
 import { defaultAgentPlanAdapterType } from "./cos-replier.js";
 import { hermesModelTierStamp } from "./hermes-model-tiers.js";
+import { resolveSystemHireModel } from "./system-hire-model.js";
 import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { RUNNABLE_REVIEWER_STATUSES } from "./review-queue-assignments.js";
 import {
@@ -334,10 +335,15 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
       const reviewerName = `CoS Reviewer ${new Date().toISOString().slice(0, 19)}`;
       const adapterType = defaultAgentPlanAdapterType();
       const txAgentsSvc = agentService(txDb);
+      const modelChoice = resolveSystemHireModel({
+        companyId, adapterType, role: "reviewer", title: "CoS Reviewer",
+        peers: await txAgentsSvc.list(companyId),
+      });
       const reviewerMetadata = {
         autoHired: true,
         autoHireReason: reason,
         autoHireSource: "cos_reviewer_auto_hire",
+        systemHireModel: modelChoice.selection,
       } as Record<string, unknown>;
       const runtimeConfig = { heartbeat: { ...REVIEWER_HEARTBEAT } };
       const created = deps.createAgent
@@ -348,7 +354,7 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
             title: "CoS Reviewer",
             capabilities: REVIEWER_CAPABILITIES,
             adapterType,
-            adapterConfig: {},
+            adapterConfig: modelChoice.adapterConfig,
             runtimeConfig,
             budgetMonthlyCents: 0,
             status: "pending_approval",
@@ -389,7 +395,8 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
           title: "CoS Reviewer",
           capabilities: REVIEWER_CAPABILITIES,
           adapterType,
-          adapterConfig: {},
+          adapterConfig: modelChoice.adapterConfig,
+          modelSelection: modelChoice.selection,
           runtimeConfig,
           budgetMonthlyCents: 0,
           // AgentDash (review-1028): the resolved tier+model ride in the
