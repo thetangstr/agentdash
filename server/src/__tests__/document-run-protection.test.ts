@@ -680,14 +680,13 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
 
   // Review fix 2: feedback trace bundles carry the run's log, events and the
   // adapter's own transcript files, and sharing uploads them off-instance.
-  it("feedback trace bundles follow the steward rule, omit adapter transcripts and are never shared when flagged", async () => {
+  it("feedback trace bundles authorize phone-shaped UUIDs without using redacted identity, omit adapter transcripts and are never shared when flagged", async () => {
     const claudeDir = await mkdtemp(join(home, "claude-config-"));
     const previousClaudeDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = claudeDir;
     const TRANSCRIPT_SENTINEL = "ADAPTER-TRANSCRIPT-SENTINEL";
     try {
-      async function seedTrace(companyId: string, stewardUserId: string) {
-        const agentId = randomUUID();
+      async function seedTrace(companyId: string, stewardUserId: string, agentId: string) {
         await seedAgent(agentId, companyId, "", stewardUserId, "claude_local");
         const runId = randomUUID();
         const sessionId = `sess-${runId.slice(0, 8)}`;
@@ -708,8 +707,10 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
         return { agentId, runId, exported: exported!, saved };
       }
 
-      const flagged = await seedTrace(FLAGGED, "feedback-steward");
-      const plain = await seedTrace(UNFLAGGED, "feedback-steward-plain");
+      // Both IDs are valid canonical UUIDs whose middle groups match the
+      // free-text phone redactor. Authorization must still use the DB identity.
+      const flagged = await seedTrace(FLAGGED, "feedback-steward", "aaaaaaaa-1234-4123-8123-aaaaaaaaaaaa");
+      const plain = await seedTrace(UNFLAGGED, "feedback-steward-plain", "bbbbbbbb-1234-4123-8123-bbbbbbbbbbbb");
 
       // Sharing is refused for the flagged company: the trace stays local.
       expect(flagged.exported.status).toBe("local_only");
@@ -717,8 +718,10 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
 
       const bundlePath = (id: string) => `/api/feedback-traces/${id}/bundle`;
       expect((await request(appAs(asUser(MEMBER, "member"))).get(bundlePath(flagged.exported.id))).status).toBe(404);
+      expect((await request(appAs(asUser(COMPANY_ADMIN, "admin"))).get(bundlePath(flagged.exported.id))).status).toBe(404);
       const stewardBundle = await request(appAs({ ...asUser("feedback-steward", "member") })).get(bundlePath(flagged.exported.id));
       expect(stewardBundle.status).toBe(200);
+      expect(stewardBundle.body.paperclipRun.agentId).toBe("aaaaaaaa-[REDACTED_PHONE]-aaaaaaaaaaaa");
       expect(JSON.stringify(stewardBundle.body)).not.toContain(TRANSCRIPT_SENTINEL);
       expect((stewardBundle.body.files as Array<{ path: string }>).some((f) => f.path.startsWith("adapter/"))).toBe(false);
       const adminBundle = await request(appAs(asInstanceAdmin())).get(bundlePath(flagged.exported.id));
@@ -728,6 +731,7 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
       // Flag off: unchanged — a member reads it, adapter transcript included.
       const plainBundle = await request(appAs(asUser(MEMBER, "member"))).get(bundlePath(plain.exported.id));
       expect(plainBundle.status).toBe(200);
+      expect(plainBundle.body.paperclipRun.agentId).toBe("bbbbbbbb-[REDACTED_PHONE]-bbbbbbbbbbbb");
       expect(JSON.stringify(plainBundle.body)).toContain(TRANSCRIPT_SENTINEL);
 
       // A trace queued for sharing before the flag went on is never uploaded.
@@ -745,6 +749,44 @@ describeEmbeddedPostgres("document run protection (slice 6b)", () => {
       else process.env.CLAUDE_CONFIG_DIR = previousClaudeDir;
     }
   }, 30_000);
+
+  it.each([
+    ["missing", null],
+    ["malformed", "not-a-run-uuid"],
+    ["redacted", "aaaaaaaa-[REDACTED_PHONE]-aaaaaaaaaaaa"],
+    ["unavailable", "cccccccc-1234-4123-8123-cccccccccccc"],
+    ["other-company", "dddddddd-1234-4123-8123-dddddddddddd"],
+  ])("feedback trace bundles fail closed with a %s source run only while flagged", async (_case, sourceRunId) => {
+    for (const companyId of [FLAGGED, UNFLAGGED]) {
+      const agentId = randomUUID();
+      const stewardUserId = `feedback-${_case}-${companyId}`;
+      await seedAgent(agentId, companyId, "", stewardUserId);
+      let targetRunId = sourceRunId;
+      if (_case === "other-company") {
+        const otherCompanyId = companyId === FLAGGED ? UNFLAGGED : FLAGGED;
+        const otherAgentId = randomUUID();
+        await seedAgent(otherAgentId, otherCompanyId, "", `other-${stewardUserId}`);
+        targetRunId = randomUUID();
+        await db.insert(heartbeatRuns).values({ id: targetRunId, companyId: otherCompanyId, agentId: otherAgentId, invocationSource: "on_demand", status: "succeeded" });
+      }
+      const issueId = randomUUID();
+      await db.insert(issues).values({ id: issueId, companyId, title: "Feedback without an available source run", status: "todo" });
+      const [comment] = await db.insert(issueComments).values({
+        companyId, issueId, authorAgentId: agentId, body: "agent answer without a run",
+      }).returning();
+      const feedback = feedbackService(db);
+      await feedback.saveIssueVote({
+        issueId, targetType: "issue_comment", targetId: comment!.id, vote: "up", authorUserId: MEMBER, allowSharing: true,
+      });
+      const [trace] = await db.select().from(feedbackExports).where(eq(feedbackExports.issueId, issueId));
+      await db.update(feedbackExports).set({ payloadSnapshot: { target: { createdByRunId: targetRunId } } }).where(eq(feedbackExports.id, trace!.id));
+      for (const actor of [asUser(MEMBER, "member"), asUser(stewardUserId, "member"), asInstanceAdmin()]) {
+        const bundle = await request(appAs(actor)).get(`/api/feedback-traces/${trace!.id}/bundle`);
+        expect(bundle.status).toBe(companyId === FLAGGED ? 404 : 200);
+        if (companyId === UNFLAGGED) expect(bundle.body.paperclipRun).toBeNull();
+      }
+    }
+  });
 
   // Review fix 6: the stale-run watchdog copies the run-log tail into a review
   // issue every company member can read.
