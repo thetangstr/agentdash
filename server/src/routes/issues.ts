@@ -4072,24 +4072,18 @@ export function issueRoutes(
       return;
     }
     await assertFeedbackTraceVisible(db, req, trace);
-    const bundle = await feedback.getFeedbackTraceBundle(traceId);
-    if (!bundle || !actorCanAccessCompany(req, bundle.companyId)) {
-      res.status(404).json({ error: "Feedback trace not found" });
-      return;
-    }
-    // Document access (slice 6b): a bundle carries its source run's log and
-    // events, so it follows the run's readership rule (steward, instance
-    // admin) while the company's flag is on.
-    const sourceRun = bundle.paperclipRun;
-    const sourceAgentId = typeof sourceRun?.agentId === "string" ? sourceRun.agentId : null;
+    // Document access (slice 6b): authorize the canonical source run before
+    // reading logs/transcripts or redacting the bundle. Redacted identifiers
+    // are display data, never inputs to the stewardship UUID lookup.
     const documentRuns = documentRunAccess(db);
-    const unreadable = sourceRun
-      ? sourceAgentId
-        ? !(await documentRuns.canReadRunContent(req.actor, { companyId: bundle.companyId, agentId: sourceAgentId }))
-        // A run whose agent cannot be read back: fail closed while flagged.
-        : await documentRuns.documentAccessEnabled(bundle.companyId)
-      : false;
-    if (unreadable) {
+    const bundle = await feedback.getFeedbackTraceBundle(traceId, async (sourceRun) => {
+      const unreadable = sourceRun
+        ? !(await documentRuns.canReadRunContent(req.actor, sourceRun))
+        // No trustworthy source identity: fail closed while flagged.
+        : await documentRuns.documentAccessEnabled(trace.companyId);
+      if (unreadable) throw notFound("Feedback trace not found");
+    });
+    if (!bundle || !actorCanAccessCompany(req, bundle.companyId)) {
       res.status(404).json({ error: "Feedback trace not found" });
       return;
     }
