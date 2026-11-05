@@ -166,6 +166,7 @@ export function WorkforceWorkspace({ companyId }: { companyId: string }) {
   const agents = useQuery({ queryKey: queryKeys.agents.list(companyId), queryFn: () => agentsApi.list(companyId) });
   const selected = agents.data?.find(a => a.id === agentId) ?? agents.data?.[0];
   return <div className="mx-auto max-w-4xl space-y-6 py-6">
+    <p className="text-sm text-muted-foreground">Need help choosing the next useful job? <Link className="inline-flex min-h-11 items-center font-medium underline" to="/company/fred">Meet Fred, your AgentDash guide</Link></p>
     <header className="space-y-2">
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Workforce setup</p>
       <h1 className="text-2xl font-semibold">Give your team the context to do good work</h1>

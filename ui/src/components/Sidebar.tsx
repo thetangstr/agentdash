@@ -7,6 +7,7 @@ import {
   Settings,
   PackageCheck,
   MessageSquare,
+  Compass,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -97,11 +98,15 @@ export function Sidebar() {
             footer "?"; nothing else belongs in this sidebar. */}
         <SidebarMoreGroup />
 
-        <div className="mt-auto flex items-center gap-1 border-t border-border pt-2">
-          <div className="min-w-0 flex-1">
-            <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+        <div className="mt-auto border-t border-border pt-2">
+          {/* AgentDash: the built-in guide is distinct from the company's CoS. */}
+          <SidebarNavItem to="/company/fred" label="Fred" icon={Compass} />
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+            </div>
+            <SidebarHelpMenu />
           </div>
-          <SidebarHelpMenu />
         </div>
 
         <PluginSlotOutlet

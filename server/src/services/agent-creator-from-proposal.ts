@@ -104,6 +104,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 }
 
 // AgentDash: operation-log-visibility is inherited from the canonical default bundle;
+// AgentDash: fred-fde-guide is inherited by every proposed worker; requests from
+// the registered guide grant no access or approval authority to its teammates.
 // workers must not probe alternate run/workspace routes after an unavailable operation.
 // AgentDash: spend-visibility is inherited from the canonical default;
 // null/omitted amounts stay unavailable in approvals, inboxes, agent history and mutation/create/hire responses too;

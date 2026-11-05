@@ -506,6 +506,10 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "model_key.requested",
   "onboarding.member_advanced",
   "onboarding.member_completed",
+  "fred.registered",
+  "fred.setup_completed",
+  "fred.brief_saved",
+  "fred.discovery_requested",
   // plugins
   "plugin.config.updated",
   "plugin.disabled",

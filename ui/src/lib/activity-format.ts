@@ -340,6 +340,11 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "model_key.requested": "requested a model key",
   "onboarding.member_advanced": "moved onboarding forward",
   "onboarding.member_completed": "finished onboarding",
+  // AgentDash: preparation and request receipts never claim work completed.
+  "fred.registered": "registered the built-in guide",
+  "fred.setup_completed": "prepared the setup for",
+  "fred.brief_saved": "saved the adoption brief on",
+  "fred.discovery_requested": "requested discovery work on",
   "plugin.config.updated": "updated a plugin's settings",
   "plugin.disabled": "disabled a plugin",
   "plugin.enabled": "enabled a plugin",

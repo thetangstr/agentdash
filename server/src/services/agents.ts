@@ -1,4 +1,5 @@
 import { withHermesSshCompanyLock } from "./hermes-ssh-policy.js";
+import { countBillableAgents } from "./guide-capacity.js";
 import { publishActivity, type ActivityPublication } from "./activity-log.js";
 import { workforceService } from "./workforce.js";
 import { assertActivityAcceptance, type ActivityAcceptance } from "./activity-log.js";
@@ -445,6 +446,8 @@ export function agentService(db: Db, optionsForService: { environmentLockHeld?: 
   }
 
   return {
+    // AgentDash: all creation paths share the protected-guide worker count.
+    countBillable: (companyId: string) => countBillableAgents(db, companyId),
     list: async (companyId: string, options?: { includeTerminated?: boolean }) => {
       const conditions = [eq(agents.companyId, companyId)];
       if (!options?.includeTerminated) {
