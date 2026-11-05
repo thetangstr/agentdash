@@ -15,6 +15,7 @@ the matching stable tag and GitHub Release.
 
 | Version | Released | Headline | GitHub Release |
 |---|---|---|---|
+| [v2026.1105.0](v2026.1105.0.md) | 2026-11-05 | Guarded updater provenance correction; unchanged merged evaluation payload | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1105.0) |
 | [v2026.1104.0](v2026.1104.0.md) | 2026-11-04 | Approved responsibility criteria, task mapping and persisted-output checks; native phone targets; public hosted-request guidance; canonical feedback access and withheld automatic wakes; no new migrations or dependencies | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1104.0) |
 | [v2026.1102.1](v2026.1102.1.md) | 2026-11-02 | Agent scorecards fill in by default, including past work; hires from a brief for every runtime; names instead of raw ids on profile and approval screens; a setup agent can set a hosted box's agent model; migration `0157` (indexes only) | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1102.1) |
 | [v2026.1102.0](v2026.1102.0.md) | 2026-11-02 | An agent sets up AgentDash Cloud for a person over MCP (start, approve, connect, then the setup tools); a failed provisioning job pages a person; no migrations for installs or boxes | [Release](https://github.com/thetangstr/agentdash/releases/tag/v2026.1102.0) |
