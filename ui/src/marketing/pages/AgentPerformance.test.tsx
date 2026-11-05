@@ -16,7 +16,7 @@ afterEach(() => { act(() => root.unmount()); container.remove(); });
 describe("public agent performance pages", () => {
   it("makes the performance overview discoverable and keeps task evidence a supporting example", async () => {
     await act(async () => root.render(<AgentPerformance />));
-    expect(container.querySelector("h1")?.textContent).toContain("agent performance");
+    expect(container.querySelector("h1")?.textContent?.replace(/\s+/g, " ").trim()).toBe("Better evidence for evaluating agent performance.");
     expect(container.querySelector('#task-evidence')?.textContent).toContain("not an overall score");
     expect(container.querySelector('.mkt-header__nav a[href="/agent-performance"]')).toBeTruthy();
     expect(container.querySelector('.mkt-footer a[href="/agent-performance"]')).toBeTruthy();
