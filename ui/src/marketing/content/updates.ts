@@ -13,3 +13,18 @@ export const UPDATE_SOURCES = [
   { label: "v2026.1007.0 release notes", href: `${GITHUB_URL}/blob/main/releases/v2026.1007.0.md` },
   { label: "v2026.1007.1 release notes", href: `${GITHUB_URL}/blob/main/releases/v2026.1007.1.md` },
 ] as const;
+
+// AgentDash: this customer update advances the existing profile/scorecard foundation.
+export const AGENT_PERFORMANCE_UPDATE = {
+  path: "/whats-new/agent-performance",
+  date: "2026-11-05",
+  title: "Better evidence for evaluating agent performance.",
+  summary: "Owner-guided criteria, responsibilities beside real tasks, and checks of saved output. What changed, how to use it, and what still remains unknown.",
+  versions: ["v2026.1104.0", "v2026.1105.0"],
+} as const;
+export const AGENT_PERFORMANCE_SOURCES = [
+  { label: "v2026.1105.0 packaging correction", href: `${GITHUB_URL}/releases/tag/v2026.1105.0` },
+  { label: "v2026.1104.0 evaluation feature notes", href: `${GITHUB_URL}/releases/tag/v2026.1104.0` },
+  { label: "v2026.1102.1 scorecard feed and compatibility", href: `${GITHUB_URL}/releases/tag/v2026.1102.1` },
+  { label: "v2026.1031.0 profiles, performance and upgrade guide", href: `${GITHUB_URL}/releases/tag/v2026.1031.0` },
+] as const;

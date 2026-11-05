@@ -1,9 +1,10 @@
 import { MarketingShell } from "../MarketingShell";
 import { SectionContainer } from "../components/SectionContainer";
 import { Eyebrow } from "../components/Eyebrow";
-import { LAUNCH_WEEK } from "../content/updates";
+import { AGENT_PERFORMANCE_UPDATE, LAUNCH_WEEK } from "../content/updates";
 import { useDocumentMeta } from "../hooks/useDocumentMeta";
 import "./WhatsNew.css";
+import "./AgentPerformance.css";
 
 export function WhatsNew() {
   useDocumentMeta("What's new · AgentDash", "Product updates from AgentDash: what changed, what it means for your team, and the release notes behind it.");
@@ -15,7 +16,16 @@ export function WhatsNew() {
           <h1 className="mkt-display-page">What’s new.</h1>
           <p className="mkt-body-lg">The work keeps moving. Here’s what changed in AgentDash, and what it means for your team.</p>
         </div>
-        <article className="mkt-update-entry">
+        <article className="mkt-update-entry" data-update="agent-performance">
+          <div className="mkt-update-entry__date"><time dateTime={AGENT_PERFORMANCE_UPDATE.date}>November 5, 2026</time><span>Agent performance</span></div>
+          <div className="mkt-update-entry__body">
+            <p className="mkt-updates__versions">{AGENT_PERFORMANCE_UPDATE.versions.join(" + ")}</p>
+            <h2 className="mkt-display-section"><a href={AGENT_PERFORMANCE_UPDATE.path}>{AGENT_PERFORMANCE_UPDATE.title}</a></h2>
+            <p className="mkt-body-lg">{AGENT_PERFORMANCE_UPDATE.summary}</p>
+            <a className="mkt-update-entry__link" href={AGENT_PERFORMANCE_UPDATE.path}>Read the update <span aria-hidden>↗</span></a>
+          </div>
+        </article>
+        <article className="mkt-update-entry" data-update="launch-week">
           <div className="mkt-update-entry__date"><time dateTime={LAUNCH_WEEK.date}>October 7, 2026</time><span>Launch week</span></div>
           <div className="mkt-update-entry__body">
             <p className="mkt-updates__versions">{LAUNCH_WEEK.versions.join(" + ")}</p>

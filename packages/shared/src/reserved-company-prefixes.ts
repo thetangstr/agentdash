@@ -19,6 +19,7 @@ export const RESERVED_COMPANY_PREFIXES = [
   "_plugins",
   // Top-level, company-agnostic pages.
   "about",
+  "agent-performance",
   "assess",
   "auth",
   "board-claim",

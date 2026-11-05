@@ -4,6 +4,7 @@ import { authApi } from "../../api/auth";
 import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
 import { useCompany } from "../../context/CompanyContext";
+import { AgentPerformanceFeature } from "../sections/AgentPerformanceFeature";
 import { MarketingShell } from "../MarketingShell";
 import { BOX_SIGN_IN_PATH } from "../WwwOnlyRoute";
 import { isMarketingHost } from "../marketing-host";
@@ -90,6 +91,7 @@ export function LandingContent() {
       <Hero />
       <StoryBeats />
       <DemoSection />
+      <AgentPerformanceFeature />
       <Capabilities />
       <HowYouGetIt />
       <ConsultingBand />
