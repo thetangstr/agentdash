@@ -25,6 +25,7 @@ export function MarketingFooter() {
             <ul>
               <li><a href="/#how-it-works">How it works</a></li>
               <li><a href="/demo">Interactive demo</a></li>
+              <li><a href="/agent-performance">Agent performance</a></li>
               <li><a href="/whats-new">What’s new</a></li>
               <li><a href="/mcp">MCP setup</a></li>
               <li><a href="/docs">Docs</a></li>

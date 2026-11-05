@@ -44,8 +44,8 @@
   border: 1px solid var(--mkt-rule);
   border-radius: var(--mkt-radius-sm);
   color: var(--mkt-ink);
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   align-items: center;
   justify-content: center;
   cursor: pointer;
@@ -71,11 +71,11 @@
   margin-top: 20px;
 }
 .mkt-header__sheet-cta .mkt-btn { width: 100%; }
-@media (max-width: 1060px) {
+@media (max-width: 1200px) {
   .mkt-header__nav,
   .mkt-header__cta { display: none; }
   .mkt-header__toggle { display: inline-flex; }
 }
-@media (min-width: 1061px) {
+@media (min-width: 1201px) {
   .mkt-header__sheet { display: none; }
 }

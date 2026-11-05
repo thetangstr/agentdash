@@ -10,12 +10,14 @@ import {
 
 describe("company routes", () => {
   it("keeps What's new index and article URLs global when a company is selected", () => {
-    for (const path of ["/whats-new", "/whats-new/launch-week", "/whats-new/launch-week?preview=1#transcript-follow"]) {
+    for (const path of ["/whats-new", "/whats-new/launch-week", "/whats-new/launch-week?preview=1#transcript-follow", "/agent-performance", "/whats-new/agent-performance"]) {
       expect(extractCompanyPrefixFromPath(path)).toBeNull();
       expect(applyCompanyPrefix(path, "ACME")).toBe(path);
       expect(toCompanyRelativePath(path)).toBe(path);
     }
     expect(isReservedCompanyPrefix("WHATS-NEW")).toBe(true);
+    expect(isReservedCompanyPrefix("AGENT-PERFORMANCE")).toBe(true);
+    expect(applyCompanyPrefix("/evaluation", "ACME")).toBe("/ACME/evaluation");
   });
   it("treats execution workspace paths as board routes that need a company prefix", () => {
     expect(isBoardPathWithoutPrefix("/execution-workspaces/workspace-123")).toBe(true);

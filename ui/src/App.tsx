@@ -98,6 +98,8 @@ import { Landing as MarketingLanding } from "./marketing/pages/Landing";
 import { Demo as MarketingDemo } from "./marketing/pages/Demo";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
 import { About as MarketingAbout } from "./marketing/pages/About";
+import { AgentPerformance as MarketingAgentPerformance } from "./marketing/pages/AgentPerformance";
+import { AgentPerformanceUpdate as MarketingAgentPerformanceUpdate } from "./marketing/pages/AgentPerformanceUpdate";
 import { WhatsNew as MarketingWhatsNew } from "./marketing/pages/WhatsNew";
 import { LaunchWeek as MarketingLaunchWeek } from "./marketing/pages/LaunchWeek";
 import { isMarketingPath } from "./marketing/marketing-path";
@@ -386,10 +388,12 @@ export function App() {
             Landing redirects logged-in users to /companies on its own. */}
         <Route path="/" element={<MarketingLanding />} />
         <Route path="demo" element={<MarketingDemo />} />
+        <Route path="agent-performance" element={<MarketingAgentPerformance />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
         <Route path="whats-new" element={<MarketingWhatsNew />} />
         <Route path="whats-new/launch-week" element={<MarketingLaunchWeek />} />
+        <Route path="whats-new/agent-performance" element={<MarketingAgentPerformanceUpdate />} />
         {/* AgentDash (SC-7, GH #768): signup, magic-link landing, progress and returning users. */}
         {/* AgentDash: www-only (they call /api/cloud); a hosted box sends them to its own sign-in. */}
         <Route path="start" element={<WwwOnlyRoute><MarketingStart /></WwwOnlyRoute>} />
