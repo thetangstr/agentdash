@@ -17,7 +17,7 @@ const questions = [
   ["What needs a decision?", "Find pending questions, approvals and recommendations without treating every output as a mandatory human checkpoint."],
 ];
 const steps = [
-  ["Open the agent's Profile", "In Team, open the agent and select Profile. Use Draft changes to describe its role, accountable owner and responsibilities."],
+  ["Open the agent's Profile", "In Team, open the agent and select Profile. Review its accountable person, then use Draft changes to describe the work and responsibilities."],
   ["Agree how work will be judged", "Edit Criterion text and Proof type under How we will judge the work. Suggestions are editable starting points. Request approval for the profile change and apply the approved revision."],
   ["Connect the task", "Assign the agent to a task. In Reviews, choose an applied Active responsibility and select Map responsibility. The criteria and recorded revision remain visible."],
   ["Read the performance evidence", "Open Performance for the displayed window, then inspect the supporting task and saved output. Record appropriate reviews and later outcomes when genuine evidence exists; leave gaps unknown."],
