@@ -22,6 +22,7 @@ vi.mock("../services/activity-log.js", () => ({
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
+  countBillable: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
   createApiKey: vi.fn(),
@@ -160,6 +161,7 @@ function makeDb(script: DbScript) {
 }
 
 beforeEach(() => {
+  mockAgentService.countBillable.mockImplementation(async (companyId: string) => (await mockAgentService.list(companyId)).length);
   mockLogActivity.mockClear();
   mockAgentService.create.mockReset();
   mockAgentService.list.mockReset();

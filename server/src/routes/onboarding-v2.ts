@@ -113,6 +113,7 @@ type OnboardingTierCapacityServices = {
   };
   agents: {
     list: (companyId: string) => Promise<unknown[]>;
+    countBillable: (companyId: string) => Promise<number>;
   };
 };
 
@@ -390,7 +391,7 @@ export function onboardingV2Routes(db: Db) {
         humans: async (companyId) =>
           (await services.access.listActiveUserMemberships(companyId)).length,
         agents: async (companyId) =>
-          (await services.agents.list(companyId)).length,
+          services.agents.countBillable(companyId),
       },
     };
   }
