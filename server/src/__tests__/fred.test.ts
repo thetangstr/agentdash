@@ -77,6 +77,28 @@ describe("Fred persisted owner workflow", () => {
   expect(a.latestRun?.status).toBe("running");
   expect(await db.select().from(issues).where(eq(issues.companyId,company.id))).toHaveLength(1);
  });
+ it("recovers a post-commit submission failure through the same idempotent discovery request",async()=>{
+  const {company,service}=await fixture();const initial=await service.setup(company.id,setup,actor);await service.saveBrief(company.id,brief,actor);
+  const native=heartbeatService(db,{autoDispatchQueuedRuns:false});let attempts=0;
+  const recovery=fredService(db,{heartbeat:{wakeup:async(...args:Parameters<typeof native.wakeup>)=>{if(++attempts===1) throw new Error('synthetic submission unavailable');return native.wakeup(...args);}}});
+  const input={registrationId:initial.registration!.id,expectedRevision:1};
+  await expect(recovery.start(company.id,input,actor)).rejects.toThrow('synthetic submission unavailable');
+  const pending=await recovery.workspace(company.id,actor);
+  expect(pending.registration?.startedAt).toBeTruthy();expect(pending.latestRun).toBeNull();expect(pending.startBlocker).toBeNull();
+  const resumed=await recovery.start(company.id,input,actor);const duplicate=await recovery.start(company.id,input,actor);
+  expect(resumed.issue?.id).toBe(initial.issue?.id);expect(duplicate.latestRun?.id).toBe(resumed.latestRun?.id);expect(attempts).toBe(2);
+  expect(await db.select().from(issues).where(eq(issues.companyId,company.id))).toHaveLength(1);
+ });
+ it("refuses retry when the owner brief no longer matches the already pinned discovery request",async()=>{
+  const {company,service}=await fixture();const initial=await service.setup(company.id,setup,actor);await service.saveBrief(company.id,brief,actor);
+  const native=heartbeatService(db,{autoDispatchQueuedRuns:false});let attempts=0;
+  const recovery=fredService(db,{heartbeat:{wakeup:async(..._args:Parameters<typeof native.wakeup>)=>{attempts++;throw new Error('synthetic submission unavailable');}}});
+  await expect(recovery.start(company.id,{registrationId:initial.registration!.id,expectedRevision:1},actor)).rejects.toThrow('synthetic submission unavailable');
+  await service.saveBrief(company.id,{...brief,expectedRevision:1,goal:'A different agreed job'},actor);
+  expect((await recovery.workspace(company.id,actor)).startBlocker).toMatch(/pinned/i);
+  await expect(recovery.start(company.id,{registrationId:initial.registration!.id,expectedRevision:2},actor)).rejects.toMatchObject({status:409});
+  expect(attempts).toBe(1);expect((await recovery.workspace(company.id,actor)).latestRun).toBeNull();
+ });
  it("blocks stale starts, paused agents, inactive owners and foreign registration IDs without starting", async()=>{
   const {company,service}=await fixture();const initial=await service.setup(company.id,setup,actor);await service.saveBrief(company.id,brief,actor);
   await expect(service.start(company.id,{registrationId:randomUUID(),expectedRevision:1},actor)).rejects.toMatchObject({status:409});

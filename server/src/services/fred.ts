@@ -15,13 +15,14 @@ import { heartbeatService } from "./heartbeat.js";
 import { lockCompanyTierCapacity } from "./tier-policy.js";
 import { insertActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
+import { logger } from "../middleware/logger.js";
 
 export interface FredActor { userId: string; trustedLocal?: boolean; syntheticLocalOwner?: boolean }
 interface Options {
  instructions?: Pick<ReturnType<typeof agentInstructionsService>, "materializeManagedBundle">;
  heartbeat?: Pick<ReturnType<typeof heartbeatService>, "wakeup">;
 }
-import { hasCurrentFredBrief, renderFredBrief } from "./fred-brief.js";
+import { hasCurrentFredBrief, renderFredBrief, renderFredDiscoveryDescription } from "./fred-brief.js";
 
 const BRIEF_KEY = "fred-adoption-brief";
 
@@ -77,7 +78,8 @@ export function fredService(db: Db, options: Options = {}) {
    else if (!hasCurrentFredBrief(document, registration.briefDocumentRevisionId, registration.brief, registration.briefRevision)) blocker="The adoption brief changed or its proof is unavailable. Review the current document and save the agreed criteria again.";
    else if (agent.budgetMonthlyCents <= 0 || agent.spentMonthlyCents >= agent.budgetMonthlyCents) blocker="Fred needs an available explicit budget.";
    else if (["done","cancelled"].includes(issue.status)) blocker="This discovery job is closed. Open its evidence and next steps.";
-   else if (registration.startedAt) blocker="Discovery has already been requested. Continue in the work thread.";
+   else if (registration.startedAt && !latest && issue.description !== renderFredDiscoveryDescription(registration.brief, registration.briefRevision, registration.briefDocumentRevisionId)) blocker="The brief changed after the discovery request. Inspect the pinned work before retrying.";
+   else if (registration.startedAt && latest) blocker="Discovery has already been requested. Continue in the work thread.";
    if (agent?.accountableUserId && !(actor.syntheticLocalOwner && agent.accountableUserId === "local-board")) {
     const [owner]=await tx.select().from(companyMemberships).where(and(eq(companyMemberships.companyId,companyId),eq(companyMemberships.principalType,"user"),eq(companyMemberships.principalId,agent.accountableUserId),eq(companyMemberships.status,"active")));
     if (!owner) blocker="Fred's accountable person is no longer active. An administrator must reassign accountability.";
@@ -135,7 +137,10 @@ export function fredService(db: Db, options: Options = {}) {
     await tx.update(fredRegistrations).set({state:"ready",updatedAt:new Date()}).where(eq(fredRegistrations.id,registration.id));
     publications.push(await insertActivity(tx,{companyId,actorType:"user",actorId:actor.userId,action:"fred.setup_completed",entityType:"agent",entityId:agent.id,details:{registrationId:registration.id,requiresApproval:company.requireBoardApprovalForNewAgents}}));
    });
-  } catch {
+  } catch (error) {
+   const code=error && typeof error === "object" && "code" in error ? String(error.code) : "unknown";
+   const errorCode=["EACCES","EPERM","ENOENT","ENOSPC","EROFS","EIO","23505","40001","40P01"].includes(code) ? code : "unknown";
+   logger.warn({companyId,agentId:accepted.agentId,registrationId:accepted.id,errorCode},"Fred setup needs inspection; retry the accepted identity");
    await locked(companyId,actor,async tx=>{
     const current=await rowFor(tx,companyId,true);
     if(current && current.id===accepted.id && current.state!=="ready") await tx.update(fredRegistrations).set({state:"repair_needed",updatedAt:new Date()}).where(eq(fredRegistrations.id,current.id));
@@ -178,9 +183,10 @@ export function fredService(db: Db, options: Options = {}) {
     const [owner]=await tx.select().from(companyMemberships).where(and(eq(companyMemberships.companyId,companyId),eq(companyMemberships.principalType,"user"),eq(companyMemberships.principalId,agent.accountableUserId),eq(companyMemberships.status,"active"))).for("share");
     if(!owner) throw conflict("Fred's accountable person is inactive");
    }
+   if(r.startedAt && issue.description !== renderFredDiscoveryDescription(r.brief, r.briefRevision, r.briefDocumentRevisionId)) throw conflict("The brief changed after the discovery request. Inspect the pinned work before retrying.");
    if(["done","cancelled"].includes(issue.status)) throw conflict("Discovery is already closed. Inspect its evidence rather than restarting setup.");
    if(!r.startedAt) {
-    await issueService(tx).update(issue.id,{status:"todo",description:renderFredBrief(r.brief,r.briefRevision)+"\nPinned native adoption revision: "+r.briefDocumentRevisionId+"\nDiscovery produces a recommendation, not owner acceptance or a measured business result.",definitionOfDone:{summary:"A sourced adoption recommendation and the next real decision",criteria:[{id:"sources",text:"A source-backed adoption recommendation using only permitted company context",done:false},{id:"unknowns",text:"Unresolved questions and missing proof are explicit",done:false},{id:"setup",text:"A proposed specialist job, criteria and native approval handoff; no unapproved business action",done:false}]}});
+    await issueService(tx).update(issue.id,{status:"todo",description:renderFredDiscoveryDescription(r.brief,r.briefRevision,r.briefDocumentRevisionId),definitionOfDone:{summary:"A sourced adoption recommendation and the next real decision",criteria:[{id:"sources",text:"A source-backed adoption recommendation using only permitted company context",done:false},{id:"unknowns",text:"Unresolved questions and missing proof are explicit",done:false},{id:"setup",text:"A proposed specialist job, criteria and native approval handoff; no unapproved business action",done:false}]}});
     const runtime=agent.runtimeConfig as Record<string,unknown>;
     const heartbeat=runtime.heartbeat && typeof runtime.heartbeat==="object" ? runtime.heartbeat as Record<string,unknown> : {};
     await tx.update(agents).set({runtimeConfig:{...runtime,heartbeat:{...heartbeat,enabled:false,wakeOnDemand:true}},updatedAt:new Date()}).where(eq(agents.id,agent.id));

@@ -40,3 +40,7 @@ export function hasCurrentFredBrief(
 ): boolean {
  return Boolean(approvedRevisionId && document && document.latestRevisionId === approvedRevisionId && document.body === renderFredBrief(brief, revision));
 }
+
+export function renderFredDiscoveryDescription(brief: FredBriefContent, revision: number, documentRevisionId: string | null): string {
+ return renderFredBrief(brief, revision) + "\nPinned native adoption revision: " + documentRevisionId + "\nDiscovery produces a recommendation, not owner acceptance or a measured business result.";
+}

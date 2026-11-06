@@ -169,7 +169,7 @@ export function FredWorkspace({ companyId }: { companyId: string }) {
   const started = Boolean(registration?.startedAt);
   const agentAvailable = data.agent?.status === "idle" || data.agent?.status === "active";
   const ready = registration?.state === "ready" && Boolean(data.agent && data.issue && data.brief);
-  const canStart = data.canConfigure && ready && agentAvailable && !started && !dirty && !data.startBlocker && !start.isPending && !start.isError;
+  const canStart = data.canConfigure && ready && agentAvailable && (!started || !data.latestRun) && !dirty && !data.startBlocker && !start.isPending && !start.isError;
   const title = !registration ? "Meet Fred" : registration.state === "repair_needed" ? "Fred’s setup needs repair" : registration.state === "materializing" ? "Preparing Fred" : data.latestRun?.status === "queued" ? "Discovery queued" : data.latestRun?.status === "running" ? "Discovery running" : data.latestRun?.status === "succeeded" ? "Discovery run finished" : started ? "Discovery requested" : "Ready for discovery";
   return <main className="mx-auto w-full max-w-4xl space-y-6 px-4 py-6 sm:px-6">
     <header className="space-y-3">
@@ -208,10 +208,10 @@ export function FredWorkspace({ companyId }: { companyId: string }) {
       {dirty && <p role="status" className="text-sm">Save or review your changed brief before starting discovery.</p>}
       {!agentAvailable && data.agent && !started && <p role="status" className="text-sm">Fred is {agentLabel(data.agent.status).toLowerCase()}. Resolve that state in the agent controls before starting work.</p>}
       <ErrorNotice error={start.error} />
-      {!started && data.canConfigure && <Button className="min-h-11" disabled={!canStart} onClick={() => start.mutate()}>{start.isPending ? "Requesting discovery…" : "Start discovery"}</Button>}
+      {(!started || !data.latestRun) && data.canConfigure && <Button className="min-h-11" disabled={!canStart} onClick={() => start.mutate()}>{start.isPending ? "Requesting discovery…" : started ? "Retry discovery request" : "Start discovery"}</Button>}
       {start.isError && <Button variant="outline" className="min-h-11" onClick={async () => { await workspace.refetch(); start.reset(); }}>Reload discovery state</Button>}
       {data.latestRun && <p className="text-sm"><span className="text-muted-foreground">Latest execution: </span><strong>{runLabel(data.latestRun.status)}</strong>{data.latestRun.error && <span className="block break-words text-muted-foreground">{data.latestRun.error}</span>}</p>}
-      {started && !data.latestRun && <p className="text-sm">Discovery was requested, but no run receipt is available here yet. Inspect the work thread before retrying.</p>}
+      {started && !data.latestRun && <p className="text-sm">Discovery was requested, but no run receipt is available here yet. Retry submits the same request and preserves its pinned criteria; it does not create another job.</p>}
       {data.issue && <Link disableIssueQuicklook className="inline-flex min-h-11 items-center gap-1 text-sm font-medium underline" to={`/issues/${data.issue.id}`}>Open discovery work, questions and evidence <ArrowUpRight className="h-3 w-3" aria-hidden="true" /></Link>}
     </section>}
     <section className={SECTION}>

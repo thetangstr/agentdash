@@ -188,3 +188,26 @@ it("shows fetch errors and a human-only setup explanation without trying another
   expect(host.textContent).toContain("An owner or admin sets up Fred");
   expect(host.querySelector('[data-testid="fred-setup"]')).toBeNull();
 });
+
+it("lets the owner retry the same saved discovery request after submission failed before any run", async () => {
+  workspace = ready(); render(); await flush(); await flush();
+  failure = "Discovery submission was unavailable";
+  await click("Start discovery");
+  workspace = { ...ready(), registration: { ...ready().registration, startedAt: "2026-11-06T16:00:00Z" }, issue: { ...ready().issue, status: "todo" } };
+  failure = null;
+  await click("Reload discovery state");
+  expect(requests.filter(request => request.url.endsWith("/start"))).toHaveLength(1);
+  expect(button("Retry discovery request").disabled).toBe(false);
+  await click("Retry discovery request");
+  const starts = requests.filter(request => request.url.endsWith("/start"));
+  expect(starts).toHaveLength(2);
+  expect(starts[1].body).toEqual(starts[0].body);
+  expect(button("Retry discovery request")).toBeUndefined();
+  expect(host.textContent).toContain("Discovery queued");
+});
+it("never offers request retry after native execution has been recorded", async () => {
+  workspace = { ...ready(), registration: { ...ready().registration, startedAt: "2026-11-06T16:00:00Z" }, latestRun: { id: "already-recorded", status: "failed", error: "Inspect the native receipt" }, startBlocker: "Continue in the native work thread." };
+  render(); await flush(); await flush();
+  expect(button("Retry discovery request")).toBeUndefined();
+  expect(requests.every(request => request.method === "GET")).toBe(true);
+});
