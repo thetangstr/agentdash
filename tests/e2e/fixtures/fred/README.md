@@ -5,12 +5,14 @@ This fixture opens the actual source UI and runs the normal `claude_local` adapt
 Run from the repository root with Node 22 and already-installed Playwright/Chrome:
 
 ```sh
-TMPDIR=/Users/Kailor/Storage/Scratch/f \
-/opt/homebrew/opt/node@22/bin/node scripts/fred-runtime.mjs \
-  --scratch-root /Users/Kailor/Storage/Scratch/f \
+export FRED_SCRATCH_ROOT=/path/to/registered-external-scratch
+export FRED_EVIDENCE_DIR=/path/to/new-retained-evidence
+TMPDIR="$FRED_SCRATCH_ROOT" \
+node scripts/fred-runtime.mjs \
+  --scratch-root "$FRED_SCRATCH_ROOT" \
   --port 3491 --db-port 23491 \
   --browser '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
-  --evidence-dir /absolute/path/to/new-retained-evidence \
+  --evidence-dir "$FRED_EVIDENCE_DIR" \
   --keep-server
 ```
 
@@ -37,5 +39,5 @@ Evidence includes raw sanitized owner/API and agent/tool receipts, run/task/docu
 Guard checks need no database or provider:
 
 ```sh
-/opt/homebrew/opt/node@22/bin/node --test tests/e2e/fixtures/fred/guards.test.mjs
+node --test tests/e2e/fixtures/fred/guards.test.mjs
 ```
