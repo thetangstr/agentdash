@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useCapability } from "../hooks/useCapability";
 import { queryKeys } from "../lib/queryKeys";
 import { agentUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
@@ -184,6 +185,9 @@ export function OrgChart() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const isPhone = useIsPhone();
+  // Import and export are owner/admin only on the server; offered only once it says yes.
+  const companyManage = useCapability(selectedCompanyId, "company:manage");
+  const canMoveWorkspace = companyManage.allowed && !companyManage.isLoading;
 
   const { data: orgTree, isLoading } = useQuery({
     queryKey: queryKeys.org(selectedCompanyId!),
@@ -466,6 +470,7 @@ export function OrgChart() {
           <p className="text-xs text-muted-foreground">
             {allNodes.length} agent{allNodes.length === 1 ? "" : "s"}
           </p>
+          {canMoveWorkspace ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon" className="size-11 shrink-0" aria-label="More org chart actions">
@@ -483,6 +488,7 @@ export function OrgChart() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          ) : null}
         </div>
         <ul className="space-y-2" data-testid="org-chart-phone-tree" aria-label="Org chart">
           {(orgTree ?? []).map((node) => (
@@ -496,6 +502,7 @@ export function OrgChart() {
   return (
     <div className="flex h-[calc(100dvh-9rem)] min-h-[420px] flex-col md:h-full md:min-h-0">
       <TeamViewTabs active="org" className="mb-3 shrink-0" />
+      {canMoveWorkspace ? (
       <div className="mb-2 flex shrink-0 flex-wrap items-center justify-start gap-2">
         <Link to="/company/import">
           <Button variant="outline" size="sm">
@@ -510,6 +517,7 @@ export function OrgChart() {
           </Button>
         </Link>
       </div>
+      ) : null}
       <div
         ref={containerRef}
         data-testid="org-chart-viewport"

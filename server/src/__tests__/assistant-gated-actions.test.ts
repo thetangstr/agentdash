@@ -670,6 +670,38 @@ describeEmbeddedPostgres("assistant MCP gated actions (M4)", () => {
     }
   });
 
+  // A CEO or Chief of Staff is company-wide authority (a CEO agent's key runs
+  // the CEO-only company routes): only an owner or admin may hire one, through
+  // an assistant as through the board routes. Checked again at confirm.
+  it("refuses a member's assistant hiring a CEO; an owner's may hire a Chief of Staff", async () => {
+    const member = await grantToken(DECIDE_SCOPES, companyId, { userId: MEMBER_USER_ID });
+    const refused = envelope(await callTool(member.token, "request_hire", { role: "ceo", reason: "run the company" }));
+    expect(refused.status).toBe("refused");
+    expect(refused.summary).toContain("Only owners and admins can create a CEO or Chief of Staff agent");
+
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const prep = envelope(await callTool(token, "request_hire", { role: "chief of staff", reason: "coordinate the team", nameHint: "Casey" }));
+    expect(prep.status, prep.summary).toBe("ok");
+    const conf = envelope(await callTool(token, "confirm_action", { handle: prep.data!.handle as string }));
+    expect(conf.status, conf.summary).toBe("ok");
+    const hired = await db.select().from(agents).where(and(eq(agents.companyId, companyId), eq(agents.name, "Casey")));
+    expect(hired.map((row) => row.role)).toEqual(["chief_of_staff"]);
+  });
+
+  it("rechecks a CEO hire at confirm when the person is no longer an administrator", async () => {
+    const { token } = await grantToken(DECIDE_SCOPES);
+    const prep = envelope(await callTool(token, "request_hire", { role: "ceo", reason: "run the company", nameHint: "Morgan" }));
+    expect(prep.status, prep.summary).toBe("ok");
+    await db.update(companyMemberships).set({ membershipRole: "member" }).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, USER_ID)));
+    try {
+      const conf = envelope(await callTool(token, "confirm_action", { handle: prep.data!.handle as string }));
+      expect(conf.status).toBe("refused");
+      expect(await db.select().from(agents).where(and(eq(agents.companyId, companyId), eq(agents.name, "Morgan")))).toEqual([]);
+    } finally {
+      await db.update(companyMemberships).set({ membershipRole: "admin" }).where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalId, USER_ID)));
+    }
+  });
+
   it("request_hire confirms into an active agent with membership and attribution", async () => {
     const { token } = await grantToken(DECIDE_SCOPES);
 

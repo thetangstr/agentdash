@@ -87,8 +87,12 @@ describe("SettingsSidebar", () => {
     }));
   }
 
-  function setInstanceAdmin(isInstanceAdmin: boolean) {
-    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: {}, membershipRole: "owner", isInstanceAdmin });
+  function setInstanceAdmin(isInstanceAdmin: boolean, companyManage = false) {
+    mockCapabilitiesApi.get.mockResolvedValue({
+      capabilities: { "company:manage": companyManage },
+      membershipRole: companyManage ? "owner" : "member",
+      isInstanceAdmin,
+    });
   }
 
   beforeEach(() => {
@@ -115,15 +119,15 @@ describe("SettingsSidebar", () => {
     await act(async () => root.unmount());
   });
 
-  it("groups the pages into Workspace, Agents, Data, Quality and Account for a member", async () => {
+  it("groups the pages into Workspace, Agents, Quality and Account for a member", async () => {
     const root = await render();
     const headings = [...container.querySelectorAll("[data-testid^='settings-nav-']")].map((el) =>
       el.getAttribute("data-testid"),
     );
+    // Import and export are owner/admin only, so a member has no Data group.
     expect(headings).toEqual([
       "settings-nav-workspace",
       "settings-nav-agents",
-      "settings-nav-data",
       "settings-nav-quality",
       "settings-nav-account",
     ]);
@@ -154,10 +158,7 @@ describe("SettingsSidebar", () => {
       { label: "Environments", href: "/company/settings/environments" },
       { label: "Adapters", href: "/instance/settings/adapters" },
     ]);
-    expect(groupLinks("data")).toEqual([
-      { label: "Import", href: "/company/import" },
-      { label: "Export", href: "/company/export" },
-    ]);
+    expect(group("data")).toBeNull();
     expect(groupLinks("quality")).toEqual([
       { label: "Evaluation", href: "/evaluation" },
       { label: "Health", href: "/company/settings/health" },
@@ -166,6 +167,16 @@ describe("SettingsSidebar", () => {
       { label: "Profile", href: "/instance/settings/profile" },
       { label: "About", href: "/instance/settings/about" },
       { label: "Changelog", href: "/instance/settings/changelog" },
+    ]);
+    await act(async () => root.unmount());
+  });
+
+  it("adds the Data group, Import and Export, for a company owner or admin", async () => {
+    setInstanceAdmin(false, true);
+    const root = await render();
+    expect(groupLinks("data")).toEqual([
+      { label: "Import", href: "/company/import" },
+      { label: "Export", href: "/company/export" },
     ]);
     await act(async () => root.unmount());
   });

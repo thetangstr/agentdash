@@ -19,7 +19,7 @@ import { meCapabilityRoutes } from "../routes/me-capabilities.js";
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
 
-const mockAccess = vi.hoisted(() => ({ canUser: vi.fn() }));
+const mockAccess = vi.hoisted(() => ({ canUser: vi.fn(), getMembership: vi.fn() }));
 vi.mock("../services/index.js", () => ({ accessService: () => mockAccess }));
 
 function appFor(actor: Record<string, unknown>, db: unknown = {}) {
@@ -102,6 +102,57 @@ describe("GET /api/me/capabilities", () => {
     const outsider = { ...human("owner"), companyIds: ["22222222-2222-4222-8222-222222222222"] };
     const res = await request(appFor(outsider)).get(`/api/me/capabilities?companyId=${COMPANY}`);
     expect(res.status).toBe(403);
+  });
+
+  // `company:manage` is `isCompanyAdministrator` itself: the predicate the
+  // settings, archive, delete, import and secret-write routes enforce.
+  describe("company:manage", () => {
+    const ask = (actor: Record<string, unknown>) =>
+      request(appFor(actor)).get(`/api/me/capabilities?companyId=${COMPANY}`);
+
+    it.each(["owner", "admin"])("is true for an active %s", async (role) => {
+      mockAccess.canUser.mockResolvedValue(false);
+      mockAccess.getMembership.mockResolvedValue({ status: "active", membershipRole: role });
+      const res = await ask(human(role));
+      expect(res.body.capabilities["company:manage"]).toBe(true);
+      expect(mockAccess.getMembership).toHaveBeenCalledWith(COMPANY, "user", "user-1");
+    });
+
+    it("is false for a member, even one holding every delegated permission", async () => {
+      mockAccess.canUser.mockResolvedValue(true);
+      mockAccess.getMembership.mockResolvedValue({ status: "active", membershipRole: "member" });
+      const res = await ask(human("member"));
+      expect(res.body.capabilities["company:manage"]).toBe(false);
+    });
+
+    it("is false for a suspended admin", async () => {
+      mockAccess.getMembership.mockResolvedValue({ status: "suspended", membershipRole: "admin" });
+      const res = await ask(human("admin"));
+      expect(res.body.capabilities["company:manage"]).toBe(false);
+    });
+
+    it("is true for an instance admin and the local implicit board without a membership lookup", async () => {
+      mockAccess.canUser.mockResolvedValue(false);
+      mockAccess.getMembership.mockReset();
+      const instanceAdmin = await ask(human("member", { instanceAdmin: true }));
+      expect(instanceAdmin.body.capabilities["company:manage"]).toBe(true);
+      const local = await ask({ type: "board", source: "local_implicit", userId: "local-board", isInstanceAdmin: true });
+      expect(local.body.capabilities["company:manage"]).toBe(true);
+      expect(mockAccess.getMembership).not.toHaveBeenCalled();
+    });
+
+    it("is false for an agent", async () => {
+      mockAccess.getMembership.mockResolvedValue({ status: "active", membershipRole: "admin" });
+      const res = await ask({ type: "agent", agentId: "agent-1", companyId: COMPANY });
+      expect(res.body.capabilities["company:manage"]).toBe(false);
+    });
+
+    it("fails closed when the membership lookup throws", async () => {
+      mockAccess.getMembership.mockRejectedValue(new Error("db down"));
+      const res = await ask(human("owner"));
+      expect(res.status).toBe(200);
+      expect(res.body.capabilities["company:manage"]).toBe(false);
+    });
   });
 
   // AgentDash (scan 3 lane L): the stewardship feature, answered with a 200

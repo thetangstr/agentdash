@@ -19,7 +19,7 @@ import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
 import { accessService } from "../services/index.js";
 import { requireProductProfile } from "../services/companies.js";
-import { assertAuthenticated, assertCompanyAccess, canSetCompanyDirection } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, canSetCompanyDirection, isCompanyAdministrator } from "./authz.js";
 
 /**
  * Capability keys the UI may ask about.
@@ -30,6 +30,7 @@ import { assertAuthenticated, assertCompanyAccess, canSetCompanyDirection } from
  */
 export type CapabilityKey =
   | "direction:set"
+  | "company:manage"
   | "agents:create"
   | "users:invite"
   | "users:manage_permissions"
@@ -113,8 +114,15 @@ export function meCapabilityRoutes(db: Db) {
       }),
     );
 
+    // `company:manage` is `isCompanyAdministrator` itself — the predicate the
+    // company settings, archive, delete, import and secret-write routes
+    // enforce — so the settings page offers its controls to exactly the
+    // people those routes accept. Fail closed on a lookup error.
+    const companyManage = await isCompanyAdministrator(access, req, companyId).catch(() => false);
+
     const capabilities: Record<CapabilityKey, boolean> = {
       "direction:set": canSetCompanyDirection(req, companyId),
+      "company:manage": companyManage,
       "agents:create": granted[0],
       "users:invite": granted[1],
       "users:manage_permissions": granted[2],

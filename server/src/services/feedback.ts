@@ -1963,6 +1963,14 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
       authorUserId: string;
       reason?: string | null;
       allowSharing?: boolean;
+      /**
+       * Whether this voter may turn on the company's feedback sharing (and
+       * answer the instance-wide sharing prompt). Routes pass
+       * `isCompanyAdministrator`; omitted means allowed, for internal callers.
+       * A voter who may not still has their vote recorded, and it is shared
+       * only when the company already shares.
+       */
+      mayEnableCompanySharing?: boolean;
     }) =>
       db.transaction(async (tx) => {
         const issue = await tx
@@ -1995,7 +2003,13 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
         const normalizedReason = normalizeReason(input.vote, input.reason);
         // Document access (slice 6b): never share a flagged company's traces;
         // the vote is still recorded, locally.
-        const sharedWithLabs = input.allowSharing === true && !(await documentAccessEnabledFor(tx, issue.companyId));
+        const voterMayEnableSharing = input.mayEnableCompanySharing !== false;
+        const sharingNeedsAdministrator =
+          input.allowSharing === true && !voterMayEnableSharing && !existingCompany.feedbackDataSharingEnabled;
+        const sharedWithLabs =
+          input.allowSharing === true
+          && !sharingNeedsAdministrator
+          && !(await documentAccessEnabledFor(tx, issue.companyId));
         let consentEnabledNow = false;
         let consentVersion = existingCompany.feedbackDataSharingTermsVersion ?? null;
         let persistedSharingPreference: "allowed" | "not_allowed" | null = null;
@@ -2048,7 +2062,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
             .then((rows) => rows[0] ?? null));
 
         const currentGeneral = normalizeInstanceGeneralSettings(currentInstanceSettings?.general);
-        if (currentInstanceSettings && currentGeneral.feedbackDataSharingPreference === "prompt") {
+        if (voterMayEnableSharing && currentInstanceSettings && currentGeneral.feedbackDataSharingPreference === "prompt") {
           const nextSharingPreference = sharedWithLabs ? "allowed" : "not_allowed";
           const currentGeneralRaw = asRecord(currentInstanceSettings.general) ?? {};
           await tx
@@ -2181,6 +2195,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
           consentEnabledNow,
           persistedSharingPreference,
           sharingEnabled: sharedWithLabs,
+          sharingNeedsAdministrator,
         };
       }),
   };

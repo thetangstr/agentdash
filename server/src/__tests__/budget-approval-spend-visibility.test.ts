@@ -96,15 +96,28 @@ describe.skipIf(!support.supported)("budget approval spend visibility", () => {
     const res = await request(appAs(companyId)).get(`/api/approvals/${approvalId}`);
     expect(res.status).toBe(200); expect(res.body.payload.budgetAmount).toBe(876543);
   });
+  // Company settings, branding and archive are owner/admin only. A plain member
+  // (who cannot read spend) is refused before anything is written, so no
+  // mutation response can carry the amounts to them; an admin, who reads spend
+  // under the same predicate, gets them back.
   for (const mutation of ["patch", "branding", "archive"] as const) {
-    it(`company ${mutation} does not bypass spend reads or change member action authority`, async () => {
-      const { companyId } = await seed(); const app = appAs(companyId);
-      const res = mutation === "archive" ? await request(app).post(`/api/companies/${companyId}/archive`)
-        : await request(app).patch(`/api/companies/${companyId}${mutation === "branding" ? "/branding" : ""}`).send({ name: "Renamed" });
-      expect(res.status, JSON.stringify(res.body)).toBe(200);
-      expect(res.body.budgetMonthlyCents).toBeNull(); expect(res.body.spentMonthlyCents).toBeNull();
+    const send = (app: express.Express, companyId: string) =>
+      mutation === "archive" ? request(app).post(`/api/companies/${companyId}/archive`)
+        : request(app).patch(`/api/companies/${companyId}${mutation === "branding" ? "/branding" : ""}`).send({ name: "Renamed" });
+    it(`company ${mutation} is refused to a plain member and writes nothing`, async () => {
+      const { companyId } = await seed();
+      const res = await send(appAs(companyId), companyId);
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(JSON.stringify(res.body)).not.toContain("876543");
       const [stored] = await db.select().from(companies).where(eq(companies.id, companyId));
-      expect(stored.budgetMonthlyCents).toBe(876543);
+      expect(stored.name).toBe("Synthetic"); expect(stored.status).toBe("active");
+    });
+    it(`company ${mutation} by an admin follows the spend predicate`, async () => {
+      const { companyId } = await seed();
+      const res = await send(appAs(companyId, "admin"), companyId);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.budgetMonthlyCents).toBe(876543);
+      const [stored] = await db.select().from(companies).where(eq(companies.id, companyId));
       expect(mutation === "archive" ? stored.status : stored.name).toBe(mutation === "archive" ? "archived" : "Renamed");
     });
   }

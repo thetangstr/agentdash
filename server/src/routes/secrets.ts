@@ -8,10 +8,10 @@ import {
   updateSecretSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { assertBoard, assertCompanyAccess, assertCompanyAdministrator } from "./authz.js";
+import { assertBoard, assertCompanyAccess, assertCompanyAdministrator, isCompanyAdministrator, reportAuthzRefusal } from "./authz.js";
 import { accessService } from "../services/access.js";
 import { isReservedManagedSecretName } from "../services/secrets.js";
-import { unprocessable } from "../errors.js";
+import { forbidden, unprocessable } from "../errors.js";
 import { logActivity, secretService } from "../services/index.js";
 
 export function secretRoutes(db: Db) {
@@ -30,6 +30,26 @@ export function secretRoutes(db: Db) {
         "This secret belongs to a connection (for example GitHub). Only a workspace owner or admin can change it; reconnect from the project's settings instead.",
       );
     }
+  }
+  // Any member may create a company secret (sealing a key they would
+  // otherwise paste as a plain env value). Rotating, renaming and deleting one
+  // changes a value other people's agents may run on, so it needs an owner or
+  // admin, or the person who created that secret (`created_by_user_id`). Runs
+  // after the existing refusals in each route so their wording and order are kept.
+  async function assertMayChangeCompanySecret(
+    req: Parameters<typeof assertCompanyAccess>[0],
+    secret: { id: string; companyId: string; createdByUserId?: string | null },
+  ) {
+    if (await isCompanyAdministrator(access, req, secret.companyId)) return;
+    const userId = req.actor.type === "board" ? req.actor.userId : null;
+    if (userId && secret.createdByUserId && secret.createdByUserId === userId) return;
+    reportAuthzRefusal(req, {
+      companyId: secret.companyId,
+      entityType: "secret",
+      entityId: secret.id,
+      reasonCode: "SECRET_OWNER_OR_ADMIN_REQUIRED",
+    });
+    throw forbidden("Only owners and admins, or the person who created this secret, can change it.");
   }
   function assertNameNotReserved(name: unknown) {
     if (isReservedManagedSecretName(name)) {
@@ -103,6 +123,7 @@ export function secretRoutes(db: Db) {
     }
     assertCompanyAccess(req, existing.companyId);
     await assertMayChangeSecret(req, existing);
+    await assertMayChangeCompanySecret(req, existing);
 
     const rotated = await svc.rotate(
       id,
@@ -140,6 +161,7 @@ export function secretRoutes(db: Db) {
     await assertMayChangeSecret(req, existing);
 
     if (req.body.name !== undefined && req.body.name !== existing.name) assertNameNotReserved(req.body.name);
+    await assertMayChangeCompanySecret(req, existing);
     const updated = await svc.update(id, {
       name: req.body.name,
       description: req.body.description,
@@ -174,6 +196,7 @@ export function secretRoutes(db: Db) {
     }
     assertCompanyAccess(req, existing.companyId);
     await assertMayChangeSecret(req, existing);
+    await assertMayChangeCompanySecret(req, existing);
 
     const removed = await svc.remove(id, { companyId: existing.companyId, allowManaged: true });
     if (!removed) {

@@ -33,6 +33,7 @@ import { humanChannelRoutes } from "../routes/human-channels.js";
 import { teamsConnectorRoutes } from "../routes/teams-connector.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { bridgeService } from "../services/bridge.js";
+import { teamsConnectorService } from "../services/teams-connector.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -649,6 +650,87 @@ describeEmbeddedPostgres("agentdash-mk teams delivery", () => {
       .where(eq(channelCallbackTokens.token, approveToken))
       .then((rows) => rows[0]!);
     expect(spent.consumedAt, "a callback token survived being used").not.toBeNull();
+  });
+
+  // -- a privileged hire needs a company administrator, on every channel ----
+  //
+  // A CEO hire filed before the upgrade (by a member, say) may still be
+  // pending. approvalService.approve checks the decider, so a member's Teams
+  // tap is refused with a plain reply and an admin's goes through.
+
+  async function pendingCeoHire(companyId: string, requestedByAgentId: string) {
+    const [approval] = await db
+      .insert(approvals)
+      .values({
+        companyId,
+        type: "hire_agent",
+        requestedByAgentId,
+        status: "pending",
+        payload: { name: `CEO ${randomUUID().slice(0, 8)}`, role: "ceo", adapterType: "process" },
+      })
+      .returning();
+    return approval!;
+  }
+
+  async function tapApprove(companyId: string, approvalId: string, revision: number, bindingId: string) {
+    const token = await teamsConnectorService(db).issueCallbackToken({
+      companyId,
+      approvalId,
+      revision,
+      decision: "approved",
+      bindingId,
+    });
+    return call(teamsApp(), (baseUrl) =>
+      request(baseUrl)
+        .post("/api/connectors/teams/messages")
+        .send({
+          id: `activity-${randomUUID()}`,
+          type: "invoke",
+          from: { aadObjectId: AAD_ID },
+          channelData: { tenant: { id: TENANT } },
+          value: { action: { data: { token } } },
+        }),
+    );
+  }
+
+  it("refuses a member steward approving a pending CEO hire over Teams, plainly", async () => {
+    const { company, steward, agent } = await seed();
+    const binding = await pairTeams(company.id, steward.principalId);
+    const approval = await pendingCeoHire(company.id, agent.id);
+
+    const res = await tapApprove(company.id, approval.id, approval.revision, binding!.id);
+
+    expect(res.status).toBe(200);
+    expect(String(res.body.value ?? "")).toBe("Only owners and admins can approve this hire.");
+    const [after] = await db.select().from(approvals).where(eq(approvals.id, approval.id));
+    expect(after!.status).toBe("pending");
+    const payloadName = (approval.payload as { name: string }).name;
+    expect(await db.select().from(agents).where(eq(agents.name, payloadName))).toEqual([]);
+  });
+
+  it("lets an owner who stewards the requesting agent approve it over Teams", async () => {
+    const { company, owner } = await seed();
+    const ownersAgent = await db
+      .insert(agents)
+      .values({ companyId: company.id, name: `Owner agent ${randomUUID().slice(0, 8)}`, role: "engineer", status: "idle", adapterType: "process" })
+      .returning()
+      .then((rows) => rows[0]!);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: ownersAgent.id,
+      userId: owner.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    const binding = await pairTeams(company.id, owner.principalId);
+    const approval = await pendingCeoHire(company.id, ownersAgent.id);
+
+    const res = await tapApprove(company.id, approval.id, approval.revision, binding!.id);
+
+    expect(String(res.body.value ?? "")).toMatch(/approved/i);
+    const [after] = await db.select().from(approvals).where(eq(approvals.id, approval.id));
+    expect(after!.status).toBe("approved");
+    const payloadName = (approval.payload as { name: string }).name;
+    const created = await db.select().from(agents).where(eq(agents.name, payloadName));
+    expect(created.map((row) => row.role)).toEqual(["ceo"]);
   });
 
   // -- default-profile behaviour is unchanged -------------------------------

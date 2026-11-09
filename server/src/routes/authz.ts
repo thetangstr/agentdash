@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
+import { PRIVILEGED_PLAN_ROLES, type PermissionKey } from "@paperclipai/shared";
 import { forbidden, unauthorized } from "../errors.js";
 import { normalizeHumanRole } from "../services/company-member-roles.js";
 import { logAuthzRefusal } from "../services/activity-log.js";
@@ -150,6 +151,117 @@ export async function assertCompanyAdministrator(
     entityId: companyId,
     reasonCode: "COMPANY_ADMINISTRATOR_REQUIRED",
   });
+  throw forbidden(message);
+}
+
+/**
+ * Does this agent shape carry company-wide authority? A `ceo` or
+ * `chief_of_staff` role (the shared `PRIVILEGED_PLAN_ROLES`: a CEO agent's key
+ * administers every other agent and runs the CEO-only company routes, and the
+ * Chief of Staff is the agent onboarding and billing act through), or
+ * `canCreateAgents`, which makes the agent an agent administrator.
+ */
+export function grantsPrivilegedAgentAuthority(input: { role?: unknown; permissions?: unknown } | null | undefined): boolean {
+  if (!input) return false;
+  if (typeof input.role === "string" && (PRIVILEGED_PLAN_ROLES as ReadonlySet<string>).has(input.role)) return true;
+  const permissions = input.permissions;
+  return Boolean(
+    permissions
+      && typeof permissions === "object"
+      && (permissions as Record<string, unknown>).canCreateAgents === true,
+  );
+}
+
+export const PRIVILEGED_AGENT_ADMIN_MESSAGE =
+  "Only owners and admins can create a CEO or Chief of Staff agent, give an agent one of those roles, or let an agent create agents.";
+
+/**
+ * Who may mint company-wide agent authority: a company administrator, never an
+ * agent. Every path that creates an agent, changes an agent's role, grants
+ * `canCreateAgents`, files or decides a hire, or imports agents asks this when
+ * the result would carry that authority. Members keep creating ordinary agents.
+ */
+export async function assertMayGrantPrivilegedAgentAuthority(
+  access: MembershipReader,
+  req: Request,
+  companyId: string,
+  message = PRIVILEGED_AGENT_ADMIN_MESSAGE,
+): Promise<void> {
+  if (req.actor.type === "agent") {
+    reportAuthzRefusal(req, {
+      companyId,
+      entityType: "company",
+      entityId: companyId,
+      reasonCode: "AGENT_PRIVILEGED_AGENT_FORBIDDEN",
+    });
+    throw forbidden(
+      "Agents cannot create privileged roles or grant canCreateAgents. Ask a board administrator to create this agent.",
+    );
+  }
+  await assertCompanyAdministrator(access, req, companyId, message);
+}
+
+/**
+ * Is this agent company-wide authority held in a key? A `ceo` (its key runs the
+ * CEO-only company routes: branding, imports, exports) or an agent with
+ * `canCreateAgents` (an agent administrator). Minting a key or connect code for
+ * one, or making someone its steward, hands that authority to a person, so it
+ * needs a company administrator.
+ *
+ * Narrower than `grantsPrivilegedAgentAuthority` on purpose: `chief_of_staff`
+ * is left out because every member of a stewardship company is given their own
+ * personal Chief of Staff (GET /me/agent) and runs it with their own key and
+ * connect code, and nothing stored tells that agent apart from the company's
+ * Chief of Staff. Creating a new `chief_of_staff` agent stays admin-only.
+ */
+export function grantsCompanyAgentAuthority(
+  agent: { role?: unknown; permissions?: unknown } | null | undefined,
+): boolean {
+  if (!agent) return false;
+  if (agent.role === "ceo") return true;
+  const permissions = agent.permissions;
+  return Boolean(
+    permissions
+      && typeof permissions === "object"
+      && (permissions as Record<string, unknown>).canCreateAgents === true,
+  );
+}
+
+export const COMPANY_AUTHORITY_AGENT_ADMIN_MESSAGE =
+  "Only owners and admins can give someone a key, a connect code or stewardship for a CEO agent or an agent that can create agents.";
+
+/** Board-user side of the rule above (keys, connect codes, stewardship). */
+export async function assertMayHandOutCompanyAgentAuthority(
+  access: MembershipReader,
+  req: Request,
+  companyId: string,
+  agent: { role?: unknown; permissions?: unknown } | null | undefined,
+): Promise<void> {
+  if (!grantsCompanyAgentAuthority(agent)) return;
+  await assertCompanyAdministrator(access, req, companyId, COMPANY_AUTHORITY_AGENT_ADMIN_MESSAGE);
+}
+
+/**
+ * Does this board user hold a company permission key (`users:invite`, ...)?
+ *
+ * The local implicit board passes, as everywhere; everyone else is asked of
+ * `access.canUser`, which also admits instance admins. The board half of the
+ * access routes' `assertCompanyPermission`, lifted here so the regular invite
+ * route and the onboarding batch-invite route ask the same question through
+ * one implementation. The caller has already established that this is a board
+ * user with company access.
+ */
+export async function assertBoardUserCompanyPermission(
+  access: {
+    canUser(companyId: string, userId: string | null | undefined, permissionKey: PermissionKey): Promise<boolean>;
+  },
+  req: Request,
+  companyId: string,
+  permissionKey: PermissionKey,
+  message = "Permission denied",
+): Promise<void> {
+  if (req.actor.type === "board" && req.actor.source === "local_implicit") return;
+  if (await access.canUser(companyId, req.actor.userId, permissionKey)) return;
   throw forbidden(message);
 }
 

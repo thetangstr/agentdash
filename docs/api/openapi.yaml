@@ -181,7 +181,7 @@ paths:
       x-stability: stable
     patch:
       operationId: updateCompany
-      summary: Update a company's settings. Any member may; agentVisibilityDefault needs an administrator; a CEO agent may change colour and logo only.
+      summary: Update a company's settings. A company owner or admin may; a CEO agent may change colour and logo only.
       tags:
         - companies
       parameters:
@@ -218,7 +218,7 @@ paths:
           $ref: "#/components/responses/Unprocessable"
         "429":
           $ref: "#/components/responses/RateLimited"
-      description: A person with access to the company may change its name, description, budget and other settings. Changing `agentVisibilityDefault` additionally needs a company administrator, and changing the product profile is gated separately. An agent may call this only if it is the company's CEO agent, and then only for the branding fields (colour and logo), parsed with `agentCompanyBrandingSchema`; any other agent gets 403.
+      description: A company owner or admin (or an instance admin, or the local operator) may change its name, description, budget and other settings; any other member gets 403. Changing the product profile is gated separately. An agent may call this only if it is the company's CEO agent, and then only for the branding fields (colour and logo), parsed with `agentCompanyBrandingSchema`; any other agent gets 403.
       security:
         - bearerBoardKey: []
         - bearerAgentKey: []
@@ -1997,7 +1997,7 @@ paths:
   /api/secrets/{id}/rotate:
     post:
       operationId: rotateSecret
-      summary: Store a new value for a secret as its next version.
+      summary: Store a new value for a secret as its next version (owner, admin or the secret's creator).
       tags:
         - secrets
       parameters:

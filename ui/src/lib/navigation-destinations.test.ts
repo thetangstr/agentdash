@@ -17,8 +17,6 @@ const FORMER_ADVANCED = [
   "/evaluation",
   "/billing",
   "/activity",
-  "/company/import",
-  "/company/export",
   "/company/settings/environments",
   "/company/settings/health",
   "/instance/settings/adapters",
@@ -26,6 +24,8 @@ const FORMER_ADVANCED = [
   "/my-agent",
   "/projects",
 ];
+// Import and export are owner/admin only on the server (`company:manage`).
+const COMPANY_MANAGE_ONLY = ["/company/import", "/company/export"];
 const INSTANCE_ADMIN_ONLY = [
   "/instance/settings/heartbeats",
   "/instance/settings/plugins",
@@ -39,6 +39,7 @@ describe("navigationDestinationGroups", () => {
     const groups = navigationDestinationGroups({
       isInstanceAdmin: false,
       isCompanyAdmin: false,
+      canManageCompany: false,
       workspacesEnabled: false,
     });
     expect(groups.map((g) => g.heading)).toEqual(["Pages", "More", "Help", "Settings"]);
@@ -60,14 +61,26 @@ describe("navigationDestinationGroups", () => {
     ]) {
       expect(all, `expected ${href}`).toContain(href);
     }
-    for (const href of [...INSTANCE_ADMIN_ONLY, "/inbox/override", "/workspaces"]) {
+    for (const href of [...INSTANCE_ADMIN_ONLY, ...COMPANY_MANAGE_ONLY, "/inbox/override", "/workspaces"]) {
       expect(all, `unexpected ${href}`).not.toContain(href);
     }
   });
 
+  it("offers Import and Export to a company owner or admin", () => {
+    const all = paths(
+      navigationDestinationGroups({
+        isInstanceAdmin: false,
+        isCompanyAdmin: true,
+        canManageCompany: true,
+        workspacesEnabled: false,
+      }),
+    );
+    for (const href of COMPANY_MANAGE_ONLY) expect(all, `expected ${href}`).toContain(href);
+  });
+
   it("adds instance pages, Override and Workspaces by who the user is and what is enabled", () => {
     const all = paths(
-      navigationDestinationGroups({ isInstanceAdmin: true, isCompanyAdmin: true, workspacesEnabled: true }),
+      navigationDestinationGroups({ isInstanceAdmin: true, isCompanyAdmin: true, canManageCompany: true, workspacesEnabled: true }),
     );
     for (const href of [...INSTANCE_ADMIN_ONLY, "/inbox/override", "/workspaces"]) {
       expect(all, `expected ${href}`).toContain(href);
@@ -78,7 +91,7 @@ describe("navigationDestinationGroups", () => {
     // GH #971 review: the override inbox is an owner/admin view on the server,
     // so the palette must not offer it to anyone the server would refuse.
     const all = paths(
-      navigationDestinationGroups({ isInstanceAdmin: false, isCompanyAdmin: false, workspacesEnabled: false }),
+      navigationDestinationGroups({ isInstanceAdmin: false, isCompanyAdmin: false, canManageCompany: false, workspacesEnabled: false }),
     );
     expect(all).not.toContain("/inbox/override");
   });
@@ -87,6 +100,7 @@ describe("navigationDestinationGroups", () => {
     const settings = navigationDestinationGroups({
       isInstanceAdmin: true,
       isCompanyAdmin: false,
+      canManageCompany: false,
       workspacesEnabled: false,
     }).find((g) => g.heading === "Settings")!;
     const generals = settings.items.filter((item) => item.label === "General");

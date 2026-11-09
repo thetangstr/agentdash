@@ -712,26 +712,44 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         });
 
         // Boundary default: hires beyond the confirmed plan must be gated
-        // behind human approval in the AgentDash UI.
+        // behind human approval in the AgentDash UI. Company settings are an
+        // owner/admin decision, so for anyone else the PATCH is refused; the
+        // tool then reports the company's real setting rather than the one it
+        // meant to set.
         let requiredManualStep: string | null = null;
+        let hiresRequireApproval: boolean | null = true;
         try {
           await client.requestJson("PATCH", `/companies/${bootstrap.companyId}`, {
             body: { requireBoardApprovalForNewAgents: true },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          requiredManualStep =
-            "REQUIRED: could not set requireBoardApprovalForNewAgents=true automatically "
-            + `(${message}). A board user must PATCH /api/companies/${bootstrap.companyId} `
-            + 'with {"requireBoardApprovalForNewAgents": true}, or enable "Require board approval '
-            + 'for new agents" in the AgentDash company settings, before any agents are hired.';
+          try {
+            const company = await client.requestJson<{ requireBoardApprovalForNewAgents?: boolean | null }>(
+              "GET",
+              `/companies/${bootstrap.companyId}`,
+            );
+            hiresRequireApproval = company.requireBoardApprovalForNewAgents === true;
+          } catch {
+            // Unknown, not "on": never report a boundary that was not confirmed.
+            hiresRequireApproval = null;
+          }
+          if (hiresRequireApproval !== true) {
+            requiredManualStep =
+              "REQUIRED: new agent hires do not "
+              + (hiresRequireApproval === null ? "provably " : "")
+              + "require approval in this workspace, and this connection could not turn that on "
+              + `(${message}). A company owner or admin must enable "Require your approval for new hires" `
+              + `in the AgentDash company settings (or PATCH /api/companies/${bootstrap.companyId} with `
+              + '{"requireBoardApprovalForNewAgents": true}) before any agents are hired.';
+          }
         }
 
         return {
           companyId: bootstrap.companyId,
           conversationId: bootstrap.conversationId,
           cosAgentId: bootstrap.cosAgentId,
-          boundaries: { hiresRequireApproval: true },
+          boundaries: { hiresRequireApproval },
           ...(requiredManualStep ? { requiredManualStep } : {}),
         };
       },

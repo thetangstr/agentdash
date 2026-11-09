@@ -31,6 +31,20 @@ vi.mock("../api/agents", () => ({
   },
 }));
 
+// Import and export are owner/admin only (`company:manage`); the page offers
+// them only once the server says yes.
+const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("../api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
+function setCompanyManage(allowed: boolean) {
+  mockCapabilitiesApi.get.mockResolvedValue({
+    companyId: "company-1",
+    actorType: "board",
+    membershipRole: allowed ? "owner" : "member",
+    isInstanceAdmin: false,
+    capabilities: { "company:manage": allowed },
+  });
+}
+
 vi.mock("../components/AgentIconPicker", () => ({
   AgentIcon: () => <span data-testid="agent-icon" />,
 }));
@@ -278,6 +292,7 @@ describe("OrgChart on a phone (390px)", () => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     orgMock.mockResolvedValue(orgTree);
     listMock.mockResolvedValue(agents);
+    setCompanyManage(true);
   });
 
   afterEach(async () => {
@@ -316,5 +331,70 @@ describe("OrgChart on a phone (390px)", () => {
     expect(container.querySelector('[aria-label="More org chart actions"]')).not.toBeNull();
     expect(container.textContent).not.toContain("Import company");
     expect(container.textContent).not.toContain("Export company");
+  });
+
+  it("offers no import or export menu to a member", async () => {
+    setCompanyManage(false);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <OrgChart />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="org-chart-phone-tree"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="More org chart actions"]')).toBeNull();
+  });
+});
+
+describe("OrgChart import and export on a desktop", () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    orgMock.mockResolvedValue(orgTree);
+    listMock.mockResolvedValue(agents);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  async function renderChart() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <OrgChart />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+  }
+
+  it("links Import and Export for a company owner or admin", async () => {
+    setCompanyManage(true);
+    await renderChart();
+    expect(container.querySelector('a[href="/company/import"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/company/export"]')).not.toBeNull();
+  });
+
+  it("links neither for a member", async () => {
+    setCompanyManage(false);
+    await renderChart();
+    expect(container.querySelector('[data-testid="org-chart-viewport"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/company/import"]')).toBeNull();
+    expect(container.querySelector('a[href="/company/export"]')).toBeNull();
   });
 });

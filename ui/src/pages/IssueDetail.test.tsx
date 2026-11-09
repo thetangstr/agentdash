@@ -110,6 +110,20 @@ vi.mock("../api/instanceSettings", () => ({
   instanceSettingsApi: mockInstanceSettingsApi,
 }));
 
+// Choosing to share feedback turns on company sharing: owner/admin only.
+const mockCapabilitiesState = vi.hoisted(() => ({ companyManage: true }));
+vi.mock("../api/capabilities", () => ({
+  capabilitiesApi: {
+    get: vi.fn(async (companyId: string) => ({
+      companyId,
+      actorType: "board",
+      membershipRole: mockCapabilitiesState.companyManage ? "owner" : "member",
+      isInstanceAdmin: false,
+      capabilities: { "company:manage": mockCapabilitiesState.companyManage },
+    })),
+  },
+}));
+
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
   useLocation: () => ({ pathname: "/issues/PAP-1", search: "", hash: "", state: null }),
@@ -837,6 +851,29 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Issue detail smoke");
     expect(container.textContent).toContain("Chat thread");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [true, "prompt"],
+    [false, "not_allowed"],
+  ] as const)("offers the feedback sharing choice only to owners and admins (company:manage %s)", async (manage, expected) => {
+    mockCapabilitiesState.companyManage = manage;
+    mockIssuesApi.get.mockResolvedValue(createIssue());
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(mockIssueChatThreadRender.mock.calls.at(-1)?.[0]).toMatchObject({
+      feedbackDataSharingPreference: expected,
+    });
+    mockCapabilitiesState.companyManage = true;
   });
 
   it("passes blocker attention to the issue detail header status icon", async () => {

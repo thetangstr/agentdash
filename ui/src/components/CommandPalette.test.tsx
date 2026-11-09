@@ -216,11 +216,12 @@ describe("CommandPalette", () => {
       "Goals", "Routines", "Costs", "Activity",
       "Guides", "Changelog", "Health",
       "Members & access", "Invites", "Billing", "Model key", "Connections",
-      "Skills", "Environments", "Adapters", "Import", "Export", "Evaluation", "Profile", "About",
+      "Skills", "Environments", "Adapters", "Evaluation", "Profile", "About",
     ]) {
       expect(labels.some((text) => text.startsWith(label)), `expected "${label}"`).toBe(true);
     }
-    for (const label of ["Plugins", "Experimental", "Schedules", "Override"]) {
+    // Import and Export are owner/admin only (`company:manage`); this is a member.
+    for (const label of ["Plugins", "Experimental", "Schedules", "Override", "Import", "Export"]) {
       expect(labels.some((text) => text.startsWith(label)), `unexpected "${label}"`).toBe(false);
     }
     act(() => {
@@ -229,7 +230,11 @@ describe("CommandPalette", () => {
   });
 
   it("adds Schedules, Plugins and Experimental for an instance admin", async () => {
-    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: {}, membershipRole: "owner", isInstanceAdmin: true });
+    mockCapabilitiesApi.get.mockResolvedValue({
+      capabilities: { "company:manage": true },
+      membershipRole: "owner",
+      isInstanceAdmin: true,
+    });
     const { root } = renderWithQueryClient(<CommandPalette />, container);
     act(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
@@ -239,6 +244,10 @@ describe("CommandPalette", () => {
     });
     expect(container.textContent).toContain("Schedules");
     expect(container.textContent).toContain("Experimental");
+    const labels = [...container.querySelectorAll("button")].map((b) => b.textContent ?? "");
+    for (const label of ["Import", "Export"]) {
+      expect(labels.some((text) => text.startsWith(label)), `expected "${label}"`).toBe(true);
+    }
     act(() => {
       root.unmount();
     });

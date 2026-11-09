@@ -47,6 +47,15 @@ vi.mock("../api/conversations", () => ({
 }));
 
 vi.mock("../api/auth", () => ({ authApi: { getSession: vi.fn().mockResolvedValue(null) } }));
+// CoSConversation asks the server whether the viewer may invite. Answered
+// synchronously (like agentsApi below) because the useQuery stub above hands
+// back the queryFn's raw value as `data`; without this the real client runs a
+// fetch against a relative URL and rejects after the test has finished.
+vi.mock("../api/capabilities", () => ({
+  capabilitiesApi: {
+    get: vi.fn(() => ({ capabilities: { "users:invite": true } })),
+  },
+}));
 vi.mock("../api/agents", () => ({
   agentsApi: { list: mockAgentsList },
 }));

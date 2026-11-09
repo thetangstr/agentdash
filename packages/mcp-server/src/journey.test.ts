@@ -582,22 +582,58 @@ describe("agentdash_start_interview", () => {
     expect(JSON.parse(String(bootstrapInit.body))).toEqual({ companyId });
   });
 
-  it("surfaces a REQUIRED manual step when the boundary PATCH fails", async () => {
-    routeFetch([
-      [/\/onboarding\/bootstrap$/, {
-        companyId: COMPANY_ID,
-        cosAgentId: AGENT_ID,
-        conversationId: CONVERSATION_ID,
-      }],
-      [new RegExp(`/companies/${COMPANY_ID}$`), { error: "Forbidden" }, 403],
-    ]);
+  // A member's PATCH of a company setting is refused (owner/admin only), so
+  // the tool reads back what is really set instead of claiming the boundary.
+  function routeBootstrapThen(patch: [unknown, number], get: [unknown, number]) {
+    const bootstrap = { companyId: COMPANY_ID, cosAgentId: AGENT_ID, conversationId: CONVERSATION_ID };
+    const fetchMock = vi.fn().mockImplementation((url: URL | string, init?: RequestInit) => {
+      const href = String(url);
+      if (/\/onboarding\/bootstrap$/.test(href)) return Promise.resolve(mockJsonResponse(bootstrap, 200));
+      if (new RegExp(`/companies/${COMPANY_ID}$`).test(href)) {
+        const [body, status] = (init?.method ?? "GET").toUpperCase() === "PATCH" ? patch : get;
+        return Promise.resolve(mockJsonResponse(body, status));
+      }
+      return Promise.resolve(mockJsonResponse({ error: `no route for ${href}` }, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("reports the real setting and names an owner or admin when the boundary PATCH is refused", async () => {
+    routeBootstrapThen(
+      [{ error: "Only owners and admins can change company settings." }, 403],
+      [{ id: COMPANY_ID, requireBoardApprovalForNewAgents: false }, 200],
+    );
 
     const result = parseText(await getTool("agentdash_start_interview").execute({}));
 
     expect(result.companyId).toBe(COMPANY_ID);
-    expect(result.boundaries).toEqual({ hiresRequireApproval: true });
+    expect(result.boundaries).toEqual({ hiresRequireApproval: false });
     expect(String(result.requiredManualStep)).toMatch(/^REQUIRED:/);
+    expect(String(result.requiredManualStep)).toContain("A company owner or admin must enable");
     expect(String(result.requiredManualStep)).toContain("requireBoardApprovalForNewAgents");
+  });
+
+  it("needs no manual step when the PATCH is refused but approval is already required", async () => {
+    routeBootstrapThen(
+      [{ error: "Only owners and admins can change company settings." }, 403],
+      [{ id: COMPANY_ID, requireBoardApprovalForNewAgents: true }, 200],
+    );
+
+    const result = parseText(await getTool("agentdash_start_interview").execute({}));
+
+    expect(result.boundaries).toEqual({ hiresRequireApproval: true });
+    expect(result.requiredManualStep).toBeUndefined();
+  });
+
+  it("reports the boundary as unknown when it can neither set nor read it", async () => {
+    routeBootstrapThen([{ error: "Forbidden" }, 403], [{ error: "Forbidden" }, 403]);
+
+    const result = parseText(await getTool("agentdash_start_interview").execute({}));
+
+    expect(result.boundaries).toEqual({ hiresRequireApproval: null });
+    expect(String(result.requiredManualStep)).toMatch(/^REQUIRED:/);
+    expect(String(result.requiredManualStep)).toContain("A company owner or admin must enable");
   });
 });
 

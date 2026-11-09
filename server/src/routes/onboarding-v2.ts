@@ -32,7 +32,12 @@ import {
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
 import { HttpError, unauthorized, badRequest, forbidden, notFound, conflict } from "../errors.js";
-import { assertCompanyAccess, assertCanSetCompanyDirection, assertInstanceAdmin } from "./authz.js";
+import {
+  assertBoardUserCompanyPermission,
+  assertCompanyAccess,
+  assertCanSetCompanyDirection,
+  assertInstanceAdmin,
+} from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { actorMayApplyAdapterPreset } from "../services/adapter-host-execution-policy.js";
 import {
@@ -1465,6 +1470,16 @@ No greetings. No markdown headings outside the JSON block.`;
       throw badRequest(`Too many invites (max ${MAX_INVITE_BATCH} per request)`);
     }
     assertCompanyAccess(req, companyId);
+    // The same permission the regular invite route requires (`users:invite`,
+    // which admins hold by role), through the same predicate. Without it any
+    // member could mint up to 25 invites per request from the wizard door.
+    await assertBoardUserCompanyPermission(
+      access,
+      req,
+      companyId,
+      "users:invite",
+      "You do not have permission to invite people to this company. Ask an owner or admin.",
+    );
 
     // AgentDash (#547): two audiences, two bases. The URL in this response
     // is read by the inviter, so it echoes the origin they used when that

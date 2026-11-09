@@ -38,10 +38,13 @@ export interface NavigationDestinationGroup {
 export function navigationDestinationGroups({
   isInstanceAdmin,
   isCompanyAdmin,
+  canManageCompany,
   workspacesEnabled,
 }: {
   isInstanceAdmin: boolean;
   isCompanyAdmin: boolean;
+  /** `company:manage` from the server: decides the Settings › Data (import/export) entries. */
+  canManageCompany: boolean;
   workspacesEnabled: boolean;
 }): NavigationDestinationGroup[] {
   const pages: NavigationDestination[] = [
@@ -71,7 +74,7 @@ export function navigationDestinationGroups({
     { heading: "Help", items: SIDEBAR_HELP_ITEMS.map((item) => ({ ...item })) },
     {
       heading: "Settings",
-      items: settingsNavGroups({ isInstanceAdmin }).flatMap((group) =>
+      items: settingsNavGroups({ isInstanceAdmin, canManageCompany }).flatMap((group) =>
         group.items.map((item) => ({
           to: item.to,
           label: item.label,

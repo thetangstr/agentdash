@@ -12,6 +12,8 @@ import { api } from "./client";
  */
 export type CapabilityKey =
   | "direction:set"
+  /** Owner/admin of the company: settings, archive, delete, import, secret writes. */
+  | "company:manage"
   | "agents:create"
   | "users:invite"
   | "users:manage_permissions"

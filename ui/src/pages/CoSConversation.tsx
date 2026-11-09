@@ -10,6 +10,7 @@ import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { conversationsApi } from "../api/conversations";
 import { useCompany } from "../context/CompanyContext";
+import { useCapability } from "../hooks/useCapability";
 import type { CardContext } from "../components/cards";
 import { HermesProviderStep } from "../components/onboarding/HermesProviderStep";
 import { refreshAccessQueries } from "../lib/access-refresh";
@@ -358,6 +359,13 @@ function CoSConversationView({
     retry: false,
   });
   const viewerUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  // The invite card sends invites through POST /onboarding/invites, which
+  // needs `users:invite` (the same rule as the regular invite route). Offer
+  // it only once the server has said this person may invite; otherwise the
+  // card is not shown.
+  const inviteCapability = useCapability(bootstrapped.companyId, "users:invite");
+  const canInvite = inviteCapability.allowed && !inviteCapability.isLoading;
+  const viewCardContext: CardContext = canInvite ? cardContext : { ...cardContext, onInviteSend: undefined };
   const agentDirectory = (agents ?? []).map((a) => ({
     id: a.id,
     name: a.name,
@@ -425,7 +433,7 @@ function CoSConversationView({
         <ChatPanel
           conversationId={bootstrapped.conversationId}
           companyId={bootstrapped.companyId}
-          cardContext={cardContext}
+          cardContext={viewCardContext}
           agentDirectory={agentDirectory}
           viewerUserId={viewerUserId}
           hasChiefOfStaff={Boolean(bootstrapped.cosAgentId)}

@@ -15,7 +15,15 @@ import {
   connections,
   connectorWorkspaceDefaults,
   createDb,
+  workflowEvents,
 } from "@paperclipai/db";
+import {
+  AGENT_POLICY_CEILING_EXCEEDED,
+  AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+  AGENT_POLICY_WILDCARD,
+  type AgentDestructiveActionMode,
+} from "@paperclipai/shared";
+import { and, eq } from "drizzle-orm";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -73,6 +81,7 @@ const { slackConnectorRoutes } = await import("../routes/slack-connector.js");
 const { gmailRoutes } = await import("../routes/gmail.js");
 const { errorHandler } = await import("../middleware/index.js");
 const { agentStewardshipService } = await import("../services/agent-stewardships.js");
+const { agentGovernanceService } = await import("../services/agent-governance.js");
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -565,6 +574,144 @@ describeEmbeddedPostgres("connector send paths bind the token to the authorized 
         .send({ to: "x@example.com", subject: "s", body: "b", agentId: agent.id });
       expect(res.status).toBe(200);
       expect(gmailSendCalls).toEqual([stewardPrivate.id]);
+    });
+  });
+
+  // AgentDash-MK T5a: a Slack post is a `send`, which the shared classifier
+  // places as `outbound_external_message` (an unqualified recipient fails
+  // closed to external). The owner ceiling's destructiveActions mode now binds
+  // to it at the moment of the send; before, the send was never classified.
+  describe("slack send under the destructive-action ceiling (agentdash_mk)", () => {
+    async function seedMk(autonomy: { read: string; draft: string; send: string } = { ...fullSend }) {
+      const company = await db
+        .insert(companies)
+        .values({
+          name: `SlackMk ${randomUUID()}`,
+          issuePrefix: `K${randomUUID().slice(0, 6).toUpperCase()}`,
+          productProfile: "agentdash_mk",
+        })
+        .returning()
+        .then((rows) => rows[0]!);
+      const agent = await db
+        .insert(agents)
+        .values({ companyId: company.id, name: `Agent ${randomUUID()}`, role: "engineer", status: "idle", adapterType: "process" })
+        .returning()
+        .then((rows) => rows[0]!);
+      const connection = await connectorService(db).create(company.id, {
+        ownerType: "agent",
+        ownerId: agent.id,
+        provider: "slack",
+        autonomy: autonomy as never,
+        visibility: "private",
+        token: { accessToken: "token-mk-agent" },
+      });
+      return { company, agent, connection };
+    }
+
+    async function setMode(companyId: string, agentId: string, mode: AgentDestructiveActionMode) {
+      await agentGovernanceService(db).materialize(companyId, agentId);
+      const policy = {
+        permissions: [AGENT_POLICY_WILDCARD],
+        monthlyBudgetCents: AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+        destructiveActions: mode,
+        dataScopes: [AGENT_POLICY_WILDCARD],
+        providers: [AGENT_POLICY_WILDCARD],
+        minimumApproval: "steward" as const,
+      };
+      await db
+        .update(agentGovernancePolicies)
+        .set({ ownerCeiling: policy, stewardRequest: policy, effectivePolicy: policy })
+        .where(and(eq(agentGovernancePolicies.companyId, companyId), eq(agentGovernancePolicies.agentId, agentId)));
+    }
+
+    async function gateEvents(companyId: string) {
+      return db
+        .select()
+        .from(workflowEvents)
+        .where(and(eq(workflowEvents.companyId, companyId), eq(workflowEvents.eventType, "destructive_action_gated")));
+    }
+
+    it("blocked: refuses the post with the named-ceiling error and never uses the token", async () => {
+      const { company, agent, connection } = await seedMk();
+      await setMode(company.id, agent.id, "blocked");
+
+      await expect(
+        slackConnectorService(db).postMessage(connection.id, {
+          channel: "C1",
+          text: "hi",
+          companyId: company.id,
+          agentId: agent.id,
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: AGENT_POLICY_CEILING_EXCEEDED,
+        message: "This action is blocked by the owner ceiling for destructive actions",
+      });
+      expect(slackTokensUsed).toHaveLength(0);
+      const events = await gateEvents(company.id);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({
+        surface: "slack_send",
+        actionClass: "outbound_external_message",
+        mode: "blocked",
+        decision: "refused",
+      });
+    });
+
+    it.each(["allowed", "approval_required"] as const)(
+      "%s: posts as before and records no verdict (there is no Slack approval step yet)",
+      async (mode) => {
+        const { company, agent, connection } = await seedMk();
+        await setMode(company.id, agent.id, mode);
+
+        const result = await slackConnectorService(db).postMessage(connection.id, {
+          channel: "C1",
+          text: "hi",
+          companyId: company.id,
+          agentId: agent.id,
+        });
+
+        expect(result).toMatchObject({ posted: true });
+        expect(slackTokensUsed).toEqual(["token-mk-agent"]);
+        expect(await gateEvents(company.id)).toHaveLength(0);
+      },
+    );
+
+    it("a draft is not a send: draft_only autonomy still drafts under a blocked ceiling", async () => {
+      const { company, agent, connection } = await seedMk({ read: "full", draft: "full", send: "draft_only" });
+      await setMode(company.id, agent.id, "blocked");
+
+      const result = await slackConnectorService(db).postMessage(connection.id, {
+        channel: "C1",
+        text: "hi",
+        companyId: company.id,
+        agentId: agent.id,
+      });
+
+      expect(result).toMatchObject({ posted: false, autonomy: "draft_only" });
+      expect(slackTokensUsed).toHaveLength(0);
+      expect(await gateEvents(company.id)).toHaveLength(0);
+    });
+
+    it("the route answers 422 for a blocked agent", async () => {
+      const { company, agent, connection } = await seedMk();
+      await setMode(company.id, agent.id, "blocked");
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "board", userId: "local-board", source: "local_implicit", isInstanceAdmin: true };
+        next();
+      });
+      app.use("/api/connectors", slackConnectorRoutes(db));
+      app.use(errorHandler);
+
+      const res = await request(app)
+        .post("/api/connectors/slack/send")
+        .send({ companyId: company.id, connectionId: connection.id, channel: "C1", text: "hi", agentId: agent.id });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toBe("This action is blocked by the owner ceiling for destructive actions");
+      expect(slackTokensUsed).toHaveLength(0);
     });
   });
 });

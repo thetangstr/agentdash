@@ -13,8 +13,9 @@ A secret is a named value, such as an API key, that agents use without it ever a
 
 | Operation | Who |
 | --- | --- |
-| `listSecrets`, `createSecret`, `rotateSecret` | a person (board key or session) who is a member of the company — an agent gets 403 `Board access required` |
-| `rotateSecret` on a secret owned by a connection | a company owner or admin |
+| `listSecrets`, `createSecret` | a person (board key or session) who is a member of the company — an agent gets 403 `Board access required` |
+| `rotateSecret` | a company owner or admin (an instance admin and the local operator also pass), or the person who created the secret — anyone else gets 403 `Only owners and admins, or the person who created this secret, can change it.` |
+| `rotateSecret` on a secret owned by a connection | a company owner or admin, refused with its own message (below) |
 
 Every call checks membership after the board check (`assertCompanyAccess` in `server/src/routes/authz.ts`): a person who is not a member answers 403 `User does not have access to this company`, and a member whose membership is not active answers 403 `User does not have active company access` on a create or a rotate.
 
@@ -107,6 +108,7 @@ curl -X POST https://your-instance.example/api/secrets/$SECRET_ID/rotate \
 | 400 | `Validation error` — the body fails the schema. |
 | 403 | `Board access required` — the caller is an agent. The body is validated first, so an agent that sends an invalid body gets the 400 instead. |
 | 403 | `This secret belongs to a connection (for example GitHub). Only a workspace owner or admin can change it…` — a member who is not an owner or admin, on a connection-owned secret. |
+| 403 | `Only owners and admins, or the person who created this secret, can change it.` — a member who neither administers the company nor created this secret. |
 | 403 | Not a member of the secret's company, or an inactive membership (messages above). |
 | 404 | `Secret not found`. |
 
@@ -143,4 +145,4 @@ The complete schema is in [the reference](/api/reference#tag/secrets/listSecrets
 
 ## Everything else
 
-Any operation can also answer 401 when no credential resolves and 429 when rate limited — see [Conventions](/api/conventions). Other routes on this resource (the provider list, renaming, deleting) are internal — see [the route index](/api/route-index), under `secrets`.
+Any operation can also answer 401 when no credential resolves and 429 when rate limited — see [Conventions](/api/conventions). Other routes on this resource (the provider list, renaming, deleting) are internal — see [the route index](/api/route-index), under `secrets`. Renaming and deleting follow the rotate rule: a company owner or admin, or the person who created the secret.

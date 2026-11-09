@@ -50,6 +50,13 @@ import {
 import { deploymentKind } from "../services/license.js";
 import { isBillingDisabled } from "../services/tier-policy.js";
 
+// Company-level configuration and destructive actions are an owner/admin
+// decision. One sentence per act, so a refused member reads the rule rather
+// than a bare "forbidden".
+const COMPANY_SETTINGS_ADMIN_MESSAGE = "Only owners and admins can change company settings.";
+const COMPANY_IMPORT_ADMIN_MESSAGE = "Only owners and admins can import into this company.";
+const COMPANY_EXPORT_ADMIN_MESSAGE = "Only owners and admins can export this company.";
+
 // AgentDash (#157): pro_past_due is intentionally excluded — past-due customers
 // do not get Pro features until they resolve the payment issue.
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
@@ -117,7 +124,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     return parsed;
   }
 
-  function assertImportTargetAccess(
+  async function assertImportTargetAccess(
     req: Request,
     target: { mode: "new_company" } | { mode: "existing_company"; companyId: string },
   ) {
@@ -126,6 +133,9 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       return;
     }
     assertCompanyAccess(req, target.companyId);
+    // Importing rewrites agents, projects and issues in place: an owner/admin
+    // decision, not ordinary membership.
+    await assertCompanyAdministrator(access, req, target.companyId, COMPANY_IMPORT_ADMIN_MESSAGE);
   }
 
   /**
@@ -158,7 +168,10 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   async function assertCanUpdateBranding(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
-    if (req.actor.type === "board") return;
+    if (req.actor.type === "board") {
+      await assertCompanyAdministrator(access, req, companyId, COMPANY_SETTINGS_ADMIN_MESSAGE);
+      return;
+    }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
     const actorAgent = await agents.getById(req.actor.agentId);
@@ -185,7 +198,18 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   async function assertCanManagePortability(req: Request, companyId: string, capability: "imports" | "exports") {
     assertCompanyAccess(req, companyId);
-    if (req.actor.type === "board") return;
+    if (req.actor.type === "board") {
+      // Importing rewrites the company; exporting carries every agent's
+      // instructions and every project and issue, restricted ones included.
+      // Both are owner/admin decisions. The CEO-agent path below is unchanged.
+      await assertCompanyAdministrator(
+        access,
+        req,
+        companyId,
+        capability === "imports" ? COMPANY_IMPORT_ADMIN_MESSAGE : COMPANY_EXPORT_ADMIN_MESSAGE,
+      );
+      return;
+    }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
     const actorAgent = await agents.getById(req.actor.agentId);
@@ -296,7 +320,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   router.post("/import/preview", validate(companyPortabilityPreviewSchema), async (req, res) => {
     assertBoard(req);
-    assertImportTargetAccess(req, req.body.target);
+    await assertImportTargetAccess(req, req.body.target);
     assertImportSourceAllowed(req.body.source);
     const preview = await portability.previewImport(req.body);
     res.json(preview);
@@ -304,7 +328,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   router.post("/import", validate(companyPortabilityImportSchema), async (req, res) => {
     assertBoard(req);
-    assertImportTargetAccess(req, req.body.target);
+    await assertImportTargetAccess(req, req.body.target);
     assertImportSourceAllowed(req.body.source);
     const actor = getActorInfo(req);
     const target = req.body.target;
@@ -699,12 +723,12 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       body = agentCompanyBrandingSchema.parse(req.body);
     } else {
       assertBoard(req);
+      // Every company setting is an owner/admin decision. This used to admit
+      // any member and gate single fields (agent visibility, the product
+      // profile) one by one; the profile gate below stays as it was, and is
+      // now reached only by administrators.
+      await assertCompanyAdministrator(access, req, companyId, COMPANY_SETTINGS_ADMIN_MESSAGE);
       body = updateCompanySchema.parse(req.body);
-      // Agent visibility (2026-09-30): who sees which agents is a company
-      // administrator's decision, whoever else may edit company settings.
-      if (body.agentVisibilityDefault !== undefined) {
-        await assertCompanyAdministrator(access, req, companyId);
-      }
 
       // The code is an authorization input, never company data — stripped here
       // for the same reason `POST /companies` strips it, so it cannot land in a
@@ -818,6 +842,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await assertCompanyAdministrator(access, req, companyId, "Only owners and admins can archive this company.");
     const company = await svc.archive(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -838,6 +863,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await assertCompanyAdministrator(access, req, companyId, "Only owners and admins can delete this company.");
     const company = await svc.remove(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });

@@ -1338,7 +1338,26 @@ export const FEATURE_FLAG_KEYS = {
    * Off by default: every work route and the attachment-text read refuse.
    */
   COWORKER_BRIDGE: "coworker_bridge_enabled",
+  /**
+   * The two agent-avatar treatments in the agent creator, each rolled out on
+   * its own. Read only by the UI (`ui/src/lib/feature-flags.ts`); listed here
+   * so the one registry of keys the write route accepts includes them.
+   */
+  AGENT_AVATAR_RESTRAINED: "agent_avatar_restrained",
+  AGENT_AVATAR_PLAYFUL: "agent_avatar_playful",
 } as const;
+
+export type FeatureFlagKey = (typeof FEATURE_FLAG_KEYS)[keyof typeof FEATURE_FLAG_KEYS];
+
+/**
+ * Every flag key something actually reads. `PUT .../feature-flags/:flagKey`
+ * refuses any other key, so a typo cannot create a row nothing will ever read.
+ */
+export const KNOWN_FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = Object.freeze(Object.values(FEATURE_FLAG_KEYS));
+
+export function isKnownFeatureFlagKey(value: string): value is FeatureFlagKey {
+  return (KNOWN_FEATURE_FLAG_KEYS as readonly string[]).includes(value);
+}
 
 // AgentDash (#157): billing-infra activity log action names.
 // Written by entitlement-sync.ts when Stripe sends payment failure or

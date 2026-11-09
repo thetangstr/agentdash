@@ -20,6 +20,7 @@ import { projectsApi } from "../api/projects";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { useCapability } from "../hooks/useCapability";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { cn } from "../lib/utils";
 import { queryKeys } from "../lib/queryKeys";
@@ -585,6 +586,10 @@ function expandAncestors(filePath: string): string[] {
 
 export function CompanyExport() {
   const { selectedCompanyId, selectedCompany } = useCompany();
+  // Exporting is owner/admin only on the server. A member who follows a link
+  // here gets the plain rule, and no preview is requested on their behalf.
+  const companyManage = useCapability(selectedCompanyId, "company:manage");
+  const canExport = companyManage.allowed && !companyManage.isLoading;
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const navigate = useNavigate();
@@ -757,12 +762,12 @@ export function CompanyExport() {
   });
 
   useEffect(() => {
-    if (!selectedCompanyId || exportPreviewMutation.isPending) return;
+    if (!selectedCompanyId || !canExport || exportPreviewMutation.isPending) return;
     if (!isSessionFetched || !areAgentsFetched || !areProjectsFetched) return;
     setExportData(null);
     exportPreviewMutation.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCompanyId, isSessionFetched, areAgentsFetched, areProjectsFetched, sidebarOrderKey]);
+  }, [selectedCompanyId, canExport, isSessionFetched, areAgentsFetched, areProjectsFetched, sidebarOrderKey]);
 
   const tree = useMemo(
     () => (exportData ? buildFileTree(exportData.files) : []),
@@ -918,6 +923,14 @@ export function CompanyExport() {
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Package} message="Select a company to export." />;
+  }
+
+  if (companyManage.isLoading) {
+    return <PageSkeleton variant="detail" />;
+  }
+
+  if (!companyManage.allowed) {
+    return <EmptyState icon={Package} message="Only owners and admins can export this company." />;
   }
 
   if (exportPreviewMutation.isPending && !exportData) {

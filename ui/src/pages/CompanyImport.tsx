@@ -19,6 +19,8 @@ import { getAgentOrderStorageKey, writeAgentOrder } from "../lib/agent-order";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
+import { PageSkeleton } from "../components/PageSkeleton";
+import { useCapability } from "../hooks/useCapability";
 import { AgentConfigForm } from "../components/AgentConfigForm";
 import { cn } from "../lib/utils";
 import {
@@ -654,6 +656,9 @@ export function CompanyImport() {
   const { pushToast } = useToastActions();
   const queryClient = useQueryClient();
   const packageInputRef = useRef<HTMLInputElement | null>(null);
+  // Importing is owner/admin only on the server; a member who follows a link
+  // here gets the plain rule instead of controls that would be refused.
+  const companyManage = useCapability(selectedCompanyId, "company:manage");
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -1087,6 +1092,14 @@ export function CompanyImport() {
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Download} message="Select a company to import into." />;
+  }
+
+  if (companyManage.isLoading) {
+    return <PageSkeleton variant="detail" />;
+  }
+
+  if (!companyManage.allowed) {
+    return <EmptyState icon={Download} message="Only owners and admins can import into this company." />;
   }
 
   return (
