@@ -15,7 +15,7 @@ import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { agentService } from "../services/agents.js";
 import { requireProductProfile } from "../services/companies.js";
 import { logger } from "../middleware/logger.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess, assertMayHandOutCompanyAgentAuthority } from "./authz.js";
 import {
   agentVisibilityParam,
 } from "./visibility.js";
@@ -75,6 +75,19 @@ export function agentStewardshipRoutes(db: Db) {
     if (!allowed) {
       throw forbidden("Agent stewardship management requires agent creation permission");
     }
+  }
+
+  /**
+   * Stewarding a CEO agent, or an agent that can create agents, lets the
+   * steward connect a terminal to it and run it: company-wide authority, so
+   * assigning or transferring that stewardship needs a company administrator.
+   * Releasing one narrows and keeps its usual rule.
+   */
+  async function assertMayStewardAgent(req: Request, companyId: string, agentId: unknown) {
+    if (typeof agentId !== "string") return;
+    const agent = await agentService(db).getById(agentId);
+    if (!agent || agent.companyId !== companyId) return;
+    await assertMayHandOutCompanyAgentAuthority(access, req, companyId, agent);
   }
 
   /**
@@ -203,6 +216,7 @@ export function agentStewardshipRoutes(db: Db) {
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanMutateStewardships(req, companyId, true);
+      await assertMayStewardAgent(req, companyId, req.body.agentId);
       const stewardship = await stewardships.assign(companyId, {
         agentId: req.body.agentId,
         userId: req.body.userId,
@@ -219,6 +233,7 @@ export function agentStewardshipRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       const agentId = req.params.agentId as string;
       await assertCanMutateStewardships(req, companyId);
+      await assertMayStewardAgent(req, companyId, agentId);
       const stewardship = await stewardships.transfer(companyId, agentId, {
         userId: req.body.userId,
         transferredByUserId: req.actor.userId ?? null,

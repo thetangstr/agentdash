@@ -3,6 +3,9 @@ import { WebClient } from "@slack/web-api";
 import type { Db } from "@paperclipai/db";
 import { connectorService } from "./connectors.js";
 import { AccessPolicyRefusedError } from "./agent-access-check.js";
+import { agentGovernanceService } from "./agent-governance.js";
+import { refuseBlockedDestructiveAction } from "./destructive-action-gate.js";
+import { workflowEventsService } from "./workflow-events.js";
 import { logActivity } from "./activity-log.js";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -102,6 +105,7 @@ export function verifySlackSignature(
 
 export function slackConnectorService(db: Db) {
   const connectors = connectorService(db);
+  const destructiveGate = { governance: agentGovernanceService(db), workflow: workflowEventsService(db) };
 
   // -------------------------------------------------------------------------
   // OAuth flow
@@ -348,6 +352,25 @@ export function slackConnectorService(db: Db) {
         autonomy: "draft_only",
       };
     }
+
+    // AgentDash-MK T5a: the destructive-action ceiling at the moment of the
+    // send. A channel post is a `send`, which the shared classifier places as
+    // `outbound_external_message` unless the recipient is known to be inside
+    // the company; nothing here can prove a Slack channel is (shared channels
+    // reach other organizations), so it fails closed to external, exactly as
+    // the classifier treats any unqualified message. A draft above is not a
+    // send and is never gated. `blocked` refuses with the named-ceiling error
+    // and records the refusal. Under `approval_required` and `allowed` the send
+    // follows the connection's send autonomy exactly as before: there is no
+    // Slack approval step yet, so nothing is recorded as decided. Inert
+    // off-profile.
+    await refuseBlockedDestructiveAction(destructiveGate, {
+      companyId: input.companyId,
+      agentId: input.agentId,
+      action: { kind: "connector", provider: SLACK_PROVIDER, operation: "send" },
+      surface: "slack_send",
+      pipelineId: `connector_send:${SLACK_PROVIDER}`,
+    });
 
     // For "full" autonomy, post the message
     const token = await connectors.getDecryptedToken(authorizedConnectionId);

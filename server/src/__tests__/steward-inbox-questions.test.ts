@@ -665,6 +665,34 @@ describeEmbeddedPostgres("steward inbox: agent questions", () => {
     expect(JSON.stringify(item)).not.toContain("drafted note body");
   });
 
+  // A CEO hire needs a company administrator wherever it is decided
+  // (approvalService.approve). A member steward approving it from the inbox
+  // is refused with a plain reason and nothing is decided.
+  it("refuses a member steward approving a pending CEO hire from the inbox", async () => {
+    const { company, stewardA, agentA } = await seed();
+    const endpoint = await makeEndpoint(company.id, stewardA.principalId);
+    const ceoHire = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "hire_agent",
+        requestedByAgentId: agentA.id,
+        status: "pending",
+        payload: { name: `CEO ${randomUUID().slice(0, 8)}`, role: "ceo", adapterType: "process" },
+        revision: 1,
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await stewardInboxService(db).recordApprovalEvent(ceoHire.id, "approval.opened");
+    const item = (await digestFor(endpoint.id)).approvals.items.find((entry: any) => entry.approvalId === ceoHire.id);
+    expect(item, "the CEO hire is in the steward's digest").toBeTruthy();
+
+    const outcome = await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(endpoint.id, item.actions.approve);
+    expect(outcome).toMatchObject({ ok: false, reason: "Only owners and admins can approve this hire." });
+    const stored = await db.select().from(approvals).where(eq(approvals.id, ceoHire.id)).then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
+  });
+
   it("wakes the requesting agent when its approval is rejected from the inbox", async () => {
     const { company, prefix, stewardA, agentA } = await seed();
     const endpoint = await makeEndpoint(company.id, stewardA.principalId);

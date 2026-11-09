@@ -100,6 +100,7 @@ export function CommandPalette() {
   const destinationGroups = navigationDestinationGroups({
     isInstanceAdmin: capabilities?.isInstanceAdmin === true,
     isCompanyAdmin: companyAccess?.access.currentUserRole === "admin",
+    canManageCompany: capabilities?.capabilities?.["company:manage"] === true,
     workspacesEnabled: experimentalSettings?.enableIsolatedWorkspaces === true,
   });
 

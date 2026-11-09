@@ -78,6 +78,15 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("../api/auth", () => ({ authApi: { getSession: vi.fn().mockResolvedValue(null) } }));
+// The invite card is offered only to a viewer the server says may invite
+// (`users:invite`). Returned synchronously, like agentsApi below, because the
+// useQuery stub hands back the queryFn's raw value as `data`.
+const mockCapabilities = vi.hoisted(() => ({ usersInvite: true }));
+vi.mock("../api/capabilities", () => ({
+  capabilitiesApi: {
+    get: vi.fn(() => ({ capabilities: { "users:invite": mockCapabilities.usersInvite } })),
+  },
+}));
 vi.mock("../api/agents", () => ({
   agentsApi: {
     // The useQuery mock above invokes queryFn() synchronously and returns the
@@ -113,6 +122,7 @@ describe("CoSConversation", () => {
     mockCompanyState.selectedCompanyId = null;
     mockSendInvites.mockReset();
     mockChatPanelProps.mockClear();
+    mockCapabilities.usersInvite = true;
     // On-prem default: no Hermes provider step.
     mockAdapterStatus.mockReset();
     mockAdapterStatus.mockReturnValue({ status: { adapter: "minimax", ready: true, preset: "minimax", reason: null } });
@@ -416,5 +426,28 @@ describe("CoSConversation", () => {
         },
       ],
     });
+  });
+
+  it("offers no invite send to a viewer without users:invite", async () => {
+    mockCapabilities.usersInvite = false;
+    mockBootstrap.mockResolvedValue({
+      companyId: "company-1",
+      cosAgentId: "agent-1",
+      conversationId: "conversation-1",
+    });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<MemoryRouter><CoSConversation /></MemoryRouter>);
+    });
+    await act(async () => {});
+
+    const props = mockChatPanelProps.mock.calls.at(-1)?.[0] as {
+      cardContext: { onInviteSend?: unknown; onProposalConfirm?: unknown };
+    };
+    expect(props.cardContext.onInviteSend).toBeUndefined();
+    // The rest of the card context is unchanged.
+    expect(typeof props.cardContext.onProposalConfirm).toBe("function");
+    expect(mockSendInvites).not.toHaveBeenCalled();
   });
 });

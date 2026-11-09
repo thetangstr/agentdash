@@ -39,7 +39,13 @@ import {
   secretService,
 } from "../services/index.js";
 import { insertActivity, publishActivity } from "../services/activity-log.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  assertBoard,
+  assertCompanyAccess,
+  assertMayGrantPrivilegedAgentAuthority,
+  getActorInfo,
+} from "./authz.js";
+import { hireGrantsPrivilegedAgentAuthority } from "../services/approvals.js";
 import {
   approvalVisibilityCondition,
   assertAgentIdVisible,
@@ -238,6 +244,13 @@ export function approvalRoutes(
     throw forbidden("Deciding an agent hire requires the agents:create permission");
   }
 
+  // A hire that would bring a CEO, Chief of Staff or agent creator into force
+  // is a company administrator's request (checked where hires are filed,
+  // below). Approving one is checked once, in `approvalService.approve`, where
+  // every decision channel meets.
+  const hireGrantsPrivilegedAuthority = (companyId: string, payload: unknown) =>
+    hireGrantsPrivilegedAgentAuthority(db, companyId, payload);
+
   /**
    * Host-executed workspace commands must never enter the system through an
    * unvalidated hire payload; creating them directly is administrator-only.
@@ -342,6 +355,7 @@ export function approvalRoutes(
   function decisionMeta(
     context: Awaited<ReturnType<typeof authority.requireDecisionAuthority>>,
     overrideReason?: string | null,
+    deciderSource?: string | null,
   ) {
     return {
       revision: context.revision,
@@ -349,6 +363,7 @@ export function approvalRoutes(
       idempotencyKey: context.idempotencyKey,
       actorRole: context.role,
       ...(overrideReason !== undefined ? { overrideReason } : {}),
+      ...(deciderSource ? { deciderSource } : {}),
     };
   }
 
@@ -474,6 +489,14 @@ export function approvalRoutes(
         hirePayloadHostExecutionInputs(approvalInput.payload),
         hostExecutionContextForCompany(companyId),
       );
+      // A CEO, Chief of Staff or agent-creator hire. An agent may PROPOSE one
+      // (a Chief of Staff proposing a CEO is the normal flow); it is decided in
+      // `approvalService.approve`, which needs a company administrator. A
+      // person filing one must already be an administrator. After the payload
+      // checks above, so their refusals come first.
+      if (req.actor.type !== "agent" && await hireGrantsPrivilegedAuthority(companyId, approvalInput.payload)) {
+        await assertMayGrantPrivilegedAgentAuthority(access, req, companyId);
+      }
     }
     // GH #828 (provenance spoof): `payload.metadata.source ===
     // "assistant_hire_request"` is stamped server-side by the gated-action
@@ -626,7 +649,7 @@ export function approvalRoutes(
       decidedByUserId,
       req.body.decisionNote,
       res,
-      decisionMeta(decisionContext),
+      decisionMeta(decisionContext, undefined, req.actor.source),
     );
     if (!resolution) return;
     const { approval, applied } = resolution;
@@ -692,7 +715,7 @@ export function approvalRoutes(
     const context = await authority.requireEmergencyOverride(existingApproval, req.actor, req.body);
     await assertCanDecideAgentLifecycleApproval(req, existingApproval);
     const decidedByUserId = req.actor.userId ?? "board";
-    const meta = decisionMeta(context, req.body.overrideReason);
+    const meta = decisionMeta(context, req.body.overrideReason, req.actor.source);
 
     const resolution =
       req.body.decision === "approved"
@@ -875,6 +898,9 @@ export function approvalRoutes(
         hirePayloadHostExecutionInputs(req.body.payload, existing.payload),
         hostExecutionContextForCompany(existing.companyId),
       );
+      if (req.actor.type !== "agent" && await hireGrantsPrivilegedAuthority(existing.companyId, req.body.payload)) {
+        await assertMayGrantPrivilegedAgentAuthority(access, req, existing.companyId);
+      }
     }
     const normalizedPayload = req.body.payload
       ? existing.type === "hire_agent"

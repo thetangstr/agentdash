@@ -445,7 +445,9 @@ describe("PATCH /api/companies/:companyId — product profile authorization", ()
       .send({ productProfile: "agentdash_mk" });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("Company owner or admin access required");
+    // Every company setting now needs an owner or admin, so the board-wide
+    // check refuses first, before the profile-specific one is reached.
+    expect(res.body.error).toBe("Only owners and admins can change company settings.");
     expect(updateMock).not.toHaveBeenCalled();
     expect(getMembershipMock).toHaveBeenCalledWith("company-1", "user", "operator-user");
   });
@@ -471,20 +473,34 @@ describe("PATCH /api/companies/:companyId — product profile authorization", ()
     },
   );
 
-  it("leaves unrelated company updates on the existing member write path", async () => {
+  it("refuses unrelated company updates from an ordinary member too", async () => {
     getByIdMock.mockResolvedValue(existingCompany);
-    updateMock.mockResolvedValue({
-      ...existingCompany,
-      name: "Acme Updated",
-    });
+    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "operator" });
 
     const app = buildPatchApp(boardActor("operator"));
     const res = await request(app)
       .patch("/api/companies/company-1")
       .send({ name: "Acme Updated" });
 
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Only owners and admins can change company settings.");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("lets an admin make unrelated company updates", async () => {
+    getByIdMock.mockResolvedValue(existingCompany);
+    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+    updateMock.mockResolvedValue({
+      ...existingCompany,
+      name: "Acme Updated",
+    });
+
+    const app = buildPatchApp(boardActor("admin"));
+    const res = await request(app)
+      .patch("/api/companies/company-1")
+      .send({ name: "Acme Updated" });
+
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith("company-1", { name: "Acme Updated" });
-    expect(getMembershipMock).not.toHaveBeenCalled();
   });
 });

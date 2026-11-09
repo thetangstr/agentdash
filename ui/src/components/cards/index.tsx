@@ -57,11 +57,14 @@ export function CardRenderer({
         />
       );
     case "invite_prompt_v1":
+      // No send handler means this viewer may not invite (the server would
+      // refuse): the card is not offered rather than offered and refused.
+      if (!context.onInviteSend) return null;
       return (
         <InvitePrompt
           companyId={(payload as any)?.companyId ?? ""}
           conversationId={(payload as any)?.conversationId ?? ""}
-          onSendInvites={context.onInviteSend ?? (async () => {})}
+          onSendInvites={context.onInviteSend}
           onSkip={context.onInviteSkip ?? (() => {})}
         />
       );

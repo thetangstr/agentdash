@@ -3,7 +3,7 @@ title: "Playbooks"
 summary: "The five operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which."
 ---
 
-> Generated at commit `d8d292bfe` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `eeed05b13` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 > 3 sections omitted: engagement-specific.
 
@@ -92,7 +92,8 @@ name, a number, or a workspace code.
    and stewardship is refused for it.
 
 5. **Invites.** POST /onboarding/invites { companyId, emails, autoApprove: true }.
-   Each entry carries `inviteUrl` — hand those to the human, because no email
+   It needs `users:invite`, the same as the regular invite route (owners and
+   admins hold it); a member without it is refused with 403. Each entry carries `inviteUrl` — hand those to the human, because no email
    provider is configured and `emailStatus: "skipped"` is the expected, correct
    outcome. Handing over the links IS the delivery.
    Do NOT pair a teammate with an agent before they accept: it is refused with

@@ -22,7 +22,7 @@ An approval requested by an agent you cannot see is invisible to you: it is left
 
 In most companies, any member who reaches the company may approve, reject or request a revision. Two rules narrow that:
 
-- **Agent hires.** Approving or rejecting a `hire_agent` approval that is still open creates, activates or ends an agent, so it needs the `agents:create` permission in the company. Instance admins and the local operator pass.
+- **Agent hires.** Approving or rejecting a `hire_agent` approval that is still open creates, activates or ends an agent, so it needs the `agents:create` permission in the company. Instance admins and the local operator pass. A hire that would create or activate a `ceo` or `chief_of_staff` agent, or one with `canCreateAgents`, needs a company owner or admin to approve, on every channel (web, Teams, Telegram, WhatsApp, the steward inbox, assistants); anyone else gets 403 `Only owners and admins can approve this hire.` An agent may propose one; a person filing one must be an owner or admin.
 - **Single-decider companies.** Some product profiles give each approval exactly one decider and require `revision`, `idempotencyKey` and `channel` on every approve and reject. There, a caller who is not the decider gets 403, and a missing field gets 400 naming it (`server/src/services/approval-authority.ts`).
 
 The examples assume:

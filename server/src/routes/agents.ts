@@ -103,6 +103,9 @@ import {
 } from "../services/instructions-root-confinement.js";
 import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertInstanceAdmin, assistantGrantAttribution, getActorInfo,
   assertCompanyAdministrator,
+  assertMayGrantPrivilegedAgentAuthority,
+  assertMayHandOutCompanyAgentAuthority,
+  grantsPrivilegedAgentAuthority,
 } from "./authz.js";
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
@@ -1062,11 +1065,32 @@ export function agentRoutes(
 
   // AgentDash (#1053): hiring is not authority to delegate privileged roles
   // or grant hiring authority, including the CEO role's inherited default.
-  function assertAgentCreationAuthority(req: Request, body: { role?: unknown; permissions?: { canCreateAgents?: unknown } | null } = req.body) {
-    if (req.actor.type !== "agent") return;
-    if (body.role === "ceo" || body.role === "chief_of_staff" || body.permissions?.canCreateAgents === true) {
-      throw forbidden("Agents cannot create privileged roles or grant canCreateAgents. Ask a board administrator to create this agent.");
+  // Agents are refused outright; a person needs to be a company administrator.
+  // Every member may still create ordinary agents (assertCanCreateAgentsForCompany),
+  // but a member-made CEO would hand them its key and the CEO-only company routes.
+  /**
+   * Moving an agent into or out of a privileged role (CEO, Chief of Staff) is a
+   * company administrator's decision, whoever else may edit the agent. One
+   * rule for every path that writes `role`: PATCH and configuration rollback.
+   */
+  async function assertMayChangeAgentRole(
+    req: Request,
+    existing: { companyId: string; role: string },
+    nextRole: unknown,
+  ) {
+    if (nextRole === undefined || nextRole === existing.role) return;
+    if (grantsPrivilegedAgentAuthority({ role: nextRole }) || grantsPrivilegedAgentAuthority({ role: existing.role })) {
+      await assertMayGrantPrivilegedAgentAuthority(access, req, existing.companyId);
     }
+  }
+
+  async function assertAgentCreationAuthority(
+    req: Request,
+    companyId: string,
+    body: { role?: unknown; permissions?: unknown } = req.body,
+  ) {
+    if (!grantsPrivilegedAgentAuthority(body)) return;
+    await assertMayGrantPrivilegedAgentAuthority(access, req, companyId);
   }
 
   /**
@@ -2905,6 +2929,15 @@ export function agentRoutes(
       );
     }
 
+    // A rollback restores `role` too, so it meets the same privileged-role rule
+    // as PATCH (into or out of CEO / Chief of Staff). Rechecked against the
+    // snapshot actually applied, inside the write below.
+    {
+      const revision = await svc.getConfigRevision(id, revisionId);
+      const snapshot = asRecord(revision?.afterConfig);
+      if (snapshot) await assertMayChangeAgentRole(req, existing, snapshot.role);
+    }
+
     // AgentDash (security, #719): a rollback can restore a command, env or cwd
     // an instance admin has since removed. Values equal to what is stored now
     // pass; restoring different host-execution values needs instance admin.
@@ -2928,6 +2961,7 @@ export function agentRoutes(
       const revision = await writer.getConfigRevision(id, revisionId);
       const snapshot = asRecord(revision?.afterConfig);
       if (!snapshot) return null;
+      await assertMayChangeAgentRole(req, existing, snapshot.role);
       const adapterType = typeof snapshot.adapterType === "string" ? snapshot.adapterType : existing.adapterType;
       rollbackPin = await assertAgentDefaultEnvironmentSelection(existing.companyId,
         typeof snapshot.defaultEnvironmentId === "string" ? snapshot.defaultEnvironmentId : null, {
@@ -3154,7 +3188,7 @@ export function agentRoutes(
     },
   ): Promise<{ agent: Awaited<ReturnType<typeof materializeDefaultInstructionsBundleForNewAgent>>; approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null } | null> {
     await assertCanCreateAgentsForCompany(req, companyId);
-    assertAgentCreationAuthority(req, body);
+    await assertAgentCreationAuthority(req, companyId, body);
     if (body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
     // AgentDash (GH #828): body metadata becomes the hire approval's payload
     // metadata, which the digest reads for assistant provenance.
@@ -3502,7 +3536,7 @@ export function agentRoutes(
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
-    assertAgentCreationAuthority(req);
+    await assertAgentCreationAuthority(req, companyId);
     if (req.body.workforceTemplateId !== undefined) assertCanSetCompanyDirection(req, companyId);
 
     const company = await db
@@ -3836,6 +3870,12 @@ export function agentRoutes(
         "Stewardship does not permit granting agent-creation authority; " +
           "an administrator with agents:create must make this change",
       );
+    }
+    // Granting `canCreateAgents` mints an agent administrator: a company
+    // administrator's decision, not any `agents:create` holder's (that grant
+    // can be delegated to a member). Revoking it narrows and stays open.
+    if (req.body.canCreateAgents === true && !canCreateAgents(existing)) {
+      await assertMayGrantPrivilegedAgentAuthority(access, req, existing.companyId);
     }
 
     // AgentDash-MK: the owner ceiling binds at the service boundary, so a
@@ -4278,6 +4318,9 @@ export function agentRoutes(
       AGENT_PEER_PATCHABLE_FIELDS,
     );
     assertStewardPatchScope(updateAuthority, req.body as Record<string, unknown>);
+    if (hasOwn(req.body as object, "role")) {
+      await assertMayChangeAgentRole(req, existing, (req.body as { role?: unknown }).role);
+    }
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
@@ -4699,6 +4742,11 @@ export function agentRoutes(
       res.status(409).json({ error: "Only pending approval agents can be approved" });
       return;
     }
+    // Activating a pending CEO, Chief of Staff or agent creator brings that
+    // authority into force: a company administrator's decision.
+    if (grantsPrivilegedAgentAuthority(existing)) {
+      await assertMayGrantPrivilegedAgentAuthority(access, req, existing.companyId);
+    }
     const approval = await svc.activatePendingApproval(id);
     if (!approval) {
       res.status(404).json({ error: "Agent not found" });
@@ -4742,6 +4790,7 @@ export function agentRoutes(
           revision: pending.revision,
           channel: "web",
           actorRole: role,
+          deciderSource: req.actor.source ?? null,
           ...(overrideReason ? { overrideReason } : {}),
         });
         if (resolved.applied && role === "owner_override") {
@@ -4855,6 +4904,9 @@ export function agentRoutes(
     // A key is for a person to run this agent from their own terminal, which is
     // exactly what an autonomous agent does not have.
     assertAgentMayHoldKey(agent);
+    // A CEO's key, or an agent creator's, is company-wide authority: handing one
+    // out is a company administrator's decision, not any agents:create holder's.
+    await assertMayHandOutCompanyAgentAuthority(access, req, agent.companyId, agent);
     const key = await svc.createApiKey(id, req.body.name, {
       source: "manual",
       createdByUserId: req.actor.userId ?? null,
@@ -4938,6 +4990,7 @@ export function agentRoutes(
 
     // Same rule as minting a key, because redeeming this code mints one.
     assertAgentMayHoldKey(agent);
+    await assertMayHandOutCompanyAgentAuthority(access, req, agent.companyId, agent);
 
     const now = new Date();
     await db

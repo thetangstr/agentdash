@@ -445,6 +445,70 @@ describe("feedbackService.saveIssueVote", () => {
     expect(traces[0]?.exportId).toBeNull();
   });
 
+  // Turning on the company's feedback sharing is a company setting: only an
+  // owner or admin's vote may do it. A member's vote is still recorded.
+  it("records a member's sharing vote locally without turning on company sharing", async () => {
+    const { companyId, issueId, commentId } = await seedIssueWithAgentComment();
+
+    const result = await svc.saveIssueVote({
+      issueId,
+      targetType: "issue_comment",
+      targetId: commentId,
+      vote: "up",
+      authorUserId: "member-1",
+      allowSharing: true,
+      mayEnableCompanySharing: false,
+    });
+
+    expect(result.vote.vote).toBe("up");
+    expect(result.sharingEnabled).toBe(false);
+    expect(result.sharingNeedsAdministrator).toBe(true);
+    expect(result.consentEnabledNow).toBe(false);
+    // Nor does a member's vote answer the instance-wide sharing prompt.
+    expect(result.persistedSharingPreference).toBeNull();
+    const company = await db.select().from(companies).where(eq(companies.id, companyId)).then((rows) => rows[0] ?? null);
+    expect(company?.feedbackDataSharingEnabled).toBe(false);
+    expect(company?.feedbackDataSharingConsentAt).toBeNull();
+  });
+
+  it("shares a member's vote when the company already shares", async () => {
+    const { companyId, issueId, commentId } = await seedIssueWithAgentComment();
+    await db.update(companies).set({ feedbackDataSharingEnabled: true }).where(eq(companies.id, companyId));
+
+    const result = await svc.saveIssueVote({
+      issueId,
+      targetType: "issue_comment",
+      targetId: commentId,
+      vote: "up",
+      authorUserId: "member-1",
+      allowSharing: true,
+      mayEnableCompanySharing: false,
+    });
+
+    expect(result.sharingEnabled).toBe(true);
+    expect(result.sharingNeedsAdministrator).toBe(false);
+    expect(result.consentEnabledNow).toBe(false);
+  });
+
+  it("lets an administrator's vote turn on company sharing", async () => {
+    const { companyId, issueId, commentId } = await seedIssueWithAgentComment();
+
+    const result = await svc.saveIssueVote({
+      issueId,
+      targetType: "issue_comment",
+      targetId: commentId,
+      vote: "up",
+      authorUserId: "admin-1",
+      allowSharing: true,
+      mayEnableCompanySharing: true,
+    });
+
+    expect(result.sharingEnabled).toBe(true);
+    expect(result.consentEnabledNow).toBe(true);
+    const company = await db.select().from(companies).where(eq(companies.id, companyId)).then((rows) => rows[0] ?? null);
+    expect(company?.feedbackDataSharingEnabled).toBe(true);
+  });
+
   it("enables sharing metadata on the first consented vote and upserts subsequent votes", async () => {
     const { companyId, issueId, commentId } = await seedIssueWithAgentComment();
 

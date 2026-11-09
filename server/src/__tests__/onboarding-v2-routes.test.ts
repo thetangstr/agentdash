@@ -27,6 +27,8 @@ const mockAgents = {
 };
 const mockAccess = {
   listActiveUserMemberships: vi.fn().mockResolvedValue([]),
+  // POST /onboarding/invites asks `users:invite`, the regular invite rule.
+  canUser: vi.fn().mockResolvedValue(true),
 };
 const mockCompanies = {
   getById: vi.fn().mockResolvedValue({ id: "c1", name: "Acme", planTier: "pro_active" }),
@@ -1649,6 +1651,76 @@ describe("POST /api/onboarding/invites", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvites.createCompanyInvite.mockReset();
+    mockAccess.canUser.mockResolvedValue(true);
+  });
+
+  // The same permission the regular invite route requires, through the same
+  // predicate: `users:invite` (admins hold it by role), local implicit board
+  // exempt, instance admins via canUser.
+  describe("users:invite", () => {
+    const member = { type: "board", userId: "u-member", source: "session", companyIds: ["c1"] };
+
+    it("refuses a member without users:invite, with the plain message, and creates nothing", async () => {
+      mockAccess.canUser.mockResolvedValue(false);
+      const res = await request(buildApp(member)).post("/api/onboarding/invites").send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com"],
+      });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe(
+        "You do not have permission to invite people to this company. Ask an owner or admin.",
+      );
+      expect(mockAccess.canUser).toHaveBeenCalledWith("c1", "u-member", "users:invite");
+      expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+      expect(mockSendEmail).not.toHaveBeenCalled();
+    });
+
+    it("lets a holder of users:invite (an admin) invite", async () => {
+      mockInvites.createCompanyInvite.mockResolvedValue({
+        id: "invite-1",
+        token: "tok1",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
+      const res = await request(buildApp({ ...member, userId: "u-admin" })).post("/api/onboarding/invites").send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com"],
+      });
+      expect(res.status).toBe(200);
+      expect(mockAccess.canUser).toHaveBeenCalledWith("c1", "u-admin", "users:invite");
+      expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets the local implicit board invite without asking", async () => {
+      mockAccess.canUser.mockResolvedValue(false);
+      mockInvites.createCompanyInvite.mockResolvedValue({
+        id: "invite-1",
+        token: "tok1",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
+      const res = await request(
+        buildApp({ type: "board", userId: "local-board", source: "local_implicit", isInstanceAdmin: true }),
+      ).post("/api/onboarding/invites").send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com"],
+      });
+      expect(res.status).toBe(200);
+      expect(mockAccess.canUser).not.toHaveBeenCalled();
+      expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(1);
+    });
+
+    it("checks the batch cap before the permission, as before", async () => {
+      mockAccess.canUser.mockResolvedValue(false);
+      const big = Array.from({ length: 26 }, (_, i) => `u${i}@x.com`);
+      const res = await request(buildApp(member)).post("/api/onboarding/invites").send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: big,
+      });
+      expect(res.status).toBe(400);
+    });
   });
 
   it("creates one invite per email, sends an email per invite, and returns URLs + emailStatus", async () => {

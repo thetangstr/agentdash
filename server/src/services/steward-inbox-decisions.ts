@@ -6,6 +6,7 @@ import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
 import { approvalService } from "./index.js";
+import { privilegedHireRefusalMessage } from "./approvals.js";
 import {
   DECIDABLE_STATUSES,
   STEWARD_INBOX_TOKEN_PROVIDER,
@@ -161,6 +162,10 @@ export function stewardInboxDecisionService(
        * rather than before: checking first would race a concurrent decision and
        * report the stale answer.
        */
+      const privilegedRefusal = privilegedHireRefusalMessage(error);
+      if (privilegedRefusal) {
+        return { ok: false, approvalId: record.approvalId, reason: privilegedRefusal };
+      }
       const current = await approvalsSvc.getById(record.approvalId).catch(() => null);
       const settled = current && !DECIDABLE_STATUSES.has(current.status);
 

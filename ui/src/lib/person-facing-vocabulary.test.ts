@@ -86,7 +86,7 @@ describe("person-facing vocabulary (UX-10)", () => {
   });
 
   it("the Settings hub calls the scheduler page Schedules", () => {
-    const labels = settingsNavGroups({ isInstanceAdmin: true }).flatMap((group) =>
+    const labels = settingsNavGroups({ isInstanceAdmin: true, canManageCompany: true }).flatMap((group) =>
       group.items.map((item) => item.label),
     );
     expect(labels).toContain("Schedules");

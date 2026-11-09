@@ -14,7 +14,7 @@ An agent is one AI employee of a company: it has a name and role, an adapter tha
 | `listAgents`, `getAgent` | a person who is a member, or an agent in that company |
 | `getCurrentAgent` | an agent key or agent run token only — anyone else gets 401 `Agent authentication required` |
 | `updateAgent` | a person with the `agents:create` permission, or an instance admin; the agent's steward or creator for a few fields; an agent for its own presentation fields, or a CEO agent for another agent's (see Update an agent, below) |
-| `pauseAgent`, `resumeAgent`, `listAgentKeys`, `createAgentKey`, `revokeAgentKey` | a person with the `agents:create` permission in the agent's company, or an instance admin — an agent gets 403 `Board access required`, a member without the permission gets 403 `Missing permission: agents:create` |
+| `pauseAgent`, `resumeAgent`, `listAgentKeys`, `createAgentKey`, `revokeAgentKey` | a person with the `agents:create` permission in the agent's company, or an instance admin — an agent gets 403 `Board access required`, a member without the permission gets 403 `Missing permission: agents:create`. Creating a key for a `ceo` agent, or one with `canCreateAgents`, needs a company owner or admin (the same holds for connect codes and for assigning or transferring its stewardship). |
 
 Every call checks company membership first (`assertCompanyAccess` in `server/src/routes/authz.ts`): a person who is not a member answers 403 `User does not have access to this company`, an agent from another company answers 403 `Agent key cannot access another company`, and a member whose membership is not active answers 403 `User does not have active company access` on any write.
 
@@ -90,7 +90,7 @@ curl https://your-instance.example/api/agents/$AGENT_ID \
 
 Send only the fields you are changing. Who may change what:
 
-- **A person with `agents:create`, or an instance admin** — any field below.
+- **A person with `agents:create`, or an instance admin** — any field below, except that moving an agent into or out of the `ceo` or `chief_of_staff` role needs a company owner or admin (`agents:create` can be delegated to a member); anyone else gets 403 `Only owners and admins can create a CEO or Chief of Staff agent, give an agent one of those roles, or let an agent create agents.`
 - **The agent's steward, or the person who created it**, in a company where stewardship is enabled — `title`, `icon`, `capabilities` and `budgetMonthlyCents` only.
 - **The agent itself** — `name`, `title`, `icon` and `capabilities` only.
 - **A CEO agent, or an agent with `canCreateAgents` or an `agents:create` grant**, on another agent — `name`, `title`, `icon` and `capabilities` only.
@@ -303,7 +303,7 @@ From `packages/shared/src/types/agent.ts`. The fields an integration reads:
 | `adapterType` | string | |
 | `adapterConfig`, `runtimeConfig` | object | `{}` on the restricted view. |
 | `budgetMonthlyCents`, `spentMonthlyCents` | integer | The monthly budget and this month's spend, in cents. |
-| `permissions` | `{ canCreateAgents: boolean }` | |
+| `permissions` | `{ canCreateAgents: boolean }` | Granting `canCreateAgents` (`PATCH /api/agents/{id}/permissions`) needs a company owner or admin. |
 | `autonomy` | `stewarded` · `autonomous` | Treat a missing value as `stewarded`. |
 | `visibility` | `company` · `owner` · null | null inherits the company default. |
 | `steward` | `{ userId, name, email, since }` or null | The person who runs the agent. On list and detail responses. |

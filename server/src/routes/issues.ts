@@ -107,7 +107,7 @@ import {
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, isCompanyAdministrator, reportAuthzRefusal } from "./authz.js";
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import { clearWorkspacePersistenceHold } from "../services/workspace-persistence-recovery.js";
@@ -4162,6 +4162,12 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    // Turning on the company's feedback sharing is a company setting, so only
+    // an owner or admin's vote may do it. A member's vote is still recorded.
+    const allowSharing = req.body.allowSharing === true;
+    const mayEnableCompanySharing = allowSharing
+      ? await isCompanyAdministrator(access, req, issue.companyId).catch(() => false)
+      : true;
     const result = await feedback.saveIssueVote({
       issueId: id,
       targetType: req.body.targetType,
@@ -4169,7 +4175,8 @@ export function issueRoutes(
       vote: req.body.vote,
       reason: req.body.reason,
       authorUserId: req.actor.userId ?? "local-board",
-      allowSharing: req.body.allowSharing === true,
+      allowSharing,
+      mayEnableCompanySharing,
     });
 
     await logActivity(db, {
@@ -4244,7 +4251,15 @@ export function issueRoutes(
       }
     }
 
-    res.status(201).json(result.vote);
+    res.status(201).json(
+      result.sharingNeedsAdministrator
+        ? {
+            ...result.vote,
+            sharingNotEnabled:
+              "Your vote was saved, but sharing was not turned on: only owners and admins can turn on feedback sharing for this company.",
+          }
+        : result.vote,
+    );
   });
 
   router.get("/issues/:id/attachments", async (req, res) => {

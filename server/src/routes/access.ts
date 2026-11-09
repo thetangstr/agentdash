@@ -107,7 +107,7 @@ import {
   inviteSignupBoundEmail,
 } from "../services/invites.js";
 import { isHostedBox } from "../services/license.js";
-import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertBoardUserCompanyPermission, assertCompanyAccess } from "./authz.js";
 // AgentDash (GH #505): one predicate for who may read member email addresses.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 // AgentDash (GH #708): membership changes re-check open live-event sockets.
@@ -2910,13 +2910,9 @@ export function accessRoutes(
       return;
     }
     if (req.actor.type !== "board") throw unauthorized();
-    if (isLocalImplicit(req)) return;
-    const allowed = await access.canUser(
-      companyId,
-      req.actor.userId,
-      permissionKey
-    );
-    if (!allowed) throw forbidden("Permission denied");
+    // AgentDash: the one board-user permission predicate, shared with the
+    // onboarding batch-invite route so the two invite doors cannot disagree.
+    await assertBoardUserCompanyPermission(access, req, companyId, permissionKey);
   }
 
   async function assertCanGenerateOpenClawInvitePrompt(

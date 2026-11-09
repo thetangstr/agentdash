@@ -12,6 +12,7 @@ import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/compone
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useCapability } from "../hooks/useCapability";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { healthApi } from "../api/health";
@@ -44,6 +45,17 @@ export function CompanySettings() {
   } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
+  // Owners and admins change company settings; everyone else reads them. The
+  // server decides (`company:manage` is the predicate the settings routes
+  // enforce). While the answer is loading the page shows neither state: the
+  // fields stay disabled and the destructive controls hidden, and the
+  // read-only line appears only once the server has said no.
+  const companyManage = useCapability(selectedCompanyId, "company:manage");
+  const canManage = companyManage.allowed && !companyManage.isLoading;
+  const showReadOnlyNotice = !companyManage.isLoading && !companyManage.allowed;
+  // The OpenClaw invite needs `users:invite`, the regular invite rule.
+  const inviteCapability = useCapability(selectedCompanyId, "users:invite");
+  const canInvite = inviteCapability.allowed && !inviteCapability.isLoading;
   const { data: health } = useQuery({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
@@ -270,6 +282,11 @@ export function CompanySettings() {
         <Settings className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-lg font-semibold">Workspace settings</h1>
       </div>
+      {showReadOnlyNotice && (
+        <p className="text-sm text-muted-foreground" data-testid="company-settings-read-only">
+          Only owners and admins can change company settings.
+        </p>
+      )}
 
       {/* General */}
       <div className="space-y-4">
@@ -283,6 +300,7 @@ export function CompanySettings() {
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
               type="text"
               value={companyName}
+              disabled={!canManage}
               onChange={(e) => setCompanyName(e.target.value)}
             />
           </Field>
@@ -296,6 +314,7 @@ export function CompanySettings() {
               type="text"
               value={description}
               placeholder="Optional workspace description"
+              disabled={!canManage}
               onChange={(e) => setDescription(e.target.value)}
             />
           </Field>
@@ -328,10 +347,11 @@ export function CompanySettings() {
                     type="file"
                     aria-label="Logo"
                     accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                    disabled={!canManage}
                     onChange={handleLogoFileChange}
                     className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none file:mr-4 file:rounded-md file:border-0 file:bg-muted file:px-2.5 file:py-1 file:text-xs"
                   />
-                  {logoUrl && (
+                  {logoUrl && canManage && (
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
@@ -370,6 +390,7 @@ export function CompanySettings() {
                     type="color"
                     aria-label="Brand color"
                     value={brandColor || "#6366f1"}
+                    disabled={!canManage}
                     onChange={(e) => setBrandColor(e.target.value)}
                     className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0 max-sm:h-11 max-sm:w-11"
                   />
@@ -377,6 +398,7 @@ export function CompanySettings() {
                     type="text"
                     aria-label="Brand color value"
                     value={brandColor}
+                    disabled={!canManage}
                     onChange={(e) => {
                       const v = e.target.value;
                       if (v === "" || /^#[0-9a-fA-F]{0,6}$/.test(v)) {
@@ -386,7 +408,7 @@ export function CompanySettings() {
                     placeholder="Auto"
                     className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm font-mono outline-none"
                   />
-                  {brandColor && (
+                  {brandColor && canManage && (
                     <Button
                       size="sm"
                       variant="ghost"
@@ -411,6 +433,7 @@ export function CompanySettings() {
                       max={MAX_COMPANY_ATTACHMENT_MAX_MIB}
                       step={1}
                       value={attachmentMaxMiB}
+                      disabled={!canManage}
                       onChange={(e) => setAttachmentMaxMiB(e.target.value)}
                       className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
                     />
@@ -429,7 +452,7 @@ export function CompanySettings() {
       </div>
 
       {/* Save button for General + Appearance */}
-      {generalDirty && (
+      {canManage && generalDirty && (
         <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -463,6 +486,7 @@ export function CompanySettings() {
             checked={!!selectedCompany.requireBoardApprovalForNewAgents}
             onChange={(v) => settingsMutation.mutate(v)}
             toggleTestId="company-settings-team-approval-toggle"
+            disabled={!canManage}
           />
         </div>
       </div>
@@ -479,6 +503,7 @@ export function CompanySettings() {
             checked={!!selectedCompany.newIssuesStartAsTodo}
             onChange={(v) => issueStartMutation.mutate(v)}
             toggleTestId="company-settings-issue-start-toggle"
+            disabled={!canManage}
           />
         </div>
       </div>
@@ -519,6 +544,7 @@ export function CompanySettings() {
           <span className="ml-2 normal-case tracking-normal font-normal">Outside agents, import and export, agent limits</span>
         </summary>
         <div className="mt-2 space-y-6">
+          {canInvite && (
           <div className="space-y-2" data-testid="company-settings-invites-section">
             <div className="text-xs font-medium text-muted-foreground">Connect an outside agent (OpenClaw)</div>
             <div className="mt-2 space-y-3 rounded-md border border-border px-4 py-4">
@@ -594,9 +620,11 @@ export function CompanySettings() {
               )}
             </div>
           </div>
+          )}
 
-          {/* Import / Export */}
-          <div className="space-y-4">
+          {/* Import / Export: owner/admin only; the routes refuse everyone else. */}
+          {canManage && (
+          <div className="space-y-4" data-testid="company-settings-packages">
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               Workspace Packages
             </div>
@@ -617,6 +645,7 @@ export function CompanySettings() {
               </div>
             </div>
           </div>
+          )}
 
           {selectedCompany?.id ? (
             <>
@@ -631,7 +660,9 @@ export function CompanySettings() {
         </div>
       </details>
 
-      {/* Danger zone: collapsed, last. Archiving is rare and irreversible from here. */}
+      {/* Danger zone: collapsed, last. Archiving is rare and irreversible from here.
+          Owners and admins only: the archive route refuses everyone else. */}
+      {canManage && (
       <details className="group space-y-4" data-testid="company-settings-danger-zone">
         <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-destructive">
           Danger zone
@@ -683,6 +714,7 @@ export function CompanySettings() {
           </div>
         </div>
       </details>
+      )}
 
     </div>
   );

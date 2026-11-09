@@ -4,7 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { channelCallbackTokens, humanChannelBindings } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { approvalAuthorityService } from "./approval-authority.js";
-import { approvalService } from "./approvals.js";
+import { approvalService, privilegedHireRefusalMessage } from "./approvals.js";
 import { humanChannelService } from "./human-channels.js";
 import { stewardAgentReplier, type StewardAgentReplierDeps } from "./steward-agent-replier.js";
 import { logActivity } from "./activity-log.js";
@@ -352,9 +352,12 @@ export function whatsappConnectorService(db: Db, deps: StewardAgentReplierDeps =
     } catch (error) {
       const status = (error as { status?: number }).status;
       logger.info({ err: error, approvalId: record.approvalId }, "whatsapp decision refused");
+      // A privileged hire (CEO, Chief of Staff, agent creator) refused by
+      // approvalService.approve says so plainly rather than "Not permitted."
       await sendText(
         input.fromNumber,
-        status === 409 ? "This request changed; open AgentDash to review." : "Not permitted.",
+        privilegedHireRefusalMessage(error)
+          ?? (status === 409 ? "This request changed; open AgentDash to review." : "Not permitted."),
       );
     }
   }

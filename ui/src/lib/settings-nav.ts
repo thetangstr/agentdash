@@ -42,7 +42,17 @@ export interface SettingsNavGroup {
   items: SettingsNavItem[];
 }
 
-export function settingsNavGroups({ isInstanceAdmin }: { isInstanceAdmin: boolean }): SettingsNavGroup[] {
+export function settingsNavGroups({
+  isInstanceAdmin,
+  canManageCompany,
+}: {
+  isInstanceAdmin: boolean;
+  /**
+   * `company:manage` from the server. Import and export are owner/admin only
+   * (the routes refuse everyone else), so the Data group is offered only then.
+   */
+  canManageCompany: boolean;
+}): SettingsNavGroup[] {
   const groups: SettingsNavGroup[] = [
     {
       id: "workspace",
@@ -82,14 +92,18 @@ export function settingsNavGroups({ isInstanceAdmin }: { isInstanceAdmin: boolea
           : []),
       ],
     },
-    {
-      id: "data",
-      label: "Data",
-      items: [
-        { to: "/company/import", label: "Import", icon: Upload },
-        { to: "/company/export", label: "Export", icon: Download },
-      ],
-    },
+    ...(canManageCompany
+      ? [
+          {
+            id: "data" as const,
+            label: "Data",
+            items: [
+              { to: "/company/import", label: "Import", icon: Upload },
+              { to: "/company/export", label: "Export", icon: Download },
+            ],
+          },
+        ]
+      : []),
     {
       id: "quality",
       label: "Quality",

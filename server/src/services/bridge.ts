@@ -3,12 +3,12 @@ import { and, asc, eq, isNull, lt, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvals, bridgeEndpoints, bridgeTasks, companies } from "@paperclipai/db";
 import {
-  AGENT_POLICY_CEILING_EXCEEDED,
   classifyAction,
   type ActionClassification,
   type AgentDestructiveActionMode,
 } from "@paperclipai/shared";
-import { HttpError, badRequest, conflict, forbidden, notFound } from "../errors.js";
+import { badRequest, conflict, forbidden, notFound } from "../errors.js";
+import { destructiveActionBlocked } from "./destructive-action-gate.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
@@ -17,35 +17,6 @@ import { enforceAgentAccess } from "./agent-access-check.js";
 import { STEWARD_INBOX_CAPABILITY } from "./steward-inbox.js";
 import { classifyInboundContent } from "./inbound-filter.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
-
-/**
- * AgentDash-MK T5a: the refusal a `blocked` destructive-action ceiling raises.
- *
- * Reuses the T2/T3 ceiling-error shape exactly — a 422 carrying
- * `AGENT_POLICY_CEILING_EXCEEDED` and a `destructiveActions` violation — so a
- * client that already renders a ceiling refusal renders this one unchanged. The
- * class the action was placed into is the `requested` value; `blocked` is the
- * bound it breached.
- */
-function destructiveActionBlocked(actionClass: ActionClassification) {
-  return new HttpError(
-    422,
-    "This action is blocked by the owner ceiling for destructive actions",
-    {
-      code: AGENT_POLICY_CEILING_EXCEEDED,
-      violations: [
-        {
-          field: "destructiveActions",
-          code: "DESTRUCTIVE_ACTIONS_EXCEED_CEILING",
-          requested: actionClass,
-          allowed: "blocked",
-          direction: "max",
-        },
-      ],
-    },
-    AGENT_POLICY_CEILING_EXCEEDED,
-  );
-}
 
 /**
  * AgentDash-MK: the local agent bridge.

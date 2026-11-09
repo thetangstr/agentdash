@@ -23,6 +23,8 @@ export function SettingsSidebar() {
   const { isMobile, setSidebarOpen } = useSidebar();
   const { data: capabilities } = useCapabilities(selectedCompanyId);
   const isInstanceAdmin = capabilities?.isInstanceAdmin === true;
+  // Unknown (still loading) counts as no: the Data items appear once the server says yes.
+  const canManageCompany = capabilities?.capabilities?.["company:manage"] === true;
 
   const { data: badges } = useQuery({
     queryKey: selectedCompanyId
@@ -51,7 +53,7 @@ export function SettingsSidebar() {
     retry: false,
   });
 
-  const groups = settingsNavGroups({ isInstanceAdmin });
+  const groups = settingsNavGroups({ isInstanceAdmin, canManageCompany });
 
   return (
     <aside className="w-60 h-full min-h-0 border-r border-border bg-background flex flex-col">

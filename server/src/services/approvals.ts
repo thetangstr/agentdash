@@ -1,7 +1,10 @@
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvalComments, approvals, assistantConversations, assistantMessages, bridgeTasks } from "@paperclipai/db";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import type { Request } from "express";
+import { HttpError, conflict, notFound, unprocessable } from "../errors.js";
+import { grantsPrivilegedAgentAuthority, isCompanyAdministrator } from "../routes/authz.js";
+import { accessService } from "./access.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { redactRunLogText, redactRunLogValue } from "./run-log-redaction.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
@@ -12,8 +15,38 @@ import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
 
+/** The refusal every decision channel shows for a privileged hire. */
+export const PRIVILEGED_HIRE_APPROVAL_REFUSAL = "Only owners and admins can approve this hire.";
+export const PRIVILEGED_HIRE_APPROVAL_CODE = "PRIVILEGED_HIRE_ADMIN_REQUIRED";
+
+/** The plain refusal to show for an error from `approve`, when it is this one. */
+export function privilegedHireRefusalMessage(error: unknown): string | null {
+  return (error as { code?: unknown } | null)?.code === PRIVILEGED_HIRE_APPROVAL_CODE
+    ? PRIVILEGED_HIRE_APPROVAL_REFUSAL
+    : null;
+}
+
+/**
+ * Would this hire bring a CEO, a Chief of Staff or an agent creator into force
+ * (`grantsPrivilegedAgentAuthority`)? A hire that creates its agent names the
+ * role in the payload; one that activates a pending agent names it by `agentId`.
+ */
+export async function hireGrantsPrivilegedAgentAuthority(
+  db: Db,
+  companyId: string,
+  payload: unknown,
+): Promise<boolean> {
+  const record = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+  if (grantsPrivilegedAgentAuthority(record)) return true;
+  const agentId = typeof record.agentId === "string" ? record.agentId : null;
+  if (!agentId) return false;
+  const target = await agentService(db).getById(agentId);
+  return Boolean(target && target.companyId === companyId && grantsPrivilegedAgentAuthority(target));
+}
+
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
+  const access = accessService(db);
   const budgets = budgetService(db);
   const instanceSettings = instanceSettingsService(db);
   const workflow = workflowEventsService(db);
@@ -57,7 +90,42 @@ export function approvalService(db: Db) {
     idempotencyKey?: string | null;
     actorRole?: string | null;
     overrideReason?: string | null;
+    /**
+     * The decider's credential source (`req.actor.source`), so the local
+     * implicit board keeps the exemption every guard gives it. Channels decide
+     * as signed-in people and omit it. Never persisted.
+     */
+    deciderSource?: string | null;
   };
+
+  /**
+   * Every decision path (web, override, agent page, assistant, WhatsApp, Teams,
+   * Telegram, the steward inbox) approves through `approve` below, so the rule
+   * that a privileged hire needs a company administrator lives here once.
+   */
+  async function assertDeciderMayApprovePrivilegedHire(
+    existing: { type: string; companyId: string; payload: unknown },
+    decidedByUserId: string,
+    meta: DecisionMeta,
+  ) {
+    if (existing.type !== "hire_agent") return;
+    if (!(await hireGrantsPrivilegedAgentAuthority(db, existing.companyId, existing.payload))) return;
+    const asRequest = {
+      actor: {
+        type: "board",
+        userId: decidedByUserId,
+        source: meta.deciderSource ?? "session",
+        isInstanceAdmin: await access.isInstanceAdmin(decidedByUserId),
+      },
+    } as unknown as Request;
+    if (await isCompanyAdministrator(access, asRequest, existing.companyId)) return;
+    throw new HttpError(
+      403,
+      PRIVILEGED_HIRE_APPROVAL_REFUSAL,
+      { code: PRIVILEGED_HIRE_APPROVAL_CODE },
+      PRIVILEGED_HIRE_APPROVAL_CODE,
+    );
+  }
 
   function redactApprovalComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
     return {
@@ -418,6 +486,7 @@ export function approvalService(db: Db) {
         decidedByUserId,
         decisionNote,
         meta,
+        (existing) => assertDeciderMayApprovePrivilegedHire(existing, decidedByUserId, meta),
       );
 
       let hireApprovedAgentId: string | null = null;

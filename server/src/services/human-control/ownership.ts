@@ -5,7 +5,7 @@ import { agents, companyMemberships, type Db } from '@paperclipai/db';
 import { z } from 'zod';
 import { assignAgentStewardshipSchema, transferAgentStewardshipSchema, humanJsonSchema, type HumanOperationDescriptor } from '@paperclipai/shared';
 import { conflict, forbidden, notFound } from '../../errors.js';
-import { assertBoard, assertCompanyAccess, getActorInfo } from '../../routes/authz.js';
+import { assertBoard, assertCompanyAccess, assertMayHandOutCompanyAgentAuthority, getActorInfo } from '../../routes/authz.js';
 import { accessService } from '../access.js';
 import { agentService } from '../agents.js';
 import { agentAccountabilityService, normalizeAgentAutonomy, accountabilityLabel } from '../agent-accountability.js';
@@ -81,6 +81,9 @@ export function ownershipHumanOperations(): HumanOperation[] {
         if (await agentConfigurationAuthority(ctx.db, ctx.req, agent) !== 'admin') throw forbidden('Only agent administrators may change accountability');
         await resolveAccountabilityPatch(ctx.db, ctx.req, agent, { accountableUserId: p.accountableUserId });
       } else {
+        // Same rule as the stewardship routes: stewarding a CEO or an agent
+        // creator is company-wide authority, a company administrator's call.
+        await assertMayHandOutCompanyAgentAuthority(accessService(ctx.db), ctx.req, companyId, agent);
         await agentAccountabilityService(ctx.db).assertAccountableMember(companyId, p.userId as string);
         if (agent.status === 'terminated' || normalizeAgentAutonomy(agent.autonomy) === 'autonomous') throw conflict('Stewardship requires an active stewarded agent');
         const assigned = await svc.activeByUser(companyId, p.userId as string);

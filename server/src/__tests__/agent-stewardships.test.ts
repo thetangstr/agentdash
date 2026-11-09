@@ -12,6 +12,7 @@ import {
   companyMemberships,
   createDb,
   humanChannelBindings,
+  principalPermissionGrants,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -143,6 +144,7 @@ describeEmbeddedPostgres("agent stewardships", () => {
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(principalPermissionGrants);
     await db.delete(bridgeEndpoints);
     await db.delete(humanChannelBindings);
     await db.delete(agentStewardships);
@@ -395,6 +397,53 @@ describeEmbeddedPostgres("agent stewardships", () => {
     );
     expect(ownerRes.status).toBe(201);
     expect(ownerRes.body.stewardship.userId).toBe(user.principalId);
+  });
+
+  // Stewarding a CEO, or an agent that can create agents, lets the steward run
+  // it: company-wide authority, so assigning or transferring it needs a
+  // company administrator, not just a delegated agents:create.
+  it("refuses a member with agents:create stewardship of a CEO; an owner may, and ordinary agents stay open", async () => {
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const delegate = await createMember(db, company.id, { role: "member" });
+    const other = await createMember(db, company.id, { role: "member" });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id, principalType: "user", principalId: delegate.principalId, permissionKey: "agents:create",
+    });
+    const ceo = await db
+      .insert(agents)
+      .values({ companyId: company.id, name: `CEO ${randomUUID()}`, role: "ceo", status: "idle", adapterType: "process" })
+      .returning()
+      .then((rows) => rows[0]!);
+    const ordinary = await createAgent(db, company.id);
+    const delegateApp = await createApp(db, makeBoardActor(company.id, delegate.principalId, "member"));
+    const ownerApp = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+    const refusal =
+      "Only owners and admins can give someone a key, a connect code or stewardship for a CEO agent or an agent that can create agents.";
+
+    const selfAssign = await requestApp(delegateApp, (baseUrl) =>
+      request(baseUrl).post(`/api/companies/${company.id}/agent-stewardships`).send({ agentId: ceo.id, userId: delegate.principalId }),
+    );
+    expect(selfAssign.status, JSON.stringify(selfAssign.body)).toBe(403);
+    expect(selfAssign.body.error).toBe(refusal);
+
+    const ordinaryAssign = await requestApp(delegateApp, (baseUrl) =>
+      request(baseUrl).post(`/api/companies/${company.id}/agent-stewardships`).send({ agentId: ordinary.id, userId: delegate.principalId }),
+    );
+    expect(ordinaryAssign.status, JSON.stringify(ordinaryAssign.body)).toBe(201);
+
+    const ownerAssign = await requestApp(ownerApp, (baseUrl) =>
+      request(baseUrl).post(`/api/companies/${company.id}/agent-stewardships`).send({ agentId: ceo.id, userId: other.principalId }),
+    );
+    expect(ownerAssign.status, JSON.stringify(ownerAssign.body)).toBe(201);
+
+    const transfer = await requestApp(delegateApp, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${ceo.id}/stewardship/transfer`)
+        .send({ userId: owner.principalId, transferReason: "taking it over" }),
+    );
+    expect(transfer.status, JSON.stringify(transfer.body)).toBe(403);
+    expect((await agentStewardshipService(db).activeByAgent(company.id, ceo.id))?.userId).toBe(other.principalId);
   });
 
   describe("capability gate (one UX)", () => {
