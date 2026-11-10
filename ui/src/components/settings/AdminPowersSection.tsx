@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ASSISTANT_BATCH_MAX_RECORDS_DEFAULT,
   ASSISTANT_BATCH_MAX_RECORDS_MAX,
@@ -8,6 +8,8 @@ import {
 } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { companiesApi } from "../../api/companies";
+import { ceilingTemplatesApi } from "../../api/ceilingTemplates";
+import { ApiError } from "../../api/client";
 import { queryKeys } from "../../lib/queryKeys";
 import { Field, ToggleField } from "../agent-config-primitives";
 
@@ -18,9 +20,9 @@ import { Field, ToggleField } from "../agent-config-primitives";
  * disabled with one plain line. Whether this person may change them is the
  * server's `company:manage` answer, passed in by the page.
  *
- * Each power is off until an admin turns it on. Later parts add, to this
- * same section: the ceiling for new agents (part 3) and the link to the
- * admin audit page (part 4).
+ * Each power is off until an admin turns it on. "Ceiling for new agents"
+ * picks one of the company's ceiling templates (or none); it applies to
+ * agents created from then on. The admin audit link arrives with part 4.
  */
 export function AdminPowersSection({
   company,
@@ -39,13 +41,20 @@ export function AdminPowersSection({
   const mutation = useMutation({
     mutationFn: (
       data: Partial<Pick<Company,
-        "adminDirectiveReadEnabled" | "adminTranscriptReadEnabled" | "assistantAdminBatchesEnabled" | "assistantBatchMaxRecords"
+        "adminDirectiveReadEnabled" | "adminTranscriptReadEnabled" | "assistantAdminBatchesEnabled" | "assistantBatchMaxRecords" | "defaultCeilingTemplateId"
       >>,
     ) => companiesApi.update(company.id, data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     },
   });
+
+  const templates = useQuery({
+    queryKey: queryKeys.ceilingTemplates(company.id),
+    queryFn: () => ceilingTemplatesApi.list(company.id),
+    retry: false,
+  });
+  const ceilingsUnavailable = templates.error instanceof ApiError && templates.error.status === 404;
 
   const assistantBatches = !!company.assistantAdminBatchesEnabled;
   const parsedMax = Number.parseInt(maxRecords, 10);
@@ -125,6 +134,29 @@ export function AdminPowersSection({
               </span>
             )}
           </div>
+        </Field>
+        <Field
+          label="Ceiling for new agents"
+          hint="Every agent created from now on starts with this ceiling. Agents that already exist keep theirs."
+        >
+          {ceilingsUnavailable ? (
+            <span className="text-xs text-muted-foreground" data-testid="admin-powers-default-ceiling-unavailable">Agent ceilings are available on request.</span>
+          ) : (
+            <select
+              aria-label="Ceiling for new agents"
+              data-testid="admin-powers-default-ceiling"
+              className="w-56 max-sm:min-h-11 max-sm:w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none disabled:opacity-60"
+              value={company.defaultCeilingTemplateId ?? ""}
+              disabled={!canManage || templates.isLoading || mutation.isPending}
+              onChange={(event) => mutation.mutate({ defaultCeilingTemplateId: event.target.value || null })}
+            >
+              <option value="">None</option>
+              {(templates.data?.templates ?? []).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+            </select>
+          )}
+          {!ceilingsUnavailable ? (
+            <p className="mt-1 text-xs text-muted-foreground">Applies to agents created from now on; existing agents keep their ceilings.</p>
+          ) : null}
         </Field>
         {mutation.isError && (
           <p className="text-xs text-destructive" role="alert">

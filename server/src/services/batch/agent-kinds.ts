@@ -182,6 +182,16 @@ export const agentSetModelBatchKind: BatchKind<AgentSetModelBatchChange, AgentRe
     return { before, after, noop: false, notes: ["Its next run uses the new model."] };
   },
   observe: (record) => ({ model: record.model }),
+  // The agent route's messages can name configuration (and a mediated
+  // config error could quote a value), so the batch stores only a plain
+  // reason by status, never the route's text.
+  refusalReason(status) {
+    if (status === 401 || status === 403) return "You are not allowed to change this agent's model.";
+    if (status === 404) return "This agent could not be found.";
+    if (status === 409) return "The agent changed at the same time, so its model was not changed.";
+    if (status === 400 || status === 422) return "The agent's runtime did not accept that model, so it was not changed.";
+    return `The model was not changed (HTTP ${status}).`;
+  },
   // Only the model: the route merges it into the agent's adapter
   // configuration and leaves everything else there as it was.
   request: (record, change) => ({ method: "PATCH", path: `/api/agents/${record.entityId}`, body: { adapterConfig: { model: change.model } } }),

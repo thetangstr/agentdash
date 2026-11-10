@@ -13,6 +13,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  */
 
 const mockCompaniesApi = vi.hoisted(() => ({ update: vi.fn() }));
+// AgentDash admin powers: the ceiling-template list behind "Ceiling for new agents".
+const mockCeilingTemplatesApi = vi.hoisted(() => ({ list: vi.fn(async () => ({ templates: [] })) }));
+vi.mock("../../api/ceilingTemplates", () => ({ ceilingTemplatesApi: mockCeilingTemplatesApi }));
 vi.mock("../../api/companies", () => ({ companiesApi: mockCompaniesApi }));
 
 const { AdminPowersSection } = await import("./AdminPowersSection");
@@ -118,5 +121,38 @@ describe("AdminPowersSection", () => {
     await setValue("120");
     await click(byTestId("admin-powers-assistant-batch-max-save")!);
     expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { assistantBatchMaxRecords: 120 });
+  });
+
+  it("Ceiling for new agents: lists the templates, saves the choice, and is disabled for people who cannot manage settings", async () => {
+    mockCeilingTemplatesApi.list.mockResolvedValue({ templates: [{ id: "t1", name: "Contractors" }] } as never);
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const select = byTestId<HTMLSelectElement>("admin-powers-default-ceiling")!;
+    expect([...select.options].map((option) => option.textContent)).toEqual(["None", "Contractors"]);
+    expect(container.textContent).toContain("Applies to agents created from now on; existing agents keep their ceilings.");
+    await act(async () => {
+      select.value = "t1";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { defaultCeilingTemplateId: "t1" });
+    act(() => root.unmount());
+    root = createRoot(container);
+    await render({ company: company(), canManage: false, showReadOnlyNotice: true });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(byTestId<HTMLSelectElement>("admin-powers-default-ceiling")!.disabled).toBe(true);
+  });
+
+  it("Ceiling for new agents is disabled while the templates load, and says 'available on request' where there are no ceilings", async () => {
+    mockCeilingTemplatesApi.list.mockReturnValue(new Promise(() => undefined) as never);
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    expect(byTestId<HTMLSelectElement>("admin-powers-default-ceiling")!.disabled).toBe(true);
+    act(() => root.unmount());
+    root = createRoot(container);
+    const { ApiError } = await import("../../api/client");
+    mockCeilingTemplatesApi.list.mockRejectedValue(new ApiError("Company not found", 404, null) as never);
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    for (let i = 0; i < 3; i++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(byTestId("admin-powers-default-ceiling-unavailable")!.textContent).toBe("Agent ceilings are available on request.");
+    mockCeilingTemplatesApi.list.mockImplementation(async () => ({ templates: [] }));
   });
 });

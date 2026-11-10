@@ -16,6 +16,7 @@ import {
   type BatchOrigin,
 } from "@paperclipai/shared";
 import { logActivity } from "../activity-log.js";
+import { redactSensitiveText } from "../../redaction.js";
 import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js";
 import { logger } from "../../middleware/logger.js";
 import { configuredEdgeSecret, EDGE_SECRET_HEADER } from "../../middleware/edge-gate.js";
@@ -130,7 +131,9 @@ function routeReason(body: unknown, status: number): string {
   if (body && typeof body === "object") {
     for (const key of ["error", "reason", "message"] as const) {
       const value = (body as Record<string, unknown>)[key];
-      if (typeof value === "string" && value.trim()) return clip(value.trim());
+      // The shared secret pass, as for activity rows: a route message that
+      // happens to quote a credential never lands in a batch row.
+      if (typeof value === "string" && value.trim()) return clip(redactSensitiveText(value.trim()));
     }
   }
   return status === 404 ? "This record could not be found." : `The change was refused (HTTP ${status}).`;
@@ -393,11 +396,13 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
       ? (kind.observe ? kind.observe(current) : kind.describe(current, change).before)
       : kind.observeMissing ? { ...kind.observeMissing } : null;
     if (notOurs) {
-      await settleItem(ctx, item, "applied", {
+      // The route answered 200 with an earlier decision: this batch did
+      // nothing, so the item is refused (and counted so), never applied.
+      await settleItem(ctx, item, "refused", {
         httpStatus: status,
         actual,
-        reasonCode: BATCH_REASON_CODES.notThisBatchsDecision,
-        reason: `${item.label}: ${notOurs}`,
+        reasonCode: notOurs.reasonCode,
+        reason: `${item.label}: ${notOurs.reason}`,
       });
       return;
     }
@@ -420,7 +425,9 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
   if (status >= 400 && status < 500) {
     await settleItem(ctx, item, "refused", {
       reasonCode: BATCH_REASON_CODES.routeRefused,
-      reason: routeReason(result.body, status),
+      // A kind can replace the route's own message (agent.set_model never
+      // stores route text, which could echo configuration values).
+      reason: kind.refusalReason ? kind.refusalReason(status) : routeReason(result.body, status),
       httpStatus: status,
     });
     return;

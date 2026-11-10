@@ -45,6 +45,10 @@ const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 
 // The Labels card asks its own server; it has its own suite.
 vi.mock("@/components/settings/LabelsCard", () => ({ LabelsCard: () => null }));
+vi.mock("@/components/settings/CeilingTemplatesCard", () => ({ CeilingTemplatesCard: () => null }));
+// AgentDash admin powers: the ceiling-template list behind "Ceiling for new agents".
+const mockCeilingTemplatesApi = vi.hoisted(() => ({ list: vi.fn(async () => ({ templates: [] })) }));
+vi.mock("../api/ceilingTemplates", () => ({ ceilingTemplatesApi: mockCeilingTemplatesApi }));
 vi.mock("../api/companies", () => ({
   companiesApi: mockCompaniesApi,
 }));

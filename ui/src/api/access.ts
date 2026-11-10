@@ -371,8 +371,14 @@ export const accessApi = {
         assigneeAgentId?: string | null;
         assigneeUserId?: string | null;
       } | null;
+      /** AgentDash admin powers: who takes over each of the member's agents (applied first). */
+      stewardTransfers?: Array<{ agentId: string; toUserId: string }>;
     } = {},
   ) => api.post<ArchiveCompanyMemberResponse>(`/companies/${companyId}/members/${memberId}/archive`, input),
+
+  /** AgentDash admin powers: the agents a member looks after (owners and admins). */
+  stewardedAgents: (companyId: string, memberId: string) =>
+    api.get<{ agents: Array<{ id: string; name: string; status: string }> }>(`/companies/${companyId}/members/${memberId}/stewarded-agents`),
 
   approveJoinRequest: (companyId: string, requestId: string) =>
     api.post<JoinRequest>(`/companies/${companyId}/join-requests/${requestId}/approve`, {}),

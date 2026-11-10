@@ -8,6 +8,7 @@ import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "../issu
 import { routePersonAssignee } from "../stewarded-agent-routing.js";
 import { approvalApproveBatchKind, approvalRejectBatchKind } from "./approval-kinds.js";
 import { agentPauseBatchKind, agentResumeBatchKind, agentSetModelBatchKind, agentTransferStewardBatchKind } from "./agent-kinds.js";
+import { agentApplyCeilingBatchKind } from "./ceiling-kinds.js";
 import { labelDeleteBatchKind, labelUpdateBatchKind, routineArchiveBatchKind, routineDeleteBatchKind } from "./routine-label-kinds.js";
 
 /**
@@ -100,10 +101,16 @@ export interface BatchKind<Change = unknown, Record extends BatchKindRecord = Ba
    */
   observeMissing?: { [key: string]: unknown };
   /**
-   * A 2xx can still say the change was not this batch's (an approval already
-   * decided by someone else answers 200). Return a plain reason in that case.
+   * A 2xx can still say this batch did nothing (an approval already decided
+   * answers 200 with the earlier decision). Return a plain reason: the item is
+   * then recorded as refused, never applied.
    */
-  checkResponse?(body: unknown, context: { actorUserId: string | null; request: BatchItemRequest }): string | null;
+  /**
+   * A plain reason for a 4xx refusal instead of the route's own message, for
+   * kinds whose route messages could quote values the batch must not store.
+   */
+  refusalReason?(status: number): string;
+  checkResponse?(body: unknown, context: { actorUserId: string | null; request: BatchItemRequest }): { reasonCode: string; reason: string } | null;
   /** The single-record route's own request, built at apply time from a fresh read. */
   request(record: Record, change: Change, item: BatchKindItemRef): BatchItemRequest;
 }
@@ -324,4 +331,5 @@ export const BATCH_KINDS: Readonly<Record<string, AnyBatchKind>> = Object.freeze
   [routineDeleteBatchKind.key]: routineDeleteBatchKind,
   [labelUpdateBatchKind.key]: labelUpdateBatchKind,
   [labelDeleteBatchKind.key]: labelDeleteBatchKind,
+  [agentApplyCeilingBatchKind.key]: agentApplyCeilingBatchKind,
 });

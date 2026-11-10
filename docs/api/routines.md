@@ -159,7 +159,7 @@ curl -X PATCH https://your-instance.example/api/routines/$ROUTINE_ID \
 
 `DELETE /api/routines/{id}` · [`deleteRoutine`](/api/reference#tag/routines/deleteRoutine)
 
-Removes the routine for good: it disappears from every read and can never run again (it cannot be restored; archive it instead if you may want it back). Its past runs, the issues those runs created and its activity history are kept. The guard is the same as for an update: `tasks:assign`, and agents are refused.
+Removes the routine for good: it is archived, its triggers go off, and it disappears from the routine routes, from agents' responsibilities and from profile references; it can never run again and cannot be restored (archive it instead if you may want it back). Its past runs, the issues those runs created and its activity history are kept. The guard is the same as for an update: `tasks:assign`, and agents are refused.
 
 ```bash
 curl -X DELETE https://your-instance.example/api/routines/$ROUTINE_ID \

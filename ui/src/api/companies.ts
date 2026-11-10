@@ -65,6 +65,7 @@ export const companiesApi = {
         | "adminTranscriptReadEnabled"
         | "assistantAdminBatchesEnabled"
         | "assistantBatchMaxRecords"
+        | "defaultCeilingTemplateId"
         | "feedbackDataSharingEnabled"
         | "brandColor"
         | "logoAssetId"

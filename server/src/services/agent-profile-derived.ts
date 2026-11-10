@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -328,6 +328,9 @@ export async function loadAssignedRoutines(
       and(
         eq(routines.companyId, companyId),
         eq(routines.assigneeAgentId, agentId),
+        // A deleted routine (DELETE /routines/:id) is not a responsibility,
+        // even where archived ones are listed.
+        isNull(routines.deletedAt),
         opts.includeArchived ? undefined : ne(routines.status, "archived"),
         viewer.projectScoped(routines.projectId),
       ),

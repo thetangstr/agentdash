@@ -777,6 +777,10 @@ export {
 export {
   agentGovernancePolicySchema,
   updateAgentGovernancePolicySchema,
+  createCeilingTemplateSchema,
+  updateCeilingTemplateSchema,
+  type CreateCeilingTemplate,
+  type UpdateCeilingTemplate,
   AGENT_GOVERNANCE_CLIENT_CHANNELS,
   type AgentGovernancePolicyInput,
   type UpdateAgentGovernancePolicy,
@@ -1556,3 +1560,5 @@ export { withoutRefinements, partialWithoutDefaults } from './validators/zod-obj
 // AgentDash admin powers, part 2: the one batch engine (numbers, words, request bodies).
 export * from "./batch.js";
 export * from "./validators/batch.js";
+// AgentDash admin powers: gains and losses between two governance policies.
+export * from "./agent-governance-diff.js";

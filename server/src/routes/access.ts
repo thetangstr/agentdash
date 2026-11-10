@@ -18,6 +18,8 @@ import type { Request } from "express";
 import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents as agentsTable,
+  agentStewardships,
   assets,
   agentApiKeys,
   authUsers,
@@ -107,7 +109,9 @@ import {
   inviteSignupBoundEmail,
 } from "../services/invites.js";
 import { isHostedBox } from "../services/license.js";
-import { assertAuthenticated, assertBoardUserCompanyPermission, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertBoardUserCompanyPermission, assertCompanyAccess, assertCompanyAdministrator } from "./authz.js";
+import { assertCanMutateStewardshipsFor, assertMayStewardAgentFor } from "./agent-stewardships.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 // AgentDash (GH #505): one predicate for who may read member email addresses.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 // AgentDash (GH #708): membership changes re-check open live-event sockets.
@@ -4913,6 +4917,23 @@ export function accessRoutes(
     }
   );
 
+  // AgentDash admin powers: the agents a member looks after, for the "Their
+  // agents" block of the remove-member dialog. Owners and admins only.
+  router.get("/companies/:companyId/members/:memberId/stewarded-agents", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const memberId = req.params.memberId as string;
+    assertCompanyAccess(req, companyId);
+    await assertCompanyAdministrator(access, req, companyId, "Only owners and admins can see whose agents a member looks after.");
+    const member = await access.getMemberById(companyId, memberId);
+    if (!member || member.principalType !== "user") throw notFound("Member not found");
+    const rows = await db
+      .select({ id: agentsTable.id, name: agentsTable.name, status: agentsTable.status })
+      .from(agentStewardships)
+      .innerJoin(agentsTable, eq(agentsTable.id, agentStewardships.agentId))
+      .where(and(eq(agentStewardships.companyId, companyId), eq(agentStewardships.userId, member.principalId), isNull(agentStewardships.endedAt)));
+    res.json({ agents: rows });
+  });
+
   router.post(
     "/companies/:companyId/members/:memberId/archive",
     validate(archiveCompanyMemberSchema),
@@ -4924,10 +4945,83 @@ export function accessRoutes(
       if (!memberToArchive) throw notFound("Member not found");
       await assertCanManageCompanyMember(req, access, companyId, memberToArchive, "archive");
 
-      const result = await access.archiveMember(companyId, memberId, {
-        reassignment: req.body.reassignment ?? null,
-        actorUserId: req.actor.userId ?? null,
-      });
+      // AgentDash admin powers: hand each of the member's agents to a new
+      // steward BEFORE the member's access (and so their stewardships) ends.
+      // The transfer route's own guards apply. Everything is checked first, so
+      // a bad choice changes nothing; transfers that went through stand even
+      // if the archive then fails (they were explicit choices), and the answer
+      // says which.
+      const transfers: Array<{ agentId: string; toUserId: string }> = req.body.stewardTransfers ?? [];
+      const transferred: Array<{ agentId: string; toUserId: string }> = [];
+      if (transfers.length > 0) {
+        await assertCanMutateStewardshipsFor(access, req, companyId);
+        const theirs = new Set(
+          (await db
+            .select({ agentId: agentStewardships.agentId })
+            .from(agentStewardships)
+            .where(and(eq(agentStewardships.companyId, companyId), eq(agentStewardships.userId, memberToArchive.principalId), isNull(agentStewardships.endedAt))))
+            .map((row) => row.agentId),
+        );
+        for (const transfer of transfers) {
+          if (!theirs.has(transfer.agentId)) {
+            res.status(422).json({ error: "One of the chosen agents is not looked after by this member, so nothing was changed." });
+            return;
+          }
+          if (transfer.toUserId === memberToArchive.principalId) {
+            res.status(422).json({ error: "The member being removed cannot take over their own agents." });
+            return;
+          }
+          await assertMayStewardAgentFor(db, access, req, companyId, transfer.agentId);
+          const target = await access.getMembership(companyId, "user", transfer.toUserId);
+          if (!target || target.status !== "active") {
+            res.status(422).json({ error: "A chosen new steward is not an active member of this company, so nothing was changed." });
+            return;
+          }
+          const [busy] = await db
+            .select({ agentId: agentStewardships.agentId })
+            .from(agentStewardships)
+            .where(and(eq(agentStewardships.companyId, companyId), eq(agentStewardships.userId, transfer.toUserId), isNull(agentStewardships.endedAt)));
+          if (busy) {
+            res.status(409).json({ error: "A person can look after only one agent, and a chosen new steward already looks after one, so nothing was changed." });
+            return;
+          }
+        }
+        const stewardshipSvc = agentStewardshipService(db);
+        for (const transfer of transfers) {
+          try {
+            await stewardshipSvc.transfer(companyId, transfer.agentId, {
+              userId: transfer.toUserId,
+              transferredByUserId: req.actor.userId ?? null,
+              transferReason: "Their steward was removed from the company.",
+            });
+            transferred.push(transfer);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "A hand-over failed.";
+            res.status(409).json({
+              error: `${message} The member was not removed. ${transferred.length} of ${transfers.length} agents were already handed over and stay with their new stewards.`,
+              transferred,
+            });
+            return;
+          }
+        }
+      }
+
+      let result: Awaited<ReturnType<typeof access.archiveMember>>;
+      try {
+        result = await access.archiveMember(companyId, memberId, {
+          reassignment: req.body.reassignment ?? null,
+          actorUserId: req.actor.userId ?? null,
+        });
+      } catch (error) {
+        if (transferred.length === 0) throw error;
+        const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
+        const message = error instanceof Error ? error.message : "The member could not be removed.";
+        res.status(status).json({
+          error: `${message} The member was not removed, but ${transferred.length} ${transferred.length === 1 ? "agent was" : "agents were"} already handed over and stay with their new stewards.`,
+          transferred,
+        });
+        return;
+      }
       if (!result) throw notFound("Member not found");
 
       // AgentDash: billing-trio (#153) — sync Stripe seat quantity after a
@@ -4947,6 +5041,7 @@ export function accessRoutes(
           principalId: result.member.principalId,
           reassignedIssueCount: result.reassignedIssueCount,
           reassignment: req.body.reassignment ?? null,
+          ...(transferred.length > 0 ? { stewardTransfers: transferred } : {}),
         },
       });
 
@@ -4958,6 +5053,7 @@ export function accessRoutes(
       res.json({
         member: redactMemberRecordEmail(req, await canViewMemberEmails(access, req, companyId), member),
         reassignedIssueCount: result.reassignedIssueCount,
+        stewardTransfers: transferred,
       });
     }
   );

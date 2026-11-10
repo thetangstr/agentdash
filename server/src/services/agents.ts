@@ -1,3 +1,4 @@
+import { agentGovernanceService } from "./agent-governance.js";
 import { withHermesSshCompanyLock } from "./hermes-ssh-policy.js";
 import { publishActivity, type ActivityPublication } from "./activity-log.js";
 import { workforceService } from "./workforce.js";
@@ -533,6 +534,11 @@ export function agentService(db: Db, optionsForService: { environmentLockHeld?: 
         })
         .returning()
         .then((rows) => rows[0]);
+
+      // AgentDash admin powers: the company's ceiling for new agents, applied
+      // once here — the one insert every hire path reaches — and never at read
+      // time, so existing agents are never narrowed by it.
+      if (created) await agentGovernanceService(db).applyCompanyDefaultCeiling(companyId, created.id);
 
       return normalizeAgentRow(created);
     },

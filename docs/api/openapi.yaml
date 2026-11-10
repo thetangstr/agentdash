@@ -553,6 +553,167 @@ paths:
         - bearerBoardKey: []
         - session: []
       x-stability: stable
+  /api/companies/{companyId}/ceiling-templates:
+    get:
+      operationId: listCeilingTemplates
+      summary: List a company's ceiling templates (404 where agent ceilings are not enabled).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+    post:
+      operationId: createCeilingTemplate
+      summary: Create a named agent ceiling (owners and admins).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCeilingTemplateRequest"
+      responses:
+        "201":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+  /api/companies/{companyId}/ceiling-templates/{templateId}:
+    patch:
+      operationId: updateCeilingTemplate
+      summary: Rename or change a ceiling template; a stale revision is 409 (owners and admins).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: templateId
+          in: path
+          required: true
+          description: Agent id (UUID).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCeilingTemplateRequest"
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+    delete:
+      operationId: deleteCeilingTemplate
+      summary: Delete a ceiling template; refused while it is the ceiling for new agents (owners and admins).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: templateId
+          in: path
+          required: true
+          description: Agent id (UUID).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: |-
+        Request schema not generated: the route has no shared validator.
+
+        Response schema not generated: the route returns no named shared type.
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
   /api/companies/{companyId}/issues:
     get:
       operationId: listIssues
@@ -3768,6 +3929,64 @@ components:
       required:
         - type
         - payload
+    CreateCeilingTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        ceiling:
+          type: object
+          properties:
+            permissions:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            monthlyBudgetCents:
+              type: integer
+              minimum: 0
+              maximum: 2147483647
+            destructiveActions:
+              type: string
+              enum:
+                - blocked
+                - approval_required
+                - allowed
+            dataScopes:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            providers:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 50
+            minimumApproval:
+              type: string
+              enum:
+                - none
+                - steward
+          required:
+            - permissions
+            - monthlyBudgetCents
+            - destructiveActions
+            - dataScopes
+            - providers
+            - minimumApproval
+          additionalProperties: false
+      required:
+        - name
+        - ceiling
+      additionalProperties: false
     CreateCompanyRequest:
       type: object
       properties:
@@ -7854,6 +8073,66 @@ components:
         - type: number
         - type: string
           const: latest
+    UpdateCeilingTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        ceiling:
+          type: object
+          properties:
+            permissions:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            monthlyBudgetCents:
+              type: integer
+              minimum: 0
+              maximum: 2147483647
+            destructiveActions:
+              type: string
+              enum:
+                - blocked
+                - approval_required
+                - allowed
+            dataScopes:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            providers:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 50
+            minimumApproval:
+              type: string
+              enum:
+                - none
+                - steward
+          required:
+            - permissions
+            - monthlyBudgetCents
+            - destructiveActions
+            - dataScopes
+            - providers
+            - minimumApproval
+          additionalProperties: false
+        revision:
+          type: integer
+          exclusiveMinimum: 0
+      required:
+        - revision
+      additionalProperties: false
     UpdateCompanyRequest:
       type: object
       properties:
@@ -7935,6 +8214,11 @@ components:
           type: integer
           minimum: 1
           maximum: 200
+        defaultCeilingTemplateId:
+          type:
+            - string
+            - "null"
+          format: uuid
     UpdateGoalRequest:
       type: object
       properties:

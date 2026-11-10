@@ -43,9 +43,13 @@ export const routines = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     /**
      * AgentDash admin powers: set by DELETE /routines/:id. A deleted routine
-     * is gone from every read and can never run again, but its past runs,
-     * the issues they created and its activity rows stay (routine_runs
-     * cascade on a hard delete, so the row is kept as a tombstone).
+     * is archived, its triggers are off and it can never run again. It is
+     * hidden from the routine routes (list, detail, writes), from an agent's
+     * responsibilities and performance views, and is not a valid reference
+     * in a profile application. History is kept: its past runs, the issues
+     * they created, its activity rows, and the evaluation ledger (whose
+     * snapshot marks it deleted). routine_runs cascade on a hard delete, so
+     * the row stays as a tombstone.
      */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },

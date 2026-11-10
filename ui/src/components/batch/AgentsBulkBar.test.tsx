@@ -19,6 +19,8 @@ vi.mock("./BatchPreviewDialog", () => ({
   },
 }));
 const mockAgentsApi = vi.hoisted(() => ({ adapterModels: vi.fn() }));
+const mockCeilingTemplatesApi = vi.hoisted(() => ({ list: vi.fn() }));
+vi.mock("../../api/ceilingTemplates", () => ({ ceilingTemplatesApi: mockCeilingTemplatesApi }));
 vi.mock("../../api/agents", () => ({ agentsApi: mockAgentsApi }));
 
 const { AgentsBulkBar } = await import("./AgentsBulkBar");
@@ -98,6 +100,24 @@ describe("AgentsBulkBar", () => {
     expect(dialog.last).toMatchObject({ kind: "agent.set_model", change: { model: "sonnet" } });
     const format = dialog.last!.formatField as (field: string, value: unknown) => unknown;
     expect(format("model", null)).toEqual({ label: "Model", value: "Runtime default" });
+  });
+
+  it("apply ceiling template previews the chosen template with gains and losses", async () => {
+    mockCeilingTemplatesApi.list.mockResolvedValue({ templates: [{ id: "t1", name: "Contractors", ceiling: {}, revision: 1 }] });
+    await render();
+    await click(q("agents-bulk-ceiling"));
+    await choose(container.querySelector<HTMLSelectElement>('select[aria-label="Ceiling template"]')!, "t1");
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent === "Preview")!);
+    expect(dialog.last).toMatchObject({ kind: "agent.apply_ceiling", ids: ["a1", "a2"], change: { templateId: "t1" } });
+    expect(typeof dialog.last!.describeItem).toBe("function");
+  });
+
+  it("says ceilings are available on request where the server has none", async () => {
+    const { ApiError } = await import("../../api/client");
+    mockCeilingTemplatesApi.list.mockRejectedValue(new ApiError("Company not found", 404, null));
+    await render();
+    await click(q("agents-bulk-ceiling"));
+    expect(q("agents-bulk-ceiling-panel")!.textContent).toContain("Agent ceilings are available on request.");
   });
 
   it("transfer steward needs a person and a reason", async () => {

@@ -125,6 +125,7 @@ curl -X PATCH https://your-instance.example/api/companies/$COMPANY_ID \
 | `adminTranscriptReadEnabled` | boolean | Admin powers: owners and admins may read run transcripts while document access is on. Off by default. |
 | `assistantAdminBatchesEnabled` | boolean | Admin powers: an owner's or admin's own Claude may prepare batch changes. Off by default. |
 | `assistantBatchMaxRecords` | integer 1 to 200 | The most records one batch from Claude may hold. Default 50. |
+| `defaultCeilingTemplateId` | UUID or null | The ceiling template every new agent starts with (one of this company's templates, else 422); null clears it. Applied once, when an agent is created; existing agents are never changed by it. |
 
 An agent may call this only if it is the company's **CEO agent**, and its body is parsed with the narrower `agentCompanyBrandingSchema`: `brandColor` and `logoAssetId`, at least one of them, nothing else.
 
@@ -157,7 +158,7 @@ From `packages/shared/src/types/company.ts`. The fields an integration reads:
 | `agentVisibilityDefault` | `company` · `owner` | |
 | `adminDirectiveReadEnabled`, `adminTranscriptReadEnabled`, `assistantAdminBatchesEnabled` | boolean | The admin powers switches; each is `false` until an owner or admin turns it on. |
 | `assistantBatchMaxRecords` | integer | 1 to 200, default 50. |
-| `defaultCeilingTemplateId` | UUID or null | Reserved: the ceiling every new agent starts with. Not settable yet. |
+| `defaultCeilingTemplateId` | UUID or null | The ceiling template every new agent starts with, or none. |
 | `brandColor`, `logoAssetId`, `logoUrl` | string or null | |
 | `createdAt`, `updatedAt` | ISO 8601 timestamp | |
 

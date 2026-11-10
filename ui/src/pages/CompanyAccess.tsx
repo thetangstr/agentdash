@@ -13,6 +13,7 @@ import { ChannelBindingsTable } from "@/components/access/ChannelBindingsTable";
 import { StewardshipAssignments } from "@/components/access/StewardshipAssignments";
 import { AgentVisibilitySetting } from "@/components/access/AgentVisibilitySetting";
 import { AvailableOnRequest } from "@/components/AvailableOnRequest";
+import { TheirAgentsBlock, type StewardTransfer } from "../components/access/TheirAgentsBlock";
 import { useStewardshipCapability } from "@/hooks/useStewardshipCapability";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
@@ -79,6 +80,9 @@ export function CompanyAccess() {
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [reassignmentTarget, setReassignmentTarget] = useState<string>("__unassigned");
+  // AgentDash admin powers: who takes over the leaving member's agents.
+  const [stewardTransfers, setStewardTransfers] = useState<StewardTransfer[]>([]);
+  const [stewardProblem, setStewardProblem] = useState<string | null>(null);
   const [draftRole, setDraftRole] = useState<CompanyMember["membershipRole"]>(null);
   const [draftStatus, setDraftStatus] = useState<EditableMemberStatus>("active");
   const [draftGrants, setDraftGrants] = useState<Set<PermissionKey>>(new Set());
@@ -198,18 +202,22 @@ export function CompanyAccess() {
   });
 
   const archiveMemberMutation = useMutation({
-    mutationFn: async (input: { memberId: string; target: string }) => {
+    mutationFn: async (input: { memberId: string; target: string; stewardTransfers: StewardTransfer[] }) => {
       const reassignment =
         input.target.startsWith("agent:")
           ? { assigneeAgentId: input.target.slice("agent:".length), assigneeUserId: null }
           : input.target.startsWith("user:")
             ? { assigneeAgentId: null, assigneeUserId: input.target.slice("user:".length) }
             : null;
-      return accessApi.archiveMember(selectedCompanyId!, input.memberId, { reassignment });
+      return accessApi.archiveMember(selectedCompanyId!, input.memberId, {
+        reassignment,
+        ...(input.stewardTransfers.length > 0 ? { stewardTransfers: input.stewardTransfers } : {}),
+      });
     },
     onSuccess: async (result) => {
       setRemovingMemberId(null);
       setReassignmentTarget("__unassigned");
+      setStewardTransfers([]);
       await refreshAccessData();
       if (selectedCompanyId) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId) });
@@ -677,6 +685,16 @@ export function CompanyAccess() {
                   </div>
                 </div>
               ) : null}
+
+              {selectedCompanyId ? (
+                <TheirAgentsBlock
+                  key={removingMember.id}
+                  companyId={selectedCompanyId}
+                  memberId={removingMember.id}
+                  candidates={activeReassignmentUsers.map((member) => ({ userId: member.principalId, name: memberDisplayName(member) }))}
+                  onChange={(transfers, problem) => { setStewardTransfers(transfers); setStewardProblem(problem); }}
+                />
+              ) : null}
             </div>
           )}
           <DialogFooter>
@@ -690,9 +708,10 @@ export function CompanyAccess() {
                 archiveMemberMutation.mutate({
                   memberId: removingMember.id,
                   target: reassignmentTarget,
+                  stewardTransfers,
                 });
               }}
-              disabled={archiveMemberMutation.isPending || assignedIssuesQuery.isLoading}
+              disabled={archiveMemberMutation.isPending || assignedIssuesQuery.isLoading || !!stewardProblem}
             >
               {archiveMemberMutation.isPending ? "Removing..." : "Remove member"}
             </Button>

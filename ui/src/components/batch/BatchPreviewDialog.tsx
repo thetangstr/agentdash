@@ -45,6 +45,12 @@ export interface BatchPreviewDialogProps {
   noun: { one: string; many: string };
   /** Plain words for a field and its value. Return null to hide a field. */
   formatField?: (field: string, value: unknown) => BatchFieldText | null;
+  /**
+   * For records whose before/after are policies: the gains and losses in
+   * plain words (diffGovernancePolicies), shown in green with "+" and in red
+   * with "−" so they read without colour too.
+   */
+  describeItem?: (before: Record<string, unknown>, after: Record<string, unknown>) => { gains: string[]; losses: string[] };
   /** The preview's first line, when the kind has a plainer one ("3 agents will resume and may start work."). */
   summary?: (count: number) => string;
   /** Called once the batch has finished (or was never needed), when the dialog closes. */
@@ -102,6 +108,16 @@ function FieldChanges({
   );
 }
 
+function GainsAndLosses({ gains, losses }: { gains: string[]; losses: string[] }) {
+  if (gains.length === 0 && losses.length === 0) return <p className="text-xs text-muted-foreground">No change to what it may do.</p>;
+  return (
+    <ul className="space-y-0.5 text-xs" data-testid="batch-gains-losses">
+      {gains.map((text) => <li key={`g-${text}`} className="text-green-700 dark:text-green-400" data-kind="gain">+ Gains: {text}</li>)}
+      {losses.map((text) => <li key={`l-${text}`} className="text-red-700 dark:text-red-400" data-kind="loss">− Loses: {text}</li>)}
+    </ul>
+  );
+}
+
 const OUTCOME_TEXT: Record<string, { title: string; tone: string }> = {
   applied: { title: "Changed", tone: "text-green-700 dark:text-green-400" },
   applied_differently: { title: "Changed, but not as previewed", tone: "text-amber-700 dark:text-amber-400" },
@@ -116,7 +132,15 @@ function outcomeKey(item: BatchItemView) {
   return item.outcome === "applied" && item.reasonCode === "applied_differently" ? "applied_differently" : item.outcome;
 }
 
-function ResultRow({ item, format }: { item: BatchItemView; format: (field: string, value: unknown) => BatchFieldText | null }) {
+function ResultRow({
+  item,
+  format,
+  describeItem,
+}: {
+  item: BatchItemView;
+  format: (field: string, value: unknown) => BatchFieldText | null;
+  describeItem?: BatchPreviewDialogProps["describeItem"];
+}) {
   const key = outcomeKey(item);
   const text = OUTCOME_TEXT[key] ?? OUTCOME_TEXT.pending!;
   return (
@@ -128,7 +152,9 @@ function ResultRow({ item, format }: { item: BatchItemView; format: (field: stri
       {key === "applied_differently" && item.actual ? (
         <div className="space-y-0.5">
           <p className="text-xs text-muted-foreground">It is now:</p>
-          <FieldChanges before={item.after} after={item.actual} format={format} />
+          {describeItem
+            ? <GainsAndLosses {...describeItem(item.after, item.actual)} />
+            : <FieldChanges before={item.after} after={item.actual} format={format} />}
         </div>
       ) : null}
       {key === "unknown" ? (
@@ -151,6 +177,7 @@ export function BatchPreviewDialog({
   change,
   noun,
   formatField,
+  describeItem,
   summary,
   onFinished,
   pollIntervalMs = 1000,
@@ -288,10 +315,15 @@ export function BatchPreviewDialog({
                 {preview.items.map((item: BatchPreviewItem) => (
                   <li key={item.itemId} className="space-y-1 px-3 py-2">
                     <p className="text-sm font-medium">{item.label}</p>
-                    <FieldChanges before={item.before} after={item.after} format={format} />
-                    {item.notes?.map((note) => (
-                      <p key={note} className="text-xs text-amber-700 dark:text-amber-400">{note}</p>
-                    ))}
+                    {describeItem
+                      ? <GainsAndLosses {...describeItem(item.before, item.after)} />
+                      : <FieldChanges before={item.before} after={item.after} format={format} />}
+                    {item.notes
+                      // Gains and losses are drawn above; the other notes are consequences.
+                      ?.filter((note) => !describeItem || !(note.startsWith("Gains: ") || note.startsWith("Loses: ")))
+                      .map((note) => (
+                        <p key={note} className="text-xs text-amber-700 dark:text-amber-400">{note}</p>
+                      ))}
                   </li>
                 ))}
               </ul>
@@ -308,7 +340,7 @@ export function BatchPreviewDialog({
               </p>
             ) : null}
             <ul className="divide-y divide-border rounded-md border border-border" data-testid="batch-results">
-              {(batch.items ?? []).map((item) => <ResultRow key={item.itemId} item={item} format={format} />)}
+              {(batch.items ?? []).map((item) => <ResultRow key={item.itemId} item={item} format={format} describeItem={describeItem} />)}
             </ul>
           </div>
         ) : null}

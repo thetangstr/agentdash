@@ -384,7 +384,8 @@ export function routineService(
     return db
       .select()
       .from(routines)
-      // A deleted routine (DELETE /routines/:id) is gone from every read.
+      // A deleted routine (DELETE /routines/:id) is gone from the routine
+      // routes; its history stays (see the deletedAt column).
       .where(and(eq(routines.id, id), isNull(routines.deletedAt)))
       .then((rows) => rows[0] ?? null);
   }
@@ -1270,10 +1271,11 @@ export function routineService(
     },
 
     /**
-     * AgentDash admin powers: delete a routine. The definition is removed
-     * from every read and can never run again (archived, triggers off,
-     * tombstoned); its past runs, the issues they created and its activity
-     * rows are kept. A hard delete would cascade the runs away.
+     * AgentDash admin powers: delete a routine. It is archived, its triggers
+     * go off and it is tombstoned: hidden from the routine routes, agents'
+     * responsibilities and profile references; its past runs, the issues
+     * they created, its activity rows and evaluation history are kept. A hard
+     * delete would cascade the runs away.
      */
     remove: async (id: string): Promise<Routine | null> => {
       const now = new Date();

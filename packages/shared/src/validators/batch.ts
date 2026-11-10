@@ -102,3 +102,9 @@ export const labelUpdateBatchChangeSchema = z.object({
   color: z.string().regex(/^#(?:[0-9a-fA-F]{6})$/, "Color must be a 6-digit hex value").optional(),
 }).strict().refine((value) => value.name !== undefined || value.color !== undefined, "Change the name or the color.");
 export type LabelUpdateBatchChange = z.infer<typeof labelUpdateBatchChangeSchema>;
+
+/** Kind `agent.apply_ceiling`: one of the company's ceiling templates. */
+export const agentApplyCeilingBatchChangeSchema = z.object({
+  templateId: z.guid(),
+}).strict();
+export type AgentApplyCeilingBatchChange = z.infer<typeof agentApplyCeilingBatchChangeSchema>;

@@ -61,8 +61,11 @@ export const updateCompanySchema = partialWithoutDefaults(createCompanySchema)
       .min(ASSISTANT_BATCH_MAX_RECORDS_MIN)
       .max(ASSISTANT_BATCH_MAX_RECORDS_MAX)
       .optional(),
-    // `defaultCeilingTemplateId` joins with the ceiling-template routes (part
-    // 3), which check that the template belongs to this company.
+    /**
+     * The ceiling template every new agent starts with; null clears it. The
+     * route checks the template belongs to this company.
+     */
+    defaultCeilingTemplateId: z.guid().nullable().optional(),
   });
 
 export type UpdateCompany = z.infer<typeof updateCompanySchema>;

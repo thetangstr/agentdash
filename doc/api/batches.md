@@ -74,6 +74,7 @@ batches, so it survives a restart). A capped request gets `429`.
 | `routine.delete` | none | `DELETE /api/routines/:id` |
 | `label.update` | `name` and/or `color` | `PATCH /api/labels/:labelId` |
 | `label.delete` | none | `DELETE /api/labels/:labelId` |
+| `agent.apply_ceiling` | `templateId` | `PUT /api/companies/:companyId/agents/:agentId/governance/ceiling` with `{policy, revision}` |
 
 `issue.update`:
 
@@ -122,19 +123,43 @@ Agents (`agent.*`):
   looks after one agent at a time, so only one agent of a batch can go to a
   given person; the rest are left out with that reason.
 
+`agent.apply_ceiling` (agentdash_mk companies only; elsewhere the preview is
+404 "Agent ceilings are not available in this workspace."):
+
+- People with `agents:create` (the ceiling route's own rule); the guard runs
+  at preview and again at confirm.
+- Each item's `before` and `after` are the agent's effective policy (plus the
+  policy revision). `after` is computed with `governanceWriteOutcome`, the
+  function the ceiling write itself uses (the ceiling clamping the steward's
+  request), so the preview cannot promise another result. Notes list the
+  gains and losses (`diffGovernancePolicies`, shared with the UI) and, when
+  something is lost, that anything above the new ceiling is brought down at
+  once (budget, permissions, channel connections, waiting sends).
+- The request carries the previewed revision: the route answers 409 on a
+  stale one (the engine's drift check usually refuses first).
+- An agent whose effective policy would not change is a no-op; a template
+  from another company (or deleted) leaves every agent out with a reason.
+
 Routines and labels:
 
-- `routine.delete` removes the routine for good; its runs, the tasks they
-  created and its history are kept (the row is kept as a tombstone, because
-  runs would cascade away with a hard delete).
+- `routine.delete` removes the routine for good: it is archived, its
+  triggers go off, and it is hidden from the routine routes, from agents'
+  responsibilities and performance views, and from profile references. Its
+  runs, the tasks they created, its activity and its evaluation history are
+  kept (the row is a tombstone, because runs would cascade away with a hard
+  delete; the evaluation snapshot marks it deleted).
 - `label.delete` notes how many tasks lose the label; the task count is part
   of the drift check, so a label put on more tasks after the preview is
   refused as changed.
 
 Approvals also note what deciding sets in motion for the types with a
 consequence (a hire, a budget override, a connector send, a profile change).
-A 200 that shows someone else had already decided the approval is recorded
-as `applied` with reason code `decided_by_someone_else`.
+A 200 that shows the approval had already been decided (the route returns the
+earlier decision) means this batch did nothing: the item is `refused`, counted
+as refused, with reason code `decided_by_someone_else` ("it was already
+approved by someone else, so nothing was done by this batch") or, when the
+same person had decided it on another channel, `already_decided` ("it was
+already approved, so nothing was done by this batch").
 
 Idempotency keys (approvals) are derived from a per-batch secret that no route
 returns, so a person who can read a batch's item ids cannot spend them first.

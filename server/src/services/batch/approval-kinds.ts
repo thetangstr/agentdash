@@ -115,7 +115,13 @@ function decisionKind(key: "approval.approve" | "approval.reject"): BatchKind<Ap
       if (typeof response.decisionIdempotencyKey === "string" && response.decisionIdempotencyKey === ourKey) return null;
       if (response.status === decided && typeof response.decidedByUserId === "string" && response.decidedByUserId === actorUserId && response.decisionIdempotencyKey === undefined) return null;
       const already = response.status === "approved" ? "approved" : response.status === "rejected" ? "rejected" : "decided";
-      return `someone else had already ${already} it, so this batch's decision was not recorded.`;
+      // Nothing was done by this batch: the route returned an earlier decision.
+      // The same person deciding on another channel is "already decided", not
+      // "someone else".
+      if (typeof response.decidedByUserId === "string" && response.decidedByUserId === actorUserId) {
+        return { reasonCode: BATCH_REASON_CODES.alreadyDecided, reason: `it was already ${already}, so nothing was done by this batch.` };
+      }
+      return { reasonCode: BATCH_REASON_CODES.notThisBatchsDecision, reason: `it was already ${already} by someone else, so nothing was done by this batch.` };
     },
     request(record, change, item) {
       const previewedRevision = typeof item.before.revision === "number" ? item.before.revision : record.revision;

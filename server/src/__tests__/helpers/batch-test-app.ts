@@ -20,6 +20,10 @@ import { approvalRoutes } from "../../routes/approvals.js";
 import { agentRoutes } from "../../routes/agents.js";
 import { agentStewardshipRoutes } from "../../routes/agent-stewardships.js";
 import { routineRoutes } from "../../routes/routines.js";
+import { agentGovernanceRoutes } from "../../routes/agent-governance.js";
+import { ceilingTemplateRoutes } from "../../routes/ceiling-templates.js";
+import { companyRoutes } from "../../routes/companies.js";
+import { accessRoutes } from "../../routes/access.js";
 import { assertBoard, assertCompanyAccess, getActorInfo, setAuthzRefusalDb } from "../../routes/authz.js";
 import { logActivity } from "../../services/activity-log.js";
 import { BATCH_KINDS, type BatchKind, type BatchKindRecord } from "../../services/batch/kinds.js";
@@ -136,6 +140,10 @@ export async function startBatchTestApp(
   api.use(agentRoutes(db));
   api.use(agentStewardshipRoutes(db));
   api.use(routineRoutes(db));
+  api.use(agentGovernanceRoutes(db));
+  api.use(ceilingTemplateRoutes(db));
+  api.use("/companies", companyRoutes(db, undefined, { allowMultiCompany: true, allowMultiTenantPerDomain: true, deploymentMode: "authenticated" }));
+  api.use(accessRoutes(db, { deploymentMode: "authenticated", deploymentExposure: "private", bindHost: "127.0.0.1", allowedHostnames: [] }));
   const batchRouter = batchRoutes(db, {
     ...options,
     kinds: { ...BATCH_KINDS, "test.widget": widgetKind(widgets), ...(options.kinds ?? {}) },

@@ -89,6 +89,9 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   // AgentDash admin powers (part 3b): the new single-record routes.
   "label.updated": "updated a label",
   "routine.deleted": "deleted a routine",
+  "ceiling_template.created": "created a ceiling template",
+  "ceiling_template.updated": "updated a ceiling template",
+  "ceiling_template.deleted": "deleted a ceiling template",
   // Agent lifecycle and configuration
   // AgentDash: Agent Performance Management gate 2 — V2 access (shadow logs, outside-profile changes)
   "access.policy_changed": "changed the access rules of",

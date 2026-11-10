@@ -141,22 +141,21 @@ describeEmbeddedPostgres("Admin powers: the company switches, real database", ()
     expect(row!.assistantAdminBatchesEnabled).toBe(false);
   });
 
-  it("keeps the record limit between 1 and 200 and does not take a ceiling template yet", async () => {
+  it("keeps the record limit between 1 and 200 and takes one of the company's own ceiling templates", async () => {
     const { companyId, founderId } = await seed();
     const founder = app(await actorFor(founderId));
     for (const value of [0, 201, 1.5]) {
       const res = await request(founder).patch(`/api/companies/${companyId}`).send({ assistantBatchMaxRecords: value });
       expect(res.status, String(value)).toBe(400);
     }
-    // The ceiling-for-new-agents select arrives with the template routes
-    // (part 3), which check the template belongs to this company. Until then
-    // the PATCH ignores the key, even for a real template.
+    // The ceiling for new agents: one of this company's templates, or none.
     const [template] = await db.insert(agentCeilingTemplates).values({
-      companyId, name: "Tight", ceiling: { permissions: [], monthlyBudgetCents: 0, destructiveActions: "forbidden", dataScopes: [], providers: [], minimumApproval: "steward" } as never,
+      companyId, name: "Tight", ceiling: { permissions: [], monthlyBudgetCents: 0, destructiveActions: "blocked", dataScopes: [], providers: [], minimumApproval: "steward" } as never,
     }).returning();
-    const res = await request(founder).patch(`/api/companies/${companyId}`).send({ defaultCeilingTemplateId: template!.id, name: "Still here" });
+    const res = await request(founder).patch(`/api/companies/${companyId}`).send({ defaultCeilingTemplateId: template!.id });
     expect(res.status).toBe(200);
-    const [row] = await db.select().from(companies).where(eq(companies.id, companyId));
-    expect(row!.defaultCeilingTemplateId).toBeNull();
+    expect(res.body.defaultCeilingTemplateId).toBe(template!.id);
+    const cleared = await request(founder).patch(`/api/companies/${companyId}`).send({ defaultCeilingTemplateId: null });
+    expect(cleared.body.defaultCeilingTemplateId).toBeNull();
   });
 });

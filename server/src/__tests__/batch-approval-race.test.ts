@@ -57,10 +57,29 @@ describeEmbeddedPostgres("batch approval decided by someone else first", () => {
     await t.batches.waitForRunner(p.body.batchId);
     beforeSend = null;
     const item = (await request(t.server).get(`/api/companies/${companyId}/batches/${p.body.batchId}`).set(owner)).body.items[0];
-    expect(item).toMatchObject({ outcome: "applied", reasonCode: "decided_by_someone_else" });
-    expect(item.reason).toMatch(/someone else had already approved it, so this batch's decision was not recorded/);
+    // Nothing was done by this batch: refused, and counted as refused.
+    expect(item).toMatchObject({ outcome: "refused", reasonCode: "decided_by_someone_else" });
+    expect(item.reason).toMatch(/it was already approved by someone else, so nothing was done by this batch\./);
+    const batch = (await request(t.server).get(`/api/companies/${companyId}/batches/${p.body.batchId}`).set(owner)).body;
+    expect(batch.counts).toMatchObject({ applied: 0, refused: 1 });
     const [row] = await t.db.select({ decidedByUserId: approvals.decidedByUserId }).from(approvals).where(eq(approvals.id, a!.id));
     expect(row!.decidedByUserId).not.toBe(ownerId);
+  });
+
+  it("the same person deciding it themselves just before the send reads 'already decided', not 'someone else'", async () => {
+    const [a] = await t.db.insert(approvals).values({ companyId, type: "request_board_approval", requestedByUserId: ownerId, status: "pending", payload: { title: "Self" } }).returning();
+    const p = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(owner).send({ kind: "approval.approve", ids: [a!.id], change: {} });
+    beforeSend = async () => {
+      const res = await request(t.server).post(`/api/approvals/${a!.id}/approve`).set(owner).send({ revision: 1, idempotencyKey: `web-${randomUUID()}`, channel: "web" });
+      expect(res.status).toBe(200);
+    };
+    await request(t.server).post(`/api/companies/${companyId}/batches/${p.body.batchId}/confirm`).set(owner).send({ handle: p.body.confirmHandle, previewDigest: p.body.previewDigest });
+    await t.batches.waitForRunner(p.body.batchId);
+    beforeSend = null;
+    const item = (await request(t.server).get(`/api/companies/${companyId}/batches/${p.body.batchId}`).set(owner)).body.items[0];
+    expect(item).toMatchObject({ outcome: "refused", reasonCode: "already_decided" });
+    expect(item.reason).toMatch(/it was already approved, so nothing was done by this batch\./);
+    expect(item.reason).not.toMatch(/someone else/);
   });
 
   it("this batch's own decision (and a replay of its own key) is plain applied", async () => {

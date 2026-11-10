@@ -12,6 +12,7 @@ import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/compone
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { AdminPowersSection } from "@/components/settings/AdminPowersSection";
 import { LabelsCard } from "@/components/settings/LabelsCard";
+import { CeilingTemplatesCard } from "@/components/settings/CeilingTemplatesCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCapability } from "../hooks/useCapability";
@@ -667,6 +668,8 @@ export function CompanySettings() {
               {/* AgentDash: APM gate 4 — admins choose the performance manager; members read it. */}
               <PerformanceManagerCard companyId={selectedCompany.id} />
               <AgentCeilingEditor companyId={selectedCompany.id} />
+              {/* AgentDash admin powers: named ceilings applied to many agents. */}
+              <CeilingTemplatesCard companyId={selectedCompany.id} canManage={canManage} />
               {reconciliationCount === 0 ? <NeedsReconciliationPanel companyId={selectedCompany.id} /> : null}
             </>
           ) : null}

@@ -189,7 +189,9 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
   };
 
   it("every production kind has parity scenarios", () => {
-    expect(Object.keys(BATCH_KINDS).sort()).toEqual(Object.keys(SCENARIOS).sort());
+    // `agent.apply_ceiling` needs an agentdash_mk company: its matrix is the
+    // separate describe at the end of this file.
+    expect(Object.keys(BATCH_KINDS).sort()).toEqual([...Object.keys(SCENARIOS), "agent.apply_ceiling"].sort());
   });
 
   for (const [kindKey, scenarios] of Object.entries(SCENARIOS)) {
@@ -271,4 +273,68 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
       }, 120_000);
     }
   }
+});
+
+describeEmbeddedPostgres("batch guard parity: agent.apply_ceiling (agentdash_mk company)", () => {
+  let t!: BatchTestApp;
+  let companyId = "";
+  let otherCompanyId = "";
+  let templateId = "";
+  const actors: Array<{ key: string; headers: Record<string, string>; batches: boolean; member: boolean }> = [];
+  const OPEN_POLICY = { permissions: ["*"], monthlyBudgetCents: 2_147_483_647, destructiveActions: "approval_required", dataScopes: ["*"], providers: ["*"], minimumApproval: "steward" } as const;
+  const TIGHT = { ...OPEN_POLICY, monthlyBudgetCents: 12_345, providers: ["slack"] };
+
+  beforeAll(async () => {
+    t = await startBatchTestApp("paperclip-batch-parity-ceiling-");
+    companyId = (await addCompany(t.db, "Parity MK", "agentdash_mk")).id;
+    otherCompanyId = (await addCompany(t.db, "Parity MK other", "agentdash_mk")).id;
+    const ownerId = await addUser(t.db, companyId, "owner");
+    const memberId = await addUser(t.db, companyId, "member");
+    const suspendedId = await addUser(t.db, companyId, "owner");
+    await t.db.update(companyMemberships).set({ status: "suspended" }).where(eq(companyMemberships.principalId, suspendedId));
+    const instanceAdminId = await addUser(t.db, otherCompanyId, "member");
+    await t.db.insert(instanceUserRoles).values({ userId: instanceAdminId, role: "instance_admin" });
+    const outsiderId = await addUser(t.db, otherCompanyId, "owner");
+    const actingAgent = await addAgent(t.db, companyId, { name: "Acting CEO", role: "ceo", status: "idle" });
+    await t.db.insert(agentApiKeys).values({ agentId: actingAgent.id, companyId, name: "parity-ceiling", keyHash: createHash("sha256").update("parity-ceiling-key").digest("hex") });
+    for (const [key, userId] of [["admin", ownerId], ["member", memberId], ["suspended", suspendedId], ["instanceAdminNonMember", instanceAdminId], ["outsider", outsiderId]] as const) {
+      actors.push({ key, headers: t.browser(await t.signIn(userId)), batches: true, member: key !== "instanceAdminNonMember" && key !== "outsider" });
+    }
+    actors.push({ key: "agent", headers: { authorization: "Bearer parity-ceiling-key" }, batches: false, member: false });
+    const created = await request(t.server).post(`/api/companies/${companyId}/ceiling-templates`).set(actors[0]!.headers).send({ name: "Parity tight", ceiling: TIGHT });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    templateId = created.body.id;
+  }, 120_000);
+
+  afterAll(async () => {
+    await t?.close();
+  });
+
+  it("the batch path never allows what the ceiling route refuses", async () => {
+    const table: Array<{ actor: string; direct: string; batch: string }> = [];
+    for (const actor of actors) {
+      const twin = () => addAgent(t.db, companyId, { name: `Twin ${randomUUID().slice(0, 4)}`, status: "idle", runtimeConfig: NO_RUN });
+      const directAgent = await twin();
+      const batchAgent = await twin();
+      const res = await request(t.server).put(`/api/companies/${companyId}/agents/${directAgent.id}/governance/ceiling`).set(actor.headers).send({ policy: TIGHT, revision: 1, channel: "web" });
+      expect(res.status, JSON.stringify(res.body)).toBeLessThan(500);
+      const direct = res.status < 300 ? "allow" : "deny";
+      let batch = "deny";
+      const p = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(actor.headers).send({ kind: "agent.apply_ceiling", ids: [batchAgent.id], change: { templateId } });
+      if (p.status === 200 && p.body.batchId) {
+        const c = await request(t.server).post(`/api/companies/${companyId}/batches/${p.body.batchId}/confirm`).set(actor.headers).send({ handle: p.body.confirmHandle, previewDigest: p.body.previewDigest });
+        expect(c.status).toBe(202);
+        await t.batches.waitForRunner(p.body.batchId);
+        const view = (await request(t.server).get(`/api/companies/${companyId}/batches/${p.body.batchId}`).set(actor.headers)).body;
+        batch = view.items[0].outcome === "applied" ? "allow" : "deny";
+      }
+      table.push({ actor: actor.key, direct, batch });
+      const label = `${actor.key}: direct ${direct}, batch ${batch}`;
+      if (batch === "allow") expect(direct, label).toBe("allow");
+      if (actor.batches && actor.member) expect(batch, label).toBe(direct);
+      else expect(batch, label).toBe("deny");
+    }
+    expect(table.find((row) => row.actor === "admin")).toMatchObject({ direct: "allow", batch: "allow" });
+    expect(table.find((row) => row.actor === "member")).toMatchObject({ direct: "deny", batch: "deny" });
+  }, 120_000);
 });

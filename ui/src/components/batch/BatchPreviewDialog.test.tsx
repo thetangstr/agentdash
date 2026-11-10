@@ -192,4 +192,27 @@ describe("BatchPreviewDialog", () => {
     expect(mockBatchesApi.cancel).toHaveBeenCalledWith("company-1", "batch-1");
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  it("shows gains in green with '+' and losses in red with '−' for policy records, readable without colour", async () => {
+    const policy = { permissions: ["*"], monthlyBudgetCents: 10_000, destructiveActions: "approval_required", dataScopes: ["*"], providers: ["slack", "teams"], minimumApproval: "steward", revision: 3 };
+    mockBatchesApi.preview.mockResolvedValue({
+      ...PREVIEW,
+      kind: "agent.apply_ceiling",
+      items: [{ itemId: "i1", entityType: "agent", entityId: "a", label: "Ada", before: policy, after: { ...policy, monthlyBudgetCents: 20_000, providers: ["slack"] },
+        notes: ["Gains: Budget: up to $200 a month (was up to $100 a month)", "Loses: Providers: loses teams", "Anything it holds above the new ceiling is brought down at once."] }],
+      notDecidable: [],
+    });
+    const { describePolicyChange } = await import("./policy-diff");
+    await render({ kind: "agent.apply_ceiling", describeItem: describePolicyChange });
+    const lines = [...document.body.querySelectorAll<HTMLElement>('[data-testid="batch-gains-losses"] li')];
+    expect(lines.map((line) => [line.dataset.kind, line.textContent])).toEqual([
+      ["gain", "+ Gains: Budget: up to $200 a month (was up to $100 a month)"],
+      ["loss", "− Loses: Providers: loses teams"],
+    ]);
+    expect(lines[0]!.className).toContain("green");
+    expect(lines[1]!.className).toContain("red");
+    // The consequence note stays; the gains and losses are not printed twice.
+    expect(text()).toContain("Anything it holds above the new ceiling is brought down at once.");
+    expect(text().match(/Loses: Providers: loses teams/g)).toHaveLength(1);
+  });
 });

@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { agentsApi } from "../../api/agents";
+import { ceilingTemplatesApi } from "../../api/ceilingTemplates";
+import { ApiError } from "../../api/client";
+import { describePolicyChange } from "./policy-diff";
 import { queryKeys } from "../../lib/queryKeys";
 import { BatchPreviewDialog, type BatchFieldText } from "./BatchPreviewDialog";
 
@@ -25,7 +28,8 @@ export interface BulkPerson {
 type Pending =
   | { kind: "agent.pause" | "agent.resume"; change: Record<string, never> }
   | { kind: "agent.set_model"; change: { model: string } }
-  | { kind: "agent.transfer_steward"; change: { userId: string; transferReason: string } };
+  | { kind: "agent.transfer_steward"; change: { userId: string; transferReason: string } }
+  | { kind: "agent.apply_ceiling"; change: { templateId: string } };
 
 const NOUN = { one: "agent", many: "agents" };
 
@@ -42,7 +46,8 @@ export function AgentsBulkBar({
   onClear: () => void;
   onFinished: () => void;
 }) {
-  const [panel, setPanel] = useState<"model" | "steward" | null>(null);
+  const [panel, setPanel] = useState<"model" | "steward" | "ceiling" | null>(null);
+  const [templateId, setTemplateId] = useState("");
   const [model, setModel] = useState("");
   const [stewardId, setStewardId] = useState("");
   const [reason, setReason] = useState("");
@@ -62,6 +67,14 @@ export function AgentsBulkBar({
     for (const query of modelQueries) for (const option of query.data ?? []) byId.set(option.id, option.label || option.id);
     return [...byId.entries()].map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label));
   }, [modelQueries]);
+
+  const templates = useQuery({
+    queryKey: queryKeys.ceilingTemplates(companyId),
+    queryFn: () => ceilingTemplatesApi.list(companyId),
+    enabled: panel === "ceiling",
+    retry: false,
+  });
+  const ceilingsUnavailable = templates.error instanceof ApiError && templates.error.status === 404;
 
   const personName = (id: unknown) => (typeof id === "string" ? people.find((person) => person.id === id)?.name ?? "Someone you cannot see" : "No one");
   function formatField(field: string, value: unknown): BatchFieldText | null {
@@ -88,6 +101,7 @@ export function AgentsBulkBar({
           <Button size="sm" variant="outline" className="max-sm:min-h-11" data-testid="agents-bulk-resume" onClick={() => setPending({ kind: "agent.resume", change: {} })}>Resume</Button>
           <Button size="sm" variant={panel === "model" ? "default" : "outline"} className="max-sm:min-h-11" data-testid="agents-bulk-model" onClick={() => setPanel(panel === "model" ? null : "model")}>Change model</Button>
           <Button size="sm" variant={panel === "steward" ? "default" : "outline"} className="max-sm:min-h-11" data-testid="agents-bulk-steward" onClick={() => setPanel(panel === "steward" ? null : "steward")}>Transfer steward</Button>
+          <Button size="sm" variant={panel === "ceiling" ? "default" : "outline"} className="max-sm:min-h-11" data-testid="agents-bulk-ceiling" onClick={() => setPanel(panel === "ceiling" ? null : "ceiling")}>Apply ceiling template</Button>
           <Button size="sm" variant="ghost" className="ml-auto max-sm:min-h-11" onClick={onClear}>Clear</Button>
         </div>
         {panel === "model" ? (
@@ -98,6 +112,22 @@ export function AgentsBulkBar({
             </select>
             <Button size="sm" className="max-sm:min-h-11" disabled={!model} onClick={() => setPending({ kind: "agent.set_model", change: { model } })}>Preview</Button>
             <span className="text-xs text-muted-foreground">Agents whose runtime does not offer it are left out.</span>
+          </div>
+        ) : null}
+        {panel === "ceiling" ? (
+          <div className="flex flex-wrap items-center gap-2" data-testid="agents-bulk-ceiling-panel">
+            {ceilingsUnavailable ? (
+              <span className="text-xs text-muted-foreground">Agent ceilings are available on request.</span>
+            ) : (
+              <>
+                <select className={inputClass} aria-label="Ceiling template" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+                  <option value="">Choose a template</option>
+                  {(templates.data?.templates ?? []).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                </select>
+                <Button size="sm" className="max-sm:min-h-11" disabled={!templateId} onClick={() => setPending({ kind: "agent.apply_ceiling", change: { templateId } })}>Preview</Button>
+                <span className="text-xs text-muted-foreground">The preview shows what each agent gains and loses.</span>
+              </>
+            )}
           </div>
         ) : null}
         {panel === "steward" ? (
@@ -135,12 +165,14 @@ export function AgentsBulkBar({
             "agent.resume": "Resume agents",
             "agent.set_model": "Change the model",
             "agent.transfer_steward": "Hand over to another steward",
+            "agent.apply_ceiling": "Apply a ceiling template",
           }[pending.kind]}
           kind={pending.kind}
           ids={selected.map((agent) => agent.id)}
           change={pending.change}
           noun={NOUN}
           formatField={formatField}
+          describeItem={pending.kind === "agent.apply_ceiling" ? describePolicyChange : undefined}
           summary={pending.kind === "agent.resume"
             ? (n) => `${n === 1 ? "1 agent" : `${n} agents`} will resume and may start work.`
             : pending.kind === "agent.pause"
