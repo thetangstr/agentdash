@@ -31,6 +31,10 @@ describe("loopbackOriginFor", () => {
     expect(loopbackOriginFor(socket)).toBe(origin);
   });
 
+  it("refuses a link-local address with a zone id plainly, instead of building an invalid URL", () => {
+    expect(() => loopbackOriginFor({ localAddress: "fe80::1%en0", localPort: 3100 })).toThrow(/link-local network address/);
+  });
+
   it("refuses when the listener address is unknown", () => {
     expect(() => loopbackOriginFor({ localPort: 3100 })).toThrow();
     expect(() => loopbackOriginFor(undefined)).toThrow();

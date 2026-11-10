@@ -20,7 +20,10 @@ single route would refuse that person.
    `omitted: {notFound, noop, notDecidable}`; they are never named. Records
    whose own rules would decide the change instead are listed in
    `notDecidable` with a plain reason (for example an issue with an open
-   review or approval step is left out of a "done": "goes to review first"). When
+   review or approval step is left out of a "done" or "in review": "goes to review
+   first"; one whose review step is under way is left out of any status or
+   assignee change: "is in review now"). Each item's `before` and `after`
+   hold every field `issue.update` can touch, not only the ones it changes. When
    nothing would change, `batchId` is `null`. The handle is shown once (only
    its sha256 is stored) and expires after 15 minutes.
 2. `POST /api/companies/:companyId/batches/:batchId/confirm` with
@@ -46,7 +49,7 @@ assistant grants get `403` on every batch route.
 
 | Outcome | Meaning |
 | --- | --- |
-| `applied` | The route answered 2xx. The record is re-read: `actual` holds the touched fields as they are now. When they differ from the preview's `after`, `reasonCode` is `applied_differently`, `reason` names the differences, a `batch.item_applied_differently` activity row is written, and `counts.appliedDifferently` counts it. |
+| `applied` | The route answered 2xx. The record is re-read: `actual` holds the touched fields as they are now. When any of them (status, priority, both assignee fields, project, labels) differs from the preview's `after`, including a field the batch did not ask to change, `reasonCode` is `applied_differently`, `reason` names the differences, a `batch.item_applied_differently` activity row is written, and `counts.appliedDifferently` counts it. |
 | `refused` | The route answered 4xx (its own reason is shown), or the engine did not send it: the record changed after the preview (`changed_since_preview`), can no longer be seen (`no_longer_visible`), the person's sign-in or access ended (`access_ended`), the batch ran out of its 10-minute budget (`batch_time_budget`) or was interrupted before reaching it (`batch_interrupted`). |
 | `failed` | Not sent (`not_sent`), or the route answered 5xx and the record is unchanged. |
 | `unknown` | Sent with no answer within 20 seconds, the connection dropped after sending, a 5xx after which the record changed, or the batch stopped while sending it. Never retried; an admin may record a verdict. |

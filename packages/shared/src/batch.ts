@@ -63,6 +63,8 @@ export const BATCH_REASON_CODES = {
   appliedDifferently: "applied_differently",
   /** Left out at preview: the record's review or approval steps decide this change, not the batch. */
   goesToReviewFirst: "goes_to_review_first",
+  /** Left out at preview: a review or approval step is under way, so its workflow decides status and assignee. */
+  inReviewNow: "in_review_now",
 } as const;
 export type BatchReasonCode = (typeof BATCH_REASON_CODES)[keyof typeof BATCH_REASON_CODES];
 

@@ -38,6 +38,11 @@ describe("sendBatchItemOverLoopback", () => {
     expect(await send(`${base}/x`)).toEqual({ kind: "response", status: 409, body: { error: "locked", echo: '{"a":1}' } });
   });
 
+  it("an unparseable target was never sent (not unknown)", async () => {
+    const result = await send("http://[fe80::1%en0]:3100/x");
+    expect(result.kind).toBe("not_sent");
+  });
+
   it("a refused connection was never sent", async () => {
     const base = await listen(() => undefined);
     const server = servers.pop()!;

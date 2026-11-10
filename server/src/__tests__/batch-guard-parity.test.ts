@@ -89,6 +89,7 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
   const SCENARIOS: Record<string, Array<{ name: string; change: Record<string, unknown> }>> = {
     "issue.update": [
       { name: "status", change: { status: "in_review" } },
+      { name: "status to blocked", change: { status: "blocked" } },
       { name: "priority", change: { priority: "critical" } },
       { name: "assign to an agent", change: { assignee: { agentId: "__AGENT__" } } },
     ],
@@ -115,6 +116,7 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
               entityType: "issue", entityId: pair.direct.id, label: "",
               status: pair.direct.status, priority: pair.direct.priority,
               assigneeAgentId: pair.direct.assigneeAgentId, assigneeUserId: pair.direct.assigneeUserId,
+              projectId: pair.direct.projectId, labelIds: [],
             }, change);
             const res = await request(t.server).patch(built.path).set(actor.headers).send(built.body);
             expect(res.status, `${actor.key}/${key} direct: ${JSON.stringify(res.body)}`).not.toBeGreaterThanOrEqual(500);

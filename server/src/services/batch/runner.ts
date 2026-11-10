@@ -76,7 +76,14 @@ export type BatchItemSender = (input: {
 /** Node's own client, so "never sent" (connection refused) and "sent, no answer" (reset, timeout) stay distinct. */
 export const sendBatchItemOverLoopback: BatchItemSender = ({ url, method, headers, body, timeoutMs }) =>
   new Promise((resolve) => {
-    const target = new URL(url);
+    let target: URL;
+    try {
+      target = new URL(url);
+    } catch {
+      // Nothing left this process: an unparseable target is never "unknown".
+      resolve({ kind: "not_sent", error: "invalid loopback address" });
+      return;
+    }
     const client = target.protocol === "https:" ? https : http;
     let written = false;
     let settled = false;

@@ -416,6 +416,85 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     expect((server!.details as Record<string, unknown>).batch).toBeUndefined();
   });
 
+  // --- Security re-check fixes (bc4c5ac21) ---
+
+  async function reviewPolicyFor(agentIdForReview: string) {
+    return { ...normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "agent", agentId: agentIdForReview }] }] })! };
+  }
+
+  it("re-check 1a: an in_review on an issue whose review step would take it is left out at preview", async () => {
+    const reviewer = await addAgent(t.db, companyId, { name: "Reviewer B", status: "paused" });
+    const reviewed = await issue({ status: "todo", executionPolicy: (await reviewPolicyFor(reviewer.id)) as never });
+    const p = await preview(ownerSession, { kind: "issue.update", ids: [reviewed.id], change: { status: "in_review" } });
+    expect(p.status).toBe(200);
+    expect(p.body.items).toEqual([]);
+    expect(p.body.notDecidable).toEqual([expect.objectContaining({ entityId: reviewed.id, reasonCode: "goes_to_review_first" })]);
+  });
+
+  it("re-check 1a: a review policy added between preview and apply refuses the in_review and sends nothing", async () => {
+    const reviewer = await addAgent(t.db, companyId, { name: "Reviewer C", status: "paused" });
+    const target = await issue({ status: "todo" });
+    const p = await preview(ownerSession, { kind: "issue.update", ids: [target.id], change: { status: "in_review" } });
+    await t.db.update(issues).set({ executionPolicy: (await reviewPolicyFor(reviewer.id)) as never }).where(eq(issues.id, target.id));
+    const c = await confirm(ownerSession, p.body.batchId, { handle: p.body.confirmHandle, previewDigest: p.body.previewDigest });
+    expect(c.status).toBe(202);
+    await t.batches.waitForRunner(p.body.batchId);
+    const [item] = await t.db.select().from(batchOperationItems).where(eq(batchOperationItems.batchId, p.body.batchId));
+    expect(item).toMatchObject({ outcome: "refused", reasonCode: "goes_to_review_first" });
+    const [row] = await t.db.select({ status: issues.status, assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, target.id));
+    expect(row).toEqual({ status: "todo", assigneeAgentId: null });
+  });
+
+  it("re-check 1a: a status change on an issue already in an active review step is left out at preview", async () => {
+    const reviewer = await addAgent(t.db, companyId, { name: "Reviewer D", status: "paused" });
+    const policy = await reviewPolicyFor(reviewer.id);
+    const stage = policy.stages[0]!;
+    const inReview = await issue({
+      status: "in_review",
+      assigneeAgentId: reviewer.id,
+      executionPolicy: policy as never,
+      executionState: {
+        status: "pending", currentStageId: stage.id, currentStageIndex: 0, currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: reviewer.id, userId: null },
+        returnAssignee: { type: "user", agentId: null, userId: ownerId },
+        reviewRequest: null, completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: null,
+      } as never,
+    });
+    const p = await preview(ownerSession, { kind: "issue.update", ids: [inReview.id], change: { status: "blocked" } });
+    expect(p.status).toBe(200);
+    expect(p.body.items).toEqual([]);
+    expect(p.body.notDecidable).toEqual([expect.objectContaining({ entityId: inReview.id, reasonCode: "in_review_now" })]);
+    // A priority change does not touch the workflow and still goes ahead.
+    const q = await preview(ownerSession, { kind: "issue.update", ids: [inReview.id], change: { priority: "low" } });
+    expect(q.body.items).toHaveLength(1);
+  });
+
+  it("re-check 1b: a side effect on a field the batch did not ask to change is reported as applied differently", async () => {
+    const other = await addAgent(t.db, companyId, { name: "Side effect", status: "paused" });
+    const target = await issue({ status: "todo" });
+    // Stand-in for any route side effect: whatever moves this issue's status
+    // also hands it to another agent.
+    await t.db.execute(sql.raw(`
+      create or replace function batch_test_side_effect() returns trigger language plpgsql as $$
+      begin new.assignee_agent_id := '${other.id}'; return new; end $$;
+      create trigger batch_test_side_effect before update of status on issues
+        for each row when (new.id = '${target.id}') execute function batch_test_side_effect();`));
+    try {
+      const { batch } = await runToEnd(memberSession, { kind: "issue.update", ids: [target.id], change: { status: "blocked" } });
+      const item = batch.items[0];
+      expect(item).toMatchObject({
+        outcome: "applied",
+        reasonCode: "applied_differently",
+        after: { status: "blocked", assigneeAgentId: null, assigneeUserId: null },
+        actual: { status: "blocked", assigneeAgentId: other.id },
+      });
+      expect(item.reason).toMatch(new RegExp(`assigneeAgentId is ${other.id}, not none`));
+      expect(batch.counts.appliedDifferently).toBe(1);
+    } finally {
+      await t.db.execute(sql.raw("drop trigger if exists batch_test_side_effect on issues; drop function if exists batch_test_side_effect();"));
+    }
+  });
+
   it("leaves no credentials in flight", () => {
     expect(batchItemCredentialCount()).toBe(0);
     resetBatchItemCredentials();

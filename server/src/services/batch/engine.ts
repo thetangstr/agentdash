@@ -88,6 +88,11 @@ function actorUserId(req: Request): string {
 export function loopbackOriginFor(socket: { encrypted?: boolean; localAddress?: string; localPort?: number } | undefined): string {
   if (!socket?.localPort || !socket.localAddress) throw new HttpError(500, "The batch could not be started on this server.");
   let host = socket.localAddress;
+  // A link-local IPv6 address with a zone id (fe80::1%en0) has no valid URL
+  // form here; refuse plainly before anything is spent or sent.
+  if (host.includes("%")) {
+    throw new HttpError(503, "Batch changes are not available while this server listens on a link-local network address.");
+  }
   if (host.startsWith("::ffff:") && host.includes(".")) host = host.slice("::ffff:".length);
   if (host === "0.0.0.0") host = "127.0.0.1";
   if (host === "::") host = "::1";
@@ -172,6 +177,8 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
       credentialOrigin(req);
+      // Fail here, before a preview is stored, if items could not be sent.
+      loopbackOrigin(req);
       const kind = kindFor(input.kind);
       await kind.previewGuard?.({ db, req, companyId });
       const change = kind.parseChange(input.change);

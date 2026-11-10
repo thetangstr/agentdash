@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issues } from "@paperclipai/db";
+import { issueLabels, issues } from "@paperclipai/db";
 import { BATCH_MAX_RECORDS_UI, BATCH_REASON_CODES, issueUpdateBatchChangeSchema, type IssueUpdateBatchChange } from "@paperclipai/shared";
 import { listVisibleIssueIds } from "../../routes/visibility.js";
 import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "../issue-execution-policy.js";
@@ -76,26 +76,44 @@ type IssueRecord = BatchKindRecord & {
   priority: string;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
-  /** True when a review or approval step is still open, so a "done" goes there first. */
+  projectId: string | null;
+  labelIds: string[];
+  /** A review or approval step has not been completed, so a "done" or "in review" starts it. */
   reviewStepOpen?: boolean;
+  /** A review or approval step is under way now, so its workflow decides status and assignee. */
+  reviewStepActive?: boolean;
 };
 
 /**
- * Would moving this issue to done be taken by its execution policy (a review
- * or approval step) instead? Conservative: an unreadable policy, or a stage
- * with no completed record, counts as open.
+ * Every field `issue.update` can touch. Each item's `before` and `after` hold
+ * all of them, not only the ones the change names: the route can change the
+ * others as a side effect (an execution policy hands the issue to its
+ * reviewer), and the post-apply check compares all of them.
  */
-function reviewStepOpen(executionPolicy: unknown, executionState: unknown): boolean {
-  if (executionPolicy == null) return false;
+const ISSUE_WATCHED_FIELDS = ["status", "priority", "assigneeAgentId", "assigneeUserId", "projectId", "labelIds"] as const;
+
+/** Statuses the execution policy treats as "start the review or approval workflow" (issue-execution-policy.ts). */
+const WORKFLOW_STARTING_STATUSES = new Set(["done", "in_review"]);
+
+/**
+ * The issue's review or approval steps. Conservative: an unreadable policy, or
+ * a stage with no completed record, counts as open.
+ */
+function reviewSteps(executionPolicy: unknown, executionState: unknown): { open: boolean; active: boolean } {
+  if (executionPolicy == null) return { open: false, active: false };
   let policy: ReturnType<typeof normalizeIssueExecutionPolicy>;
   try {
     policy = normalizeIssueExecutionPolicy(executionPolicy);
   } catch {
-    return true;
+    return { open: true, active: true };
   }
-  if (!policy || policy.stages.length === 0) return false;
-  const completed = new Set(parseIssueExecutionState(executionState)?.completedStageIds ?? []);
-  return policy.stages.some((stage) => !completed.has(stage.id));
+  if (!policy || policy.stages.length === 0) return { open: false, active: false };
+  const state = parseIssueExecutionState(executionState);
+  const completed = new Set(state?.completedStageIds ?? []);
+  return {
+    open: policy.stages.some((stage) => !completed.has(stage.id)),
+    active: Boolean(state?.currentStageId) && (state?.status === "pending" || state?.status === "changes_requested"),
+  };
 }
 
 function issueLabel(row: { identifier: string | null; title: string }): string {
@@ -126,44 +144,59 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
         priority: issues.priority,
         assigneeAgentId: issues.assigneeAgentId,
         assigneeUserId: issues.assigneeUserId,
+        projectId: issues.projectId,
         executionPolicy: issues.executionPolicy,
         executionState: issues.executionState,
       })
       .from(issues)
       .where(and(eq(issues.companyId, companyId), inArray(issues.id, [...visible])));
-    return new Map(rows.map((row) => [row.id, {
-      entityType: "issue",
-      entityId: row.id,
-      label: issueLabel(row),
-      status: row.status,
-      priority: row.priority,
-      assigneeAgentId: row.assigneeAgentId,
-      assigneeUserId: row.assigneeUserId,
-      reviewStepOpen: reviewStepOpen(row.executionPolicy, row.executionState),
-    }]));
+    const labelRows = rows.length === 0 ? [] : await db
+      .select({ issueId: issueLabels.issueId, labelId: issueLabels.labelId })
+      .from(issueLabels)
+      .where(inArray(issueLabels.issueId, rows.map((row) => row.id)));
+    const labelsByIssue = new Map<string, string[]>();
+    for (const row of labelRows) labelsByIssue.set(row.issueId, [...(labelsByIssue.get(row.issueId) ?? []), row.labelId]);
+    return new Map(rows.map((row) => {
+      const steps = reviewSteps(row.executionPolicy, row.executionState);
+      return [row.id, {
+        entityType: "issue",
+        entityId: row.id,
+        label: issueLabel(row),
+        status: row.status,
+        priority: row.priority,
+        assigneeAgentId: row.assigneeAgentId,
+        assigneeUserId: row.assigneeUserId,
+        projectId: row.projectId,
+        labelIds: [...(labelsByIssue.get(row.id) ?? [])].sort(),
+        reviewStepOpen: steps.open,
+        reviewStepActive: steps.active,
+      }];
+    }));
   },
   describe(record, change) {
     const before: Record<string, unknown> = {};
-    const after: Record<string, unknown> = {};
-    if (change.status !== undefined) {
-      before.status = record.status;
-      after.status = change.status;
-    }
-    if (change.priority !== undefined) {
-      before.priority = record.priority;
-      after.priority = change.priority;
-    }
+    for (const field of ISSUE_WATCHED_FIELDS) before[field] = field === "labelIds" ? [...record.labelIds] : record[field];
+    const after: Record<string, unknown> = { ...before, labelIds: [...record.labelIds] };
+    if (change.status !== undefined) after.status = change.status;
+    if (change.priority !== undefined) after.priority = change.priority;
     if (change.assignee !== undefined) {
-      before.assigneeAgentId = record.assigneeAgentId;
-      before.assigneeUserId = record.assigneeUserId;
       after.assigneeAgentId = change.assignee && "agentId" in change.assignee ? change.assignee.agentId : null;
       after.assigneeUserId = change.assignee && "userId" in change.assignee ? change.assignee.userId : null;
     }
-    const noop = Object.keys(after).every((key) => after[key] === before[key]);
-    // A "done" on an issue with an open review or approval step is taken by
-    // that step (the route moves it to review and hands it to the reviewer),
-    // so the batch would not do what it says. Leave it out, plainly.
-    if (!noop && change.status === "done" && record.reviewStepOpen) {
+    const noop = ISSUE_WATCHED_FIELDS.every((field) => JSON.stringify(after[field]) === JSON.stringify(before[field]));
+    if (noop) return { before, after, noop };
+    // The issue's review or approval workflow, not the batch, would decide
+    // these: the route sends a "done" or "in review" to the reviewer and
+    // reassigns it, and while a step is under way it controls status and
+    // assignee. Leave the issue out, plainly, so a batch never surprises anyone.
+    const touchesWorkflow = change.status !== undefined || change.assignee !== undefined;
+    if (touchesWorkflow && record.reviewStepActive) {
+      return {
+        before, after, noop,
+        notDecidable: { reasonCode: BATCH_REASON_CODES.inReviewNow, reason: `${record.label} is in review now, so its reviewer decides; it was left out.` },
+      };
+    }
+    if (change.status !== undefined && WORKFLOW_STARTING_STATUSES.has(change.status) && record.reviewStepOpen) {
       return {
         before, after, noop,
         notDecidable: { reasonCode: BATCH_REASON_CODES.goesToReviewFirst, reason: `${record.label} goes to review first, so it was left out.` },
