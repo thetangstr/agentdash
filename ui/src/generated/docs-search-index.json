@@ -379,6 +379,23 @@
       "firstParagraph": "AgentDash writes an activity entry for changes across the company: who acted, what they did, and to what."
     },
     {
+      "slug": "guides/board-operator/change-many-things-at-once",
+      "title": "Change many things at once as an admin",
+      "summary": "Bulk changes with a preview and honest per-record results, the admin audit and its CSV export, ceiling templates, steward hand-over, routine delete, labels, the Admin powers switches, and batch changes from your own Claude",
+      "headings": [
+        "Change many records with a preview",
+        "Read the results",
+        "See who did what: the admin audit",
+        "Ceiling templates",
+        "Remove a member and hand over their agents",
+        "Delete a routine",
+        "Rename and recolor labels",
+        "The Admin powers switches",
+        "Batch changes from your own Claude"
+      ],
+      "firstParagraph": "These tools arrived in v2026.1110.0. Most of them need no setting: a batch is the same change you could make one record at a time, done for many records after one preview. Only the Admin powers switches are off until an owner or admin turns them on."
+    },
+    {
       "slug": "guides/board-operator/importing-and-exporting",
       "title": "Importing and Exporting Companies",
       "summary": "Export a company to a portable markdown package, and import one from a zip, a local folder or a public GitHub repo",
@@ -1133,6 +1150,7 @@
       "title": "API changelog",
       "summary": "The API-affecting lines of every AgentDash release note, newest first. Generated from releases/*.md.",
       "headings": [
+        "v2026.1110.0 — 2026-11-10",
         "v2026.1109.1 — 2026-11-09",
         "v2026.1104.0 — 2026-11-04",
         "v2026.1102.1 — 2026-11-02",
@@ -1166,7 +1184,7 @@
         "v2026.827.1 — 2026-08-27",
         "v2026.827.0 — 2026-08-27"
       ],
-      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 121 lines from 32 releases, out of 43 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words…"
+      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 131 lines from 33 releases, out of 44 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words…"
     },
     {
       "slug": "api/route-index",
