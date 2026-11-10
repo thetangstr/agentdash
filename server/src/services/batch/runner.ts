@@ -283,7 +283,7 @@ function itemRequestView(actor: Request["actor"]): Request {
 
 async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, actor: Request["actor"]) {
   const { db, kind } = ctx;
-  const records = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId]);
+  const records = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId], change);
   const record = records.get(item.entityId);
   if (!record) {
     await settleItem(ctx, item, "refused", {
@@ -293,10 +293,12 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     return;
   }
   const described = kind.describe(record, change);
-  if (fingerprintOf(described.before) !== item.fingerprint) {
+  // Drift: the record, or what the change would make of it (for example who
+  // the route would hand it to), is not what the preview showed.
+  if (fingerprintOf(described.before) !== item.fingerprint || canonicalJson(described.after) !== canonicalJson(item.after)) {
     await settleItem(ctx, item, "refused", {
       reasonCode: BATCH_REASON_CODES.changedSincePreview,
-      reason: `${item.label} changed after you previewed it; nothing was done to it.`,
+      reason: `This ${kind.noun} changed after you previewed it, so nothing was done to it.`,
     });
     return;
   }
@@ -306,7 +308,7 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     await settleItem(ctx, item, "refused", { reasonCode: described.notDecidable.reasonCode, reason: described.notDecidable.reason });
     return;
   }
-  const request = kind.request(record, change);
+  const request = kind.request(record, change, { itemId: item.id, before: item.before });
   const body = JSON.stringify(request.body);
   const claimed = await db
     .update(batchOperationItems)
@@ -366,10 +368,12 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     // preview showed: an execution policy can send a "done" to review and
     // hand it to the reviewer. Re-read the record; if the touched fields are
     // not what the preview said, the item says so, with the actual values.
-    const after = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId]);
+    const after = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId], change);
     const current = after.get(item.entityId);
-    const actual = current ? kind.describe(current, change).before : null;
-    if (actual && canonicalJson(actual) === canonicalJson(item.after)) {
+    const actual = current ? (kind.observe ? kind.observe(current) : kind.describe(current, change).before) : null;
+    // Compare the observed fields against the same keys of the preview.
+    const expected = actual ? Object.fromEntries(Object.keys(actual).map((key) => [key, item.after[key]])) : null;
+    if (actual && canonicalJson(actual) === canonicalJson(expected)) {
       await settleItem(ctx, item, "applied", { httpStatus: status, actual });
     } else {
       await settleItem(ctx, item, "applied", {
@@ -394,7 +398,7 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
   // A server error may come after the change was accepted (some routes answer
   // 500 when follow-up effects are unresolved). Only an unchanged record is
   // reported as failed; anything else is unknown, never "failed".
-  const reread = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId]);
+  const reread = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId], change);
   const now = reread.get(item.entityId);
   const unchanged = now ? fingerprintOf(kind.describe(now, change).before) === item.fingerprint : false;
   if (unchanged) {

@@ -65,6 +65,10 @@ export const BATCH_REASON_CODES = {
   goesToReviewFirst: "goes_to_review_first",
   /** Left out at preview: a review or approval step is under way, so its workflow decides status and assignee. */
   inReviewNow: "in_review_now",
+  /** Left out at preview: the approval is not among those waiting on this person. */
+  notWaitingOnYou: "not_waiting_on_you",
+  /** Left out at preview: this person may not decide the approval. */
+  notYoursToDecide: "not_yours_to_decide",
 } as const;
 export type BatchReasonCode = (typeof BATCH_REASON_CODES)[keyof typeof BATCH_REASON_CODES];
 
@@ -85,6 +89,8 @@ export interface BatchPreviewItem {
   label: string;
   before: Record<string, unknown>;
   after: Record<string, unknown>;
+  /** Plain consequences worth knowing before applying, for example "Moving it out of done reopens it." Preview only. */
+  notes?: string[];
 }
 
 export interface BatchPreviewResult {

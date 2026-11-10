@@ -245,6 +245,8 @@ export function Issues() {
         initialSearch={syncedSearch}
         onSearchChange={handleSearchChange}
         enableRoutineVisibilityFilter
+        // AgentDash admin powers: select tasks and change them together.
+        bulkEdit
         hasMoreIssues={hasMoreServerIssues}
         onLoadMoreIssues={loadMoreServerIssues}
         onUpdateIssue={(id, data) => {

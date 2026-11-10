@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
-import { agents, agentStewardships, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
+import { agents, agentStewardships, approvals as approvalsTable, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
 import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview, type WaitingOnYouStoppedAgentIssue } from '@paperclipai/shared';
 import { agentVisibilityCondition, approvalVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything } from '../routes/visibility.js';
 import type { Db } from "@paperclipai/db";
@@ -201,9 +201,49 @@ export function waitingOnYouService(db: Db) {
     };
   }
 
+  /**
+   * Match the real decision path: requireDecisionActor returns null when the
+   * company needs no decision role (non-MK), and the caller substitutes
+   * "admin" — null means allowed, not refused. Only a thrown refusal means
+   * this person cannot decide.
+   */
+  async function canDecideApproval(approval: unknown, actor: WaitingOnYouActor): Promise<boolean> {
+    try {
+      await authority.requireDecisionActor(approval as never, actor as never);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * AgentDash admin powers (part 3): the approvals among `approvalIds` the
+   * person can see, each with whether it is waiting on them and whether they
+   * may decide it — the same scope (`scopeAndRankOpenApprovals` over the
+   * person's audience) and the same `canDecide` probe as the Decisions list.
+   * Batch decisions take only rows that are waiting on the person and that
+   * they may decide; the route re-checks authority when each one is sent.
+   */
+  async function decisionCandidates(companyId: string, actor: WaitingOnYouActor, approvalIds: readonly string[], actualRequest?: Request) {
+    const req = actualRequest ?? ({ actor: { ...actor, type: 'board' } } as unknown as Request);
+    const ids = [...new Set(approvalIds)].filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+    const out = new Map<string, { approval: ApprovalLike & { revision: number; payload: unknown; companyId: string }; waitingOnYou: boolean; canDecide: boolean }>();
+    if (ids.length === 0) return out;
+    const rows = await db.select().from(approvalsTable)
+      .where(and(eq(approvalsTable.companyId, companyId), inArray(approvalsTable.id, ids), approvalVisibilityCondition(req, companyId)));
+    const audience = await digest.audienceAgents(companyId, actor.userId ?? null);
+    const inScope = new Set(scopeAndRankOpenApprovals(rows as ApprovalLike[], new Set(audience.map((agent) => agent.id))).map(({ approval }) => approval.id));
+    for (const row of rows) {
+      const waiting = inScope.has(row.id);
+      out.set(row.id, { approval: row as never, waitingOnYou: waiting, canDecide: waiting ? await canDecideApproval(row, actor) : false });
+    }
+    return out;
+  }
+
   return {
     pendingQuestions,
     stoppedAgentIssues,
+    decisionCandidates,
     /**
      * The pending-decisions payload: approvals with `canDecide` computed per
      * row by probing the one authority service, plus the person's open
@@ -259,17 +299,7 @@ export function waitingOnYouService(db: Db) {
 
       const decisions = await Promise.all(
         ranked.slice(0, opts.decisionLimit ?? 50).map(async ({ approval, risk }) => {
-          let canDecide = false;
-          try {
-            // Match the real decision path: requireDecisionActor returns null
-            // when the company needs no decision role (non-MK), and the caller
-            // substitutes "admin" — null means allowed, not refused. Only a
-            // thrown refusal means this person cannot decide.
-            await authority.requireDecisionActor(approval as never, actor as never);
-            canDecide = true;
-          } catch {
-            canDecide = false;
-          }
+          const canDecide = await canDecideApproval(approval, actor);
           const linked = await issueApprovals.listIssuesForApproval(approval.id).catch(() => []);
           const first = Array.isArray(linked) ? linked[0] : null;
           const payload =

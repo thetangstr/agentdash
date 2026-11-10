@@ -194,7 +194,7 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     await t.batches.waitForRunner(p.body.batchId);
     const [item] = await t.db.select().from(batchOperationItems).where(eq(batchOperationItems.batchId, p.body.batchId));
     expect(item).toMatchObject({ outcome: "refused", reasonCode: "changed_since_preview" });
-    expect(item!.reason).toMatch(/changed after you previewed it; nothing was done to it/);
+    expect(item!.reason).toBe("This task changed after you previewed it, so nothing was done to it.");
     const [row] = await t.db.select({ priority: issues.priority }).from(issues).where(eq(issues.id, a.id));
     expect(row!.priority).toBe("critical");
     const refusedRows = await t.db.select().from(activityLog).where(and(eq(activityLog.action, "batch.item_refused"), eq(activityLog.entityId, a.id)));

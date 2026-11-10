@@ -16,6 +16,7 @@ import { requestActorSourceMiddleware } from "../../lib/request-actor-source.js"
 import { issueRoutes } from "../../routes/issues.js";
 import { batchRoutes } from "../../routes/batches.js";
 import { activityRoutes } from "../../routes/activity.js";
+import { approvalRoutes } from "../../routes/approvals.js";
 import { assertBoard, assertCompanyAccess, getActorInfo, setAuthzRefusalDb } from "../../routes/authz.js";
 import { logActivity } from "../../services/activity-log.js";
 import { BATCH_KINDS, type BatchKind, type BatchKindRecord } from "../../services/batch/kinds.js";
@@ -51,6 +52,7 @@ export function widgetKind(widgets: Map<string, Widget>): BatchKind<{ value: str
   return {
     key: "test.widget",
     entityType: "widget",
+    noun: "widget",
     maxPerBatch: 200,
     parseChange: (input) => z.object({ value: z.string().min(1) }).strict().parse(input),
     async load({ companyId }, ids) {
@@ -127,6 +129,7 @@ export async function startBatchTestApp(
   api.use(boardMutationGuard());
   api.use(issueRoutes(db, {} as never));
   api.use(activityRoutes(db));
+  api.use(approvalRoutes(db, { autoDispatchQueuedRuns: false }));
   const batchRouter = batchRoutes(db, {
     ...options,
     kinds: { ...BATCH_KINDS, "test.widget": widgetKind(widgets), ...(options.kinds ?? {}) },

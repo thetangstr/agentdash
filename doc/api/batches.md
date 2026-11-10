@@ -15,7 +15,7 @@ single route would refuse that person.
 1. `POST /api/companies/:companyId/batches/preview` with `{kind, ids, change}`.
    Returns `{batchId, previewDigest, confirmHandle, expiresAt, kind, items, omitted}`.
    `items` are the exact records and, for each, the touched fields `before` and
-   `after`. Ids the person cannot see, ids from another company and records
+   `after`, and optional plain `notes` (consequences worth knowing). Ids the person cannot see, ids from another company and records
    the change would not alter are left out and only counted in
    `omitted: {notFound, noop, notDecidable}`; they are never named. Records
    whose own rules would decide the change instead are listed in
@@ -64,11 +64,41 @@ batches, so it survives a restart). A capped request gets `429`.
 
 | Kind | Change | Route each record goes through |
 | --- | --- | --- |
-| `issue.update` | any of `status`, `priority`, `assignee` (`{agentId}`, `{userId}` or `null`) | `PATCH /api/issues/:id` |
+| `issue.update` | any of `status`, `priority`, `assignee` (`{agentId}`, `{userId}` or `null`), `projectId` (or `null`), `addLabelIds`, `removeLabelIds` | `PATCH /api/issues/:id` |
+| `approval.approve` | optional shared `decisionNote` | `POST /api/approvals/:id/approve` |
+| `approval.reject` | optional shared `decisionNote` | `POST /api/approvals/:id/reject` |
 
-Part 3 adds the product kinds (labels and project on issues, approvals, agent
-pause/resume, model, steward transfer, ceiling templates, routines). Every kind
-must join `server/src/__tests__/batch-guard-parity.test.ts`.
+`issue.update`:
+
+- Labels are added or removed; the preview turns them into each task's full
+  label set, and a task that already has (or lacks) them is a no-op.
+- Assigning a person who looks after an agent: the route hands the task to
+  that agent, so the preview's `after` shows the agent and a note says so. If
+  the stewardship changes before apply, the item is refused as changed.
+- Moving a task out of done carries the note "Moving it out of done reopens
+  it" (and "clears its review record" when it has one).
+- A task with an open review or approval step is left out of a "done" or "in
+  review"; one whose step is under way is left out of any status or assignee
+  change.
+
+`approval.approve` / `approval.reject`:
+
+- Candidates are the approvals waiting on the person that they may decide:
+  the same scope and authority probe as the Decisions list
+  (`waitingOnYouService.decisionCandidates`). Others are listed in
+  `notDecidable` ("is not waiting on you", "you cannot decide").
+- Each request carries the revision the preview saw (the route answers 409 on
+  a stale one; the engine's own drift check usually refuses first), an
+  idempotency key `batch:<itemId>` (a retried request replays the same
+  decision) and `channel: "web"`.
+- "Request changes" is not a batch kind: each one needs its own note.
+
+At apply, an item is refused as `changed_since_preview` ("This task changed
+after you previewed it, so nothing was done to it.") when the record, or what
+the change would make of it, is no longer what the preview showed. A kind's
+own guard (`previewGuard`) runs at preview and again at confirm.
+
+Every kind must join `server/src/__tests__/batch-guard-parity.test.ts`.
 
 ## Activity
 

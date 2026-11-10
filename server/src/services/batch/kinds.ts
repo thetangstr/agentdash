@@ -5,6 +5,8 @@ import { issueLabels, issues } from "@paperclipai/db";
 import { BATCH_MAX_RECORDS_UI, BATCH_REASON_CODES, issueUpdateBatchChangeSchema, type IssueUpdateBatchChange } from "@paperclipai/shared";
 import { listVisibleIssueIds } from "../../routes/visibility.js";
 import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "../issue-execution-policy.js";
+import { resolveStewardedAgentRoute } from "../stewarded-agent-routing.js";
+import { approvalApproveBatchKind, approvalRejectBatchKind } from "./approval-kinds.js";
 
 /**
  * AgentDash admin powers, part 2: the kinds a batch can be.
@@ -38,20 +40,36 @@ export interface BatchKindContext {
   companyId: string;
 }
 
+export interface BatchKindItemRef {
+  itemId: string;
+  /** What the preview recorded as `before`: requests that carry a revision send the previewed one. */
+  before: Record<string, unknown>;
+}
+
 export interface BatchKind<Change = unknown, Record extends BatchKindRecord = BatchKindRecord> {
   key: string;
   entityType: string;
+  /** What a person calls one record of this kind, in reasons ("task", "approval"). */
+  noun: string;
   maxPerBatch: number;
   /** Throws a ZodError (400) for a change this kind does not accept. */
   parseChange(input: unknown): Change;
-  /** An extra guard at preview, beyond board access to the company (for example admin-only kinds). */
-  previewGuard?(ctx: BatchKindContext): Promise<void>;
-  /** Only the records the actor can see. Ids it cannot see are simply absent, never named. */
-  load(ctx: BatchKindContext, ids: readonly string[]): Promise<Map<string, Record>>;
   /**
-   * The touched fields before and after. `before` is also the drift
+   * An extra guard beyond board access to the company (for example
+   * admin-only kinds). The engine runs it at preview and again at confirm.
+   */
+  previewGuard?(ctx: BatchKindContext): Promise<void>;
+  /**
+   * Only the records the actor can see (or may act on). Ids it cannot see are
+   * simply absent, never named. The change is passed so a kind can resolve
+   * what the route will do (for example a person who stewards an agent).
+   */
+  load(ctx: BatchKindContext, ids: readonly string[], change: Change): Promise<Map<string, Record>>;
+  /**
+   * `before` and `after` of the record. `before` is also the drift
    * fingerprint: it is hashed at preview and compared with a fresh read
-   * before the item is sent.
+   * before the item is sent; at apply the freshly described `after` must
+   * also still equal the previewed one.
    */
   describe(record: Record, change: Change): {
     before: { [key: string]: unknown };
@@ -63,9 +81,16 @@ export interface BatchKind<Change = unknown, Record extends BatchKindRecord = Ba
      * record is left out of the batch and the reason is shown at preview.
      */
     notDecidable?: { reasonCode: string; reason: string };
+    /** Plain consequences shown at preview ("Moving it out of done reopens it."). */
+    notes?: string[];
   };
+  /**
+   * The fields compared after the route answered 2xx, against the same keys
+   * of the previewed `after`. Defaults to `describe(record).before`.
+   */
+  observe?(record: Record): { [key: string]: unknown };
   /** The single-record route's own request, built at apply time from a fresh read. */
-  request(record: Record, change: Change): BatchItemRequest;
+  request(record: Record, change: Change, item: BatchKindItemRef): BatchItemRequest;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +107,10 @@ type IssueRecord = BatchKindRecord & {
   reviewStepOpen?: boolean;
   /** A review or approval step is under way now, so its workflow decides status and assignee. */
   reviewStepActive?: boolean;
+  /** The issue carries a review or approval record (execution state). */
+  hasReviewRecord?: boolean;
+  /** For a change that assigns a person: the agent the route will hand it to, when that person stewards one. */
+  routedAgentId?: string | null;
 };
 
 /**
@@ -131,8 +160,9 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
   key: "issue.update",
   entityType: "issue",
   maxPerBatch: BATCH_MAX_RECORDS_UI,
+  noun: "task",
   parseChange: (input) => issueUpdateBatchChangeSchema.parse(input),
-  async load({ db, req, companyId }, ids) {
+  async load({ db, req, companyId }, ids, change) {
     const visible = await listVisibleIssueIds(db, req, companyId, ids);
     if (visible.size === 0) return new Map();
     const rows = await db
@@ -154,6 +184,16 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
       .select({ issueId: issueLabels.issueId, labelId: issueLabels.labelId })
       .from(issueLabels)
       .where(inArray(issueLabels.issueId, rows.map((row) => row.id)));
+    // Work given to a person who stewards an agent goes to that agent: the
+    // route asks the same helper, so the preview shows what will happen.
+    const routed = change?.assignee && "userId" in change.assignee
+      ? await resolveStewardedAgentRoute(db, {
+          companyId,
+          actorAgentId: null,
+          actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
+          assigneeUserId: change.assignee.userId,
+        })
+      : null;
     const labelsByIssue = new Map<string, string[]>();
     for (const row of labelRows) labelsByIssue.set(row.issueId, [...(labelsByIssue.get(row.issueId) ?? []), row.labelId]);
     return new Map(rows.map((row) => {
@@ -170,6 +210,8 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
         labelIds: [...(labelsByIssue.get(row.id) ?? [])].sort(),
         reviewStepOpen: steps.open,
         reviewStepActive: steps.active,
+        hasReviewRecord: row.executionState != null,
+        routedAgentId: routed && row.assigneeUserId !== routed.fromUserId ? routed.toAgentId : null,
       }];
     }));
   },
@@ -180,11 +222,33 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
     if (change.status !== undefined) after.status = change.status;
     if (change.priority !== undefined) after.priority = change.priority;
     if (change.assignee !== undefined) {
-      after.assigneeAgentId = change.assignee && "agentId" in change.assignee ? change.assignee.agentId : null;
-      after.assigneeUserId = change.assignee && "userId" in change.assignee ? change.assignee.userId : null;
+      if (change.assignee && "userId" in change.assignee && record.routedAgentId) {
+        after.assigneeAgentId = record.routedAgentId;
+        after.assigneeUserId = null;
+      } else {
+        after.assigneeAgentId = change.assignee && "agentId" in change.assignee ? change.assignee.agentId : null;
+        after.assigneeUserId = change.assignee && "userId" in change.assignee ? change.assignee.userId : null;
+      }
+    }
+    if (change.projectId !== undefined) after.projectId = change.projectId;
+    if (change.addLabelIds?.length || change.removeLabelIds?.length) {
+      const next = new Set(record.labelIds);
+      for (const id of change.addLabelIds ?? []) next.add(id);
+      for (const id of change.removeLabelIds ?? []) next.delete(id);
+      after.labelIds = [...next].sort();
+    }
+    const notes: string[] = [];
+    if (change.assignee && "userId" in change.assignee && record.routedAgentId) {
+      notes.push("This person looks after an agent, so the task goes to that agent.");
+    }
+    if (record.status === "done" && change.status !== undefined && change.status !== "done") {
+      notes.push(record.hasReviewRecord
+        ? "Moving it out of done reopens it and clears its review record."
+        : "Moving it out of done reopens it.");
     }
     const noop = ISSUE_WATCHED_FIELDS.every((field) => JSON.stringify(after[field]) === JSON.stringify(before[field]));
     if (noop) return { before, after, noop };
+    const withNotes = notes.length > 0 ? { notes } : {};
     // The issue's review or approval workflow, not the batch, would decide
     // these: the route sends a "done" or "in review" to the reviewer and
     // reassigns it, and while a step is under way it controls status and
@@ -202,19 +266,24 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
         notDecidable: { reasonCode: BATCH_REASON_CODES.goesToReviewFirst, reason: `${record.label} goes to review first, so it was left out.` },
       };
     }
-    return { before, after, noop };
+    return { before, after, noop, ...withNotes };
   },
   request(record, change) {
     const body: Record<string, unknown> = {};
     if (change.status !== undefined && change.status !== record.status) body.status = change.status;
     if (change.priority !== undefined && change.priority !== record.priority) body.priority = change.priority;
     if (change.assignee !== undefined) {
+      // The person's id is sent as is: the route itself hands work given to a
+      // person who stewards an agent to that agent, as the preview said.
       body.assigneeAgentId = change.assignee && "agentId" in change.assignee ? change.assignee.agentId : null;
       body.assigneeUserId = change.assignee && "userId" in change.assignee ? change.assignee.userId : null;
-      // A person assignee stays with the person, so the record ends exactly
-      // as the preview showed (the route would otherwise route work given to
-      // a person who stewards an agent to that agent).
-      if (body.assigneeUserId) body.assignToPerson = true;
+    }
+    if (change.projectId !== undefined && change.projectId !== record.projectId) body.projectId = change.projectId;
+    if (change.addLabelIds?.length || change.removeLabelIds?.length) {
+      const next = new Set(record.labelIds);
+      for (const id of change.addLabelIds ?? []) next.add(id);
+      for (const id of change.removeLabelIds ?? []) next.delete(id);
+      body.labelIds = [...next].sort();
     }
     return { method: "PATCH", path: `/api/issues/${record.entityId}`, body };
   },
@@ -223,4 +292,6 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
 /** The production registry. Tests pass their own kinds to the service instead of registering here. */
 export const BATCH_KINDS: Readonly<Record<string, AnyBatchKind>> = Object.freeze({
   [issueUpdateBatchKind.key]: issueUpdateBatchKind,
+  [approvalApproveBatchKind.key]: approvalApproveBatchKind,
+  [approvalRejectBatchKind.key]: approvalRejectBatchKind,
 });

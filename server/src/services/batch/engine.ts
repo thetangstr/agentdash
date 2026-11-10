@@ -186,10 +186,10 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       if (ids.length > kind.maxPerBatch) throw badRequest(`A batch of this kind holds at most ${kind.maxPerBatch} records.`);
       const userId = actorUserId(req);
 
-      const records = await kind.load({ db, req, companyId }, ids);
+      const records = await kind.load({ db, req, companyId }, ids, change);
       const omitted = { notFound: 0, noop: 0, notDecidable: 0 };
       const notDecidable: BatchPreviewResult["notDecidable"] = [];
-      const planned: Array<{ entityType: string; entityId: string; label: string; before: Record<string, unknown>; after: Record<string, unknown> }> = [];
+      const planned: Array<{ entityType: string; entityId: string; label: string; before: Record<string, unknown>; after: Record<string, unknown>; notes?: string[] }> = [];
       for (const id of ids) {
         const record = records.get(id);
         if (!record) { omitted.notFound++; continue; }
@@ -200,7 +200,10 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
           notDecidable.push({ entityType: record.entityType, entityId: record.entityId, label: record.label, ...described.notDecidable });
           continue;
         }
-        planned.push({ entityType: record.entityType, entityId: record.entityId, label: record.label, before: described.before, after: described.after });
+        planned.push({
+          entityType: record.entityType, entityId: record.entityId, label: record.label, before: described.before, after: described.after,
+          ...(described.notes?.length ? { notes: described.notes } : {}),
+        });
       }
       if (planned.length === 0) {
         return { batchId: null, previewDigest: null, confirmHandle: null, expiresAt: null, kind: kind.key, items: [], omitted, notDecidable };
@@ -213,6 +216,7 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
         items: planned.map((item) => [item.entityType, item.entityId, item.before, item.after]),
       }));
       const confirmHandle = randomBytes(32).toString("base64url");
+      const notesByEntity = new Map(planned.filter((item) => item.notes).map((item) => [`${item.entityType}:${item.entityId}`, item.notes!]));
       const expiresAt = new Date(Date.now() + BATCH_PREVIEW_TTL_MS);
 
       const created = await db.transaction(async (tx) => {
@@ -263,7 +267,10 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
         kind: kind.key,
         items: created.items
           .sort((a, b) => a.ordinal - b.ordinal)
-          .map((item) => ({ itemId: item.id, entityType: item.entityType, entityId: item.entityId, label: item.label, before: item.before, after: item.after })),
+          .map((item) => {
+            const notes = notesByEntity.get(`${item.entityType}:${item.entityId}`);
+            return { itemId: item.id, entityType: item.entityType, entityId: item.entityId, label: item.label, before: item.before, after: item.after, ...(notes ? { notes } : {}) };
+          }),
         omitted,
         notDecidable,
       };
@@ -276,6 +283,9 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       const existing = await loadOwnBatch(req, companyId, batchId);
       if (existing.origin !== "ui") throw forbidden("This batch is confirmed from its review page.");
       const kind = kindFor(existing.kind);
+      // A kind's own guard (admin-only kinds) holds at confirm as well as at
+      // preview: the person may have lost the role in between.
+      await kind.previewGuard?.({ db, req, companyId });
       if (existing.previewDigest !== input.previewDigest) {
         throw conflict("This preview is out of date. Preview the change again.");
       }
