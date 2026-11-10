@@ -222,6 +222,7 @@ describe("deliverable review reasons", () => {
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   // AgentDash admin powers (part 4)
   "audit.exported",
+  "batch.confirm_code_shown",
   "agent.directives_read_by_admin",
   "run.content_read_by_admin",
   // AgentDash: Agent Performance Management gate 2 (written from P2.2–P2.4 on)

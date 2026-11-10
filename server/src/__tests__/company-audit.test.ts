@@ -1,6 +1,8 @@
 import express, { Router, type Request } from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { and, eq, inArray, like, not, or, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // These fixtures inject req.actor without running the auth middleware, so no
@@ -565,5 +567,83 @@ describeEmbeddedPostgres("admin audit (part 4.1)", () => {
         expect(exported?.details).toMatchObject({ rowCount: 50_000, truncated: true, completed: true });
       });
     }, 180_000);
+
+    it("review of 4de5523e9: formula characters after leading whitespace, and full-width forms, are neutralized", () => {
+      for (const value of [" =1+1", "\n=cmd", "  +1", "\n\n-1", " @SUM(A1)", "＝1+1", "＋1", "－1", "＠SUM(A1)", " ＝1"]) {
+        const cell = csvCell(value);
+        const unquoted = cell.startsWith('"') ? cell.slice(1, -1).replace(/""/g, '"') : cell;
+        expect(unquoted.startsWith("'"), JSON.stringify(value)).toBe(true);
+      }
+      expect(csvCell("\tx")).toBe("'\tx");
+      expect(csvCell("\rx")).toBe("\"'\rx\"");
+      expect(csvCell(" plain")).toBe(" plain");
+      expect(csvCell("a=b")).toBe("a=b");
+    });
+
+    it("review of 4de5523e9: a slow client is served with backpressure, and a client that leaves is logged as incomplete", async () => {
+      const SLOW = randomUUID();
+      await db.insert(companies).values({ id: SLOW, name: "Slow Co", issuePrefix: "AUS" });
+      await db.insert(companyMemberships).values({ companyId: SLOW, principalType: "user", principalId: ADMIN, status: "active", membershipRole: "admin" });
+      // 5,000 rows of about 4 KB each: about 20 MB if the server buffered it all.
+      await db.execute(sql`
+        insert into activity_log (company_id, actor_type, actor_id, action, entity_type, entity_id, origin, details, created_at)
+        select ${SLOW}::uuid, 'user', ${ADMIN}, 'slow.row', 'company', ${SLOW}, 'server',
+               jsonb_build_object('note', repeat('x', 4000)),
+               timestamptz '2026-08-01T00:00:00Z' + (n || ' seconds')::interval
+        from generate_series(1, 5000) as n`);
+      let serverRes: http.ServerResponse | null = null;
+      const app = express();
+      app.use((req, res, next) => {
+        (req as any).actor = asUser(ADMIN, "admin", [SLOW]);
+        if (req.path.endsWith("/audit.csv")) serverRes = res;
+        next();
+      });
+      app.use("/api", companyAuditRoutes(db, { csvPageSize: 100 }));
+      app.use(errorHandler);
+      const server = http.createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as AddressInfo).port;
+      const buffered = () => (serverRes as http.ServerResponse | null)?.writableLength ?? 0;
+      try {
+        const clientReq = http.get({ host: "127.0.0.1", port, path: `/api/companies/${SLOW}/audit.csv` });
+        const clientRes = await new Promise<http.IncomingMessage>((resolve) => clientReq.on("response", resolve));
+        clientRes.pause(); // a client that reads nothing more
+        // Let the server run until it is blocked on the socket.
+        let last = -1;
+        let peak = 0;
+        for (let i = 0; i < 40; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          peak = Math.max(peak, buffered());
+          if (buffered() === last && i > 5) break;
+          last = buffered();
+        }
+        // At most about one page (100 rows of ~4 KB) waits in the server's buffer.
+        expect(peak).toBeLessThan(2 * 1024 * 1024);
+        clientReq.destroy();
+        await vi.waitFor(async () => {
+          const [exported] = await db
+            .select()
+            .from(activityLog)
+            .where(and(eq(activityLog.companyId, SLOW), eq(activityLog.action, "audit.exported")));
+          expect(exported?.details).toMatchObject({ completed: false, truncated: false });
+          expect((exported!.details as { rowCount: number }).rowCount).toBeLessThan(5000);
+        }, { timeout: 15_000 });
+      } finally {
+        server.closeAllConnections?.();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }, 60_000);
+  });
+
+  describe("round 5a: assistant connections", () => {
+    it("an admin's assistant grant cannot read the audit (JSON or CSV)", async () => {
+      const viaAssistant = appAs({ ...asUser(ADMIN, "admin"), source: "assistant_grant", assistantGrantId: randomUUID(), assistantClientName: "Claude" });
+      for (const path of [`/api/companies/${COMPANY}/audit`, `/api/companies/${COMPANY}/audit.csv`]) {
+        const res = await request(viaAssistant).get(path);
+        expect(res.status, path).toBe(403);
+        expect(res.headers["content-type"], path).not.toMatch(/csv/);
+      }
+      expect((await request(admin()).get(`/api/companies/${COMPANY}/audit`)).status).toBe(200);
+    });
   });
 });

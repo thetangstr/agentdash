@@ -69,7 +69,7 @@ function plural(count: number, noun: { one: string; many: string }) {
   return `${count} ${count === 1 ? noun.one : noun.many}`;
 }
 
-function defaultFormat(field: string, value: unknown): BatchFieldText {
+export function defaultFormat(field: string, value: unknown): BatchFieldText {
   const text = value === null || value === undefined
     ? "None"
     : Array.isArray(value)
@@ -82,7 +82,7 @@ function changedFields(before: Record<string, unknown>, after: Record<string, un
   return Object.keys(after).filter((key) => JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null));
 }
 
-function FieldChanges({
+export function FieldChanges({
   before,
   after,
   format,
@@ -132,7 +132,7 @@ function outcomeKey(item: BatchItemView) {
   return item.outcome === "applied" && item.reasonCode === "applied_differently" ? "applied_differently" : item.outcome;
 }
 
-function ResultRow({
+export function ResultRow({
   item,
   format,
   describeItem,

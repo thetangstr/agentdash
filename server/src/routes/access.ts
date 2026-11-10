@@ -4923,6 +4923,8 @@ export function accessRoutes(
     const companyId = req.params.companyId as string;
     const memberId = req.params.memberId as string;
     assertCompanyAccess(req, companyId);
+    // Review of 4de5523e9: never through a person's assistant connection.
+    if (req.actor.source === "assistant_grant") throw forbidden("Only owners and admins can see whose agents a member looks after.");
     await assertCompanyAdministrator(access, req, companyId, "Only owners and admins can see whose agents a member looks after.");
     const member = await access.getMemberById(companyId, memberId);
     if (!member || member.principalType !== "user") throw notFound("Member not found");

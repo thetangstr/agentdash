@@ -59,6 +59,8 @@ export const BATCH_REASON_CODES = {
   interrupted: "batch_interrupted",
   timeBudget: "batch_time_budget",
   accessEnded: "access_ended",
+  /** Part 5: the assistant connection was revoked, the person is no longer an admin, or the company switch was turned off. */
+  assistantAccessEnded: "assistant_access_ended",
   /** Applied, but the record now differs from the preview: the route did something else (see `actual`). */
   appliedDifferently: "applied_differently",
   /** Left out at preview: the record's review or approval steps decide this change, not the batch. */
@@ -151,6 +153,8 @@ export interface BatchView {
   confirmedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  /** Part 5: the connection that prepared it, when the person's own Claude did (never any code or hash). */
+  assistantClientName?: string | null;
   items?: BatchItemView[];
 }
 

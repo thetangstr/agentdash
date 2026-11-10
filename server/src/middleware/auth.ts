@@ -8,6 +8,8 @@ import { EVALUATOR_AGENT_ROLE, EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllow
 import {
   ASSISTANT_ACCESS_TOKEN_PREFIX,
   ASSISTANT_INSUFFICIENT_SCOPE,
+  ASSISTANT_SCOPE_ADMIN,
+  assistantStepUpChallenge,
   ASSISTANT_LOOPBACK_TOKEN_PREFIX,
   ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR,
   ASSISTANT_WRITE_LIMIT_PER_HOUR,
@@ -323,6 +325,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         // five work routes take `agentdash:work`; the three gated-action
         // routes take the opt-in `agentdash:decide`.
         if (!resolved.scopes.includes(writeRoute.scope)) {
+          // AgentDash admin powers (part 5): the admin scope is a step-up the
+          // client can request on reconnect; say exactly which scopes to ask for.
+          if (writeRoute.scope === ASSISTANT_SCOPE_ADMIN) {
+            res.set("WWW-Authenticate", assistantStepUpChallenge(resolved.scopes, ASSISTANT_SCOPE_ADMIN));
+          }
           res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: writeRoute.scope });
           return;
         }
@@ -417,7 +424,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         origin: resolved.credential,
       };
       runWithBatchActivityContext(
-        { batchId: resolved.batchId, itemId: resolved.itemId, companyId: resolved.companyId, origin: resolved.origin },
+        {
+          batchId: resolved.batchId,
+          itemId: resolved.itemId,
+          companyId: resolved.companyId,
+          origin: resolved.origin,
+          // Part 5: an assistant-prepared batch names its connection on every row.
+          ...(resolved.grantId ? { grantId: resolved.grantId } : {}),
+          ...(resolved.client ? { client: resolved.client } : {}),
+        },
         () => next(),
       );
       return;

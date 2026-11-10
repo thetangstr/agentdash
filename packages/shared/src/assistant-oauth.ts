@@ -7,15 +7,25 @@
  *  - `agentdash:work`   — creating/moving work and waking agents
  *  - `agentdash:decide` — resolving approvals and hiring; opt-in at consent,
  *                         never granted by default
+ *  - `agentdash:admin`  — AgentDash admin powers (part 5): preparing batch
+ *                         changes as an admin. Never pre-checked at consent,
+ *                         and dropped from the grant (never failing it) unless
+ *                         the person is an admin of the company and the
+ *                         company switch "Allow batch changes from an admin's
+ *                         own Claude" is on. A batch it prepares changes
+ *                         nothing until the person reads back the code shown
+ *                         only in their browser, or applies it there.
  */
 export const ASSISTANT_SCOPE_READ = "agentdash:read";
 export const ASSISTANT_SCOPE_WORK = "agentdash:work";
 export const ASSISTANT_SCOPE_DECIDE = "agentdash:decide";
+export const ASSISTANT_SCOPE_ADMIN = "agentdash:admin";
 
 export const ASSISTANT_SCOPES = [
   ASSISTANT_SCOPE_READ,
   ASSISTANT_SCOPE_WORK,
   ASSISTANT_SCOPE_DECIDE,
+  ASSISTANT_SCOPE_ADMIN,
 ] as const;
 
 export type AssistantScope = (typeof ASSISTANT_SCOPES)[number];
@@ -69,6 +79,39 @@ export const ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR = 10;
  */
 export const ASSISTANT_GATED_CONFIRM_LIMIT_PER_HOUR = 20;
 export const ASSISTANT_GATED_HIRE_LIMIT_PER_HOUR = 5;
+
+/**
+ * AgentDash admin powers (part 5): the per-grant budget for batch changes an
+ * admin prepares from their own Claude. Durable: counted from
+ * `batch_operations` rows (prepares by `created_at`, confirmed records by
+ * `confirmed_at`), so a restart cannot reset it. Records per batch come from
+ * `companies.assistant_batch_max_records`.
+ */
+export const ASSISTANT_BATCH_PREPARE_LIMIT_PER_HOUR = 10;
+export const ASSISTANT_BATCH_RECORD_LIMIT_PER_HOUR = 200;
+/** Wrong confirm codes that cancel the batch. */
+export const ASSISTANT_BATCH_CONFIRM_CODE_MAX_ATTEMPTS = 5;
+/** The kinds an assistant may prepare (v1, orchestrator decision 2). */
+export const ASSISTANT_BATCH_KINDS = [
+  "issue.update",
+  "approval.approve",
+  "approval.reject",
+  "agent.pause",
+  "agent.resume",
+  "agent.set_model",
+  "agent.transfer_steward",
+  "agent.apply_ceiling",
+] as const;
+
+/**
+ * The step-up challenge for a call that needs a scope the grant lacks
+ * (RFC 6750 §3.1 with the RFC 9470 `scope` parameter): the scopes the grant
+ * has now plus the one it needs, so the client can ask for exactly that.
+ */
+export function assistantStepUpChallenge(currentScopes: readonly string[], required: string): string {
+  const scopes = [...new Set([...currentScopes, required])].join(" ");
+  return `Bearer error="${ASSISTANT_INSUFFICIENT_SCOPE}", scope="${scopes}"`;
+}
 
 /**
  * The ONLY routes an `assistant_grant` credential may reach, and the scope
@@ -253,6 +296,24 @@ export const ASSISTANT_LOOPBACK_WRITE_ROUTES: ReadonlyArray<{
     scope: ASSISTANT_SCOPE_DECIDE,
     consumesWriteAllowance: false,
     bodyFields: ["handle", "personSaid"],
+  },
+  // AgentDash admin powers (part 5): prepare_batch_change. Prepares, never
+  // applies: nothing changes until the person reads back the code that only
+  // their browser shows. Bounded by its own durable per-grant budget.
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/assistant\/batches\/prepare$/,
+    scope: ASSISTANT_SCOPE_ADMIN,
+    consumesWriteAllowance: false,
+    bodyFields: ["kind", "targets", "change"],
+  },
+  // confirm_batch_change — the code the person read back, and nothing else.
+  {
+    method: "POST",
+    pattern: /^\/api\/companies\/[^/]+\/assistant\/batches\/[^/]+\/confirm$/,
+    scope: ASSISTANT_SCOPE_ADMIN,
+    consumesWriteAllowance: false,
+    bodyFields: ["code"],
   },
 ];
 

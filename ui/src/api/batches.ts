@@ -21,4 +21,14 @@ export const batchesApi = {
     api.get<BatchView>(`/companies/${companyId}/batches/${batchId}`),
   cancel: (companyId: string, batchId: string) =>
     api.post<BatchView>(`/companies/${companyId}/batches/${batchId}/cancel`, {}),
+  /**
+   * Part 5: shows the code that confirms a batch the person's own Claude
+   * prepared. Browser only; the code is in this response and nowhere else.
+   * Never cache, store or log it.
+   */
+  confirmCode: (companyId: string, batchId: string) =>
+    api.post<{ code: string; expiresAt: string }>(`/companies/${companyId}/batches/${batchId}/confirm-code`, {}),
+  /** Part 5: "Apply here", with the person's own session. */
+  applyHere: (companyId: string, batchId: string) =>
+    api.post<{ batchId: string; status: BatchStatus }>(`/companies/${companyId}/batches/${batchId}/apply-here`, {}),
 };

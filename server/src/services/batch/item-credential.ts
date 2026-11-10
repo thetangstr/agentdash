@@ -27,7 +27,15 @@ import { BATCH_ITEM_CREDENTIAL_TTL_MS, BATCH_ITEM_TOKEN_PREFIX, type BatchOrigin
 /** The proof the confirming request was authenticated with, re-validated by the routes that check it. */
 export type BatchItemCredentialOrigin =
   | { kind: "session"; sessionId: string; userId: string }
-  | { kind: "local_implicit" };
+  | { kind: "local_implicit" }
+  /**
+   * Part 5: a batch the person's own Claude prepared and they confirmed with
+   * the code shown in their browser. The item actor is that grant's actor
+   * (`source: "assistant_grant"`); the runner re-reads the grant, the
+   * person's admin role and the company switch before every item, and the
+   * session re-check (`sessionProof`) never accepts this origin.
+   */
+  | { kind: "assistant"; grantId: string; userId: string };
 
 export interface BatchItemBinding {
   method: string;
@@ -43,6 +51,9 @@ export interface BatchItemIdentity {
   credential: BatchItemCredentialOrigin;
   actor: Request["actor"];
   binding: BatchItemBinding;
+  /** Assistant-prepared batches: the connection, stamped on every activity row as details.batch.{grantId, client}. */
+  grantId?: string | null;
+  client?: string | null;
 }
 
 interface Entry extends BatchItemIdentity {

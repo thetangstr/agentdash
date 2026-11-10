@@ -1,8 +1,25 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { batchConfirmSchema, batchPreviewSchema, batchReconcileSchema } from "@paperclipai/shared";
+import { companies } from "@paperclipai/db";
+import {
+  ASSISTANT_BATCH_KINDS,
+  ASSISTANT_SCOPE_ADMIN,
+  assistantBatchConfirmSchema,
+  assistantBatchPrepareSchema,
+  assistantStepUpChallenge,
+  batchApplyHereSchema,
+  batchConfirmSchema,
+  batchPreviewSchema,
+  batchReconcileSchema,
+} from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { batchService, type BatchServiceOptions } from "../services/batch/engine.js";
+import { BATCH_KINDS } from "../services/batch/kinds.js";
+import { describeChangeAsText, resolveAssistantTargets } from "../services/batch/assistant-targets.js";
+import { batchReviewUrl } from "../lib/public-base-url.js";
+import { assertCompanyAccess } from "./authz.js";
+import { badRequest } from "../errors.js";
 
 /**
  * AgentDash admin powers, part 2: the batch routes.
@@ -52,6 +69,104 @@ export function batchRoutes(db: Db, options: BatchServiceOptions = {}) {
       ));
     },
   );
+
+  /**
+   * AgentDash admin powers (part 5): the code that confirms a batch the
+   * person's own Claude prepared. Browser only (the engine refuses grants,
+   * their loopback, board keys and batch item credentials; this is a POST,
+   * so the browser-origin guard applies); creator only. The response is the
+   * only place the code ever appears.
+   */
+  router.post("/companies/:companyId/batches/:batchId/confirm-code", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await svc.mintConfirmCode(req, req.params.companyId as string, req.params.batchId as string));
+  });
+
+  /** "Apply here": the creator's own browser session spends an assistant-prepared batch. */
+  router.post("/companies/:companyId/batches/:batchId/apply-here", validate(batchApplyHereSchema), async (req, res) => {
+    res.status(202).json(await svc.applyHere(req, req.params.companyId as string, req.params.batchId as string));
+  });
+
+  /**
+   * The admin scope is a step-up: a grant without it is told exactly which
+   * scopes to ask for on reconnect (RFC 6750 `insufficient_scope`).
+   */
+  function requireAdminScope(req: Request, res: Response): boolean {
+    if (req.actor.source !== "assistant_grant") return true; // the engine refuses anyone else
+    const scopes = req.actor.assistantScopes ?? [];
+    if (scopes.includes(ASSISTANT_SCOPE_ADMIN)) return true;
+    res.set("WWW-Authenticate", assistantStepUpChallenge(scopes, ASSISTANT_SCOPE_ADMIN));
+    res.status(403).json({ error: "insufficient_scope", required_scope: ASSISTANT_SCOPE_ADMIN });
+    return false;
+  }
+
+  /**
+   * prepare_batch_change: resolves the named records on the server, then
+   * stores a preview with origin `assistant`. Prepares, never applies; the
+   * answer carries a review link, never a code.
+   */
+  router.post("/companies/:companyId/assistant/batches/prepare", validate(assistantBatchPrepareSchema), async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    if (!requireAdminScope(req, res)) return;
+    const { kind: kindKey, targets, change } = req.body as { kind: string; targets: string[]; change: Record<string, unknown> };
+    const kinds = options.kinds ?? BATCH_KINDS;
+    const kind = Object.prototype.hasOwnProperty.call(kinds, kindKey) ? kinds[kindKey] : undefined;
+    if (!kind) throw badRequest("This kind of batch change is not available.");
+    if (!(ASSISTANT_BATCH_KINDS as readonly string[]).includes(kindKey)) {
+      throw badRequest("This kind of batch change cannot be prepared from an assistant.");
+    }
+    // Access first (grant, admin, switch), so nothing is resolved for someone who may not prepare.
+    await svc.assertAssistantAccess(req, companyId);
+    const parsedChange = kind.parseChange(change);
+    const resolved = await resolveAssistantTargets(db, req, companyId, kind, parsedChange, targets);
+    if (!resolved.ok) {
+      res.status(422).json({
+        ok: false,
+        outcome: resolved.problems.some((problem) => problem.kind === "needs_clarification") ? "needs_clarification" : "not_found",
+        problems: resolved.problems,
+        message: "Some of the records could not be told apart or found, so no batch was prepared. Ask the person which they mean, then prepare it again.",
+      });
+      return;
+    }
+    const preview = await svc.previewAssistant(req, companyId, { kind: kindKey, ids: resolved.ids, change });
+    const counts = {
+      willChange: preview.items.length,
+      notFound: preview.omitted.notFound,
+      alreadyThatWay: preview.omitted.noop,
+      notDecidable: preview.omitted.notDecidable,
+    };
+    if (!preview.batchId) {
+      res.json({
+        ok: true,
+        batchId: null,
+        summary: `Nothing to change: none of the ${kind.noun}s named would change.`,
+        counts,
+        notDecidable: preview.notDecidable.map((entry) => ({ label: entry.label, reason: entry.reason })),
+      });
+      return;
+    }
+    const [company] = await db.select({ issuePrefix: companies.issuePrefix }).from(companies).where(eq(companies.id, companyId));
+    res.json({
+      ok: true,
+      batchId: preview.batchId,
+      summary: `${counts.willChange} ${kind.noun}${counts.willChange === 1 ? "" : "s"} would change. Nothing changes until the person opens the review link, checks it, and reads you the code shown there (or applies it there).`,
+      counts,
+      sample: preview.items.slice(0, 10).map((item) => `${item.label}: ${describeChangeAsText(item.before, item.after)}`),
+      notDecidable: preview.notDecidable.map((entry) => ({ label: entry.label, reason: entry.reason })),
+      reviewUrl: company ? batchReviewUrl(company.issuePrefix, preview.batchId) : undefined,
+      expiresAt: preview.expiresAt,
+    });
+  });
+
+  /** confirm_batch_change: the code the person read back from their browser. */
+  router.post("/companies/:companyId/assistant/batches/:batchId/confirm", validate(assistantBatchConfirmSchema), async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    if (!requireAdminScope(req, res)) return;
+    const result = await svc.confirmAssistant(req, companyId, req.params.batchId as string, (req.body as { code: string }).code);
+    res.status(202).json(result);
+  });
 
   return Object.assign(router, { batchService: svc });
 }

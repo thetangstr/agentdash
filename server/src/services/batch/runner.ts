@@ -3,8 +3,9 @@ import https from "node:https";
 import type { Request } from "express";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { authSessions, batchOperationItems, batchOperations, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { assistantGrants, authSessions, batchOperationItems, batchOperations, companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import {
+  ASSISTANT_SCOPE_ADMIN,
   BATCH_HEARTBEAT_INTERVAL_MS,
   BATCH_ITEM_TIMEOUT_MS,
   BATCH_REASON_CODES,
@@ -21,6 +22,7 @@ import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js
 import { logger } from "../../middleware/logger.js";
 import { configuredEdgeSecret, EDGE_SECRET_HEADER } from "../../middleware/edge-gate.js";
 import type { AnyBatchKind } from "./kinds.js";
+import { normalizeHumanRole } from "../company-member-roles.js";
 import {
   batchItemBodyDigest,
   canonicalJson,
@@ -59,6 +61,9 @@ export interface BatchRunnerContext {
   itemTimeoutMs?: number;
   /** Read from the batch row when the runner starts. Never leaves the server. */
   itemKeyNonce?: string | null;
+  /** Assistant-prepared batches (part 5): the connection, stamped on every row as details.batch.{grantId, client}. */
+  grantId?: string | null;
+  client?: string | null;
 }
 
 export type BatchSendResult =
@@ -197,11 +202,77 @@ export async function recountBatch(db: Pick<Db, "select" | "update">, batchId: s
   return counts;
 }
 
-type RefreshedAccess = { ok: true; actor: Request["actor"] } | { ok: false };
+type RefreshedAccess = { ok: true; actor: Request["actor"] } | { ok: false; assistant?: boolean };
+
+/**
+ * Part 5: a batch the person's own Claude prepared and they confirmed with
+ * the browser-shown code. Before EVERY item, all of these are read again:
+ * the grant is live (not revoked) and still holds `agentdash:admin`, for this
+ * person and this company; the person is still an active admin of the
+ * company; the company's "batch changes from an admin's own Claude" switch is
+ * still on. Any one failing stops the batch: the remaining items are refused
+ * and none is sent. The item actor is the grant's actor (source
+ * `assistant_grant`, no instance-admin power), rebuilt from these rows.
+ */
+async function refreshAssistantAccess(
+  db: Db,
+  ctx: BatchRunnerContext,
+  credential: { grantId: string; userId: string },
+): Promise<RefreshedAccess> {
+  const [grant] = await db
+    .select({
+      id: assistantGrants.id,
+      companyId: assistantGrants.companyId,
+      userId: assistantGrants.userId,
+      scopes: assistantGrants.scopes,
+      clientName: assistantGrants.clientName,
+      revokedAt: assistantGrants.revokedAt,
+    })
+    .from(assistantGrants)
+    .where(eq(assistantGrants.id, credential.grantId));
+  if (
+    !grant
+    || grant.revokedAt
+    || grant.userId !== credential.userId
+    || grant.companyId !== ctx.companyId
+    || !grant.scopes.includes(ASSISTANT_SCOPE_ADMIN)
+  ) return { ok: false, assistant: true };
+  const [membership] = await db
+    .select({ membershipRole: companyMemberships.membershipRole, status: companyMemberships.status })
+    .from(companyMemberships)
+    .where(and(
+      eq(companyMemberships.companyId, ctx.companyId),
+      eq(companyMemberships.principalType, "user"),
+      eq(companyMemberships.principalId, credential.userId),
+      eq(companyMemberships.status, "active"),
+    ));
+  if (!membership || normalizeHumanRole(membership.membershipRole) !== "admin") return { ok: false, assistant: true };
+  const [company] = await db
+    .select({ enabled: companies.assistantAdminBatchesEnabled })
+    .from(companies)
+    .where(eq(companies.id, ctx.companyId));
+  if (!company?.enabled) return { ok: false, assistant: true };
+  return {
+    ok: true,
+    actor: {
+      type: "board",
+      userId: credential.userId,
+      companyId: ctx.companyId,
+      companyIds: [ctx.companyId],
+      memberships: [{ companyId: ctx.companyId, membershipRole: membership.membershipRole, status: membership.status }],
+      isInstanceAdmin: false,
+      assistantGrantId: grant.id,
+      assistantScopes: [...grant.scopes],
+      assistantClientName: grant.clientName,
+      source: "assistant_grant",
+    },
+  };
+}
 
 /** The person's access as it is now, not as it was at confirm. */
 async function refreshAccess(db: Db, ctx: BatchRunnerContext): Promise<RefreshedAccess> {
   if (ctx.credential.kind === "local_implicit") return { ok: true, actor: { ...ctx.actor } };
+  if (ctx.credential.kind === "assistant") return refreshAssistantAccess(db, ctx, ctx.credential);
   const { sessionId, userId } = ctx.credential;
   const [session] = await db
     .select({ userId: authSessions.userId, expiresAt: authSessions.expiresAt })
@@ -263,7 +334,7 @@ async function settleItem(
   // differently from the preview.
   const differently = outcome === "applied" && detail.reasonCode === BATCH_REASON_CODES.appliedDifferently;
   if (outcome !== "applied" || differently) {
-    await runWithBatchActivityContext({ batchId: ctx.batchId, itemId: item.id, companyId: ctx.companyId, origin: ctx.origin }, () =>
+    await runWithBatchActivityContext({ batchId: ctx.batchId, itemId: item.id, companyId: ctx.companyId, origin: ctx.origin, grantId: ctx.grantId ?? null, client: ctx.client ?? null }, () =>
       logActivity(db, {
         companyId: ctx.companyId,
         actorType: "user",
@@ -342,6 +413,8 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     credential: ctx.credential,
     actor,
     binding: { method: request.method, path: request.path, bodyDigest: batchItemBodyDigest(request.body) },
+    grantId: ctx.grantId ?? null,
+    client: ctx.client ?? null,
   });
   const edgeSecret = configuredEdgeSecret();
   const send = ctx.send ?? sendBatchItemOverLoopback;
@@ -486,8 +559,13 @@ export async function runBatch(ctx: BatchRunnerContext): Promise<void> {
       }
       const access = await refreshAccess(db, ctx);
       if (!access.ok) {
-        await refuseRemaining(ctx, items.slice(index), BATCH_REASON_CODES.accessEnded,
-          "Your sign-in or your access to this company ended, so this record was not sent.");
+        if (access.assistant) {
+          await refuseRemaining(ctx, items.slice(index), BATCH_REASON_CODES.assistantAccessEnded,
+            "Your assistant connection was revoked, you are no longer an admin of this company, or batch changes from Claude were turned off, so this record was not sent.");
+        } else {
+          await refuseRemaining(ctx, items.slice(index), BATCH_REASON_CODES.accessEnded,
+            "Your sign-in or your access to this company ended, so this record was not sent.");
+        }
         break;
       }
       await runItem(ctx, change, item, access.actor);
@@ -499,7 +577,7 @@ export async function runBatch(ctx: BatchRunnerContext): Promise<void> {
       .returning({ id: batchOperations.id });
     if (finished.length > 0) {
       const counts = await recountBatch(db, ctx.batchId);
-      await runWithBatchActivityContext({ batchId: ctx.batchId, companyId: ctx.companyId, origin: ctx.origin }, () =>
+      await runWithBatchActivityContext({ batchId: ctx.batchId, companyId: ctx.companyId, origin: ctx.origin, grantId: ctx.grantId ?? null, client: ctx.client ?? null }, () =>
         logActivity(db, {
           companyId: ctx.companyId,
           actorType: "user",

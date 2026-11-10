@@ -40,7 +40,7 @@ curl https://your-instance.example/.well-known/oauth-protected-resource
 {
   "resource": "https://your-instance.example/api/mcp/assistant",
   "authorization_servers": ["https://your-instance.example"],
-  "scopes_supported": ["agentdash:read", "agentdash:work", "agentdash:decide"],
+  "scopes_supported": ["agentdash:read", "agentdash:work", "agentdash:decide", "agentdash:admin"],
   "bearer_methods_supported": ["header"],
   "resource_name": "AgentDash assistant MCP"
 }
@@ -97,7 +97,7 @@ curl https://your-instance.example/.well-known/oauth-authorization-server
   "grant_types_supported": ["authorization_code", "refresh_token"],
   "code_challenge_methods_supported": ["S256"],
   "token_endpoint_auth_methods_supported": ["none"],
-  "scopes_supported": ["agentdash:read", "agentdash:work", "agentdash:decide"],
+  "scopes_supported": ["agentdash:read", "agentdash:work", "agentdash:decide", "agentdash:admin"],
   "client_id_metadata_document_supported": true,
   "resource_parameter_supported": true
 }
@@ -118,6 +118,14 @@ curl https://your-instance.example/.well-known/oauth-authorization-server
 | Status | When |
 | --- | --- |
 | 500 | `server_error`, as above. |
+
+## The admin scope (`agentdash:admin`)
+
+`agentdash:admin` lets a person's own assistant prepare **batch changes as an admin**: changes to many records at once, such as moving 40 work items or pausing agents. It is a step-up scope:
+
+- At consent it is never pre-checked. It can be granted only for a company where the person is an owner or admin **and** the company switch "Allow batch changes from an admin's own Claude" is on. Anywhere else the consent screen shows it disabled with the reason, and if a request asks for it anyway the server drops it from the grant (the grant is still issued with the other scopes). A grant made before this scope existed does not gain it: connect the assistant again.
+- A call that needs it, made with a grant that lacks it, answers 403 `insufficient_scope` with a step-up challenge naming the scopes to ask for, for example `WWW-Authenticate: Bearer error="insufficient_scope", scope="agentdash:read agentdash:work agentdash:admin"`.
+- Nothing an assistant prepares with it changes anything by itself. The person opens the review page in AgentDash, checks every change, and either reads the code shown there back to the assistant or applies it there. The code is shown only in the person's browser, works once, and five wrong codes cancel the batch. Turning the company switch off, demoting the person or revoking the connection stops a batch, even halfway through.
 
 ## Everything else
 

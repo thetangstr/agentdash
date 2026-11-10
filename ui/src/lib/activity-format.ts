@@ -86,6 +86,8 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "batch.item_unknown": "has an unconfirmed batch change on",
   "batch.item_applied_differently": "had a batch change land differently than previewed on",
   "batch.item_reconciled": "recorded what happened to a batch change on",
+  // AgentDash admin powers (part 5): the code itself is never in the row.
+  "batch.confirm_code_shown": "showed the confirm code for a batch change prepared by their assistant",
   // AgentDash admin powers (part 4): the admin audit and the two switched reads.
   "audit.exported": "exported the audit log of",
   "agent.directives_read_by_admin": "read, as an admin, the directives of",

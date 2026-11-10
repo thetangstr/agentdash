@@ -11,6 +11,7 @@ import {
 import { buildActivityReadScope } from "../services/activity-read-scope.js";
 import { logActivity } from "../services/activity-log.js";
 import { logger } from "../middleware/logger.js";
+import { forbidden } from "../errors.js";
 import { assertCompanyAccess, assertCompanyAdministrator, assistantGrantAttribution, getActorInfo } from "./authz.js";
 
 /**
@@ -179,6 +180,8 @@ export function parseAuditQuery(query: Request["query"], options: { csv?: boolea
   };
 }
 
+const FORMULA_START = /^[\t\r]|^\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20]/u;
+
 /**
  * One CSV cell. A cell a spreadsheet would read as a formula (`=`, `+`, `-`,
  * `@`, a tab or a carriage return first) gets a leading `'`; then the usual
@@ -186,7 +189,9 @@ export function parseAuditQuery(query: Request["query"], options: { csv?: boolea
  */
 export function csvCell(value: unknown): string {
   let text = value === null || value === undefined ? "" : String(value);
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  // Review of 4de5523e9: also a formula character after leading whitespace or
+  // newlines (spreadsheets trim them), and the full-width forms ＝ ＋ － ＠.
+  if (FORMULA_START.test(text)) text = `'${text}`;
   if (/[",\r\n]/.test(text)) text = `"${text.replace(/"/g, '""')}"`;
   return text;
 }
@@ -194,6 +199,9 @@ export function csvCell(value: unknown): string {
 export function csvLine(cells: unknown[]): string {
   return `${cells.map(csvCell).join(",")}\r\n`;
 }
+
+/** The client closed the connection mid-export. */
+class ClientGone extends Error {}
 
 type AuditRow = {
   id: string;
@@ -233,6 +241,9 @@ export function companyAuditRoutes(
 
   async function guard(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
+    // Round 5a: a person's assistant connection (a Claude connector token or
+    // its internal loopback) never dumps the audit log, admin or not.
+    if (req.actor.source === "assistant_grant") throw forbidden(ADMIN_ONLY_MESSAGE);
     await assertCompanyAdministrator(access, req, companyId, ADMIN_ONLY_MESSAGE);
   }
 
@@ -318,11 +329,30 @@ export function companyAuditRoutes(
     res.setHeader("Content-Disposition", `attachment; filename="audit-${day}.csv"`);
     res.setHeader("Cache-Control", "no-store");
     if (truncated) res.setHeader("X-Audit-Truncated", "true");
-    res.write(csvLine([...AUDIT_CSV_COLUMNS]));
-
     let rowCount = 0;
     let completed = false;
+    /**
+     * Review of 4de5523e9: respect backpressure. When the socket buffer is
+     * full, wait for 'drain' (or the client going away) before the next page,
+     * so a slow client never makes the server hold the whole export.
+     * Returns false once the client is gone.
+     */
+    async function writeChunk(text: string): Promise<boolean> {
+      if (res.destroyed || res.writableEnded) return false;
+      if (res.write(text)) return true;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          res.off("drain", done);
+          res.off("close", done);
+          resolve();
+        };
+        res.on("drain", done);
+        res.on("close", done);
+      });
+      return !res.destroyed;
+    }
     try {
+      if (!(await writeChunk(csvLine([...AUDIT_CSV_COLUMNS])))) throw new ClientGone();
       let cursor: ActivityPageCursor | null = null;
       while (rowCount < csvMaxRows) {
         const page = await svc.listPage({ ...base, cursor, limit: Math.min(csvPageSize, csvMaxRows - rowCount) });
@@ -345,22 +375,29 @@ export function companyAuditRoutes(
             row.details ? JSON.stringify(row.details) : "",
           ]);
         }
+        if (chunk && !(await writeChunk(chunk))) throw new ClientGone();
         rowCount += rows.length;
-        if (chunk) res.write(chunk);
-        if (!page.nextCursor || res.destroyed) break;
+        if (!page.nextCursor) break;
         cursor = page.nextCursor;
       }
       if (truncated) {
-        res.write(csvLine([
+        const written = await writeChunk(csvLine([
           `TRUNCATED: this export stopped at ${csvMaxRows} rows. Narrow the filters or the dates to export the rest.`,
           ...AUDIT_CSV_COLUMNS.slice(1).map(() => ""),
         ]));
+        if (!written) throw new ClientGone();
       }
-      completed = true;
+      // Only a download that reached its end is complete; a client that went
+      // away mid-export is recorded with the rows actually handed to it.
+      completed = !res.destroyed;
     } catch (err) {
-      // Headers are gone: cut the download short so it cannot pass for complete.
-      logger.error({ err, companyId }, "audit CSV export failed");
-      res.destroy(err as Error);
+      if (err instanceof ClientGone) {
+        completed = false;
+      } else {
+        // Headers are gone: cut the download short so it cannot pass for complete.
+        logger.error({ err, companyId }, "audit CSV export failed");
+        res.destroy(err as Error);
+      }
     } finally {
       const actor = getActorInfo(req);
       await logActivity(db, {

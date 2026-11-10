@@ -177,6 +177,7 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      if (req.actor.source === "assistant_grant") throw forbidden("Not available through an assistant connection."); // review of 4de5523e9
       await assertCompanyAdministrator(access, req, companyId);
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
@@ -680,6 +681,7 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      if (req.actor.source === "assistant_grant") throw forbidden("Not available through an assistant connection."); // review of 4de5523e9
       await assertCompanyAdministrator(access, req, companyId);
       const q = z.object({ refs: z.string().min(1), costCapCents: z.coerce.number().int().min(0).optional(), verifyLimit: z.coerce.number().int().min(1).max(200).optional() }).safeParse(req.query);
       if (!q.success) throw badRequest("refs (project:<id>,goal:<id>) is required", { issues: q.error.issues });

@@ -23,6 +23,32 @@ export const batchConfirmSchema = z.object({
 }).strict();
 export type BatchConfirmRequest = z.infer<typeof batchConfirmSchema>;
 
+/**
+ * AgentDash admin powers (part 5): a batch prepared by the person's own
+ * Claude. `targets` are references as a person says them (issue identifiers,
+ * agent names, ids); the server resolves them, never the model.
+ */
+export const assistantBatchPrepareSchema = z.object({
+  kind: z.string().trim().min(1).max(64),
+  targets: z.array(z.string().trim().min(1).max(300)).min(1, "Name at least one record.").max(BATCH_MAX_RECORDS_UI),
+  change: z.record(z.string(), z.unknown()),
+}).strict();
+export type AssistantBatchPrepareRequest = z.infer<typeof assistantBatchPrepareSchema>;
+
+/** The code the person read back from their browser, as they said it (`K7QM-3XRD`, any case, dashes or spaces). */
+export const assistantBatchConfirmSchema = z.object({
+  code: z.string().trim().min(1).max(40),
+}).strict();
+export type AssistantBatchConfirmRequest = z.infer<typeof assistantBatchConfirmSchema>;
+
+/**
+ * "Apply here" on the review page: the person's own browser session spends
+ * the batch directly. A batch's records and changes never change after the
+ * preview, so the page needs to send nothing but the request itself.
+ */
+export const batchApplyHereSchema = z.object({}).strict();
+export type BatchApplyHereRequest = z.infer<typeof batchApplyHereSchema>;
+
 export const batchReconcileSchema = z.object({
   verdict: z.enum(BATCH_RECONCILE_VERDICTS),
   note: z.string().trim().max(1000).optional(),

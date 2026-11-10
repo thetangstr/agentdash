@@ -1123,6 +1123,7 @@
         "Protected-resource metadata",
         "Protected-resource metadata, path-suffixed",
         "Authorization-server metadata",
+        "The admin scope (agentdash:admin)",
         "Everything else"
       ],
       "firstParagraph": "An assistant that connects to POST /api/mcp/assistant gets its access token through OAuth 2.1. These three documents tell the client where to get one. They are public, take no credential, and are served at the app root, not under /api."
@@ -1264,7 +1265,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 689 routes in 93 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest e394885bae4d; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 693 routes in 93 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 7179f790cc38; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

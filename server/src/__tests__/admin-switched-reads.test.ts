@@ -28,6 +28,7 @@ import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { agentDirectivesRoutes } from "../routes/agent-directives.js";
 import { agentRoutes } from "../routes/agents.js";
+import { accessRoutes } from "../routes/access.js";
 import {
   ADMIN_TRANSCRIPT_READ_LOG_WINDOW_MS,
   resetAdminTranscriptReadLogForTests,
@@ -143,6 +144,7 @@ describeEmbeddedPostgres("admin-switched reads (parts 4.2, 4.3)", () => {
     });
     app.use("/api", agentDirectivesRoutes(db));
     app.use("/api", agentRoutes(db));
+    app.use("/api", accessRoutes(db, { deploymentMode: "authenticated", deploymentExposure: "private", bindHost: "127.0.0.1", allowedHostnames: [] }));
     app.use(errorHandler);
     return app;
   }
@@ -304,6 +306,20 @@ describeEmbeddedPostgres("admin-switched reads (parts 4.2, 4.3)", () => {
       expect(await rowsFor("run.content_read_by_admin")).toHaveLength(0);
       // Another company's admin path does not exist: the switch is per company.
       expect((await db.select().from(companies).where(and(eq(companies.id, MK), eq(companies.adminTranscriptReadEnabled, true))))).toHaveLength(0);
+    });
+  });
+
+  describe("review of 4de5523e9: who looks after which agents", () => {
+    it("GET .../members/:memberId/stewarded-agents refuses an admin's assistant grant", async () => {
+      const [membership] = await db.select().from(companyMemberships)
+        .where(and(eq(companyMemberships.companyId, MK), eq(companyMemberships.principalId, STEWARD)));
+      const path = `/api/companies/${MK}/members/${membership!.id}/stewarded-agents`;
+      const direct = await request(admin()).get(path);
+      expect(direct.status).toBe(200);
+      expect(direct.body.agents.map((agent: { id: string }) => agent.id)).toEqual([STEWARDED]);
+      const viaAssistant = await request(appAs(asAssistant(ADMIN, "admin"))).get(path);
+      expect(viaAssistant.status).toBe(403);
+      expect(JSON.stringify(viaAssistant.body)).not.toContain(STEWARDED);
     });
   });
 });
