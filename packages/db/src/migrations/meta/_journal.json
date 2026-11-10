@@ -1107,13 +1107,6 @@
       "when": 1793647071014,
       "tag": "0157_evaluation_ingest_keyset_indexes",
       "breakpoints": true
-    },
-    {
-      "idx": 158,
-      "version": "7",
-      "when": 1793911691037,
-      "tag": "0158_fred_builtin_guide",
-      "breakpoints": true
     }
   ]
 }

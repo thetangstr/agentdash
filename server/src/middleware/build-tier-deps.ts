@@ -1,10 +1,9 @@
 // AgentDash: billing-trio (#151) — caller-only helper that assembles the
 // `Deps` shape required by `requireTierFor`. Lives next to the middleware
 // rather than inside it so the middleware itself stays untouched.
-import { companyMemberships, type Db } from "@paperclipai/db";
-import { and, eq, sql } from "drizzle-orm";
+import { agents, companyMemberships, type Db } from "@paperclipai/db";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { companyService } from "../services/companies.js";
-import { countBillableAgents } from "../services/guide-capacity.js";
 
 export function buildRequireTierDeps(db: Db) {
   const companies = companyService(db);
@@ -28,7 +27,19 @@ export function buildRequireTierDeps(db: Db) {
           .then((rows) => rows[0] ?? null);
         return row?.count ?? 0;
       },
-      agents: (companyId: string) => countBillableAgents(db, companyId),
+      agents: async (companyId: string) => {
+        const row = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(agents)
+          .where(
+            and(
+              eq(agents.companyId, companyId),
+              ne(agents.status, "terminated"),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        return row?.count ?? 0;
+      },
     },
   };
 }

@@ -1548,5 +1548,3 @@ export * from './reserved-company-prefixes.js';
 export { normalizeEscapedLineBreaks } from './validators/text.js';
 // zod 3 → zod 4 object semantics (refinement-free objects, defaults-free partials).
 export { withoutRefinements, partialWithoutDefaults } from './validators/zod-object.js';
-// AgentDash: built-in FDE owner workflow contracts.
-export * from './fred.js';

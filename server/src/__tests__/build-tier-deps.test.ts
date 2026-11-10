@@ -3,7 +3,6 @@ import express from "express";
 import request from "supertest";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import { requireTierFor } from "../middleware/require-tier.js";
-import { PgDialect } from "drizzle-orm/pg-core";
 
 // AgentDash: billing-trio (#151) — covers the helper that assembles `Deps`
 // for `requireTierFor` and the wiring expectation that the middleware blocks
@@ -70,20 +69,6 @@ describe("buildRequireTierDeps", () => {
     const deps = buildRequireTierDeps(db);
     const agents = await deps.counts.agents("co-1");
     expect(agents).toBe(5);
-  });
-
-  it("exempts only a protected same-company guide registration, never an agent name or metadata", async () => {
-    const { db } = makeDbWithCounts(0, 2, "free");
-    await buildRequireTierDeps(db).counts.agents("co-1");
-    const condition = db.where.mock.calls.at(-1)?.[0];
-    const query = new PgDialect().sqlToQuery(condition);
-    expect(query.sql).toContain("fred_registrations");
-    expect(query.sql).toContain("not exists");
-    expect(query.sql).toContain('"fred_registrations"."agent_id" = "agents"."id"');
-    expect(query.sql).toContain('"fred_registrations"."company_id" = "agents"."company_id"');
-    expect(query.params).toEqual(expect.arrayContaining(["co-1", "terminated"]));
-    expect(query.sql).not.toContain('"name"');
-    expect(query.sql).not.toContain('"metadata"');
   });
 
   it("getCompany falls back to free planTier when company is missing", async () => {

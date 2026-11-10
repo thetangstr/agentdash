@@ -22,7 +22,6 @@ const mockAgents = {
   getById: vi.fn(),
   createApiKey: vi.fn(),
   list: vi.fn().mockResolvedValue([]),
-  countBillable: vi.fn(),
   listKeys: vi.fn().mockResolvedValue([]),
 };
 const mockAccess = {
@@ -200,9 +199,6 @@ const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalPublicUrl = process.env.PAPERCLIP_PUBLIC_URL;
 
 beforeEach(() => {
-  // These fixtures contain ordinary workers only; protected-guide rows are
-  // exercised by fred-guide-capacity.test.ts against PostgreSQL.
-  mockAgents.countBillable.mockImplementation(async (companyId: string) => (await mockAgents.list(companyId)).length);
   mockAccess.listActiveUserMemberships.mockResolvedValue([]);
   mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "pro_active" });
   mockAgents.list.mockResolvedValue([]);

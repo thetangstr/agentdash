@@ -188,4 +188,3 @@ export { issueResponsibilities } from "./issue_responsibilities.js";
 export { routineRunOccurrences } from "./routine_run_occurrences.js";
 export { workforceEnrollments } from './workforce_enrollments.js';
 export { humanActionHandles } from './human_action_handles.js';
-export { fredRegistrations } from './fred_registrations.js';

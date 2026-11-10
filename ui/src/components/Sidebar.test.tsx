@@ -538,11 +538,11 @@ describe("Sidebar", () => {
     }
     expect(hrefs.some((h) => h?.startsWith("/instance/"))).toBe(false);
     expect(hrefs.some((h) => h?.startsWith("/projects"))).toBe(false);
-    // Six primary + My agent + four More + Fred and Settings (plus per-agent rows).
+    // Six primary + My agent + four More + Settings (plus the per-agent rows under Team).
     expect(hrefs.filter((h) => !h?.startsWith("/agents/"))).toEqual([
       "/dashboard", "/cos", "/issues", "/decisions", "/shipped", "/agents", "/my-agent",
       "/goals", "/routines", "/costs", "/activity",
-      "/company/fred", "/company/settings",
+      "/company/settings",
     ]);
     await act(async () => root.unmount());
   });
@@ -550,16 +550,6 @@ describe("Sidebar", () => {
   describe("footer", () => {
     beforeEach(() => {
       mockCompany.current = { id: "company-1", issuePrefix: "PAP", name: "Paperclip" };
-    });
-
-    it("offers Fred's company guide without replacing Ask or the primary work navigation", async () => {
-      const root = await renderSidebar();
-      const fred = [...container.querySelectorAll("a")].filter((a) => a.textContent === "Fred");
-      expect(fred).toHaveLength(1);
-      expect(fred[0].getAttribute("href")).toBe("/company/fred");
-      expect(container.querySelector('nav > div')?.contains(fred[0])).toBe(false);
-      expect(container.querySelector('a[href="/cos"]')).not.toBeNull();
-      await act(async () => root.unmount());
     });
 
     it("pins Settings to the Settings hub", async () => {
