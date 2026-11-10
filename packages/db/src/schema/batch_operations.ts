@@ -78,6 +78,12 @@ export const batchOperationItems = pgTable(
     before: jsonb("before").$type<Record<string, unknown>>().notNull(),
     after: jsonb("after").$type<Record<string, unknown>>().notNull(),
     fingerprint: text("fingerprint").notNull(),
+    /**
+     * For an applied record: the touched fields as re-read after the route
+     * answered. When they differ from `after` the route did something other
+     * than the preview, and the item says so (`reason_code = applied_differently`).
+     */
+    actual: jsonb("actual").$type<Record<string, unknown>>(),
     /** pending | applying | applied | refused | failed | unknown */
     outcome: text("outcome").notNull().default("pending"),
     reasonCode: text("reason_code"),

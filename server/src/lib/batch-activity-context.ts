@@ -11,11 +11,16 @@ import type { BatchOrigin } from "@paperclipai/shared";
  * `insertActivity`) merges `details.batch` into every row the request writes,
  * so no route is edited to say "this came from a batch".
  *
+ * `details.batch` is only ever written from this context: outside it a
+ * caller-supplied `batch` key is removed (a hand-posted activity row cannot
+ * claim to come from a batch). The engine writes its own rows inside it too.
+ *
  * Modelled on lib/request-actor-source.ts.
  */
 export interface BatchActivityContext {
   batchId: string;
-  itemId: string;
+  /** Absent for rows about the whole batch (`batch.completed`, `batch.interrupted`). */
+  itemId?: string | null;
   companyId: string;
   origin: BatchOrigin;
   grantId?: string | null;
@@ -36,7 +41,7 @@ export function runWithBatchActivityContext<T>(context: BatchActivityContext, fn
 export function batchActivityDetails(context: BatchActivityContext): Record<string, unknown> {
   return {
     id: context.batchId,
-    itemId: context.itemId,
+    ...(context.itemId ? { itemId: context.itemId } : {}),
     origin: context.origin,
     ...(context.grantId ? { grantId: context.grantId } : {}),
     ...(context.client ? { client: context.client } : {}),

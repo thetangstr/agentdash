@@ -84,6 +84,7 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "batch.item_refused": "was refused a batch change to",
   "batch.item_failed": "could not apply a batch change to",
   "batch.item_unknown": "has an unconfirmed batch change on",
+  "batch.item_applied_differently": "had a batch change land differently than previewed on",
   "batch.item_reconciled": "recorded what happened to a batch change on",
   // Agent lifecycle and configuration
   // AgentDash: Agent Performance Management gate 2 — V2 access (shadow logs, outside-profile changes)

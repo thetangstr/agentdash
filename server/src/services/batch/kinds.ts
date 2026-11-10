@@ -2,8 +2,9 @@ import type { Request } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { issues } from "@paperclipai/db";
-import { BATCH_MAX_RECORDS_UI, issueUpdateBatchChangeSchema, type IssueUpdateBatchChange } from "@paperclipai/shared";
+import { BATCH_MAX_RECORDS_UI, BATCH_REASON_CODES, issueUpdateBatchChangeSchema, type IssueUpdateBatchChange } from "@paperclipai/shared";
 import { listVisibleIssueIds } from "../../routes/visibility.js";
+import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "../issue-execution-policy.js";
 
 /**
  * AgentDash admin powers, part 2: the kinds a batch can be.
@@ -52,7 +53,17 @@ export interface BatchKind<Change = unknown, Record extends BatchKindRecord = Ba
    * fingerprint: it is hashed at preview and compared with a fresh read
    * before the item is sent.
    */
-  describe(record: Record, change: Change): { before: { [key: string]: unknown }; after: { [key: string]: unknown }; noop: boolean };
+  describe(record: Record, change: Change): {
+    before: { [key: string]: unknown };
+    after: { [key: string]: unknown };
+    noop: boolean;
+    /**
+     * Set when the record's own rules, not the batch, would decide the
+     * outcome (for example an issue whose review step takes a "done"). The
+     * record is left out of the batch and the reason is shown at preview.
+     */
+    notDecidable?: { reasonCode: string; reason: string };
+  };
   /** The single-record route's own request, built at apply time from a fresh read. */
   request(record: Record, change: Change): BatchItemRequest;
 }
@@ -65,7 +76,27 @@ type IssueRecord = BatchKindRecord & {
   priority: string;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
+  /** True when a review or approval step is still open, so a "done" goes there first. */
+  reviewStepOpen?: boolean;
 };
+
+/**
+ * Would moving this issue to done be taken by its execution policy (a review
+ * or approval step) instead? Conservative: an unreadable policy, or a stage
+ * with no completed record, counts as open.
+ */
+function reviewStepOpen(executionPolicy: unknown, executionState: unknown): boolean {
+  if (executionPolicy == null) return false;
+  let policy: ReturnType<typeof normalizeIssueExecutionPolicy>;
+  try {
+    policy = normalizeIssueExecutionPolicy(executionPolicy);
+  } catch {
+    return true;
+  }
+  if (!policy || policy.stages.length === 0) return false;
+  const completed = new Set(parseIssueExecutionState(executionState)?.completedStageIds ?? []);
+  return policy.stages.some((stage) => !completed.has(stage.id));
+}
 
 function issueLabel(row: { identifier: string | null; title: string }): string {
   const title = row.title.length > 120 ? `${row.title.slice(0, 117)}...` : row.title;
@@ -95,6 +126,8 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
         priority: issues.priority,
         assigneeAgentId: issues.assigneeAgentId,
         assigneeUserId: issues.assigneeUserId,
+        executionPolicy: issues.executionPolicy,
+        executionState: issues.executionState,
       })
       .from(issues)
       .where(and(eq(issues.companyId, companyId), inArray(issues.id, [...visible])));
@@ -106,6 +139,7 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
       priority: row.priority,
       assigneeAgentId: row.assigneeAgentId,
       assigneeUserId: row.assigneeUserId,
+      reviewStepOpen: reviewStepOpen(row.executionPolicy, row.executionState),
     }]));
   },
   describe(record, change) {
@@ -126,6 +160,15 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
       after.assigneeUserId = change.assignee && "userId" in change.assignee ? change.assignee.userId : null;
     }
     const noop = Object.keys(after).every((key) => after[key] === before[key]);
+    // A "done" on an issue with an open review or approval step is taken by
+    // that step (the route moves it to review and hands it to the reviewer),
+    // so the batch would not do what it says. Leave it out, plainly.
+    if (!noop && change.status === "done" && record.reviewStepOpen) {
+      return {
+        before, after, noop,
+        notDecidable: { reasonCode: BATCH_REASON_CODES.goesToReviewFirst, reason: `${record.label} goes to review first, so it was left out.` },
+      };
+    }
     return { before, after, noop };
   },
   request(record, change) {

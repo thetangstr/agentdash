@@ -5916,6 +5916,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "actual": {
+          "name": "actual",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "outcome": {
           "name": "outcome",
           "type": "text",

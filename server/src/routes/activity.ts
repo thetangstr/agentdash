@@ -130,7 +130,11 @@ export function activityRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const actor = getActorInfo(req);
     const { action, entityType, entityId, agentId } = req.body as z.infer<typeof createActivitySchema>;
-    const details = req.body.details ? sanitizeRecord(req.body.details) : null;
+    const sanitized = req.body.details ? sanitizeRecord(req.body.details) : null;
+    // AgentDash admin powers (part 2): `details.batch` says a row came from a
+    // batch, and only the server writes it (services/activity-log.ts). A
+    // hand-posted row cannot claim it.
+    const { batch: _forgedBatch, ...details } = sanitized ?? {};
     const event = await svc.create({
       companyId,
       actorType: actor.actorType,
@@ -142,7 +146,7 @@ export function activityRoutes(db: Db) {
       // Mirror the column in details so readers that only see `details`
       // (live events, older UIs) can still tell the row was posted by hand.
       // An assistant-grant caller keeps its `via` provenance (GH #678).
-      details: { ...(details ?? {}), ...assistantGrantAttribution(req), origin: "manual" },
+      details: { ...details, ...assistantGrantAttribution(req), origin: "manual" },
       origin: "manual",
     });
     res.status(201).json(event);

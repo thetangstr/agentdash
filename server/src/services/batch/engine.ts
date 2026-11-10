@@ -25,6 +25,7 @@ import { badRequest, conflict, forbidden, HttpError, notFound } from "../../erro
 import { assertBoard, assertCompanyAccess, isCompanyAdministrator } from "../../routes/authz.js";
 import { accessService } from "../access.js";
 import { logActivity } from "../activity-log.js";
+import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js";
 import { logger } from "../../middleware/logger.js";
 import { BATCH_KINDS, type AnyBatchKind } from "./kinds.js";
 import { canonicalJson, sha256Hex, type BatchItemCredentialOrigin } from "./item-credential.js";
@@ -76,11 +77,26 @@ function actorUserId(req: Request): string {
   return req.actor.userId ?? "local-board";
 }
 
-/** `http(s)://127.0.0.1:<port>` of the listener this request arrived on (the MCP loopback precedent, routes/mcp.ts). */
+/**
+ * The origin of the listener this request arrived on: its own local address
+ * and port, never an assumed 127.0.0.1. A server bound to one address (a
+ * tailnet IP, a custom host) is reached on that address, so no other local
+ * process that happens to hold 127.0.0.1:<port> can receive an item's
+ * credential. Unspecified addresses map to loopback; IPv4-mapped IPv6 is
+ * unwrapped; IPv6 is bracketed.
+ */
+export function loopbackOriginFor(socket: { encrypted?: boolean; localAddress?: string; localPort?: number } | undefined): string {
+  if (!socket?.localPort || !socket.localAddress) throw new HttpError(500, "The batch could not be started on this server.");
+  let host = socket.localAddress;
+  if (host.startsWith("::ffff:") && host.includes(".")) host = host.slice("::ffff:".length);
+  if (host === "0.0.0.0") host = "127.0.0.1";
+  if (host === "::") host = "::1";
+  const authority = host.includes(":") ? `[${host}]` : host;
+  return `${socket.encrypted ? "https" : "http"}://${authority}:${socket.localPort}`;
+}
+
 function loopbackOrigin(req: Request): string {
-  const socket = req.socket as { encrypted?: boolean; localPort?: number } | undefined;
-  if (!socket?.localPort) throw new HttpError(500, "The batch could not be started on this server.");
-  return `${socket.encrypted ? "https" : "http"}://127.0.0.1:${socket.localPort}`;
+  return loopbackOriginFor(req.socket as { encrypted?: boolean; localAddress?: string; localPort?: number } | undefined);
 }
 
 function iso(value: Date | null | undefined): string | null {
@@ -119,6 +135,7 @@ function batchView(row: BatchRow, items?: ItemRow[]): BatchView {
             reasonCode: item.reasonCode,
             reason: item.reason,
             httpStatus: item.httpStatus,
+            actual: item.actual ?? null,
             appliedAt: iso(item.appliedAt),
             reconciledVerdict: (item.reconciledVerdict as BatchReconcileVerdict | null) ?? null,
             reconciledAt: iso(item.reconciledAt),
@@ -164,16 +181,22 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
 
       const records = await kind.load({ db, req, companyId }, ids);
       const omitted = { notFound: 0, noop: 0, notDecidable: 0 };
+      const notDecidable: BatchPreviewResult["notDecidable"] = [];
       const planned: Array<{ entityType: string; entityId: string; label: string; before: Record<string, unknown>; after: Record<string, unknown> }> = [];
       for (const id of ids) {
         const record = records.get(id);
         if (!record) { omitted.notFound++; continue; }
         const described = kind.describe(record, change);
         if (described.noop) { omitted.noop++; continue; }
+        if (described.notDecidable) {
+          omitted.notDecidable++;
+          notDecidable.push({ entityType: record.entityType, entityId: record.entityId, label: record.label, ...described.notDecidable });
+          continue;
+        }
         planned.push({ entityType: record.entityType, entityId: record.entityId, label: record.label, before: described.before, after: described.after });
       }
       if (planned.length === 0) {
-        return { batchId: null, previewDigest: null, confirmHandle: null, expiresAt: null, kind: kind.key, items: [], omitted };
+        return { batchId: null, previewDigest: null, confirmHandle: null, expiresAt: null, kind: kind.key, items: [], omitted, notDecidable };
       }
 
       const previewDigest = sha256Hex(canonicalJson({
@@ -235,6 +258,7 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((item) => ({ itemId: item.id, entityType: item.entityType, entityId: item.entityId, label: item.label, before: item.before, after: item.after })),
         omitted,
+        notDecidable,
       };
     },
 
@@ -303,6 +327,9 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     async get(req: Request, companyId: string, batchId: string): Promise<BatchView> {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
+      // The same credential rule as preview and confirm: a signed-in person
+      // in the browser (or the local operator), never a board key or grant.
+      credentialOrigin(req);
       if (!isUuidLike(batchId)) throw notFound("Batch not found");
       const [row] = await db
         .select()
@@ -323,6 +350,9 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     async list(req: Request, companyId: string, opts: { limit?: number } = {}): Promise<BatchView[]> {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
+      // The same credential rule as preview and confirm: a signed-in person
+      // in the browser (or the local operator), never a board key or grant.
+      credentialOrigin(req);
       const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
       const admin = await isCompanyAdministrator(access, req, companyId);
       const rows = await db
@@ -339,6 +369,9 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     async cancel(req: Request, companyId: string, batchId: string): Promise<BatchView> {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
+      // The same credential rule as preview and confirm: a signed-in person
+      // in the browser (or the local operator), never a board key or grant.
+      credentialOrigin(req);
       await loadOwnBatch(req, companyId, batchId);
       const [row] = await db
         .update(batchOperations)
@@ -352,6 +385,9 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     async reconcile(req: Request, companyId: string, batchId: string, itemId: string, input: BatchReconcileRequest): Promise<BatchItemView> {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
+      // The same credential rule as preview and confirm: a signed-in person
+      // in the browser (or the local operator), never a board key or grant.
+      credentialOrigin(req);
       if (!(await isCompanyAdministrator(access, req, companyId))) {
         throw forbidden("Only owners and admins can record what happened to an unknown change.");
       }
@@ -378,21 +414,21 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
         ))
         .returning();
       if (!item) throw conflict("Only a change with an unknown outcome and no recorded verdict can be reconciled.");
-      await logActivity(db, {
-        companyId,
-        actorType: "user",
-        actorId: actorUserId(req),
-        action: "batch.item_reconciled",
-        entityType: item.entityType,
-        entityId: item.entityId,
-        details: {
-          batch: { id: batchId, itemId: item.id, origin: batch.origin },
-          kind: batch.kind,
-          label: item.label,
-          verdict: input.verdict,
-          ...(input.note ? { note: input.note } : {}),
-        },
-      });
+      await runWithBatchActivityContext({ batchId, itemId: item.id, companyId, origin: batch.origin as BatchOrigin }, () =>
+        logActivity(db, {
+          companyId,
+          actorType: "user",
+          actorId: actorUserId(req),
+          action: "batch.item_reconciled",
+          entityType: item.entityType,
+          entityId: item.entityId,
+          details: {
+            kind: batch.kind,
+            label: item.label,
+            verdict: input.verdict,
+            ...(input.note ? { note: input.note } : {}),
+          },
+        }));
       return batchView(batch, [item]).items![0]!;
     },
 

@@ -1,7 +1,8 @@
 import { and, eq, inArray, lt, or, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { batchOperationItems, batchOperations } from "@paperclipai/db";
-import { BATCH_HEARTBEAT_STALE_MS, BATCH_REASON_CODES } from "@paperclipai/shared";
+import { BATCH_HEARTBEAT_STALE_MS, BATCH_REASON_CODES, type BatchOrigin } from "@paperclipai/shared";
+import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js";
 import { logActivity } from "../activity-log.js";
 import { recountBatch } from "./runner.js";
 
@@ -44,15 +45,16 @@ export async function interruptBatch(db: Db, batchId: string): Promise<boolean> 
     })
     .where(and(eq(batchOperationItems.batchId, batchId), eq(batchOperationItems.outcome, "pending")));
   const counts = await recountBatch(db, batchId);
-  await logActivity(db, {
-    companyId: batch.companyId,
-    actorType: "system",
-    actorId: "batch-sweeper",
-    action: "batch.interrupted",
-    entityType: "batch",
-    entityId: batchId,
-    details: { batch: { id: batchId, origin: batch.origin }, kind: batch.kind, counts, createdByUserId: batch.createdByUserId },
-  });
+  await runWithBatchActivityContext({ batchId, companyId: batch.companyId, origin: batch.origin as BatchOrigin }, () =>
+    logActivity(db, {
+      companyId: batch.companyId,
+      actorType: "system",
+      actorId: "batch-sweeper",
+      action: "batch.interrupted",
+      entityType: "batch",
+      entityId: batchId,
+      details: { kind: batch.kind, counts, createdByUserId: batch.createdByUserId },
+    }));
   return true;
 }
 

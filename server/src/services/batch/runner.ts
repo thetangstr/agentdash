@@ -16,6 +16,7 @@ import {
   type BatchOrigin,
 } from "@paperclipai/shared";
 import { logActivity } from "../activity-log.js";
+import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js";
 import { logger } from "../../middleware/logger.js";
 import { configuredEdgeSecret, EDGE_SECRET_HEADER } from "../../middleware/edge-gate.js";
 import type { AnyBatchKind } from "./kinds.js";
@@ -126,6 +127,25 @@ function routeReason(body: unknown, status: number): string {
   return status === 404 ? "This record could not be found." : `The change was refused (HTTP ${status}).`;
 }
 
+function plainValue(value: unknown): string {
+  if (value === null || value === undefined) return "none";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/** "status is in_review, not done; assigneeAgentId is …, not none" — only the fields that differ. */
+function describeDifference(previewed: Record<string, unknown>, actual: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of Object.keys(previewed)) {
+    if (canonicalJson(previewed[key]) !== canonicalJson(actual[key])) {
+      parts.push(`${key} is ${plainValue(actual[key])}, not ${plainValue(previewed[key])}`);
+    }
+  }
+  for (const key of Object.keys(actual)) {
+    if (!(key in previewed)) parts.push(`${key} is ${plainValue(actual[key])}`);
+  }
+  return parts.join("; ") || "it differs from the preview";
+}
+
 export function fingerprintOf(before: Record<string, unknown>): string {
   return sha256Hex(canonicalJson(before));
 }
@@ -143,6 +163,15 @@ export async function recountBatch(db: Pick<Db, "select" | "update">, batchId: s
       counts[row.outcome] = Number(row.count);
     }
   }
+  const [different] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(batchOperationItems)
+    .where(and(
+      eq(batchOperationItems.batchId, batchId),
+      eq(batchOperationItems.outcome, "applied"),
+      eq(batchOperationItems.reasonCode, BATCH_REASON_CODES.appliedDifferently),
+    ));
+  counts.appliedDifferently = Number(different?.count ?? 0);
   await db.update(batchOperations).set({ counts }).where(eq(batchOperations.id, batchId));
   return counts;
 }
@@ -190,7 +219,7 @@ async function settleItem(
   ctx: BatchRunnerContext,
   item: ItemRow,
   outcome: BatchItemFinalOutcome,
-  detail: { reasonCode?: string | null; reason?: string | null; httpStatus?: number | null },
+  detail: { reasonCode?: string | null; reason?: string | null; httpStatus?: number | null; actual?: Record<string, unknown> | null },
 ) {
   const { db } = ctx;
   const updated = await db
@@ -200,6 +229,7 @@ async function settleItem(
       reasonCode: detail.reasonCode ?? null,
       reason: detail.reason ? clip(detail.reason) : null,
       httpStatus: detail.httpStatus ?? null,
+      actual: detail.actual ?? null,
       appliedAt: outcome === "applied" ? new Date() : null,
       updatedAt: new Date(),
     })
@@ -208,24 +238,29 @@ async function settleItem(
     .returning({ id: batchOperationItems.id });
   if (updated.length === 0) return;
   // An applied record's row is the route's own (it carries details.batch).
-  // The engine writes a row only for what the route did not record.
-  if (outcome !== "applied") {
-    await logActivity(db, {
-      companyId: ctx.companyId,
-      actorType: "user",
-      actorId: ctx.actor.userId ?? "board",
-      action: outcome === "refused" ? "batch.item_refused" : outcome === "failed" ? "batch.item_failed" : "batch.item_unknown",
-      entityType: item.entityType,
-      entityId: item.entityId,
-      details: {
-        batch: { id: ctx.batchId, itemId: item.id, origin: ctx.origin },
-        kind: ctx.kind.key,
-        label: item.label,
-        reasonCode: detail.reasonCode ?? null,
-        reason: detail.reason ? clip(detail.reason) : null,
-        httpStatus: detail.httpStatus ?? null,
-      },
-    });
+  // The engine writes a row only for what the route did not record, or did
+  // differently from the preview.
+  const differently = outcome === "applied" && detail.reasonCode === BATCH_REASON_CODES.appliedDifferently;
+  if (outcome !== "applied" || differently) {
+    await runWithBatchActivityContext({ batchId: ctx.batchId, itemId: item.id, companyId: ctx.companyId, origin: ctx.origin }, () =>
+      logActivity(db, {
+        companyId: ctx.companyId,
+        actorType: "user",
+        actorId: ctx.actor.userId ?? "board",
+        action: differently
+          ? "batch.item_applied_differently"
+          : outcome === "refused" ? "batch.item_refused" : outcome === "failed" ? "batch.item_failed" : "batch.item_unknown",
+        entityType: item.entityType,
+        entityId: item.entityId,
+        details: {
+          kind: ctx.kind.key,
+          label: item.label,
+          reasonCode: detail.reasonCode ?? null,
+          reason: detail.reason ? clip(detail.reason) : null,
+          httpStatus: detail.httpStatus ?? null,
+          ...(differently ? { previewed: item.after, actual: detail.actual ?? null } : {}),
+        },
+      }));
   }
   await recountBatch(db, ctx.batchId);
 }
@@ -256,6 +291,12 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
       reasonCode: BATCH_REASON_CODES.changedSincePreview,
       reason: `${item.label} changed after you previewed it; nothing was done to it.`,
     });
+    return;
+  }
+  // The record's own rules now decide this change (for example a review step
+  // was added after the preview): not sent, with the same plain reason.
+  if (described.notDecidable) {
+    await settleItem(ctx, item, "refused", { reasonCode: described.notDecidable.reasonCode, reason: described.notDecidable.reason });
     return;
   }
   const request = kind.request(record, change);
@@ -314,7 +355,25 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
   }
   const { status } = result;
   if (status >= 200 && status < 300) {
-    await settleItem(ctx, item, "applied", { httpStatus: status });
+    // A 2xx says the route accepted the request, not that it did what the
+    // preview showed: an execution policy can send a "done" to review and
+    // hand it to the reviewer. Re-read the record; if the touched fields are
+    // not what the preview said, the item says so, with the actual values.
+    const after = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId]);
+    const current = after.get(item.entityId);
+    const actual = current ? kind.describe(current, change).before : null;
+    if (actual && canonicalJson(actual) === canonicalJson(item.after)) {
+      await settleItem(ctx, item, "applied", { httpStatus: status, actual });
+    } else {
+      await settleItem(ctx, item, "applied", {
+        httpStatus: status,
+        actual,
+        reasonCode: BATCH_REASON_CODES.appliedDifferently,
+        reason: actual
+          ? `${item.label} was changed, but not as previewed: ${describeDifference(item.after, actual)}.`
+          : `${item.label} was changed, but you can no longer see it to check how.`,
+      });
+    }
     return;
   }
   if (status >= 400 && status < 500) {
@@ -391,15 +450,16 @@ export async function runBatch(ctx: BatchRunnerContext): Promise<void> {
       .returning({ id: batchOperations.id });
     if (finished.length > 0) {
       const counts = await recountBatch(db, ctx.batchId);
-      await logActivity(db, {
-        companyId: ctx.companyId,
-        actorType: "user",
-        actorId: ctx.actor.userId ?? "board",
-        action: "batch.completed",
-        entityType: "batch",
-        entityId: ctx.batchId,
-        details: { batch: { id: ctx.batchId, origin: ctx.origin }, kind: ctx.kind.key, counts },
-      });
+      await runWithBatchActivityContext({ batchId: ctx.batchId, companyId: ctx.companyId, origin: ctx.origin }, () =>
+        logActivity(db, {
+          companyId: ctx.companyId,
+          actorType: "user",
+          actorId: ctx.actor.userId ?? "board",
+          action: "batch.completed",
+          entityType: "batch",
+          entityId: ctx.batchId,
+          details: { kind: ctx.kind.key, counts },
+        }));
     }
   } catch (err) {
     logger.error({ err, batchId: ctx.batchId }, "batch runner stopped unexpectedly");

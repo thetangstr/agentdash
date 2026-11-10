@@ -15,6 +15,7 @@ import { createDefaultApiRateLimiter } from "../../middleware/rate-limit.js";
 import { requestActorSourceMiddleware } from "../../lib/request-actor-source.js";
 import { issueRoutes } from "../../routes/issues.js";
 import { batchRoutes } from "../../routes/batches.js";
+import { activityRoutes } from "../../routes/activity.js";
 import { assertBoard, assertCompanyAccess, getActorInfo, setAuthzRefusalDb } from "../../routes/authz.js";
 import { logActivity } from "../../services/activity-log.js";
 import { BATCH_KINDS, type BatchKind, type BatchKindRecord } from "../../services/batch/kinds.js";
@@ -40,7 +41,7 @@ import { resetInstanceSecretsCacheForTests } from "../../services/run-log-redact
 
 export type TestDb = ReturnType<typeof createDb>;
 
-export type WidgetMode = "ok" | "refuse" | "boom" | "boom-after" | "hang" | "end-session";
+export type WidgetMode = "ok" | "refuse" | "boom" | "boom-after" | "hang" | "end-session" | "different";
 export interface Widget { id: string; companyId: string; value: string; mode: WidgetMode }
 export interface WidgetCall { widgetId: string; credentialKind: string | null; actorSource: string | null; userId: string | null }
 
@@ -82,7 +83,11 @@ export interface BatchTestApp {
   close(): Promise<void>;
 }
 
-export async function startBatchTestApp(prefix: string, options: BatchServiceOptions = {}): Promise<BatchTestApp> {
+export async function startBatchTestApp(
+  prefix: string,
+  options: BatchServiceOptions = {},
+  listen: { host?: string; port?: number } = {},
+): Promise<BatchTestApp> {
   const saved: Record<string, string | undefined> = {};
   for (const key of ["PAPERCLIP_HOME", "PAPERCLIP_INSTANCE_ID", "PAPERCLIP_SECRETS_MASTER_KEY", "RUN_LOG_BASE_PATH", "AGENTDASH_DEFAULT_ADAPTER"]) {
     saved[key] = process.env[key];
@@ -121,6 +126,7 @@ export async function startBatchTestApp(prefix: string, options: BatchServiceOpt
   api.use(createDefaultApiRateLimiter({ deploymentMode: "authenticated" }));
   api.use(boardMutationGuard());
   api.use(issueRoutes(db, {} as never));
+  api.use(activityRoutes(db));
   const batchRouter = batchRoutes(db, {
     ...options,
     kinds: { ...BATCH_KINDS, "test.widget": widgetKind(widgets), ...(options.kinds ?? {}) },
@@ -151,6 +157,11 @@ export async function startBatchTestApp(prefix: string, options: BatchServiceOpt
         return;
       case "hang":
         return; // never answers
+      case "different":
+        // Answers 200 but does something other than what was asked.
+        widget.value = `${value}-but-different`;
+        res.json({ id: widget.id, value: widget.value });
+        return;
       case "end-session":
         if (req.verifiedCredential?.kind === "batch_item" && req.verifiedCredential.origin.kind === "session") {
           await db.delete(authSessions).where(eq(authSessions.id, req.verifiedCredential.origin.sessionId));
@@ -176,10 +187,11 @@ export async function startBatchTestApp(prefix: string, options: BatchServiceOpt
   app.use(errorHandler);
 
   const server = http.createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const host = listen.host ?? "127.0.0.1";
+  await new Promise<void>((resolve) => server.listen(listen.port ?? 0, host, resolve));
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const baseUrl = `http://${host.includes(":") ? `[${host}]` : host}:${port}`;
 
   return {
     db,

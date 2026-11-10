@@ -17,7 +17,10 @@ single route would refuse that person.
    `items` are the exact records and, for each, the touched fields `before` and
    `after`. Ids the person cannot see, ids from another company and records
    the change would not alter are left out and only counted in
-   `omitted: {notFound, noop, notDecidable}`; they are never named. When
+   `omitted: {notFound, noop, notDecidable}`; they are never named. Records
+   whose own rules would decide the change instead are listed in
+   `notDecidable` with a plain reason (for example an issue with an open
+   review or approval step is left out of a "done": "goes to review first"). When
    nothing would change, `batchId` is `null`. The handle is shown once (only
    its sha256 is stored) and expires after 15 minutes.
 2. `POST /api/companies/:companyId/batches/:batchId/confirm` with
@@ -35,15 +38,15 @@ their own), `POST …/:batchId/cancel` (the creator, before confirm), and
 (owners and admins, unknown items only, once; it records a verdict and never
 resends).
 
-Who may start a batch: a person signed in to AgentDash in the browser (or the
-local operator on a local-trusted install). Agents, board API keys and
-assistant grants get `403` at preview.
+Who may use these routes: a person signed in to AgentDash in the browser (or
+the local operator on a local-trusted install). Agents, board API keys and
+assistant grants get `403` on every batch route.
 
 ## Outcomes
 
 | Outcome | Meaning |
 | --- | --- |
-| `applied` | The route answered 2xx. |
+| `applied` | The route answered 2xx. The record is re-read: `actual` holds the touched fields as they are now. When they differ from the preview's `after`, `reasonCode` is `applied_differently`, `reason` names the differences, a `batch.item_applied_differently` activity row is written, and `counts.appliedDifferently` counts it. |
 | `refused` | The route answered 4xx (its own reason is shown), or the engine did not send it: the record changed after the preview (`changed_since_preview`), can no longer be seen (`no_longer_visible`), the person's sign-in or access ended (`access_ended`), the batch ran out of its 10-minute budget (`batch_time_budget`) or was interrupted before reaching it (`batch_interrupted`). |
 | `failed` | Not sent (`not_sent`), or the route answered 5xx and the record is unchanged. |
 | `unknown` | Sent with no answer within 20 seconds, the connection dropped after sending, a 5xx after which the record changed, or the batch stopped while sending it. Never retried; an admin may record a verdict. |
@@ -80,5 +83,8 @@ Each item request carries a `pcbx_` credential: in-process only, never
 persisted or sent to a client, single use, 30-second lifetime, and bound to
 one method, path and body digest (`server/src/services/batch/item-credential.ts`).
 It resolves to a copy of the confirming person's actor, re-read before every
-item. Two exemptions apply only when the verified credential kind is
+item. Items are sent to the local address and port the confirm arrived on
+(not an assumed 127.0.0.1), so a server bound to one address is reached there
+and no other local process can receive an item. `details.batch` on activity
+rows is server-written only: a caller-supplied `batch` key is dropped. Two exemptions apply only when the verified credential kind is
 `batch_item`: the CSRF origin check and the default API rate limiter.

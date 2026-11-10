@@ -8,6 +8,7 @@ CREATE TABLE "batch_operation_items" (
 	"before" jsonb NOT NULL,
 	"after" jsonb NOT NULL,
 	"fingerprint" text NOT NULL,
+	"actual" jsonb,
 	"outcome" text DEFAULT 'pending' NOT NULL,
 	"reason_code" text,
 	"reason" text,

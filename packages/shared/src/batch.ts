@@ -59,6 +59,10 @@ export const BATCH_REASON_CODES = {
   interrupted: "batch_interrupted",
   timeBudget: "batch_time_budget",
   accessEnded: "access_ended",
+  /** Applied, but the record now differs from the preview: the route did something else (see `actual`). */
+  appliedDifferently: "applied_differently",
+  /** Left out at preview: the record's review or approval steps decide this change, not the batch. */
+  goesToReviewFirst: "goes_to_review_first",
 } as const;
 export type BatchReasonCode = (typeof BATCH_REASON_CODES)[keyof typeof BATCH_REASON_CODES];
 
@@ -67,6 +71,8 @@ export interface BatchCounts {
   refused: number;
   failed: number;
   unknown: number;
+  /** Of `applied`: records the route changed differently from the preview. */
+  appliedDifferently?: number;
 }
 
 export interface BatchPreviewItem {
@@ -89,6 +95,8 @@ export interface BatchPreviewResult {
   kind: string;
   items: BatchPreviewItem[];
   omitted: { notFound: number; noop: number; notDecidable: number };
+  /** The records counted as `notDecidable`, each with a plain reason (the person can see them). */
+  notDecidable: Array<{ entityType: string; entityId: string; label: string; reasonCode: string; reason: string }>;
 }
 
 export interface BatchItemView extends BatchPreviewItem {
@@ -97,6 +105,11 @@ export interface BatchItemView extends BatchPreviewItem {
   reasonCode: string | null;
   reason: string | null;
   httpStatus: number | null;
+  /**
+   * Applied records: the touched fields as they are after the route answered.
+   * When `reasonCode` is `applied_differently` they differ from `after`.
+   */
+  actual: Record<string, unknown> | null;
   appliedAt: string | null;
   reconciledVerdict: BatchReconcileVerdict | null;
   reconciledAt: string | null;
@@ -120,5 +133,5 @@ export interface BatchView {
 }
 
 export function emptyBatchCounts(): BatchCounts {
-  return { applied: 0, refused: 0, failed: 0, unknown: 0 };
+  return { applied: 0, refused: 0, failed: 0, unknown: 0, appliedDifferently: 0 };
 }

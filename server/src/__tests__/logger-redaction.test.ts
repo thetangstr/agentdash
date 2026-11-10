@@ -47,6 +47,15 @@ describe("log redaction", () => {
     expect(body.token).toBe("[Redacted]");
   });
 
+  it("scrubs the batch confirm handle from a refused confirm line", () => {
+    const line = logLineWith({
+      reqBody: { handle: "aZ3kq-confirm-handle-value-0123456789", previewDigest: "f".repeat(64) },
+    });
+    const body = line.reqBody as Record<string, unknown>;
+    expect(body.handle).toBe("[Redacted]");
+    expect(body.previewDigest).toBe("f".repeat(64));
+  });
+
   it("still redacts the authorization header", () => {
     const line = logLineWith({
       req: { headers: { authorization: "Bearer ***" } },

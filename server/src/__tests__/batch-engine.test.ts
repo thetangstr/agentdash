@@ -18,6 +18,9 @@ import { addAgent, addCompany, addUser } from "./helpers/agent-profile-fixtures.
 import { startBatchTestApp, type BatchTestApp, type Widget } from "./helpers/batch-test-app.js";
 import { createHash, randomBytes } from "node:crypto";
 import { sweepBatches } from "../services/batch/sweeper.js";
+import { logActivity } from "../services/activity-log.js";
+import { normalizeIssueExecutionPolicy } from "../services/issue-execution-policy.js";
+import { boardApiKeys } from "@paperclipai/db";
 import { resetBatchItemCredentials, batchItemCredentialCount } from "../services/batch/item-credential.js";
 
 /**
@@ -128,7 +131,7 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     await t.batches.waitForRunner(p.body.batchId);
 
     const g = await request(t.server).get(`/api/companies/${companyId}/batches/${p.body.batchId}`).set(t.browser(memberSession));
-    expect(g.body).toMatchObject({ status: "completed", counts: { applied: 2, refused: 0, failed: 0, unknown: 0 } });
+    expect(g.body).toMatchObject({ status: "completed", counts: { applied: 2, refused: 0, failed: 0, unknown: 0, appliedDifferently: 0 } });
     expect(g.body.items.every((item: { outcome: string; httpStatus: number }) => item.outcome === "applied" && item.httpStatus === 200)).toBe(true);
     expect(JSON.stringify(g.body)).not.toContain(p.body.confirmHandle);
     for (const id of [a.id, b.id]) {
@@ -142,7 +145,7 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     expect((updated[0]!.details as Record<string, unknown>).batch).toMatchObject({ id: p.body.batchId, origin: "ui" });
     const completed = await t.db.select().from(activityLog).where(and(eq(activityLog.action, "batch.completed"), eq(activityLog.entityId, p.body.batchId)));
     expect(completed).toHaveLength(1);
-    expect((completed[0]!.details as Record<string, unknown>).counts).toEqual({ applied: 2, refused: 0, failed: 0, unknown: 0 });
+    expect((completed[0]!.details as Record<string, unknown>).counts).toEqual({ applied: 2, refused: 0, failed: 0, unknown: 0, appliedDifferently: 0 });
     expect(batchItemCredentialCount()).toBe(0);
   });
 
@@ -212,7 +215,7 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     expect(byId.get(boom.id)).toMatchObject({ outcome: "failed", httpStatus: 500 });
     expect(byId.get(boomAfter.id)).toMatchObject({ outcome: "unknown", httpStatus: 500 });
     expect(byId.get(hang.id)).toMatchObject({ outcome: "unknown", reasonCode: "no_answer", httpStatus: null });
-    expect(batch.counts).toEqual({ applied: 1, refused: 1, failed: 1, unknown: 2 });
+    expect(batch.counts).toEqual({ applied: 1, refused: 1, failed: 1, unknown: 2, appliedDifferently: 0 });
     expect(batch.status).toBe("completed");
     for (const [action, id] of [["batch.item_refused", refuse.id], ["batch.item_failed", boom.id], ["batch.item_unknown", boomAfter.id], ["batch.item_unknown", hang.id]] as const) {
       const rows = await t.db.select().from(activityLog).where(and(eq(activityLog.action, action), eq(activityLog.entityId, id)));
@@ -346,6 +349,71 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     expect(batch.items[0]).toMatchObject({ outcome: "applied", before: { assigneeAgentId: null }, after: { assigneeAgentId: agentId } });
     const [row] = await t.db.select({ assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, a.id));
     expect(row!.assigneeAgentId).toBe(agentId);
+  });
+
+  // --- Security review fixes (PASS WITH FIXES on eb842442f) ---
+
+  it("review fix 1: a 2xx that did something other than the preview is reported as applied differently, with the actual values", async () => {
+    const same = widget("ok");
+    const other = widget("different");
+    const { batch } = await runToEnd(memberSession, { kind: "test.widget", ids: [same.id, other.id], change: { value: "new" } });
+    const byId = new Map(batch.items.map((item: { entityId: string }) => [item.entityId, item]));
+    expect(byId.get(same.id)).toMatchObject({ outcome: "applied", reasonCode: null, actual: { value: "new" } });
+    expect(byId.get(other.id)).toMatchObject({
+      outcome: "applied",
+      reasonCode: "applied_differently",
+      after: { value: "new" },
+      actual: { value: "new-but-different" },
+    });
+    expect((byId.get(other.id) as { reason: string }).reason).toMatch(/was changed, but not as previewed: value is new-but-different, not new/);
+    expect(batch.counts).toMatchObject({ applied: 2, appliedDifferently: 1 });
+    const rows = await t.db.select().from(activityLog).where(and(eq(activityLog.action, "batch.item_applied_differently"), eq(activityLog.entityId, other.id)));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.details).toMatchObject({ previewed: { value: "new" }, actual: { value: "new-but-different" }, batch: { id: batch.id } });
+  });
+
+  it("review fix 1: a done on an issue whose review step would take it is left out at preview, with a plain reason", async () => {
+    const reviewer = await addAgent(t.db, companyId, { name: "Reviewer", status: "paused" });
+    const policy = normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "agent", agentId: reviewer.id }] }] })!;
+    const reviewed = await issue({ status: "todo", executionPolicy: { ...policy } as never });
+    const plain = await issue({ status: "todo" });
+    const p = await preview(ownerSession, { kind: "issue.update", ids: [reviewed.id, plain.id], change: { status: "done" } });
+    expect(p.status, JSON.stringify(p.body)).toBe(200);
+    expect(p.body.items.map((item: { entityId: string }) => item.entityId)).toEqual([plain.id]);
+    expect(p.body.omitted).toMatchObject({ notDecidable: 1 });
+    expect(p.body.notDecidable).toEqual([expect.objectContaining({ entityId: reviewed.id, reasonCode: "goes_to_review_first" })]);
+    expect(p.body.notDecidable[0].reason).toMatch(/goes to review first/);
+    // A priority change on the same issue is not affected.
+    const q = await preview(ownerSession, { kind: "issue.update", ids: [reviewed.id], change: { priority: "high" } });
+    expect(q.body.items).toHaveLength(1);
+  });
+
+  it("review fix 4: get, list, cancel and reconcile refuse a board API key like preview and confirm do", async () => {
+    const w = widget();
+    const p = await preview(memberSession, { kind: "test.widget", ids: [w.id], change: { value: "k" } });
+    await t.db.insert(boardApiKeys).values({ userId: memberId, name: "cli", keyHash: createHash("sha256").update("board-key-batch-test").digest("hex") });
+    const key = { authorization: "Bearer board-key-batch-test" };
+    const base = `/api/companies/${companyId}/batches`;
+    expect((await request(t.server).get(`${base}/${p.body.batchId}`).set(key)).status).toBe(403);
+    expect((await request(t.server).get(base).set(key)).status).toBe(403);
+    expect((await request(t.server).post(`${base}/${p.body.batchId}/cancel`).set(key).send({})).status).toBe(403);
+    expect((await request(t.server).post(`${base}/${p.body.batchId}/items/${p.body.items[0].itemId}/reconcile`).set(key).send({ verdict: "landed" })).status).toBe(403);
+    const [row] = await t.db.select({ status: batchOperations.status }).from(batchOperations).where(eq(batchOperations.id, p.body.batchId));
+    expect(row!.status).toBe("previewed");
+  });
+
+  it("review fix 5: a hand-posted or server row outside a batch cannot carry details.batch", async () => {
+    const posted = await request(t.server).post(`/api/companies/${companyId}/activity`).set(t.browser(memberSession))
+      .send({ action: "note.added", entityType: "company", entityId: companyId, details: { batch: { id: "forged", origin: "ui" }, note: "hi" } });
+    expect(posted.status, JSON.stringify(posted.body)).toBe(201);
+    const [row] = await t.db.select().from(activityLog).where(eq(activityLog.id, posted.body.id));
+    expect(row!.details).toMatchObject({ note: "hi" });
+    expect((row!.details as Record<string, unknown>).batch).toBeUndefined();
+
+    const entityId = randomUUID();
+    await logActivity(t.db, { companyId, actorType: "user", actorId: memberId, action: "widget.updated", entityType: "widget", entityId, details: { batch: { id: "forged" }, value: "x" } });
+    const [server] = await t.db.select().from(activityLog).where(eq(activityLog.entityId, entityId));
+    expect((server!.details as Record<string, unknown>).batch).toBeUndefined();
   });
 
   it("leaves no credentials in flight", () => {

@@ -307,6 +307,7 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "batch.item_refused",
   "batch.item_failed",
   "batch.item_unknown",
+  "batch.item_applied_differently",
   "batch.item_reconciled",
   "board_api_key.created",
   "board_api_key.revoked",

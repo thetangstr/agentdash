@@ -81,6 +81,12 @@ export async function insertActivity(
   return insertActivityWithRedaction(executor, input, settings.censorUsernameInLogs, beforeInsert);
 }
 
+function withoutBatchKey(details: LogActivityInput["details"]): LogActivityInput["details"] {
+  if (!details || !Object.prototype.hasOwnProperty.call(details, "batch")) return details;
+  const { batch: _batch, ...rest } = details;
+  return rest;
+}
+
 async function insertActivityWithRedaction(
   executor: Pick<Db, "insert">,
   input: LogActivityInput,
@@ -89,12 +95,14 @@ async function insertActivityWithRedaction(
 ): Promise<ActivityPublication> {
   const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
   // AgentDash admin powers (part 2): a row written while a batch item's
-  // request runs says which batch and item it came from. Server-derived, so it
-  // replaces any `batch` a caller put in details.
+  // request runs says which batch and item it came from. `details.batch` is
+  // server-derived only: inside the context it is set from the context;
+  // outside it a caller-supplied `batch` key is dropped, so a hand-posted row
+  // (POST /companies/:id/activity) cannot claim to come from a batch.
   const batch = currentBatchActivityContext();
   const details = batch && batch.companyId === input.companyId
     ? { ...(input.details ?? {}), batch: batchActivityDetails(batch) }
-    : input.details;
+    : withoutBatchKey(input.details);
   const sanitizedDetails = details ? sanitizeRecord(details) : null;
   const redactedDetails = sanitizedDetails
     ? // AgentDash (GH #992): activity details can carry run output (error
