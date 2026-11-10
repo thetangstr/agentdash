@@ -21,6 +21,7 @@ import {
   readNotes,
   releasedDate,
   structureProblems,
+  taggedNoteProblems,
 } from "./check-release-log.mjs";
 
 // Every test here uses fixtures. None reads the repository's own releases/ or
@@ -43,6 +44,21 @@ test("reads the leading date from a Released line with trailing prose", () => {
 test("recognises withdrawn notes", () => {
   assert.equal(isWithdrawn("# v2026.902.1\n\n> Withdrawn, never released. Cancelled at the gate.\n"), true);
   assert.equal(isWithdrawn(note("v2026.902.0")), false);
+});
+
+test("a note published and then withdrawn is withdrawn too, and exempt from structure and the frozen-copy rule", () => {
+  const banner = "# v2026.1109.0\n\n> Released: 2026-11-09.\n\n> **Withdrawn on 2026-11-09. Do not install this release.** It is superseded.\n";
+  assert.equal(isWithdrawn(banner), true);
+  assert.equal(needsStructure("v2026.1109.0.md", banner), false);
+  // Prose that merely mentions withdrawal does not count.
+  assert.equal(isWithdrawn("# v2026.1109.0\n\n> Released: 2026-11-09.\n\nThis was Withdrawn on 2026-11-09 in prose.\n"), false);
+  const tag = "v2026.1109.0";
+  const tagged = Buffer.from(note(tag, "2026-11-09"));
+  const run = (current) =>
+    taggedNoteProblems({ notes: { [`${tag}.md`]: current }, tags: [tag], readTagged: () => tagged, readCurrent: () => Buffer.from(current) });
+  // The banner is the one permitted edit of a published note; any other edit still fails.
+  assert.deepEqual(run(`${note(tag, "2026-11-09")}\n> **Withdrawn on 2026-11-09. Do not install this release.**\n`), []);
+  assert.equal(run(`${note(tag, "2026-11-09")}\nAn extra line.\n`).length, 1);
 });
 
 test("checks only stable tags from v2026.512.0 on", () => {

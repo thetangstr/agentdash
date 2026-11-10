@@ -21,7 +21,9 @@ import {
   resolvePublishedVersions,
   sortVersions,
   stableVersionsFromPage,
+  WITHDRAWN_LINE,
 } from "./published-releases.mjs";
+import { WITHDRAWN_LINE as NOTES_WITHDRAWN_LINE } from "./docs/generate-api-changelog.mjs";
 
 // Fixtures only: no test reads the repository's own releases/ or snapshot,
 // which change with every release (the CI step checks those).
@@ -85,6 +87,23 @@ test("keeps only published stable releases, newest first", () => {
   assert.deepEqual(sortVersions(["v2026.930.1", "v2026.1001.0", "v2026.930.0", "v2026.1001.0"]), ["v2026.1001.0", "v2026.930.1", "v2026.930.0"]);
   assert.throws(() => stableVersionsFromPage({ message: "Not Found" }), /did not return a list/);
   assert.throws(() => stableVersionsFromPage([{ name: "no tag" }]), /without a tag_name/);
+});
+
+test("the public list and the notes check use the same withdrawn marker", () => {
+  assert.equal(WITHDRAWN_LINE.source, NOTES_WITHDRAWN_LINE.source);
+  assert.equal(WITHDRAWN_LINE.flags, NOTES_WITHDRAWN_LINE.flags);
+});
+
+test("a release withdrawn after publication is left off the public list; its replacement is listed", () => {
+  const withdrawn = "> **Withdrawn on 2026-11-09. Do not install this release.** It is superseded.\n\n# v2026.1109.0\n";
+  assert.deepEqual(
+    stableVersionsFromPage([
+      release("v2026.1109.1", { body: "# v2026.1109.1\n\n> Released: 2026-11-09.\n\nThis release replaces v2026.1109.0, which was withdrawn.\n" }),
+      release("v2026.1109.0", { body: withdrawn }),
+      release("v2026.1105.0", { body: null }),
+    ]),
+    ["v2026.1109.1", "v2026.1105.0"],
+  );
 });
 
 test("reads every page of the Releases API and sends GITHUB_TOKEN when given", async () => {

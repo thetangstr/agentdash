@@ -50,6 +50,12 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The marker of a release withdrawn after publication. This module runs alone in the
+// site build (and is copied alone by its own test), so it carries its own copy of the
+// marker; scripts/published-releases.test.mjs fails if it drifts from
+// WITHDRAWN_LINE in scripts/docs/generate-api-changelog.mjs.
+export const WITHDRAWN_LINE = /^>\s*(?:\*\*)?Withdrawn(?:, never released|\s+on\s+\d{4}-\d{2}-\d{2})/i;
+
 export const DEFAULT_REPO = "thetangstr/agentdash";
 export const SNAPSHOT_REL = "releases/published.json";
 export const GENERATED_REL = "ui/src/marketing/content/published-releases.generated.json";
@@ -99,6 +105,9 @@ export function stableReleasesFromPage(page) {
     }
     if (release.draft !== false || release.prerelease !== false) continue;
     if (!isStableVersion(release.tag_name)) continue;
+    // A release withdrawn after publication keeps its tag and page on GitHub but is
+    // not listed on the public site.
+    if (typeof release.body === "string" && release.body.split(/\r?\n/).some((line) => WITHDRAWN_LINE.test(line))) continue;
     const publishedAt = typeof release.published_at === "string" && ISO_INSTANT.test(release.published_at) ? release.published_at : null;
     releases.push({ version: release.tag_name, publishedAt });
   }

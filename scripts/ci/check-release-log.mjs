@@ -46,7 +46,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseRelease } from "../docs/generate-api-changelog.mjs";
+import { parseRelease, WITHDRAWN_LINE as WITHDRAWN_NOTE_LINE } from "../docs/generate-api-changelog.mjs";
 import { publicReleaseMarkdown } from "../docs/public-release-notes.mjs";
 import { parsePublishedFile } from "../published-releases.mjs";
 
@@ -62,7 +62,7 @@ export const REQUIRED_SECTIONS = ["What's new", "For admins", "Upgrade", "Securi
 const STABLE_TAG = /^v(\d{4})\.(\d{3,4})\.(\d+)$/;
 const NOTES_FILE = /^v\d+\.\d+\.\d+\.md$/;
 const RELEASED_LINE = /^>\s*Released:\s*(\d{4}-\d{2}-\d{2})\b/im;
-const WITHDRAWN_LINE = /^>\s*Withdrawn, never released/im;
+const WITHDRAWN_LINE = new RegExp(WITHDRAWN_NOTE_LINE.source, "im");
 const UPSTREAM_LINE = /^>\s*Upstream:/im;
 
 function stableKey(tag) {

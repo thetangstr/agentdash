@@ -7,7 +7,11 @@ export interface ReleaseNote {
   version: string;
   /** Leading YYYY-MM-DD of the `> Released:` line. Trailing prose is not part of it. */
   releasedAt: string | null;
-  /** AgentDash: `> Withdrawn, never released.` — a cut that was drafted but never tagged. */
+  /**
+   * AgentDash: a withdrawn cut, either `> Withdrawn, never released.` (drafted but never
+   * tagged) or `> Withdrawn. Do not install this release.` (published, then withdrawn).
+   * These are the two lines the public-notes sanitizer emits for a withdrawn note.
+   */
   withdrawn: boolean;
   /** AgentDash: `> Upstream: …` — Paperclip notes inherited with the fork, not an AgentDash release. */
   upstream: boolean;
@@ -53,7 +57,7 @@ export function parseReleaseMarkdown(markdown: string): ReleaseNote {
   const version = lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim() ?? "Unversioned";
   const releasedLine = lines.find((line) => /^>\s*Released:/i.test(line));
   const releasedAt = releasedLine ? parseReleasedDate(releasedLine.replace(/^>\s*Released:\s*/i, "")) : null;
-  const withdrawn = lines.some((line) => /^>\s*Withdrawn, never released/i.test(line));
+  const withdrawn = lines.some((line) => /^>\s*Withdrawn(?:, never released|\. Do not install this release)/i.test(line));
   const upstream = lines.some((line) => /^>\s*Upstream:/i.test(line));
 
   const sections: ReleaseNoteSection[] = [];

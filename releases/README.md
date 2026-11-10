@@ -133,6 +133,15 @@ Paperclip releases, not on `origin`, and are not part of this log.
 5. If a cut is cancelled after its notes merged, replace the `> Released:`
    line with `> Withdrawn, never released.` and a sentence on what happened,
    and move its row to the withdrawn table.
+6. If a release is withdrawn after it was published (as v2026.1109.0 was), keep
+   its tag, images and notes file, and put a line that starts
+   `> **Withdrawn on YYYY-MM-DD. Do not install this release.**` under its
+   `> Released:` line, and on top of its GitHub Release body. That line is the
+   one permitted edit of a tagged note: the check no longer requires the copy to
+   equal the tag's, the API changelog skips it, the public site leaves it off
+   `/releases`, the in-app Changelog leaves it out, and the replacement release's
+   notes say what it replaces. Prefix the row's headline with
+   `**Withdrawn, do not install.**`.
 
 `scripts/ci/check-release-log.mjs` runs on every PR. It fails when a stable
 `v*` tag on `origin` (from v2026.512.0 on) has no notes file, when a notes file
