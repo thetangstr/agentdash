@@ -917,6 +917,51 @@ paths:
         - bearerAgentKey: []
         - session: []
       x-stability: stable
+  /api/labels/{labelId}:
+    patch:
+      operationId: updateLabel
+      summary: Rename or recolor a label.
+      tags:
+        - issues
+      parameters:
+        - name: labelId
+          in: path
+          required: true
+          description: Issue id (UUID).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIssueLabelRequest"
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueLabel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      security:
+        - bearerBoardKey: []
+        - bearerAgentKey: []
+        - session: []
+      x-stability: stable
   /api/companies/{companyId}/projects:
     get:
       operationId: listProjects
@@ -1638,6 +1683,43 @@ paths:
       security:
         - bearerBoardKey: []
         - bearerAgentKey: []
+        - session: []
+      x-stability: stable
+    delete:
+      operationId: deleteRoutine
+      summary: Delete a routine for good; its past runs, the issues they created and its activity are kept.
+      tags:
+        - routines
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Routine id (UUID).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: |-
+        Request schema not generated: the route has no shared validator.
+
+        Response schema not generated: the route returns no named shared type.
+      security:
+        - bearerBoardKey: []
         - session: []
       x-stability: stable
   /api/routines/{id}/run:
@@ -7887,6 +7969,17 @@ components:
             - string
             - "null"
           format: uuid
+    UpdateIssueLabelRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 48
+        color:
+          type: string
+          pattern: ^#(?:[0-9a-fA-F]{6})$
+      additionalProperties: false
     UpdateIssueRouteRequest:
       type: object
       properties:

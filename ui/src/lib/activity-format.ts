@@ -86,6 +86,9 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "batch.item_unknown": "has an unconfirmed batch change on",
   "batch.item_applied_differently": "had a batch change land differently than previewed on",
   "batch.item_reconciled": "recorded what happened to a batch change on",
+  // AgentDash admin powers (part 3b): the new single-record routes.
+  "label.updated": "updated a label",
+  "routine.deleted": "deleted a routine",
   // Agent lifecycle and configuration
   // AgentDash: Agent Performance Management gate 2 — V2 access (shadow logs, outside-profile changes)
   "access.policy_changed": "changed the access rules of",

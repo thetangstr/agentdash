@@ -1013,6 +1013,8 @@ export {
   createIssueSchema,
   createChildIssueSchema,
   createIssueLabelSchema,
+  updateIssueLabelSchema,
+  type UpdateIssueLabel,
   updateIssueSchema,
   updateIssueRouteSchema,
   issueExecutionPolicySchema,

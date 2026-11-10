@@ -67,6 +67,13 @@ batches, so it survives a restart). A capped request gets `429`.
 | `issue.update` | any of `status`, `priority`, `assignee` (`{agentId}`, `{userId}` or `null`), `projectId` (or `null`), `addLabelIds`, `removeLabelIds` | `PATCH /api/issues/:id` |
 | `approval.approve` | optional shared `decisionNote` | `POST /api/approvals/:id/approve` |
 | `approval.reject` | optional shared `decisionNote` | `POST /api/approvals/:id/reject` |
+| `agent.pause` / `agent.resume` | none | `POST /api/agents/:id/pause` / `resume` |
+| `agent.set_model` | `model` | `PATCH /api/agents/:id` with `{adapterConfig: {model}}` |
+| `agent.transfer_steward` | `userId`, `transferReason` | `POST /api/companies/:companyId/agents/:agentId/stewardship/transfer` |
+| `routine.archive` | none | `PATCH /api/routines/:id` with `{status: "archived"}` |
+| `routine.delete` | none | `DELETE /api/routines/:id` |
+| `label.update` | `name` and/or `color` | `PATCH /api/labels/:labelId` |
+| `label.delete` | none | `DELETE /api/labels/:labelId` |
 
 `issue.update`:
 
@@ -97,6 +104,40 @@ At apply, an item is refused as `changed_since_preview` ("This task changed
 after you previewed it, so nothing was done to it.") when the record, or what
 the change would make of it, is no longer what the preview showed. A kind's
 own guard (`previewGuard`) runs at preview and again at confirm.
+
+Agents (`agent.*`):
+
+- For people with `agents:create` (the routes' own rule). The kind's guard
+  runs at preview and again at confirm: someone who loses the permission in
+  between sends nothing (403 at confirm).
+- Pause notes "Pausing stops the work it is doing now" (or "stops it from
+  starting new work"); resume notes "Resuming may start work now". Removed
+  or not-yet-set-up agents are left out.
+- `agent.set_model` reads and stores only `adapterConfig.model`; nothing
+  else of an agent's configuration (which can hold credentials) reaches a
+  record, a batch row, a preview, an activity row or a log line. Agents whose
+  runtime does not offer the model (the same per-runtime list the agent form
+  offers) are left out.
+- `agent.transfer_steward`: agents with no steward are left out. A person
+  looks after one agent at a time, so only one agent of a batch can go to a
+  given person; the rest are left out with that reason.
+
+Routines and labels:
+
+- `routine.delete` removes the routine for good; its runs, the tasks they
+  created and its history are kept (the row is kept as a tombstone, because
+  runs would cascade away with a hard delete).
+- `label.delete` notes how many tasks lose the label; the task count is part
+  of the drift check, so a label put on more tasks after the preview is
+  refused as changed.
+
+Approvals also note what deciding sets in motion for the types with a
+consequence (a hire, a budget override, a connector send, a profile change).
+A 200 that shows someone else had already decided the approval is recorded
+as `applied` with reason code `decided_by_someone_else`.
+
+Idempotency keys (approvals) are derived from a per-batch secret that no route
+returns, so a person who can read a batch's item ids cannot spend them first.
 
 Every kind must join `server/src/__tests__/batch-guard-parity.test.ts`.
 

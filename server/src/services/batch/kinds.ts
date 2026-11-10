@@ -5,8 +5,10 @@ import { issueLabels, issues } from "@paperclipai/db";
 import { BATCH_MAX_RECORDS_UI, BATCH_REASON_CODES, issueUpdateBatchChangeSchema, type IssueUpdateBatchChange } from "@paperclipai/shared";
 import { listVisibleIssueIds } from "../../routes/visibility.js";
 import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "../issue-execution-policy.js";
-import { resolveStewardedAgentRoute } from "../stewarded-agent-routing.js";
+import { routePersonAssignee } from "../stewarded-agent-routing.js";
 import { approvalApproveBatchKind, approvalRejectBatchKind } from "./approval-kinds.js";
+import { agentPauseBatchKind, agentResumeBatchKind, agentSetModelBatchKind, agentTransferStewardBatchKind } from "./agent-kinds.js";
+import { labelDeleteBatchKind, labelUpdateBatchKind, routineArchiveBatchKind, routineDeleteBatchKind } from "./routine-label-kinds.js";
 
 /**
  * AgentDash admin powers, part 2: the kinds a batch can be.
@@ -44,6 +46,8 @@ export interface BatchKindItemRef {
   itemId: string;
   /** What the preview recorded as `before`: requests that carry a revision send the previewed one. */
   before: Record<string, unknown>;
+  /** For routes that take an idempotency key: unguessable, stable for this item. */
+  idempotencyKey: string;
 }
 
 export interface BatchKind<Change = unknown, Record extends BatchKindRecord = BatchKindRecord> {
@@ -89,6 +93,17 @@ export interface BatchKind<Change = unknown, Record extends BatchKindRecord = Ba
    * of the previewed `after`. Defaults to `describe(record).before`.
    */
   observe?(record: Record): { [key: string]: unknown };
+  /**
+   * For kinds that remove the record (deletes): the observed fields when the
+   * record no longer exists after a 2xx. Without it a vanished record is
+   * reported as "changed, but you can no longer see it".
+   */
+  observeMissing?: { [key: string]: unknown };
+  /**
+   * A 2xx can still say the change was not this batch's (an approval already
+   * decided by someone else answers 200). Return a plain reason in that case.
+   */
+  checkResponse?(body: unknown, context: { actorUserId: string | null; request: BatchItemRequest }): string | null;
   /** The single-record route's own request, built at apply time from a fresh read. */
   request(record: Record, change: Change, item: BatchKindItemRef): BatchItemRequest;
 }
@@ -175,6 +190,7 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
         assigneeAgentId: issues.assigneeAgentId,
         assigneeUserId: issues.assigneeUserId,
         projectId: issues.projectId,
+        createdByUserId: issues.createdByUserId,
         executionPolicy: issues.executionPolicy,
         executionState: issues.executionState,
       })
@@ -184,16 +200,22 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
       .select({ issueId: issueLabels.issueId, labelId: issueLabels.labelId })
       .from(issueLabels)
       .where(inArray(issueLabels.issueId, rows.map((row) => row.id)));
-    // Work given to a person who stewards an agent goes to that agent: the
-    // route asks the same helper, so the preview shows what will happen.
-    const routed = change?.assignee && "userId" in change.assignee
-      ? await resolveStewardedAgentRoute(db, {
-          companyId,
-          actorAgentId: null,
-          actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
-          assigneeUserId: change.assignee.userId,
-        })
-      : null;
+    // Work given to a person who stewards an agent goes to that agent. The
+    // route's own rule decides, per issue (its exceptions for an unchanged
+    // assignee and a person named in the review policy, and never an agent
+    // the person cannot see), so the preview shows exactly what will happen.
+    const routedByIssue = new Map<string, string | null>();
+    if (change?.assignee && "userId" in change.assignee) {
+      for (const row of rows) {
+        const { routed } = await routePersonAssignee(db, req, companyId, { assigneeUserId: change.assignee.userId, assigneeAgentId: null }, {
+          assigneeUserId: row.assigneeUserId,
+          assigneeAgentId: row.assigneeAgentId,
+          createdByUserId: row.createdByUserId,
+          executionPolicy: row.executionPolicy,
+        });
+        routedByIssue.set(row.id, routed?.toAgentId ?? null);
+      }
+    }
     const labelsByIssue = new Map<string, string[]>();
     for (const row of labelRows) labelsByIssue.set(row.issueId, [...(labelsByIssue.get(row.issueId) ?? []), row.labelId]);
     return new Map(rows.map((row) => {
@@ -211,7 +233,7 @@ export const issueUpdateBatchKind: BatchKind<IssueUpdateBatchChange, IssueRecord
         reviewStepOpen: steps.open,
         reviewStepActive: steps.active,
         hasReviewRecord: row.executionState != null,
-        routedAgentId: routed && row.assigneeUserId !== routed.fromUserId ? routed.toAgentId : null,
+        routedAgentId: routedByIssue.get(row.id) ?? null,
       }];
     }));
   },
@@ -294,4 +316,12 @@ export const BATCH_KINDS: Readonly<Record<string, AnyBatchKind>> = Object.freeze
   [issueUpdateBatchKind.key]: issueUpdateBatchKind,
   [approvalApproveBatchKind.key]: approvalApproveBatchKind,
   [approvalRejectBatchKind.key]: approvalRejectBatchKind,
+  [agentPauseBatchKind.key]: agentPauseBatchKind,
+  [agentResumeBatchKind.key]: agentResumeBatchKind,
+  [agentSetModelBatchKind.key]: agentSetModelBatchKind,
+  [agentTransferStewardBatchKind.key]: agentTransferStewardBatchKind,
+  [routineArchiveBatchKind.key]: routineArchiveBatchKind,
+  [routineDeleteBatchKind.key]: routineDeleteBatchKind,
+  [labelUpdateBatchKind.key]: labelUpdateBatchKind,
+  [labelDeleteBatchKind.key]: labelDeleteBatchKind,
 });

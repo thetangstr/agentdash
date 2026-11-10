@@ -45,6 +45,8 @@ export interface BatchPreviewDialogProps {
   noun: { one: string; many: string };
   /** Plain words for a field and its value. Return null to hide a field. */
   formatField?: (field: string, value: unknown) => BatchFieldText | null;
+  /** The preview's first line, when the kind has a plainer one ("3 agents will resume and may start work."). */
+  summary?: (count: number) => string;
   /** Called once the batch has finished (or was never needed), when the dialog closes. */
   onFinished?: () => void;
   pollIntervalMs?: number;
@@ -149,6 +151,7 @@ export function BatchPreviewDialog({
   change,
   noun,
   formatField,
+  summary,
   onFinished,
   pollIntervalMs = 1000,
 }: BatchPreviewDialogProps) {
@@ -264,7 +267,7 @@ export function BatchPreviewDialog({
             <p className="text-sm" data-testid="batch-preview-summary">
               {preview.items.length === 0
                 ? `Nothing to change in the ${plural(included.length, noun)} you picked.`
-                : `${plural(preview.items.length, noun)} will change.`}
+                : summary ? summary(preview.items.length) : `${plural(preview.items.length, noun)} will change.`}
             </p>
             {preview.omitted.noop > 0 ? (
               <p className="text-xs text-muted-foreground">{plural(preview.omitted.noop, noun)} already look like this, so they are left out.</p>

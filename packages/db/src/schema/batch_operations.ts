@@ -35,6 +35,12 @@ export const batchOperations = pgTable(
     confirmCodeAttempts: integer("confirm_code_attempts").notNull().default(0),
     /** sha256 of the canonical JSON of the previewed items. */
     previewDigest: text("preview_digest").notNull(),
+    /**
+     * A per-batch secret, never returned by any route: items' idempotency
+     * keys are derived from it, so nobody who can read a batch's item ids
+     * can spend a key first (part 3a review).
+     */
+    itemKeyNonce: text("item_key_nonce"),
     itemCount: integer("item_count").notNull(),
     counts: jsonb("counts").$type<BatchCounts>().notNull().default({ applied: 0, refused: 0, failed: 0, unknown: 0 }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

@@ -54,6 +54,8 @@ vi.mock("@/components/settings/NeedsReconciliationPanel", () => ({
   NeedsReconciliationPanel: () => null,
   useNeedsReconciliationCount: () => 0,
 }));
+// The Labels card asks its own server; it has its own suite.
+vi.mock("@/components/settings/LabelsCard", () => ({ LabelsCard: () => null }));
 vi.mock("@/components/settings/AgentCeilingEditor", () => ({ AgentCeilingEditor: () => null }));
 vi.mock("@/components/settings/AgentAccessEnforcementCard", () => ({ AgentAccessEnforcementCard: () => null }));
 vi.mock("@/components/settings/PerformanceManagerCard", () => ({ PerformanceManagerCard: () => null }));

@@ -66,6 +66,14 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
     return (await request(t.server).get(`/api/companies/${companyId}/batches/${p.batchId}`).set(headers)).body;
   }
 
+  async function boardApproval(values: Partial<typeof approvals.$inferInsert> = {}) {
+    const [row] = await t.db.insert(approvals).values({
+      companyId, type: "request_board_approval", requestedByUserId: ownerId, status: "pending",
+      payload: { title: `Spend ${randomUUID().slice(0, 4)}` }, ...values,
+    }).returning();
+    return row!;
+  }
+
   async function labelIdsOf(issueId: string) {
     const rows = await t.db.select({ labelId: issueLabels.labelId }).from(issueLabels).where(eq(issueLabels.issueId, issueId));
     return rows.map((row) => row.labelId).sort();
@@ -170,6 +178,55 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
     });
   });
 
+  describe("security review of round 3a (3534361b4)", () => {
+    it("fix 1: an approval raised by an agent the person cannot see is not named or counted as not decidable", async () => {
+      const hidden = await addAgent(t.db, companyId, { name: "Hidden agent", visibility: "owner", createdByUserId: ownerId, status: "idle", runtimeConfig: NO_RUN } as never);
+      const [secret] = await t.db.insert(approvals).values({ companyId, type: "hire_agent", status: "pending", payload: { name: "Secret Hire", title: "CFO" }, requestedByAgentId: hidden.id }).returning();
+      expect((await request(t.server).get(`/api/approvals/${secret!.id}`).set(member)).status).toBe(404);
+      const shown = await preview(member, { kind: "approval.approve", ids: [secret!.id], change: {} });
+      const missing = await preview(member, { kind: "approval.approve", ids: [randomUUID()], change: {} });
+      expect(JSON.stringify(shown)).not.toContain("Secret Hire");
+      expect(shown.notDecidable).toEqual([]);
+      expect(shown.omitted).toEqual({ notFound: 1, noop: 0, notDecidable: 0 });
+      // Indistinguishable from an id that does not exist.
+      expect(shown).toEqual(missing);
+    });
+
+    it("fix 2: assigning a person who looks after a hidden agent previews (and does) what the route does: the person keeps it", async () => {
+      const steward = await addUser(t.db, companyId, "member");
+      const hidden = await addAgent(t.db, companyId, { name: "Hidden helper", visibility: "owner", createdByUserId: ownerId, status: "idle", runtimeConfig: NO_RUN } as never);
+      await t.db.insert(agentStewardships).values({ companyId, agentId: hidden.id, userId: steward, assignedByUserId: ownerId });
+      const a = await issue();
+      const p = await preview(member, { kind: "issue.update", ids: [a.id], change: { assignee: { userId: steward } } });
+      expect(p.items[0]).toMatchObject({ after: { assigneeAgentId: null, assigneeUserId: steward } });
+      expect(p.items[0].notes ?? []).toEqual([]);
+      expect(JSON.stringify(p)).not.toContain(hidden.id);
+      const batch = await apply(member, p);
+      expect(batch.items[0]).toMatchObject({ outcome: "applied", reasonCode: null });
+      const [row] = await t.db.select({ assigneeUserId: issues.assigneeUserId, assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, a.id));
+      expect(row).toEqual({ assigneeUserId: steward, assigneeAgentId: null });
+    });
+
+    it("fix 2: a person named in the task's review policy keeps the work, as the route decides", async () => {
+      const steward = await addUser(t.db, companyId, "member");
+      const agent = await addAgent(t.db, companyId, { name: "Visible helper", status: "idle", runtimeConfig: NO_RUN });
+      await t.db.insert(agentStewardships).values({ companyId, agentId: agent.id, userId: steward, assignedByUserId: ownerId });
+      const policy = { ...normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "user", userId: steward }] }] })! };
+      const a = await issue({ executionPolicy: policy as never });
+      const p = await preview(owner, { kind: "issue.update", ids: [a.id], change: { assignee: { userId: steward } } });
+      expect(p.items[0]).toMatchObject({ after: { assigneeAgentId: null, assigneeUserId: steward } });
+    });
+
+    it("fix 5: the preview says what approving a hire sets in motion", async () => {
+      const [hire] = await t.db.insert(approvals).values({ companyId, type: "hire_agent", requestedByUserId: ownerId, status: "pending", payload: { name: "Bea", title: "Bookkeeper" } }).returning();
+      const p = await preview(owner, { kind: "approval.approve", ids: [hire!.id], change: {} });
+      expect(p.items[0].notes[0]).toMatch(/^Approving this hires the agent/);
+      const plain = await boardApproval();
+      const q = await preview(owner, { kind: "approval.approve", ids: [plain.id], change: {} });
+      expect(q.items[0].notes).toBeUndefined();
+    });
+  });
+
   describe("approval.approve / approval.reject", () => {
     async function boardApproval(values: Partial<typeof approvals.$inferInsert> = {}) {
       const [row] = await t.db.insert(approvals).values({
@@ -189,7 +246,10 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
       expect(batch.counts).toMatchObject({ applied: 2, appliedDifferently: 0 });
       for (const [approval, item] of [[a, batch.items.find((i: { entityId: string }) => i.entityId === a.id)], [b, batch.items.find((i: { entityId: string }) => i.entityId === b.id)]] as const) {
         const [row] = await t.db.select().from(approvals).where(eq(approvals.id, approval.id));
-        expect(row).toMatchObject({ status: "approved", decisionNote: "Fine for this quarter.", decisionIdempotencyKey: `batch:${item.itemId}` });
+        expect(row).toMatchObject({ status: "approved", decisionNote: "Fine for this quarter." });
+        // Derived from the batch's own secret: not guessable from the item id anyone can read.
+        expect(row!.decisionIdempotencyKey).toMatch(/^batch:[0-9a-f]{48}$/);
+        expect(row!.decisionIdempotencyKey).not.toContain(item.itemId);
       }
     });
 

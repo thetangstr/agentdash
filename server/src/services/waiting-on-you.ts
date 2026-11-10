@@ -2,7 +2,7 @@ import type { Request } from 'express';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { agents, agentStewardships, approvals as approvalsTable, authUsers, companyMemberships, issues, issueThreadInteractions, issueWorkProducts } from '@paperclipai/db';
 import { askUserQuestionsPayloadSchema, type WaitingOnYouQuestion, type WaitingOnYouReview, type WaitingOnYouStoppedAgentIssue } from '@paperclipai/shared';
-import { agentVisibilityCondition, approvalVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything } from '../routes/visibility.js';
+import { agentVisibilityCondition, approvalVisibilityCondition, issueVisibilityCondition, projectScopedVisibilityCondition, resolveAgentVisibility, seesEverything, visibleAgentIdsFor } from '../routes/visibility.js';
 import type { Db } from "@paperclipai/db";
 import { assistantDigestService } from "./assistant-digest.js";
 import { approvalAuthorityService } from "./approval-authority.js";
@@ -12,6 +12,7 @@ import {
   APPROVAL_KIND_PHRASES,
   approvalAskPhrase,
   decisionConsequences,
+  profileChangeSubjectAgentId,
   scopeAndRankOpenApprovals,
   type WaitingApprovalLike as ApprovalLike,
 } from "./waiting-on-you-rules.js";
@@ -229,8 +230,17 @@ export function waitingOnYouService(db: Db) {
     const ids = [...new Set(approvalIds)].filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
     const out = new Map<string, { approval: ApprovalLike & { revision: number; payload: unknown; companyId: string }; waitingOnYou: boolean; canDecide: boolean }>();
     if (ids.length === 0) return out;
-    const rows = await db.select().from(approvalsTable)
+    const visibleRows = await db.select().from(approvalsTable)
       .where(and(eq(approvalsTable.companyId, companyId), inArray(approvalsTable.id, ids), approvalVisibilityCondition(req, companyId)));
+    // The same agent-visibility rule as GET /approvals and /approvals/:id: a
+    // request raised by (or about) an agent the person cannot see does not
+    // exist for them, so it is not even counted as "not decidable".
+    const visibleAgentIds = await visibleAgentIdsFor(db, req, companyId);
+    const rows = visibleAgentIds === null ? visibleRows : visibleRows.filter((row) => {
+      if (row.requestedByAgentId && !visibleAgentIds.has(row.requestedByAgentId)) return false;
+      const subjectAgentId = profileChangeSubjectAgentId(row);
+      return !subjectAgentId || visibleAgentIds.has(subjectAgentId);
+    });
     const audience = await digest.audienceAgents(companyId, actor.userId ?? null);
     const inScope = new Set(scopeAndRankOpenApprovals(rows as ApprovalLike[], new Set(audience.map((agent) => agent.id))).map(({ approval }) => approval.id));
     for (const row of rows) {

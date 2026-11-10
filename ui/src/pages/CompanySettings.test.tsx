@@ -43,6 +43,8 @@ const mockPushToast = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 
+// The Labels card asks its own server; it has its own suite.
+vi.mock("@/components/settings/LabelsCard", () => ({ LabelsCard: () => null }));
 vi.mock("../api/companies", () => ({
   companiesApi: mockCompaniesApi,
 }));

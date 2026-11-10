@@ -309,6 +309,8 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "batch.item_unknown",
   "batch.item_applied_differently",
   "batch.item_reconciled",
+  "label.updated",
+  "routine.deleted",
   "board_api_key.created",
   "board_api_key.revoked",
   // local-harness bridge

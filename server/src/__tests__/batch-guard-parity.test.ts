@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agentApiKeys, approvals, companyMemberships, instanceUserRoles, issues, labels, projects } from "@paperclipai/db";
+import { agentApiKeys, agents, agentStewardships, approvals, companyMemberships, instanceUserRoles, issues, labels, projects, routines } from "@paperclipai/db";
+import { registerServerAdapter, unregisterServerAdapter } from "../adapters/registry.js";
 import { getEmbeddedPostgresTestSupport } from "./helpers/embedded-postgres.js";
 import { addAgent, addCompany, addUser } from "./helpers/agent-profile-fixtures.js";
 import { startBatchTestApp, type BatchTestApp } from "./helpers/batch-test-app.js";
@@ -23,6 +24,8 @@ import { BATCH_KINDS } from "../services/batch/kinds.js";
  * the "every kind is covered" test fails until one exists.
  */
 
+const PARITY_ADAPTER = "batch_parity_fake";
+const NO_RUN = { heartbeat: { enabled: false, wakeOnDemand: false } };
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
@@ -46,6 +49,12 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
   const actors = new Map<ActorKey, Actor>();
 
   beforeAll(async () => {
+    registerServerAdapter({
+      type: PARITY_ADAPTER,
+      models: [{ id: "parity-model", label: "Parity" }, { id: "parity-model-2", label: "Parity 2" }],
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false, summary: "fake" }),
+      testEnvironment: async () => ({ adapterType: PARITY_ADAPTER, status: "pass", checks: [], testedAt: new Date().toISOString() }),
+    } as never);
     t = await startBatchTestApp("paperclip-batch-parity-");
     companyId = (await addCompany(t.db, "Parity", "default")).id;
     otherCompanyId = (await addCompany(t.db, "Parity other", "default")).id;
@@ -78,9 +87,40 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
 
   afterAll(async () => {
     await t?.close();
+    unregisterServerAdapter(PARITY_ADAPTER);
   });
 
   async function twin(kindKey: string, record: RecordKey) {
+    const target = record === "foreign" ? otherCompanyId : companyId;
+    if (kindKey.startsWith("agent.")) {
+      const values = {
+        open: {},
+        restrictedByOwner: { visibility: "owner", createdByUserId: ownerId },
+        restrictedByCreator: { visibility: "owner", createdByUserId: creatorId },
+        foreign: {},
+      }[record];
+      const insert = async () => {
+        const [row] = await t.db.insert(agents).values({
+          companyId: target, name: `${record} ${randomUUID().slice(0, 4)}`, role: "engineer",
+          status: kindKey === "agent.resume" ? "paused" : "idle", runtimeConfig: NO_RUN,
+          adapterType: PARITY_ADAPTER, adapterConfig: { model: "parity-model" }, ...values,
+        } as never).returning();
+        if (kindKey === "agent.transfer_steward") {
+          const steward = await addUser(t.db, target, "member");
+          await t.db.insert(agentStewardships).values({ companyId: target, agentId: row!.id, userId: steward, assignedByUserId: ownerId });
+        }
+        return row!;
+      };
+      return { direct: await insert(), batch: await insert() };
+    }
+    if (kindKey.startsWith("routine.")) {
+      const insert = () => t.db.insert(routines).values({ companyId: target, title: `${record} ${randomUUID().slice(0, 4)}`, status: "active" }).returning().then((rows) => rows[0]!);
+      return { direct: await insert(), batch: await insert() };
+    }
+    if (kindKey.startsWith("label.")) {
+      const insert = () => t.db.insert(labels).values({ companyId: target, name: `${record} ${randomUUID().slice(0, 6)}`, color: "#336699" }).returning().then((rows) => rows[0]!);
+      return { direct: await insert(), batch: await insert() };
+    }
     if (kindKey.startsWith("approval.")) {
       // Board-filed approvals (no requesting agent): waiting on every member.
       const target = record === "foreign" ? otherCompanyId : companyId;
@@ -102,6 +142,14 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
 
   /** The record a kind builds its request from, for the direct call. */
   function recordFor(kindKey: string, row: Record<string, any>) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    if (kindKey.startsWith("agent.")) {
+      return {
+        entityType: "agent", entityId: row.id, label: row.name, companyId: row.companyId, status: row.status,
+        adapterType: row.adapterType, model: "parity-model", stewardUserId: "someone", modelOffered: true, targetBusyWith: null,
+      };
+    }
+    if (kindKey.startsWith("routine.")) return { entityType: "routine", entityId: row.id, label: row.title, status: row.status };
+    if (kindKey.startsWith("label.")) return { entityType: "label", entityId: row.id, label: row.name, name: row.name, color: row.color, taskCount: 0 };
     if (kindKey.startsWith("approval.")) {
       return { entityType: "approval", entityId: row.id, label: "", status: row.status, revision: row.revision, waitingOnYou: true, canDecide: true };
     }
@@ -113,7 +161,7 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
     };
   }
 
-  const SCENARIOS: Record<string, Array<{ name: string; change: Record<string, unknown> }>> = {
+  const SCENARIOS: Record<string, Array<{ name: string; change: Record<string, unknown>; records?: RecordKey[] }>> = {
     "issue.update": [
       { name: "status", change: { status: "in_review" } },
       { name: "status to blocked", change: { status: "blocked" } },
@@ -129,6 +177,15 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
     "approval.reject": [
       { name: "reject", change: {} },
     ],
+    "agent.pause": [{ name: "pause", change: {} }],
+    "agent.resume": [{ name: "resume", change: {} }],
+    "agent.set_model": [{ name: "change model", change: { model: "parity-model-2" } }],
+    // A person looks after one agent at a time: each run hands one agent to a fresh person.
+    "agent.transfer_steward": [{ name: "transfer steward", change: { userId: "__FRESH_PERSON__", transferReason: "Parity" }, records: ["open", "foreign"] }],
+    "routine.archive": [{ name: "archive", change: {} }],
+    "routine.delete": [{ name: "delete", change: {} }],
+    "label.update": [{ name: "recolor", change: { color: "#00aa00" } }],
+    "label.delete": [{ name: "delete", change: {} }],
   };
 
   it("every production kind has parity scenarios", () => {
@@ -139,19 +196,22 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
     for (const scenario of scenarios) {
       it(`${kindKey}: ${scenario.name}`, async () => {
         const kind = BATCH_KINDS[kindKey]!;
-        const change = kind.parseChange(JSON.parse(JSON.stringify(scenario.change)
+        const changeFor = async () => kind.parseChange(JSON.parse(JSON.stringify(scenario.change)
           .replaceAll("__AGENT__", agentId).replaceAll("__PERSON__", personId)
+          .replaceAll("__FRESH_PERSON__", await addUser(t.db, companyId, "member"))
           .replaceAll("__LABEL__", labelId).replaceAll("__PROJECT__", openProjectId)));
+        const recordKeys = scenario.records ?? (["open", "restrictedByOwner", "restrictedByCreator", "foreign"] as const);
         const table: Array<{ actor: ActorKey; record: RecordKey; direct: Verdict; batch: Verdict }> = [];
         for (const actor of actors.values()) {
           const records = new Map<RecordKey, Awaited<ReturnType<typeof twin>>>();
-          for (const key of ["open", "restrictedByOwner", "restrictedByCreator", "foreign"] as const) records.set(key, await twin(kindKey, key));
+          for (const key of recordKeys) records.set(key, await twin(kindKey, key));
+          const change = await changeFor();
 
           // 1. The single-record route, called directly with the kind's own request.
           const direct = new Map<RecordKey, Verdict>();
           for (const [key, pair] of records) {
-            const built = kind.request(recordFor(kindKey, pair.direct), change, { itemId: randomUUID(), before: { revision: (pair.direct as { revision?: number }).revision } });
-            const res = await request(t.server)[built.method.toLowerCase() as "patch" | "post"](built.path).set(actor.headers).send(built.body);
+            const built = kind.request(recordFor(kindKey, pair.direct), change, { itemId: randomUUID(), before: { revision: (pair.direct as { revision?: number }).revision }, idempotencyKey: `batch:${randomUUID()}` });
+            const res = await request(t.server)[built.method.toLowerCase() as "patch" | "post" | "delete"](built.path).set(actor.headers).send(built.body);
             expect(res.status, `${actor.key}/${key} direct: ${JSON.stringify(res.body)}`).not.toBeGreaterThanOrEqual(500);
             direct.set(key, res.status >= 200 && res.status < 300 ? "allow" : "deny");
           }
@@ -160,7 +220,7 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
           const batch = new Map<RecordKey, Verdict>();
           const byBatchId = new Map([...records].map(([key, pair]) => [pair.batch.id, key]));
           const preview = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(actor.headers)
-            .send({ kind: kindKey, ids: [...byBatchId.keys()], change });
+            .send({ kind: kindKey, ids: [...byBatchId.keys()], change: kindKey === "agent.transfer_steward" ? await changeFor() : change });
           if (preview.status === 403 || preview.status === 401) {
             for (const key of records.keys()) batch.set(key, "deny");
           } else {
@@ -188,6 +248,10 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
           // A batch is bound to its company: another company's record is never
           // touched, even by someone who could change it there directly.
           if (row.record === "foreign") expect(row.batch, label).toBe("deny");
+          // A batch needs membership of its company. An instance admin who is
+          // not a member may still act on some single routes (the stewardship
+          // routes let instance admins through); a batch never lets them.
+          else if (row.actor === "instanceAdminNonMember") expect(row.batch, label).toBe("deny");
           // Board sessions get exactly the single route's answer.
           else if (actors.get(row.actor)!.batches) expect(row.batch, label).toBe(row.direct);
           // Actors who may not start a batch are refused at preview.

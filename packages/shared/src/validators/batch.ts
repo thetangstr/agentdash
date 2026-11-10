@@ -70,3 +70,35 @@ export const approvalDecisionBatchChangeSchema = z.object({
   decisionNote: z.string().trim().max(2000).optional(),
 }).strict();
 export type ApprovalDecisionBatchChange = z.infer<typeof approvalDecisionBatchChangeSchema>;
+
+/** Kinds `agent.pause` and `agent.resume`: no options. */
+export const agentPauseResumeBatchChangeSchema = z.object({}).strict();
+export type AgentPauseResumeBatchChange = z.infer<typeof agentPauseResumeBatchChangeSchema>;
+
+/**
+ * Kind `agent.set_model`: the model id, sent as `{adapterConfig: {model}}`
+ * (the route merges it into the agent's adapter configuration). Only the
+ * model is ever stored in a batch row.
+ */
+export const agentSetModelBatchChangeSchema = z.object({
+  model: z.string().trim().min(1).max(200),
+}).strict();
+export type AgentSetModelBatchChange = z.infer<typeof agentSetModelBatchChangeSchema>;
+
+/** Kind `agent.transfer_steward`: the new steward and the reason the stewardship record keeps. */
+export const agentTransferStewardBatchChangeSchema = z.object({
+  userId: z.string().trim().min(1).max(256),
+  transferReason: z.string().trim().min(1).max(500),
+}).strict();
+export type AgentTransferStewardBatchChange = z.infer<typeof agentTransferStewardBatchChangeSchema>;
+
+/** Kinds `routine.archive`, `routine.delete` and `label.delete`: no options. */
+export const noOptionsBatchChangeSchema = z.object({}).strict();
+export type NoOptionsBatchChange = z.infer<typeof noOptionsBatchChangeSchema>;
+
+/** Kind `label.update`: rename (one label) or recolor (any number). */
+export const labelUpdateBatchChangeSchema = z.object({
+  name: z.string().trim().min(1).max(48).optional(),
+  color: z.string().regex(/^#(?:[0-9a-fA-F]{6})$/, "Color must be a 6-digit hex value").optional(),
+}).strict().refine((value) => value.name !== undefined || value.color !== undefined, "Change the name or the color.");
+export type LabelUpdateBatchChange = z.infer<typeof labelUpdateBatchChangeSchema>;

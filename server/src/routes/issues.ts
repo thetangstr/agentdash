@@ -49,6 +49,7 @@ import {
   createIssueThreadInteractionSchema,
   createIssueWorkProductSchema,
   createIssueLabelSchema,
+  updateIssueLabelSchema,
   checkoutIssueSchema,
   createChildIssueSchema,
   createIssueSchema,
@@ -129,7 +130,7 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
-import { resolveStewardedAgentRoute, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
+import { routePersonAssignee, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
 import {
   agentHandoffsEnabled,
   checkHandoffRounds,
@@ -606,20 +607,11 @@ export function issueRoutes(
 
   /**
    * AgentDash: work assigned to a person who stewards an agent goes to that
-   * agent, whoever assigns it (see services/stewarded-agent-routing.ts).
-   * Returns the input with `assignToPerson` removed — it is a request flag,
-   * never stored — and the assignee moved when the rule applies. On an
-   * update, a person who already holds the issue is not a new assignment and
-   * is left alone, and an agent handing its issue back to the person who
-   * created it (the return-to-creator exemption in issue-patch-actions.ts) is
-   * returning work for review, not delegating it, so it is left alone too.
-   * Work is never given to an agent the caller cannot see (agent visibility),
-   * so a hidden steward's agent leaves the assignment with the person. A
-   * person assigning themselves is taking the work, and a person named as a
-   * reviewer or approver by the issue's execution policy is that stage's
-   * participant: both keep the assignment.
+   * agent, whoever assigns it. The rule, with its exceptions and the
+   * agent-visibility filter, lives in services/stewarded-agent-routing.ts
+   * (`routePersonAssignee`), so the batch preview predicts exactly this.
    */
-  async function routePersonAssigneeToStewardedAgent<
+  function routePersonAssigneeToStewardedAgent<
     T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
   >(
     req: Request,
@@ -632,51 +624,7 @@ export function issueRoutes(
       executionPolicy?: unknown;
     },
   ): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
-    const { assignToPerson, ...fields } = input;
-    const rest = fields as T;
-    if (current && input.assigneeUserId === current.assigneeUserId) return { input: rest, routed: null };
-    const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
-    if (
-      current &&
-      actorAgentId &&
-      current.assigneeAgentId === actorAgentId &&
-      !!current.createdByUserId &&
-      input.assigneeUserId === current.createdByUserId
-    ) {
-      return { input: rest, routed: null };
-    }
-    const requestedPolicy = (input as { executionPolicy?: unknown }).executionPolicy;
-    if (
-      typeof input.assigneeUserId === "string" &&
-      namesStageUser(requestedPolicy !== undefined ? requestedPolicy : current?.executionPolicy, input.assigneeUserId)
-    ) {
-      return { input: rest, routed: null };
-    }
-    const routed = await resolveStewardedAgentRoute(db, {
-      companyId,
-      actorAgentId,
-      actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
-      assigneeAgentId: input.assigneeAgentId,
-      assigneeUserId: input.assigneeUserId,
-      assignToPerson,
-    });
-    if (!routed) return { input: rest, routed: null };
-    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
-    if (visibleIds !== null && !visibleIds.has(routed.toAgentId)) return { input: rest, routed: null };
-    return { input: { ...rest, assigneeAgentId: routed.toAgentId, assigneeUserId: null }, routed };
-  }
-
-  /** Whether an execution policy names this person as a stage participant. */
-  function namesStageUser(policy: unknown, userId: string): boolean {
-    const stages = (policy as { stages?: unknown } | null | undefined)?.stages;
-    if (!Array.isArray(stages)) return false;
-    return stages.some((stage) => {
-      const participants = (stage as { participants?: unknown } | null)?.participants;
-      return Array.isArray(participants) && participants.some((participant) => {
-        const p = participant as { type?: unknown; userId?: unknown } | null;
-        return p?.type === "user" && p.userId === userId;
-      });
-    });
+    return routePersonAssignee(db, req, companyId, input, current);
   }
 
   /**
@@ -1529,6 +1477,40 @@ export function issueRoutes(
       details: { name: label.name, color: label.color },
     });
     res.status(201).json(label);
+  });
+
+  // AgentDash admin powers: rename or recolor a label. Same guard as create
+  // and delete (company access): today's rule, kept.
+  router.patch("/labels/:labelId", validate(updateIssueLabelSchema), async (req, res) => {
+    const labelId = req.params.labelId as string;
+    if (!isUuidLike(labelId)) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    const existing = await svc.getLabelById(labelId);
+    if (!existing) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId);
+    const updated = await svc.updateLabel(labelId, req.body);
+    if (!updated) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: updated.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "label.updated",
+      entityType: "label",
+      entityId: updated.id,
+      details: { name: updated.name, color: updated.color, previousName: existing.name, previousColor: existing.color },
+    });
+    res.json(updated);
   });
 
   router.delete("/labels/:labelId", async (req, res) => {

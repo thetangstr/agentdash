@@ -936,6 +936,7 @@
         "Release an issue",
         "List an issue's comments",
         "Add a comment",
+        "Rename or recolor a label",
         "The Issue object",
         "The IssueComment object",
         "Everything else"
@@ -1002,6 +1003,7 @@
         "Get a routine",
         "Create a routine",
         "Update a routine",
+        "Delete a routine",
         "Run a routine",
         "The Routine object",
         "Everything else"
@@ -1258,7 +1260,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 680 routes in 91 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 4a9a6a5be97f; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 682 routes in 91 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 4c05a2e0eda9; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

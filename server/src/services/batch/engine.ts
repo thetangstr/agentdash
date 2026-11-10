@@ -243,6 +243,7 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
           status: "previewed",
           confirmTokenHash: sha256Hex(confirmHandle),
           previewDigest,
+          itemKeyNonce: randomBytes(32).toString("base64url"),
           itemCount: planned.length,
           counts: emptyBatchCounts(),
           expiresAt,

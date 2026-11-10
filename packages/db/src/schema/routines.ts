@@ -41,6 +41,13 @@ export const routines = pgTable(
     lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * AgentDash admin powers: set by DELETE /routines/:id. A deleted routine
+     * is gone from every read and can never run again, but its past runs,
+     * the issues they created and its activity rows stay (routine_runs
+     * cascade on a hard delete, so the row is kept as a tombstone).
+     */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (table) => ({
     companyStatusIdx: index("routines_company_status_idx").on(table.companyId, table.status),

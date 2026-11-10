@@ -237,6 +237,14 @@ export const createIssueLabelSchema = z.object({
 
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
+/** AgentDash admin powers: rename or recolor a label (PATCH /labels/:labelId). */
+export const updateIssueLabelSchema = z.object({
+  name: z.string().trim().min(1).max(48).optional(),
+  color: z.string().regex(/^#(?:[0-9a-fA-F]{6})$/, "Color must be a 6-digit hex value").optional(),
+}).strict().refine((value) => value.name !== undefined || value.color !== undefined, "Change the name or the color.");
+
+export type UpdateIssueLabel = z.infer<typeof updateIssueLabelSchema>;
+
 export const updateIssueSchema = partialWithoutDefaults(createIssueBaseSchema.omit({
   definitionOfDone: true,
   // AgentDash: ExecOS request identity is immutable after creation.

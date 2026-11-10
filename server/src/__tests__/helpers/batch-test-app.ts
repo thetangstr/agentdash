@@ -17,6 +17,9 @@ import { issueRoutes } from "../../routes/issues.js";
 import { batchRoutes } from "../../routes/batches.js";
 import { activityRoutes } from "../../routes/activity.js";
 import { approvalRoutes } from "../../routes/approvals.js";
+import { agentRoutes } from "../../routes/agents.js";
+import { agentStewardshipRoutes } from "../../routes/agent-stewardships.js";
+import { routineRoutes } from "../../routes/routines.js";
 import { assertBoard, assertCompanyAccess, getActorInfo, setAuthzRefusalDb } from "../../routes/authz.js";
 import { logActivity } from "../../services/activity-log.js";
 import { BATCH_KINDS, type BatchKind, type BatchKindRecord } from "../../services/batch/kinds.js";
@@ -130,6 +133,9 @@ export async function startBatchTestApp(
   api.use(issueRoutes(db, {} as never));
   api.use(activityRoutes(db));
   api.use(approvalRoutes(db, { autoDispatchQueuedRuns: false }));
+  api.use(agentRoutes(db));
+  api.use(agentStewardshipRoutes(db));
+  api.use(routineRoutes(db));
   const batchRouter = batchRoutes(db, {
     ...options,
     kinds: { ...BATCH_KINDS, "test.widget": widgetKind(widgets), ...(options.kinds ?? {}) },

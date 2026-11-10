@@ -56,6 +56,8 @@ export interface BatchRunnerContext {
   send?: BatchItemSender;
   timeBudgetMs?: number;
   itemTimeoutMs?: number;
+  /** Read from the batch row when the runner starts. Never leaves the server. */
+  itemKeyNonce?: string | null;
 }
 
 export type BatchSendResult =
@@ -151,6 +153,15 @@ function describeDifference(previewed: Record<string, unknown>, actual: Record<s
     if (!(key in previewed)) parts.push(`${key} is ${plainValue(actual[key])}`);
   }
   return parts.join("; ") || "it differs from the preview";
+}
+
+/**
+ * The idempotency key an item's request carries where the route takes one.
+ * Derived from a per-batch secret that no route ever returns, so a person who
+ * can read a batch's item ids cannot spend the key first on another record.
+ */
+export function batchItemIdempotencyKey(nonce: string | null, batchId: string, itemId: string): string {
+  return `batch:${sha256Hex(`${nonce ?? batchId}:${itemId}`).slice(0, 48)}`;
 }
 
 export function fingerprintOf(before: Record<string, unknown>): string {
@@ -308,7 +319,11 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     await settleItem(ctx, item, "refused", { reasonCode: described.notDecidable.reasonCode, reason: described.notDecidable.reason });
     return;
   }
-  const request = kind.request(record, change, { itemId: item.id, before: item.before });
+  const request = kind.request(record, change, {
+    itemId: item.id,
+    before: item.before,
+    idempotencyKey: batchItemIdempotencyKey(ctx.itemKeyNonce ?? null, ctx.batchId, item.id),
+  });
   const body = JSON.stringify(request.body);
   const claimed = await db
     .update(batchOperationItems)
@@ -368,9 +383,24 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     // preview showed: an execution policy can send a "done" to review and
     // hand it to the reviewer. Re-read the record; if the touched fields are
     // not what the preview said, the item says so, with the actual values.
+    // The answer itself can show the change was not this batch's (for an
+    // approval: someone else decided it first, and the route answers 200).
+    const notOurs = kind.checkResponse?.(result.body, { actorUserId: actor.userId ?? null, request }) ?? null;
     const after = await kind.load({ db, req: itemRequestView(actor), companyId: ctx.companyId }, [item.entityId], change);
     const current = after.get(item.entityId);
-    const actual = current ? (kind.observe ? kind.observe(current) : kind.describe(current, change).before) : null;
+    // A record that is gone after a delete is what a delete kind expects.
+    const actual = current
+      ? (kind.observe ? kind.observe(current) : kind.describe(current, change).before)
+      : kind.observeMissing ? { ...kind.observeMissing } : null;
+    if (notOurs) {
+      await settleItem(ctx, item, "applied", {
+        httpStatus: status,
+        actual,
+        reasonCode: BATCH_REASON_CODES.notThisBatchsDecision,
+        reason: `${item.label}: ${notOurs}`,
+      });
+      return;
+    }
     // Compare the observed fields against the same keys of the preview.
     const expected = actual ? Object.fromEntries(Object.keys(actual).map((key) => [key, item.after[key]])) : null;
     if (actual && canonicalJson(actual) === canonicalJson(expected)) {
@@ -430,7 +460,8 @@ export async function runBatch(ctx: BatchRunnerContext): Promise<void> {
   }, BATCH_HEARTBEAT_INTERVAL_MS);
   heartbeat.unref?.();
   try {
-    const [stored] = await db.select({ change: batchOperations.change }).from(batchOperations).where(eq(batchOperations.id, ctx.batchId));
+    const [stored] = await db.select({ change: batchOperations.change, itemKeyNonce: batchOperations.itemKeyNonce }).from(batchOperations).where(eq(batchOperations.id, ctx.batchId));
+    ctx.itemKeyNonce = stored?.itemKeyNonce ?? null;
     const change = ctx.kind.parseChange(stored?.change ?? {});
     const items = await db
       .select()

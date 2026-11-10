@@ -69,6 +69,16 @@ export const BATCH_REASON_CODES = {
   notWaitingOnYou: "not_waiting_on_you",
   /** Left out at preview: this person may not decide the approval. */
   notYoursToDecide: "not_yours_to_decide",
+  /** Applied by the route, but not as this batch's own decision (someone else decided it first). */
+  notThisBatchsDecision: "decided_by_someone_else",
+  /** Left out at preview: the agent's runtime does not offer the chosen model. */
+  modelNotOffered: "model_not_offered",
+  /** Left out at preview: the agent has no steward to hand over. */
+  noStewardToTransfer: "no_steward_to_transfer",
+  /** Left out at preview: a person looks after one agent at a time, and the new steward would already have one. */
+  stewardAlreadyBusy: "steward_already_busy",
+  /** Left out at preview: the agent has been removed (terminated) or is not set up yet. */
+  agentNotManageable: "agent_not_manageable",
 } as const;
 export type BatchReasonCode = (typeof BATCH_REASON_CODES)[keyof typeof BATCH_REASON_CODES];
 

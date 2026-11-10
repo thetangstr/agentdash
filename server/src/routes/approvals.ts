@@ -3,6 +3,7 @@ import {
   runtimeConfigHostExecutionInputs,
 } from "../services/adapter-host-execution-policy.js";
 import { hostExecutionContextForCompany } from "../services/host-execution-context.js";
+import { profileChangeSubjectAgentId } from "../services/waiting-on-you-rules.js";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
@@ -87,11 +88,7 @@ import {
  * subject agent is checked separately: a hidden agent's profile change does
  * not exist for the caller.
  */
-function profileChangeSubjectAgentId(approval: { type: string; payload: unknown }): string | null {
-  if (approval.type !== "agent_profile_change") return null;
-  const agentId = (approval.payload as Record<string, unknown> | null)?.agentId;
-  return typeof agentId === "string" ? agentId : null;
-}
+// (moved to services/waiting-on-you-rules.ts so batch candidates apply the same rule)
 
 /**
  * AgentDash: APM gate 5 — a `hire_agent` that carries a profile is filed only

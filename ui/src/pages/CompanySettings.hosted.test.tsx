@@ -30,6 +30,8 @@ vi.mock("../api/health", () => ({
   healthApi: mockHealthApi,
 }));
 
+// The Labels card asks its own server; it has its own suite.
+vi.mock("@/components/settings/LabelsCard", () => ({ LabelsCard: () => null }));
 vi.mock("../api/companies", () => ({
   companiesApi: mockCompaniesApi,
 }));
