@@ -102,6 +102,7 @@ import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting"
 import { About as MarketingAbout } from "./marketing/pages/About";
 import { AgentPerformance as MarketingAgentPerformance } from "./marketing/pages/AgentPerformance";
 import { AgentPerformanceUpdate as MarketingAgentPerformanceUpdate } from "./marketing/pages/AgentPerformanceUpdate";
+import { AdminPowersUpdate as MarketingAdminPowersUpdate } from "./marketing/pages/AdminPowersUpdate";
 import { WhatsNew as MarketingWhatsNew } from "./marketing/pages/WhatsNew";
 import { LaunchWeek as MarketingLaunchWeek } from "./marketing/pages/LaunchWeek";
 import { Releases as MarketingReleases } from "./marketing/pages/Releases";
@@ -402,6 +403,7 @@ export function App() {
         <Route path="whats-new" element={<MarketingWhatsNew />} />
         <Route path="whats-new/launch-week" element={<MarketingLaunchWeek />} />
         <Route path="whats-new/agent-performance" element={<MarketingAgentPerformanceUpdate />} />
+        <Route path="whats-new/admin-powers" element={<MarketingAdminPowersUpdate />} />
         {/* AgentDash: public release notes; a version is listed once its GitHub Release is published. */}
         <Route path="releases" element={<MarketingReleases />} />
         <Route path="releases/:version" element={<MarketingRelease />} />
