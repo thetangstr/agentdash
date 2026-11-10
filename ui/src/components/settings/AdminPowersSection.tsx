@@ -87,7 +87,7 @@ export function AdminPowersSection({
         />
         <ToggleField
           label="Admins can read run transcripts when document access is on"
-          hint="Owners and admins can open the transcript of any agent's run, even when document access limits who reads them. Each read is recorded. Off by default."
+          hint="Owners and admins can open the transcript of any agent's run, even when document access limits who reads them. Reads are recorded once per person and run every 10 minutes. Off by default."
           checked={!!company.adminTranscriptReadEnabled}
           onChange={(value) => mutation.mutate({ adminTranscriptReadEnabled: value })}
           toggleTestId="admin-powers-transcript-read-toggle"
