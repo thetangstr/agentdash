@@ -102,6 +102,8 @@ import { AgentPerformance as MarketingAgentPerformance } from "./marketing/pages
 import { AgentPerformanceUpdate as MarketingAgentPerformanceUpdate } from "./marketing/pages/AgentPerformanceUpdate";
 import { WhatsNew as MarketingWhatsNew } from "./marketing/pages/WhatsNew";
 import { LaunchWeek as MarketingLaunchWeek } from "./marketing/pages/LaunchWeek";
+import { Releases as MarketingReleases } from "./marketing/pages/Releases";
+import { ReleaseRoute as MarketingRelease } from "./marketing/pages/Release";
 import { isMarketingPath } from "./marketing/marketing-path";
 // AgentDash (SC-7, GH #768): the self-serve front door on www.
 import { Start as MarketingStart } from "./marketing/pages/Start";
@@ -394,6 +396,9 @@ export function App() {
         <Route path="whats-new" element={<MarketingWhatsNew />} />
         <Route path="whats-new/launch-week" element={<MarketingLaunchWeek />} />
         <Route path="whats-new/agent-performance" element={<MarketingAgentPerformanceUpdate />} />
+        {/* AgentDash: public release notes; a version is listed once its GitHub Release is published. */}
+        <Route path="releases" element={<MarketingReleases />} />
+        <Route path="releases/:version" element={<MarketingRelease />} />
         {/* AgentDash (SC-7, GH #768): signup, magic-link landing, progress and returning users. */}
         {/* AgentDash: www-only (they call /api/cloud); a hosted box sends them to its own sign-in. */}
         <Route path="start" element={<WwwOnlyRoute><MarketingStart /></WwwOnlyRoute>} />

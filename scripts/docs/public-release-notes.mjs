@@ -14,7 +14,10 @@ export function publicReleaseMarkdown(markdown) {
     throw new Error("Invalid release version");
   }
   const out = [`# ${note.version}`];
-  if (note.withdrawn) return `${out.join("\n")}\n> Withdrawn, never released.\n`;
+  if (note.withdrawn) {
+    const line = note.withdrawnNeverReleased ? "Withdrawn, never released." : "Withdrawn. Do not install this release.";
+    return `${out.join("\n")}\n> ${line}\n`;
+  }
   if (note.releasedAt) out.push(`> Released: ${note.releasedAt}`);
   if (note.upstream) out.push("> Upstream: Inherited release.");
   let section = null;

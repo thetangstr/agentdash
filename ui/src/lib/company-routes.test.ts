@@ -19,6 +19,16 @@ describe("company routes", () => {
     expect(isReservedCompanyPrefix("AGENT-PERFORMANCE")).toBe(true);
     expect(applyCompanyPrefix("/evaluation", "ACME")).toBe("/ACME/evaluation");
   });
+  it("keeps the release-notes index and version pages global when a company is selected", () => {
+    for (const path of ["/releases", "/releases/v2026.1105.0", "/releases/v2026.1105.0#upgrade"]) {
+      expect(extractCompanyPrefixFromPath(path)).toBeNull();
+      expect(applyCompanyPrefix(path, "ACME")).toBe(path);
+      expect(toCompanyRelativePath(path)).toBe(path);
+    }
+    expect(isReservedCompanyPrefix("RELEASES")).toBe(true);
+    expect(isReservedCompanyPrefix("releases")).toBe(true);
+    expect(isReservedCompanyPrefix("RELEASE")).toBe(false);
+  });
   it("treats execution workspace paths as board routes that need a company prefix", () => {
     expect(isBoardPathWithoutPrefix("/execution-workspaces/workspace-123")).toBe(true);
     expect(isBoardPathWithoutPrefix("/execution-workspaces/workspace-123/routines")).toBe(true);

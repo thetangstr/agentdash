@@ -67,11 +67,16 @@ jobs:
 
       - name: Release log is complete and indexed
         # releases/*.md is the release log (GitHub Release bodies, in-app
-        # Changelog). Fails when a stable tag has no notes, a note has no
-        # parseable Released date, or releases/README.md misses a file. Tags
-        # come from `git ls-remote origin`, so shallow or tagless checkouts
-        # and local Paperclip `upstream` tags don't matter.
-        run: node scripts/ci/check-release-log.mjs && node --test scripts/ci/check-release-log.test.mjs
+        # Changelog, www.agentdash.cloud/releases). Fails when a stable tag
+        # has no notes, a note has no parseable Released date,
+        # releases/README.md misses a file, a note after v2026.1105.0 lacks
+        # the four public sections or differs from its tagged commit's copy
+        # (read with local git; fetch-depth 0 above brings the tags), or
+        # releases/published.json lists a version that is not a released
+        # AgentDash tag. Tag names come from `git ls-remote origin`, so local
+        # Paperclip `upstream` tags don't matter. The release scripts' tests
+        # mock GitHub and Vercel.
+        run: node scripts/ci/check-release-log.mjs && node --test scripts/ci/check-release-log.test.mjs scripts/published-releases.test.mjs scripts/check-release-body.test.mjs scripts/release-site-deploy.test.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

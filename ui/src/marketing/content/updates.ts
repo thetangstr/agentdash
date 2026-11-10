@@ -9,9 +9,10 @@ export const LAUNCH_WEEK = {
   versions: ["v2026.1007.0", "v2026.1007.1"],
 } as const;
 
+// AgentDash: the public, sanitized release-notes pages (content/releases.ts), not the raw files.
 export const UPDATE_SOURCES = [
-  { label: "v2026.1007.0 release notes", href: `${GITHUB_URL}/blob/main/releases/v2026.1007.0.md` },
-  { label: "v2026.1007.1 release notes", href: `${GITHUB_URL}/blob/main/releases/v2026.1007.1.md` },
+  { label: "v2026.1007.0 release notes", href: "/releases/v2026.1007.0" },
+  { label: "v2026.1007.1 release notes", href: "/releases/v2026.1007.1" },
 ] as const;
 
 // AgentDash: this customer update advances the existing profile/scorecard foundation.

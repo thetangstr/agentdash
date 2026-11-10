@@ -108,6 +108,8 @@ describe("release notes", () => {
 
     expect(versions).not.toContain("v2026.902.1");
     expect(versions).not.toContain("v2026.827.3");
+    // Published and then withdrawn: also left out.
+    expect(versions).not.toContain("v2026.1109.0");
     expect(versions.every((version) => version.startsWith("v"))).toBe(true);
   });
 });

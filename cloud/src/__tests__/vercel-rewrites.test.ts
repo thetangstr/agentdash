@@ -94,6 +94,24 @@ describe("vercel.json redirects for the old app (GH #837 review)", () => {
     for (const path of ["/docsx", "/documents"]) expect(redirectFor(path), path).toBe("/find");
   });
 
+  it("serves the public release notes without admitting unrelated prefixes", () => {
+    for (const path of ["/releases", "/releases/", "/releases/v2026.1105.0"]) expect(redirectFor(path), path).toBeNull();
+    for (const path of ["/releasesx", "/ACME/releases"]) expect(redirectFor(path), path).toBe("/find");
+  });
+
+  it("leaves the build's published list at /releases/published.json to the static file", () => {
+    // scripts/published-releases.mjs writes ui/public/releases/published.json,
+    // which the build copies to ui/dist; release.yml polls it after a release.
+    // Nothing redirects it, and no rewrite sends it to another service. Vercel
+    // serves a file that exists before applying rewrites, so the SPA fallback
+    // only answers when the file is missing (a self-hosted build without the
+    // prebuild), and the page there is the release not-found page.
+    expect(redirectFor("/releases/published.json")).toBeNull();
+    const target = vercel.rewrites.find((r) => sourceRegex(r.source).test("/releases/published.json"))!.destination;
+    expect(target).toBe("/index.html");
+    expect(vercel.rewrites.filter((r) => /^https?:/.test(r.destination)).some((r) => sourceRegex(r.source).test("/releases/published.json"))).toBe(false);
+  });
+
   it("sends /assess to /start until assess is re-homed (GH #838)", () => {
     expect(redirectFor("/assess")).toBe("/start");
   });

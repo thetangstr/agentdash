@@ -339,6 +339,38 @@ jobs:
         working-directory: source
         run: pnpm install --no-frozen-lockfile
 
+      - name: Require the source commit to carry its release notes
+        # The tag is cut from the immutable source, while the GitHub Release
+        # body comes from release-control. An install's in-app Changelog is
+        # built from the tagged source, so it must carry the same notes, byte
+        # for byte, before anything is tagged. (www.agentdash.cloud/releases
+        # is built from main; scripts/ci/check-release-log.mjs keeps main's
+        # copy of each tagged note identical to the tag's.)
+        env:
+          GITHUB_ACTIONS: "true"
+          REPO_ROOT: ${{ github.workspace }}/source
+          STABLE_DATE: ${{ inputs.stable_date }}
+        run: |
+          version_args=(stable --skip-npm --print-version)
+          if [ -n "$STABLE_DATE" ]; then
+            version_args+=(--date "$STABLE_DATE")
+          fi
+          version="$(release-control/scripts/release.sh "${version_args[@]}")"
+          notes="releases/v${version}.md"
+          if [ ! -f "release-control/$notes" ]; then
+            echo "::error::release-control has no $notes, which becomes the GitHub Release body." >&2
+            exit 1
+          fi
+          if [ ! -f "source/$notes" ]; then
+            echo "::error::The source commit has no $notes. Merge the notes first and cut from a commit that contains them." >&2
+            exit 1
+          fi
+          if ! cmp -s "source/$notes" "release-control/$notes"; then
+            echo "::error::$notes in the source commit differs from release-control's copy, which becomes the GitHub Release body." >&2
+            exit 1
+          fi
+          echo "The source commit carries $notes, identical to the GitHub Release body."
+
       - name: Dry-run stable release
         env:
           GITHUB_ACTIONS: "true"
@@ -449,6 +481,38 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Require the source commit to carry its release notes
+        # The tag is cut from the immutable source, while the GitHub Release
+        # body comes from release-control. An install's in-app Changelog is
+        # built from the tagged source, so it must carry the same notes, byte
+        # for byte, before anything is tagged. (www.agentdash.cloud/releases
+        # is built from main; scripts/ci/check-release-log.mjs keeps main's
+        # copy of each tagged note identical to the tag's.)
+        env:
+          GITHUB_ACTIONS: "true"
+          REPO_ROOT: ${{ github.workspace }}/source
+          STABLE_DATE: ${{ inputs.stable_date }}
+        run: |
+          version_args=(stable --skip-npm --print-version)
+          if [ -n "$STABLE_DATE" ]; then
+            version_args+=(--date "$STABLE_DATE")
+          fi
+          version="$(release-control/scripts/release.sh "${version_args[@]}")"
+          notes="releases/v${version}.md"
+          if [ ! -f "release-control/$notes" ]; then
+            echo "::error::release-control has no $notes, which becomes the GitHub Release body." >&2
+            exit 1
+          fi
+          if [ ! -f "source/$notes" ]; then
+            echo "::error::The source commit has no $notes. Merge the notes first and cut from a commit that contains them." >&2
+            exit 1
+          fi
+          if ! cmp -s "source/$notes" "release-control/$notes"; then
+            echo "::error::$notes in the source commit differs from release-control's copy, which becomes the GitHub Release body." >&2
+            exit 1
+          fi
+          echo "The source commit carries $notes, identical to the GitHub Release body."
 
       - name: Publish stable
         id: stable_release
@@ -735,3 +799,47 @@ jobs:
           release-control/scripts/create-github-release.sh "$VERSION" \
             --image-digest "$DIGEST" \
             --image-repo "$REPO"
+
+  # www.agentdash.cloud/releases lists a version only once its stable GitHub
+  # Release is published: Vercel's build reads the Releases API
+  # (scripts/published-releases.mjs, falling back to releases/published.json).
+  # This is the last job, and nothing needs it, so a failure here never skips
+  # the image jobs. It checks the final body (notes plus the image section)
+  # against the notes file, retrying, then asks Vercel to rebuild www through
+  # the deploy hook in the repository secret VERCEL_DEPLOY_HOOK_URL and waits
+  # (up to 15 minutes) until www.agentdash.cloud/releases/published.json lists
+  # the new version, so a site build that fell back to the snapshot fails here
+  # instead of lagging silently. Without the secret this warns and passes, and
+  # the release appears on the site after the next merge to main. A body
+  # mismatch fails this job only. The notes are frozen once tagged, so edit
+  # the GitHub Release body to match releases/vX.md, then rerun this job.
+  refresh_release_site:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    needs: [publish_stable, record_stable_image_digest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout release control
+        uses: actions/checkout@v4
+        with:
+          path: release-control
+
+      - name: Verify the published GitHub Release body is the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.publish_stable.outputs.version }}
+        run: |
+          node release-control/scripts/check-release-body.mjs \
+            --tag "v${VERSION}" \
+            --notes "release-control/releases/v${VERSION}.md" \
+            --repo "$GITHUB_REPOSITORY" \
+            --attempts 3
+
+      - name: Ask Vercel to rebuild www.agentdash.cloud and wait for the new version
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+          VERSION: ${{ needs.publish_stable.outputs.version }}
+        run: node release-control/scripts/release-site-deploy.mjs --expect-version "v${VERSION}"
