@@ -87,7 +87,7 @@ The key must be sent as `Authorization: Bearer`. The `x-agent-key` header works 
 
 `POST /api/mcp/assistant` · [`mcpAssistant`](/api/reference#tag/mcp/mcpAssistant)
 
-Serves the `assistant` toolset for one person in one company, through an assistant they have granted access. The grant's scopes filter what is offered. A grant without `agentdash:work` is not shown the work tools, and one without `agentdash:decide` is not shown the gated tools. The tools, grouped by the scope that unlocks them, are in [the assistant tool reference](/mcp/tools/assistant). [Toolsets](/mcp/toolsets) explains how the sets differ.
+Serves the `assistant` toolset for one person in one company, through an assistant they have granted access. The grant's scopes filter what is offered. A grant without `agentdash:work` is not shown the work tools, and one without `agentdash:decide` is not shown the gated tools. The admin batch tools are shown only to a grant that explicitly holds `agentdash:admin` (see [Connecting](/mcp/connecting)); they prepare a batch and apply it only with the code the person reads back from their browser. The tools, grouped by the scope that unlocks them, are in [the assistant tool reference](/mcp/tools/assistant). [Toolsets](/mcp/toolsets) explains how the sets differ.
 
 A `pcpa_` token reaches this one route and no other (`ASSISTANT_ROUTE_SCOPES` in `packages/shared/src/assistant-oauth.ts`). An access token lives one hour (`ASSISTANT_ACCESS_TOKEN_TTL_MS`, same file).
 

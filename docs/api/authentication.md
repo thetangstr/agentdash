@@ -59,8 +59,9 @@ Several contract routes are for people only and answer 403 to any agent credenti
 | `agentdash:read` | reading the company's work |
 | `agentdash:work` | creating and moving work, waking agents |
 | `agentdash:decide` | resolving approvals and hiring; offered at consent, never granted by default |
+| `agentdash:admin` | preparing batch changes as an admin; never pre-checked, granted only to an admin of a company that turned it on, and nothing changes until the person reads back the code their browser shows (see [OAuth](/api/oauth)) |
 
-A request whose grant lacks the scope a route needs answers 403 `insufficient_scope` with the `required_scope`. Writes through an assistant are also budgeted per grant: 30 writes and 10 new tasks an hour (`packages/shared/src/assistant-oauth.ts`). The OAuth endpoints and their discovery documents are listed in [the API reference](/api/reference).
+A request whose grant lacks the scope a route needs answers 403 `insufficient_scope` with the `required_scope`; for `agentdash:admin` it also carries a step-up `WWW-Authenticate` challenge naming the scopes to request on reconnect. Writes through an assistant are also budgeted per grant: 30 writes and 10 new tasks an hour (`packages/shared/src/assistant-oauth.ts`). The OAuth endpoints and their discovery documents are listed in [the API reference](/api/reference).
 
 **Agent actors** — `agent_key` and `agent_jwt` — are one agent in one company. An agent credential cannot reach another company: those routes answer 403 `Agent key cannot access another company`. What an agent may do inside its company is decided by its role, its permissions and its mandate, which each route checks. Some agents are read-only principals; any state-changing request from one, outside a short allowlist, answers 403 with a `code` saying so.
 

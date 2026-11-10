@@ -10,6 +10,9 @@ import { AgentAccessEnforcementCard } from "@/components/settings/AgentAccessEnf
 import { PerformanceManagerCard } from "@/components/settings/PerformanceManagerCard";
 import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
+import { AdminPowersSection } from "@/components/settings/AdminPowersSection";
+import { LabelsCard } from "@/components/settings/LabelsCard";
+import { CeilingTemplatesCard } from "@/components/settings/CeilingTemplatesCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCapability } from "../hooks/useCapability";
@@ -506,7 +509,18 @@ export function CompanySettings() {
             disabled={!canManage}
           />
         </div>
+        {/* AgentDash admin powers: the company's labels. Any member manages
+            labels today (the label routes' rule), so this is not gated on
+            company:manage. */}
+        {selectedCompany?.id ? <LabelsCard companyId={selectedCompany.id} /> : null}
       </div>
+
+      {/* AgentDash admin powers: the company switches, for every company. */}
+      <AdminPowersSection
+        company={selectedCompany}
+        canManage={canManage}
+        showReadOnlyNotice={showReadOnlyNotice}
+      />
 
       {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
       <ReadinessAssessmentCard />
@@ -654,6 +668,8 @@ export function CompanySettings() {
               {/* AgentDash: APM gate 4 — admins choose the performance manager; members read it. */}
               <PerformanceManagerCard companyId={selectedCompany.id} />
               <AgentCeilingEditor companyId={selectedCompany.id} />
+              {/* AgentDash admin powers: named ceilings applied to many agents. */}
+              <CeilingTemplatesCard companyId={selectedCompany.id} canManage={canManage} />
               {reconciliationCount === 0 ? <NeedsReconciliationPanel companyId={selectedCompany.id} /> : null}
             </>
           ) : null}

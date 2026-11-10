@@ -1,5 +1,6 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { RoutinesBulkBar } from "../components/batch/RoutinesBulkBar";
 import { Link, useNavigate, useSearchParams } from "@/lib/router";
 import { ArrowUpDown, Check, ChevronDown, ChevronRight, Layers, MoreHorizontal, Plus, Repeat } from "lucide-react";
 import { routinesApi } from "../api/routines";
@@ -334,6 +335,8 @@ function RoutineListRow({
 }
 
 export function Routines() {
+  // AgentDash admin powers: select routines and archive or delete them together.
+  const [selectedRoutineIds, setSelectedRoutineIds] = useState<string[]>([]);
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
@@ -561,6 +564,8 @@ export function Routines() {
     () => buildRoutineGroups(sortedRoutines, routineViewState.groupBy, projectById, agentById),
     [agentById, projectById, routineViewState.groupBy, sortedRoutines],
   );
+  // Only routines still shown stay selected.
+  const selectedRoutineIdsShown = selectedRoutineIds.filter((id) => sortedRoutines.some((routine) => routine.id === id));
   const recentRunsIssueLinkState = useMemo(
     () =>
       createIssueDetailLocationState(
@@ -1047,6 +1052,20 @@ export function Routines() {
                   ) : null}
                   <CollapsibleContent>
                     {group.items.map((routine) => (
+                      <div key={routine.id} className="flex items-stretch">
+                      <label className="flex shrink-0 cursor-pointer items-center border-b border-border px-2 max-sm:min-w-11 max-sm:justify-center">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          aria-label={`Select ${routine.title}`}
+                          data-testid="routine-bulk-checkbox"
+                          checked={selectedRoutineIds.includes(routine.id)}
+                          onChange={(event) => setSelectedRoutineIds((current) => event.target.checked
+                            ? [...current.filter((id) => id !== routine.id), routine.id]
+                            : current.filter((id) => id !== routine.id))}
+                        />
+                      </label>
+                      <div className="min-w-0 flex-1">
                       <RoutineListRow
                         key={routine.id}
                         routine={routine}
@@ -1059,6 +1078,8 @@ export function Routines() {
                         onToggleEnabled={handleToggleEnabled}
                         onToggleArchived={handleToggleArchived}
                       />
+                      </div>
+                      </div>
                     ))}
                   </CollapsibleContent>
                 </Collapsible>
@@ -1066,6 +1087,18 @@ export function Routines() {
             </div>
           )}
         </div>
+      ) : null}
+
+      {selectedRoutineIdsShown.length > 0 ? (
+        <RoutinesBulkBar
+          companyId={selectedCompanyId}
+          selectedIds={selectedRoutineIdsShown}
+          onClear={() => setSelectedRoutineIds([])}
+          onFinished={() => {
+            setSelectedRoutineIds([]);
+            void queryClient.invalidateQueries({ queryKey: queryKeys.routines.list(selectedCompanyId) });
+          }}
+        />
       ) : null}
 
       <RoutineRunVariablesDialog

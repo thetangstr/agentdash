@@ -1,5 +1,6 @@
+import type React from "react";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
@@ -64,6 +65,7 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2, SlidersHorizontal, X } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
+import { IssuesBulkBar } from "./batch/IssuesBulkBar";
 import { buildIssueTree, countDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
 import { statusBadge } from "../lib/status-colors";
@@ -403,6 +405,12 @@ interface IssuesListProps {
   onLoadMoreIssues?: () => void;
   onSearchChange?: (search: string) => void;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
+  /**
+   * AgentDash admin powers: checkboxes, "select visible" and the sticky
+   * action bar that changes many tasks at once through the batch preview
+   * dialog. List view only (not the board). Off for embedded lists.
+   */
+  bulkEdit?: boolean;
 }
 
 const ISSUE_SORT_OPTIONS = [
@@ -657,6 +665,44 @@ function SubIssueProgressSummaryStrip({
   );
 }
 
+/**
+ * AgentDash admin powers: a row's selection checkbox. Without bulk edit the
+ * row renders exactly as before (no extra wrapper).
+ */
+function BulkRowFrame({
+  enabled,
+  label,
+  checked,
+  onCheckedChange,
+  children,
+}: {
+  enabled: boolean;
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  children: React.ReactNode;
+}) {
+  if (!enabled) return <>{children}</>;
+  return (
+    <div className="flex items-stretch">
+      <label
+        className="flex shrink-0 cursor-pointer items-center px-2 max-sm:min-w-11 max-sm:justify-center"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <input
+          type="checkbox"
+          className="h-4 w-4"
+          aria-label={label}
+          data-testid="issue-bulk-checkbox"
+          checked={checked}
+          onChange={(event) => onCheckedChange(event.target.checked)}
+        />
+      </label>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
 export function IssuesList({
   issues,
   isLoading,
@@ -685,8 +731,11 @@ export function IssuesList({
   onLoadMoreIssues,
   onSearchChange,
   onUpdateIssue,
+  bulkEdit = false,
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const queryClient = useQueryClient();
+  const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(() => new Set());
   const { selectedCompanyId } = useCompany();
   const { openNewIssue } = useDialogActions();
   const { data: session } = useQuery({
@@ -1108,6 +1157,25 @@ export function IssuesList({
     queryFn: () => issuesApi.listLabels(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+
+  // AgentDash admin powers: the bulk selection follows the filters — a task
+  // that is no longer shown is no longer selected.
+  const bulkEnabled = bulkEdit && !!selectedCompanyId && viewState.viewMode === "list";
+  useEffect(() => {
+    if (selectedIssueIds.size === 0) return;
+    const shown = new Set(filtered.map((issue) => issue.id));
+    if ([...selectedIssueIds].every((id) => shown.has(id))) return;
+    setSelectedIssueIds(new Set([...selectedIssueIds].filter((id) => shown.has(id))));
+  }, [filtered, selectedIssueIds]);
+  const toggleIssueSelected = useCallback((issueId: string, selected: boolean) => {
+    setSelectedIssueIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(issueId);
+      else next.delete(issueId);
+      return next;
+    });
+  }, []);
+  const allShownSelected = filtered.length > 0 && filtered.every((issue) => selectedIssueIds.has(issue.id));
 
   const activeFilterCount = countActiveIssueFilters(viewState, enableRoutineVisibilityFilter);
   const effectiveGroupBy = resolveEffectiveGroupBy(viewState.viewMode, viewState.groupBy);
@@ -1610,6 +1678,18 @@ export function IssuesList({
         />
       ) : (
         <>
+          {bulkEnabled && filtered.length > 0 ? (
+            <label className="flex min-h-9 cursor-pointer items-center gap-2 px-2 text-xs text-muted-foreground max-sm:min-h-11" data-testid="issues-select-visible">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                aria-label="Select all shown tasks"
+                checked={allShownSelected}
+                onChange={(event) => setSelectedIssueIds(event.target.checked ? new Set(filtered.map((issue) => issue.id)) : new Set())}
+              />
+              {allShownSelected ? `All ${filtered.length} shown selected` : `Select all ${filtered.length} shown`}
+            </label>
+          ) : null}
           {groupedContent.map((group) => {
           if (remainingRowsToRender <= 0) return null;
           return (
@@ -1749,6 +1829,12 @@ export function IssuesList({
                           : {}),
                       }}
                     >
+                      <BulkRowFrame
+                        enabled={bulkEnabled}
+                        label={`Select ${issue.identifier ?? issue.title}`}
+                        checked={selectedIssueIds.has(issue.id)}
+                        onCheckedChange={(checked) => toggleIssueSelected(issue.id, checked)}
+                      >
                       <IssueRow
                         issue={issue}
                         issueLinkState={issueLinkState}
@@ -1948,6 +2034,7 @@ export function IssuesList({
                           ) : undefined
                         )}
                       />
+                      </BulkRowFrame>
                       {hasChildren && isExpanded && children.map((child) => renderIssueRow(child, depth + 1))}
                     </div>
                   );
@@ -1970,6 +2057,22 @@ export function IssuesList({
               </p>
             </div>
           )}
+          {bulkEnabled && selectedIssueIds.size > 0 ? (
+            <IssuesBulkBar
+              companyId={selectedCompanyId!}
+              selectedIds={filtered.filter((issue) => selectedIssueIds.has(issue.id)).map((issue) => issue.id)}
+              agents={(agents ?? []).map((agent) => ({ id: agent.id, name: agent.name }))}
+              people={(companyMembers?.users ?? []).map((user) => ({ id: user.principalId, name: companyUserLabelMap.get(user.principalId) ?? "A teammate" }))}
+              projects={(projects ?? []).map((project) => ({ id: project.id, name: project.name }))}
+              labels={(labels ?? []).map((label) => ({ id: label.id, name: label.name }))}
+              currentUserId={currentUserId}
+              onClear={() => setSelectedIssueIds(new Set())}
+              onFinished={() => {
+                setSelectedIssueIds(new Set());
+                void queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId!) });
+              }}
+            />
+          ) : null}
         </>
       )}
     </div>

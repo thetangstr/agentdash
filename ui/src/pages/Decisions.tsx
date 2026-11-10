@@ -17,7 +17,10 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { issueUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { useQueryClient } from "@tanstack/react-query";
+import { BatchPreviewDialog } from "../components/batch/BatchPreviewDialog";
+import { queryKeys } from "../lib/queryKeys";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { cn } from "../lib/utils";
 import { DecisionsOtherSources } from "./DecisionsOtherSources";
@@ -49,9 +52,30 @@ export const EMPTY_SHORT_TEXT = "Nothing needs you right now.";
 // readable home.
 export { decisionsListLength };
 
-function DecisionRow({ decision }: { decision: WaitingOnYouDecision }) {
+function DecisionRow({
+  decision,
+  selected = false,
+  onSelectedChange,
+}: {
+  decision: WaitingOnYouDecision;
+  selected?: boolean;
+  /** Present only on rows the person may decide: those get a checkbox. */
+  onSelectedChange?: (selected: boolean) => void;
+}) {
   return (
     <li data-testid="decisions-row" className="flex items-start gap-3 px-4 py-3">
+      {onSelectedChange ? (
+        <label className="-my-1 flex shrink-0 cursor-pointer items-center max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            aria-label={`Select: ${decision.summary}`}
+            data-testid="decisions-select"
+            checked={selected}
+            onChange={(event) => onSelectedChange(event.target.checked)}
+          />
+        </label>
+      ) : null}
       <ShieldQuestion className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
       <div className="min-w-0 flex-1 space-y-1">
         <Link
@@ -122,11 +146,25 @@ function TaskRow({ task }: { task: WaitingOnYouTask }) {
   );
 }
 
+const DECISION_NOUN = { one: "approval", many: "approvals" };
+
+function formatDecisionField(field: string, value: unknown) {
+  if (field !== "status") return null;
+  const words: Record<string, string> = { pending: "Waiting", revision_requested: "Changes asked for", approved: "Approved", rejected: "Rejected" };
+  return { label: "Decision", value: typeof value === "string" ? words[value] ?? value.replace(/_/g, " ") : "None" };
+}
+
 export function Decisions() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [showOther, setShowOther] = useState(false);
   const isPhone = useIsPhone();
+  const queryClient = useQueryClient();
+  // AgentDash admin powers: decide several at once. Only rows the person may
+  // decide can be selected; the server re-checks each one when it is sent.
+  const [selectedApprovalIds, setSelectedApprovalIds] = useState<string[]>([]);
+  const [sharedNote, setSharedNote] = useState("");
+  const [batchKind, setBatchKind] = useState<"approval.approve" | "approval.reject" | null>(null);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Decisions" }]);
@@ -153,6 +191,8 @@ export function Decisions() {
   // The manual/machine split is server-side: `tasksAssignedToYou` is the
   // manual main list, `otherTasksAssignedToYou` the machine-filed group.
   const decisions = waiting?.decisions ?? [];
+  // Only what is still listed and decidable stays selected.
+  const selectedApprovals = selectedApprovalIds.filter((id) => decisions.some((decision) => decision.approvalId === id && decision.canDecide));
   const manualTasks = waiting?.tasksAssignedToYou ?? [];
   const otherTasks = waiting?.otherTasksAssignedToYou ?? [];
   const otherTasksTotal = waiting?.otherTasksAssignedToYouTotal ?? otherTasks.length;
@@ -206,10 +246,62 @@ export function Decisions() {
         <section className="rounded-xl border border-border bg-card" aria-label="Pending approvals">
           <ul className="divide-y divide-border">
             {decisions.map((decision) => (
-              <DecisionRow key={decision.approvalId} decision={decision} />
+              <DecisionRow
+                key={decision.approvalId}
+                decision={decision}
+                selected={selectedApprovalIds.includes(decision.approvalId)}
+                onSelectedChange={decision.canDecide
+                  ? (selected) => setSelectedApprovalIds((current) => selected
+                    ? [...current.filter((id) => id !== decision.approvalId), decision.approvalId]
+                    : current.filter((id) => id !== decision.approvalId))
+                  : undefined}
+              />
             ))}
           </ul>
+          {selectedApprovals.length > 0 ? (
+            <div
+              className="sticky bottom-0 z-20 flex flex-wrap items-center gap-2 border-t border-border bg-background/95 px-4 py-2 backdrop-blur"
+              role="toolbar"
+              aria-label="Decide selected approvals"
+              data-testid="decisions-bulk-bar"
+            >
+              <span className="text-sm font-medium">{selectedApprovals.length} selected</span>
+              <input
+                className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none max-sm:min-h-11 max-sm:basis-full"
+                placeholder="Note for all of them (optional)"
+                aria-label="Note for all selected approvals"
+                value={sharedNote}
+                maxLength={2000}
+                onChange={(event) => setSharedNote(event.target.value)}
+              />
+              <Button size="sm" className="max-sm:min-h-11" onClick={() => setBatchKind("approval.approve")} data-testid="decisions-bulk-approve">
+                Approve
+              </Button>
+              <Button size="sm" variant="outline" className="max-sm:min-h-11" onClick={() => setBatchKind("approval.reject")} data-testid="decisions-bulk-reject">
+                Reject
+              </Button>
+              <Button size="sm" variant="ghost" className="max-sm:min-h-11" onClick={() => setSelectedApprovalIds([])}>Clear</Button>
+            </div>
+          ) : null}
         </section>
+      ) : null}
+      {batchKind ? (
+        <BatchPreviewDialog
+          open
+          onOpenChange={(open) => { if (!open) setBatchKind(null); }}
+          companyId={selectedCompanyId}
+          title={`${batchKind === "approval.approve" ? "Approve" : "Reject"} ${selectedApprovals.length === 1 ? "1 approval" : `${selectedApprovals.length} approvals`}`}
+          kind={batchKind}
+          ids={selectedApprovals}
+          change={sharedNote.trim() ? { decisionNote: sharedNote.trim() } : {}}
+          noun={DECISION_NOUN}
+          formatField={formatDecisionField}
+          onFinished={() => {
+            setSelectedApprovalIds([]);
+            setSharedNote("");
+            void queryClient.invalidateQueries({ queryKey: queryKeys.home.waitingOnYou(selectedCompanyId) });
+          }}
+        />
       ) : null}
       {moreDecisions > 0 ? (
         <p className="px-1 text-xs text-muted-foreground">

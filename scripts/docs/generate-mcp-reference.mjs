@@ -86,7 +86,7 @@ export { HUMAN_PLAYBOOK } from "./human.ts";
 export { CLOUD_PLAYBOOK } from "./cloud.ts";
 export { Client } from "@modelcontextprotocol/sdk/client/index.js";
 export { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-export { ASSISTANT_SCOPE_READ, ASSISTANT_SCOPE_WORK, ASSISTANT_SCOPE_DECIDE } from "@paperclipai/shared";
+export { ASSISTANT_SCOPE_READ, ASSISTANT_SCOPE_WORK, ASSISTANT_SCOPE_DECIDE, ASSISTANT_SCOPE_ADMIN } from "@paperclipai/shared";
 `;
 
 async function loadServerModule(repoRoot) {
@@ -197,11 +197,24 @@ export async function readMcpSurface(repoRoot) {
       else if (withDecide.includes(tool.name)) assistantScopeOf.set(tool.name, mod.ASSISTANT_SCOPE_DECIDE);
       else throw new Error(`assistant tool ${tool.name} is in no scope's surface`);
     }
+    // AgentDash admin powers (part 5b): the admin batch tools are served only
+    // to a grant that explicitly holds agentdash:admin, never over stdio, so
+    // they are measured from a listing with every scope set.
+    const allScopes = [mod.ASSISTANT_SCOPE_READ, mod.ASSISTANT_SCOPE_WORK, mod.ASSISTANT_SCOPE_DECIDE, mod.ASSISTANT_SCOPE_ADMIN];
+    const full = (await listConnection(mod, CONNECTIONS.find((c) => c.id === "assistant"), { assistantScopes: allScopes })).tools;
+    const withAdmin = await byScopes([mod.ASSISTANT_SCOPE_READ, mod.ASSISTANT_SCOPE_ADMIN]);
+    const stdioNames = new Set(assistant.tools.map((tool) => tool.name));
+    const assistantAdminTools = full.filter((tool) => !stdioNames.has(tool.name));
+    for (const tool of assistantAdminTools) {
+      if (!withAdmin.includes(tool.name)) throw new Error(`assistant tool ${tool.name} is in no scope's surface`);
+      assistantScopeOf.set(tool.name, mod.ASSISTANT_SCOPE_ADMIN);
+    }
     return {
       connections,
       toolsets: [...mod.AGENTDASH_TOOLSETS],
       assistantScopeOf,
-      scopes: { read: mod.ASSISTANT_SCOPE_READ, work: mod.ASSISTANT_SCOPE_WORK, decide: mod.ASSISTANT_SCOPE_DECIDE },
+      assistantAdminTools,
+      scopes: { read: mod.ASSISTANT_SCOPE_READ, work: mod.ASSISTANT_SCOPE_WORK, decide: mod.ASSISTANT_SCOPE_DECIDE, admin: mod.ASSISTANT_SCOPE_ADMIN },
       playbooks: [
         { name: "PLAYBOOK", file: "packages/mcp-server/src/playbook.ts", text: mod.PLAYBOOK },
         { name: "STEWARD_PLAYBOOK", file: "packages/mcp-server/src/playbook.ts", text: mod.STEWARD_PLAYBOOK },
@@ -489,6 +502,7 @@ const ASSISTANT_SCOPE_HEADINGS = (scopes) => [
   { scope: scopes.read, heading: `Read tools — every grant (\`${scopes.read}\`)` },
   { scope: scopes.work, heading: `Work tools — grants with \`${scopes.work}\`` },
   { scope: scopes.decide, heading: `Gated tools — grants with \`${scopes.decide}\`` },
+  ...(scopes.admin ? [{ scope: scopes.admin, heading: `Admin batch tools — grants that explicitly hold \`${scopes.admin}\`` }] : []),
 ];
 
 export function renderToolPage(page, surface, commit) {
@@ -496,9 +510,15 @@ export function renderToolPage(page, surface, commit) {
   const listed = surface.connections[text.connection].tools;
   const { kept: tools, omitted } = omitEngagementTools(listed);
   const notes = omitted > 0 ? [omissionNote(omitted, "tool")] : [];
+  // The admin batch tools are served only to a grant that explicitly holds the admin
+  // scope, so the default listing does not contain them; the page documents them, and
+  // the count it states must be the count it documents.
+  const adminCount = page.surface === "assistant" ? (surface.assistantAdminTools?.length ?? 0) : 0;
+  const stated = listed.length + adminCount;
   const lines = [
-    `**${listed.length} tools** — measured: the length of the \`tools/list\` response` +
-      (omitted > 0 ? `; ${tools.length} are documented here and ${omitted} ${omitted === 1 ? "is" : "are"} omitted as ${OMITTED_REASON}` : "") +
+    `**${stated} tools** — measured: the length of the \`tools/list\` response` +
+      (adminCount > 0 ? ` for a grant holding every scope (${listed.length} without \`${surface.scopes.admin}\`)` : "") +
+      (omitted > 0 ? `; ${tools.length + adminCount} are documented here and ${omitted} ${omitted === 1 ? "is" : "are"} omitted as ${OMITTED_REASON}` : "") +
       `. Source: ${text.source}.`,
     "",
     "Each tool's description is its inline string, verbatim. The input table is rendered from the JSON schema the server advertises in `tools/list`" +
@@ -512,11 +532,16 @@ export function renderToolPage(page, surface, commit) {
     lines.push(
       "",
       "Over `POST /api/mcp/assistant` the grant's scopes filter this list (`src/assistant/index.ts`): the read tools are always served, the work tools only with " +
-        `\`${surface.scopes.work}\`, the gated tools only with \`${surface.scopes.decide}\`. Over stdio no scopes apply and all ${listed.length} are served. ` +
+        `\`${surface.scopes.work}\`, the gated tools only with \`${surface.scopes.decide}\`` +
+        (surface.assistantAdminTools?.length
+          ? `, and the ${surface.assistantAdminTools.length} admin batch tools only when the grant explicitly holds \`${surface.scopes.admin}\` (never over stdio, and never when no scopes are set)`
+          : "") +
+        `. Over stdio no scopes apply and the ${listed.length} other tools are served. ` +
         "Which tool needs which scope is measured by listing the surface with each scope set.",
     );
+    const documented = [...tools, ...(surface.assistantAdminTools ?? [])];
     for (const { scope, heading } of ASSISTANT_SCOPE_HEADINGS(surface.scopes)) {
-      const group = tools.filter((tool) => surface.assistantScopeOf.get(tool.name) === scope);
+      const group = documented.filter((tool) => surface.assistantScopeOf.get(tool.name) === scope);
       const groupOmitted = listed.filter((tool) => surface.assistantScopeOf.get(tool.name) === scope).length - group.length;
       sections.push(`## ${heading}\n\n${plural(group.length, "tool")}${groupOmitted > 0 ? `; ${groupOmitted} omitted: ${OMITTED_REASON}` : ""}.\n`);
       for (const tool of group) sections.push(renderTool(tool, "###"));

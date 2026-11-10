@@ -12,6 +12,7 @@ The activity log records what happens in a company: an issue created, an agent p
 | Operation | Who |
 | --- | --- |
 | `listActivity` | a member of the company, or an agent in it |
+| `listCompanyAudit`, `exportCompanyAuditCsv` | an owner or admin of the company, signed in as a person |
 
 The call checks membership first (`assertCompanyAccess` in `server/src/routes/authz.ts`): a person who is not a member answers 403 `User does not have access to this company`, and an agent from another company answers 403 `Agent key cannot access another company`.
 
@@ -52,6 +53,37 @@ Rows come back newest first. There is no offset. To follow the log, pass the new
 | 400 | `since must be an ISO 8601 timestamp` — `since` does not parse. |
 | 400 | `Invalid identifier` — `agentId` is not a UUID. |
 | 403 | Not a member, or an agent key for another company (messages above). |
+
+## The admin audit
+
+`GET /api/companies/{companyId}/audit` · [`listCompanyAudit`](/api/reference#tag/activity/listCompanyAudit)
+`GET /api/companies/{companyId}/audit.csv` · [`exportCompanyAuditCsv`](/api/reference#tag/activity/exportCompanyAuditCsv)
+
+The same log for a company's owners and admins, with filters, cursor paging and a CSV export. It adds no read authority: rows go through the very filter and redaction `listActivity` applies (`server/src/services/activity-read-scope.ts`), so an admin sees here exactly what the activity feed shows them. Anyone else answers 403 `Only owners and admins can see this.`, and the refusal is logged (`authz.refused`).
+
+**Query** — all optional, and combined with AND:
+
+| Parameter | Notes |
+| --- | --- |
+| `actorType` | `user`, `agent` or `system`. |
+| `actorId` | Only rows by this person or agent. |
+| `action` | Comma-separated, at most 20. Each is an exact action name or a prefix such as `issue.*`. |
+| `entityType`, `entityId` | As on `listActivity`. |
+| `from`, `to` | ISO 8601 timestamps, both inclusive; `from` after `to` is a 400. |
+| `includeSystem` | Default `true` (every row). `false` leaves out what `listActivity`'s `false` leaves out. |
+| `cursor` | The `nextCursor` of the previous page. Not for the CSV. |
+| `limit` | Rows per page, 1 to 200, default 100. Not for the CSV. |
+
+Rows come newest first, ordered by `createdAt` and then `id`, so paging is stable while new rows arrive.
+
+**Response** `200` — `{ items, actorNames, nextCursor }`: `items` is an array of `ActivityEvent`; `actorNames` maps the people and agents on the page to their names; `nextCursor` is `null` on the last page.
+
+**CSV.** The same filters, as `text/csv` with columns `created_at, actor_type, actor_id, actor_name, action, entity_type, entity_id, agent_id, run_id, via, batch_id, details_json`. An export holds at most 50,000 rows: past that, the response carries `X-Audit-Truncated: true` and ends with a row that says so. A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`, so a spreadsheet does not read it as a formula. Each export is logged as `audit.exported` with its filters and row count.
+
+| Status | When |
+| --- | --- |
+| 400 | A filter does not parse: a bad date, an unknown `actorType`, more than 20 actions, an action that is neither a name nor `prefix.*`, a bad `cursor`, or a `limit` outside 1 to 200. |
+| 403 | Not an owner or admin of the company (`Only owners and admins can see this.`), or not a member. |
 
 ## The `ActivityEvent` object
 

@@ -31,6 +31,15 @@ vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
 vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 vi.mock("../api/inboxDismissals", () => ({ inboxDismissalsApi: mockInboxDismissalsApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
+// AgentDash admin powers: the shared batch dialog has its own suite; here it
+// is a stub that records what the page asked it to do.
+const batchDialog = vi.hoisted(() => ({ last: null as null | Record<string, unknown> }));
+vi.mock("../components/batch/BatchPreviewDialog", () => ({
+  BatchPreviewDialog: (props: Record<string, unknown>) => {
+    batchDialog.last = props;
+    return <div data-testid="batch-dialog-stub" />;
+  },
+}));
 
 const { ApiError } = await import("../api/client");
 
@@ -179,6 +188,60 @@ describe("Decisions", () => {
   }
 
   const q = (id: string) => container.querySelector(`[data-testid="${id}"]`);
+
+  describe("deciding several at once (admin powers)", () => {
+    function twoDecisions(canDecideSecond: boolean) {
+      const first = waitingWith().decisions[0]!;
+      return waitingWith({
+        decisions: [
+          first,
+          { ...first, approvalId: "appr-2", summary: "Casper asks to spend over the limit.", canDecide: canDecideSecond },
+        ],
+        total: 2,
+      });
+    }
+
+    it("puts checkboxes only on rows the person may decide", async () => {
+      mockDashboardApi.waitingOnYou.mockResolvedValue(twoDecisions(false));
+      await render();
+      const rows = [...container.querySelectorAll('[data-testid="decisions-row"]')];
+      expect(rows).toHaveLength(2);
+      expect(rows[0]!.querySelector('[data-testid="decisions-select"]')).toBeTruthy();
+      expect(rows[1]!.querySelector('[data-testid="decisions-select"]')).toBeNull();
+      expect(rows[1]!.textContent).toContain("someone else decides this");
+    });
+
+    it("selecting rows shows the bar; Approve and Reject open the batch dialog with the shared note", async () => {
+      mockDashboardApi.waitingOnYou.mockResolvedValue(twoDecisions(true));
+      batchDialog.last = null;
+      await render();
+      expect(q("decisions-bulk-bar")).toBeNull();
+      for (const box of container.querySelectorAll<HTMLInputElement>('[data-testid="decisions-select"]')) {
+        await act(async () => { box.click(); });
+      }
+      expect(q("decisions-bulk-bar")!.textContent).toContain("2 selected");
+      const note = container.querySelector<HTMLInputElement>('input[aria-label="Note for all selected approvals"]')!;
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+        setter.call(note, "Fine this quarter");
+        note.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => { (q("decisions-bulk-approve") as HTMLButtonElement).click(); });
+      expect(batchDialog.last).toMatchObject({ kind: "approval.approve", ids: ["appr-1", "appr-2"], change: { decisionNote: "Fine this quarter" }, companyId: "company-1" });
+      await act(async () => { (batchDialog.last!.onOpenChange as (open: boolean) => void)(false); });
+      await act(async () => { (q("decisions-bulk-reject") as HTMLButtonElement).click(); });
+      expect(batchDialog.last).toMatchObject({ kind: "approval.reject", ids: ["appr-1", "appr-2"] });
+      // Phone-sized targets.
+      expect((q("decisions-bulk-approve") as HTMLElement).className).toContain("max-sm:min-h-11");
+    });
+
+    it("shows no checkboxes or bar while the list is still loading", async () => {
+      mockDashboardApi.waitingOnYou.mockReturnValue(new Promise(() => undefined));
+      await render();
+      expect(container.querySelector('[data-testid="decisions-select"]')).toBeNull();
+      expect(q("decisions-bulk-bar")).toBeNull();
+    });
+  });
 
   it("shows the approval's question and what yes and no do, with a link to the detail", async () => {
     await render();

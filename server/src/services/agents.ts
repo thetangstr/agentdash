@@ -1,3 +1,4 @@
+import { agentGovernanceService } from "./agent-governance.js";
 import { withHermesSshCompanyLock } from "./hermes-ssh-policy.js";
 import { publishActivity, type ActivityPublication } from "./activity-log.js";
 import { workforceService } from "./workforce.js";
@@ -512,27 +513,38 @@ export function agentService(db: Db, optionsForService: { environmentLockHeld?: 
         role,
         title: data.title,
       });
-      const created = await db
-        .insert(agents)
-        .values({
-          ...data,
-          adapterConfig: tiered.adapterConfig,
-          name: uniqueName,
-          companyId,
-          role,
-          permissions: normalizedPermissions,
-          runtimeConfig,
-          ...(tiered.appliedTier
-            ? {
-                metadata: {
-                  ...(isPlainRecord(data.metadata) ? data.metadata : {}),
-                  [AGENT_MODEL_TIER_METADATA_KEY]: tiered.appliedTier,
-                },
-              }
-            : {}),
-        })
-        .returning()
-        .then((rows) => rows[0]);
+      // AgentDash admin powers: the company's ceiling for new agents, applied
+      // once here — the one insert every hire path reaches — and never at read
+      // time, so existing agents are never narrowed by it.
+      // Review of 94b9e03ee (r3c fix 1): the insert and that ceiling are ONE
+      // transaction (a savepoint inside the caller's when `db` is already a
+      // transaction), so a failed ceiling write leaves no agent behind running
+      // broader than the company intended.
+      const created = await db.transaction(async (tx) => {
+        const row = await tx
+          .insert(agents)
+          .values({
+            ...data,
+            adapterConfig: tiered.adapterConfig,
+            name: uniqueName,
+            companyId,
+            role,
+            permissions: normalizedPermissions,
+            runtimeConfig,
+            ...(tiered.appliedTier
+              ? {
+                  metadata: {
+                    ...(isPlainRecord(data.metadata) ? data.metadata : {}),
+                    [AGENT_MODEL_TIER_METADATA_KEY]: tiered.appliedTier,
+                  },
+                }
+              : {}),
+          })
+          .returning()
+          .then((rows) => rows[0]);
+        if (row) await agentGovernanceService(tx as unknown as Db).applyCompanyDefaultCeiling(companyId, row.id);
+        return row;
+      });
 
       return normalizeAgentRow(created);
     },

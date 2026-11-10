@@ -121,6 +121,11 @@ curl -X PATCH https://your-instance.example/api/companies/$COMPANY_ID \
 | `brandColor` | `#rrggbb` or null | |
 | `logoAssetId` | UUID or null | An uploaded asset to use as the logo. |
 | `attachmentMaxBytes` | integer ≥ 1 | |
+| `adminDirectiveReadEnabled` | boolean | Admin powers: owners and admins may read (never push) the directives of any agent, `GET /api/companies/{companyId}/agents/{agentId}/directives`, even with no active steward. Their own session only: an assistant grant does not qualify. Every such read is logged as `agent.directives_read_by_admin` with `{ agentId, stewardUserId }`. Off by default. |
+| `adminTranscriptReadEnabled` | boolean | Admin powers: while document access is on, owners and admins may open one run's detail, events and log (`GET /api/heartbeat-runs/{runId}`, `/events`, `/log`) through their own session (not an assistant grant). Run listings stay blanked for them. A read only this allows is logged as `run.content_read_by_admin` with `{ runId, agentId, route }`, once per person and run per 10 minutes. Off by default. |
+| `assistantAdminBatchesEnabled` | boolean | Admin powers: an owner's or admin's own Claude may prepare batch changes. Off by default. |
+| `assistantBatchMaxRecords` | integer 1 to 200 | The most records one batch from Claude may hold. Default 50. |
+| `defaultCeilingTemplateId` | UUID or null | The ceiling template every new agent starts with (one of this company's templates, else 422); null clears it. Applied once, when an agent is created; existing agents are never changed by it. |
 
 An agent may call this only if it is the company's **CEO agent**, and its body is parsed with the narrower `agentCompanyBrandingSchema`: `brandColor` and `logoAssetId`, at least one of them, nothing else.
 
@@ -151,6 +156,9 @@ From `packages/shared/src/types/company.ts`. The fields an integration reads:
 | `budgetMonthlyCents`, `spentMonthlyCents` | integer | The monthly budget and this month's spend, in cents. |
 | `requireBoardApprovalForNewAgents`, `newIssuesStartAsTodo` | boolean | |
 | `agentVisibilityDefault` | `company` · `owner` | |
+| `adminDirectiveReadEnabled`, `adminTranscriptReadEnabled`, `assistantAdminBatchesEnabled` | boolean | The admin powers switches; each is `false` until an owner or admin turns it on. |
+| `assistantBatchMaxRecords` | integer | 1 to 200, default 50. |
+| `defaultCeilingTemplateId` | UUID or null | The ceiling template every new agent starts with, or none. |
 | `brandColor`, `logoAssetId`, `logoUrl` | string or null | |
 | `createdAt`, `updatedAt` | ISO 8601 timestamp | |
 

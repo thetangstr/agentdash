@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, assistantGrants, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import { EVALUATOR_AGENT_ROLE, EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
 import {
   ASSISTANT_ACCESS_TOKEN_PREFIX,
   ASSISTANT_INSUFFICIENT_SCOPE,
+  ASSISTANT_SCOPE_ADMIN,
+  ASSISTANT_SCOPE_DECIDE,
+  assistantStepUpChallenge,
   ASSISTANT_LOOPBACK_TOKEN_PREFIX,
   ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR,
   ASSISTANT_WRITE_LIMIT_PER_HOUR,
@@ -21,6 +24,9 @@ import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
 import { assistantOAuthService, assistantResourceUri } from "../services/assistant-oauth.js";
 import { resolveAssistantLoopbackToken } from "../services/assistant-loopback.js";
+import { BATCH_ITEM_TOKEN_PREFIX } from "@paperclipai/shared";
+import { batchItemBodyDigest, consumeBatchItemCredential } from "../services/batch/item-credential.js";
+import { runWithBatchActivityContext } from "../lib/batch-activity-context.js";
 import { consumeAssistantWriteAllowance } from "../services/assistant-write-limits.js";
 import { logActivity } from "../services/activity-log.js";
 
@@ -320,6 +326,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         // five work routes take `agentdash:work`; the three gated-action
         // routes take the opt-in `agentdash:decide`.
         if (!resolved.scopes.includes(writeRoute.scope)) {
+          // AgentDash admin powers (part 5): the admin scope is a step-up the
+          // client can request on reconnect; say exactly which scopes to ask for.
+          if (writeRoute.scope === ASSISTANT_SCOPE_ADMIN) {
+            res.set("WWW-Authenticate", assistantStepUpChallenge(resolved.scopes, ASSISTANT_SCOPE_ADMIN));
+          }
           res.status(403).json({ error: ASSISTANT_INSUFFICIENT_SCOPE, required_scope: writeRoute.scope });
           return;
         }
@@ -379,6 +390,83 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       req.verifiedCredential = { kind: "assistant", origin: resolved.origin,
         loopback: { expiresAt: resolved.expiresAt, lease: resolved.lease } };
       next();
+      return;
+    }
+
+    // AgentDash admin powers (part 2): one item of a confirmed batch. The
+    // runner (services/batch/runner.ts) mints a `pcbx_` token per item and
+    // sends it over this server's own listener to the record's single-record
+    // route. Resolved on prefix before any credential table is read; a
+    // forged, expired or already-spent token resolves to nothing and the
+    // request stays unauthenticated. The token is good for exactly one
+    // (method, path, body); anything else is refused here, before the route.
+    if (token.startsWith(BATCH_ITEM_TOKEN_PREFIX)) {
+      const resolved = consumeBatchItemCredential(token);
+      if (!resolved) {
+        next();
+        return;
+      }
+      const rawUrl = req.originalUrl || req.url || "";
+      if (
+        req.method.toUpperCase() !== resolved.binding.method
+        || rawUrl.includes("?")
+        || normalizedPath(req) !== resolved.binding.path
+        || batchItemBodyDigest(req.body) !== resolved.binding.bodyDigest
+      ) {
+        res.status(403).json({ error: "This batch credential is not valid for this request" });
+        return;
+      }
+      // Review of 8f1b669b0: an item of an assistant-prepared batch re-reads
+      // its grant here, at the moment the request arrives, so a connection
+      // revoked (or stripped of the admin scope) after the runner's per-item
+      // check cannot carry the item. The runner and the issue routes check
+      // too; this closes the window between them and the send.
+      if (resolved.credential.kind === "assistant") {
+        const credential = resolved.credential;
+        const [grant] = await db
+          .select({
+            userId: assistantGrants.userId,
+            companyId: assistantGrants.companyId,
+            scopes: assistantGrants.scopes,
+            revokedAt: assistantGrants.revokedAt,
+            decisionsNeedTap: assistantGrants.decisionsNeedTap,
+          })
+          .from(assistantGrants)
+          .where(eq(assistantGrants.id, credential.grantId));
+        if (!grant || grant.revokedAt || grant.userId !== credential.userId || grant.companyId !== resolved.companyId
+          || !grant.scopes.includes(ASSISTANT_SCOPE_ADMIN) || resolved.actor.assistantGrantId !== credential.grantId) {
+          res.status(403).json({ error: "This assistant connection was revoked, so this record was not changed." });
+          return;
+        }
+        // Review of c5941141b: a decision also needs the decide scope and never
+        // a connection whose decisions need the person's tap, read here too so
+        // a change between the runner's check and the send still stops it.
+        if (resolved.binding.path.startsWith("/api/approvals/")
+          && (!grant.scopes.includes(ASSISTANT_SCOPE_DECIDE) || grant.decisionsNeedTap)) {
+          res.status(403).json({ error: "This assistant connection may no longer decide approvals, so this one was not decided. Decide it in AgentDash, on the Decisions page." });
+          return;
+        }
+      }
+      req.actor = { ...resolved.actor };
+      req.verifiedCredential = {
+        kind: "batch_item",
+        batchId: resolved.batchId,
+        itemId: resolved.itemId,
+        companyId: resolved.companyId,
+        origin: resolved.credential,
+      };
+      runWithBatchActivityContext(
+        {
+          batchId: resolved.batchId,
+          itemId: resolved.itemId,
+          companyId: resolved.companyId,
+          origin: resolved.origin,
+          // Part 5: an assistant-prepared batch names its connection on every row.
+          ...(resolved.grantId ? { grantId: resolved.grantId } : {}),
+          ...(resolved.client ? { client: resolved.client } : {}),
+        },
+        () => next(),
+      );
       return;
     }
 

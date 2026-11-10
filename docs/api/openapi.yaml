@@ -553,6 +553,167 @@ paths:
         - bearerBoardKey: []
         - session: []
       x-stability: stable
+  /api/companies/{companyId}/ceiling-templates:
+    get:
+      operationId: listCeilingTemplates
+      summary: List a company's ceiling templates (404 where agent ceilings are not enabled).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+    post:
+      operationId: createCeilingTemplate
+      summary: Create a named agent ceiling (owners and admins).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCeilingTemplateRequest"
+      responses:
+        "201":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+  /api/companies/{companyId}/ceiling-templates/{templateId}:
+    patch:
+      operationId: updateCeilingTemplate
+      summary: Rename or change a ceiling template; a stale revision is 409 (owners and admins).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: templateId
+          in: path
+          required: true
+          description: Agent id (UUID).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCeilingTemplateRequest"
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+    delete:
+      operationId: deleteCeilingTemplate
+      summary: Delete a ceiling template; refused while it is the ceiling for new agents (owners and admins).
+      tags:
+        - agents
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: templateId
+          in: path
+          required: true
+          description: Agent id (UUID).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: |-
+        Request schema not generated: the route has no shared validator.
+
+        Response schema not generated: the route returns no named shared type.
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
   /api/companies/{companyId}/issues:
     get:
       operationId: listIssues
@@ -898,6 +1059,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/IssueComment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      security:
+        - bearerBoardKey: []
+        - bearerAgentKey: []
+        - session: []
+      x-stability: stable
+  /api/labels/{labelId}:
+    patch:
+      operationId: updateLabel
+      summary: Rename or recolor a label.
+      tags:
+        - issues
+      parameters:
+        - name: labelId
+          in: path
+          required: true
+          description: Issue id (UUID).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIssueLabelRequest"
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueLabel"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1640,6 +1846,43 @@ paths:
         - bearerAgentKey: []
         - session: []
       x-stability: stable
+    delete:
+      operationId: deleteRoutine
+      summary: Delete a routine for good; its past runs, the issues they created and its activity are kept.
+      tags:
+        - routines
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Routine id (UUID).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: |-
+        Request schema not generated: the route has no shared validator.
+
+        Response schema not generated: the route returns no named shared type.
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
   /api/routines/{id}/run:
     post:
       operationId: runRoutine
@@ -1878,6 +2121,196 @@ paths:
       security:
         - bearerBoardKey: []
         - bearerAgentKey: []
+        - session: []
+      x-stability: stable
+  /api/companies/{companyId}/audit:
+    get:
+      operationId: listCompanyAudit
+      summary: "The admin audit: the activity feed's rows for an owner or admin, filtered and paged by cursor."
+      tags:
+        - activity
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: actorType
+          in: query
+          required: false
+          description: "`user`, `agent` or `system`."
+          schema:
+            type: string
+            enum:
+              - user
+              - agent
+              - system
+        - name: actorId
+          in: query
+          required: false
+          description: Only rows by this person or agent.
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          description: Comma-separated action names, each exact or `prefix.*`; at most 20.
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          required: false
+          description: Only rows about this kind of entity.
+          schema:
+            type: string
+        - name: entityId
+          in: query
+          required: false
+          description: Only rows about this entity.
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: Only rows at or after this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Only rows at or before this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: includeSystem
+          in: query
+          required: false
+          description: "Default `true`: every row. `false`: as the activity feed's `false`."
+          schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+        - name: cursor
+          in: query
+          required: false
+          description: The `nextCursor` of the previous page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Rows per page, 1 to 200. Default 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+  /api/companies/{companyId}/audit.csv:
+    get:
+      operationId: exportCompanyAuditCsv
+      summary: The admin audit as CSV (at most 50,000 rows), for an owner or admin; each export is logged.
+      tags:
+        - activity
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: actorType
+          in: query
+          required: false
+          description: "`user`, `agent` or `system`."
+          schema:
+            type: string
+            enum:
+              - user
+              - agent
+              - system
+        - name: actorId
+          in: query
+          required: false
+          description: Only rows by this person or agent.
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          description: Comma-separated action names, each exact or `prefix.*`; at most 20.
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          required: false
+          description: Only rows about this kind of entity.
+          schema:
+            type: string
+        - name: entityId
+          in: query
+          required: false
+          description: Only rows about this entity.
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: Only rows at or after this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Only rows at or before this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: includeSystem
+          in: query
+          required: false
+          description: "Default `true`: every row. `false`: as the activity feed's `false`."
+          schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
         - session: []
       x-stability: stable
   /api/companies/{companyId}/dashboard:
@@ -2384,6 +2817,7 @@ components:
             agentdash:read: Read the company's work.
             agentdash:work: Create and move work, wake agents.
             agentdash:decide: Resolve approvals and hire. Opt-in at consent; never granted by default.
+            agentdash:admin: Prepare batch changes as an admin. Never pre-checked; granted only to an admin of a company that turned it on. Nothing changes until the person reads back the code shown in their browser.
     bearerBridgeEndpoint:
       type: http
       scheme: bearer
@@ -3352,6 +3786,18 @@ components:
           type: boolean
         agentVisibilityDefault:
           $ref: "#/components/schemas/AgentVisibility"
+        adminDirectiveReadEnabled:
+          type: boolean
+        adminTranscriptReadEnabled:
+          type: boolean
+        assistantAdminBatchesEnabled:
+          type: boolean
+        assistantBatchMaxRecords:
+          type: number
+        defaultCeilingTemplateId:
+          type:
+            - string
+            - "null"
         feedbackDataSharingEnabled:
           type: boolean
         feedbackDataSharingConsentAt:
@@ -3674,6 +4120,64 @@ components:
       required:
         - type
         - payload
+    CreateCeilingTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        ceiling:
+          type: object
+          properties:
+            permissions:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            monthlyBudgetCents:
+              type: integer
+              minimum: 0
+              maximum: 2147483647
+            destructiveActions:
+              type: string
+              enum:
+                - blocked
+                - approval_required
+                - allowed
+            dataScopes:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            providers:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 50
+            minimumApproval:
+              type: string
+              enum:
+                - none
+                - steward
+          required:
+            - permissions
+            - monthlyBudgetCents
+            - destructiveActions
+            - dataScopes
+            - providers
+            - minimumApproval
+          additionalProperties: false
+      required:
+        - name
+        - ceiling
+      additionalProperties: false
     CreateCompanyRequest:
       type: object
       properties:
@@ -7760,6 +8264,66 @@ components:
         - type: number
         - type: string
           const: latest
+    UpdateCeilingTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        ceiling:
+          type: object
+          properties:
+            permissions:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            monthlyBudgetCents:
+              type: integer
+              minimum: 0
+              maximum: 2147483647
+            destructiveActions:
+              type: string
+              enum:
+                - blocked
+                - approval_required
+                - allowed
+            dataScopes:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 200
+            providers:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 200
+              maxItems: 50
+            minimumApproval:
+              type: string
+              enum:
+                - none
+                - steward
+          required:
+            - permissions
+            - monthlyBudgetCents
+            - destructiveActions
+            - dataScopes
+            - providers
+            - minimumApproval
+          additionalProperties: false
+        revision:
+          type: integer
+          exclusiveMinimum: 0
+      required:
+        - revision
+      additionalProperties: false
     UpdateCompanyRequest:
       type: object
       properties:
@@ -7831,6 +8395,21 @@ components:
             - string
             - "null"
           format: uuid
+        adminDirectiveReadEnabled:
+          type: boolean
+        adminTranscriptReadEnabled:
+          type: boolean
+        assistantAdminBatchesEnabled:
+          type: boolean
+        assistantBatchMaxRecords:
+          type: integer
+          minimum: 1
+          maximum: 200
+        defaultCeilingTemplateId:
+          type:
+            - string
+            - "null"
+          format: uuid
     UpdateGoalRequest:
       type: object
       properties:
@@ -7865,6 +8444,17 @@ components:
             - string
             - "null"
           format: uuid
+    UpdateIssueLabelRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 48
+        color:
+          type: string
+          pattern: ^#(?:[0-9a-fA-F]{6})$
+      additionalProperties: false
     UpdateIssueRouteRequest:
       type: object
       properties:

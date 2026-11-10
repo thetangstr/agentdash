@@ -67,4 +67,44 @@ describe("OAuthConsent", () => {
     );
     expect(container.textContent).toContain("Allow Muse");
   });
+
+  async function renderWith(view: typeof consentView & { companies: Array<{ id: string; name: string; adminBatchesAvailable?: boolean }> }) {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => view })));
+    root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={["/oauth/consent?request=req-1"]}>
+            <OAuthConsent />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  it("admin powers (part 5): batch changes as an admin is labelled, never pre-checked, and says how to get it", async () => {
+    await renderWith({ ...consentView, requestedScopes: ["agentdash:read", "agentdash:admin"], companies: [{ id: "c1", name: "Paperclip", adminBatchesAvailable: true }] });
+    const row = container.querySelector('[data-testid="consent-scope-agentdash:admin"]')!;
+    expect(row.textContent).toContain("Batch changes as an admin");
+    expect(row.textContent).toContain("Nothing changes until you open the preview in AgentDash and give your assistant the code shown there.");
+    const box = row.querySelector("input")!;
+    expect(box.checked).toBe(false);
+    expect(box.disabled).toBe(false);
+    expect(row.textContent).toContain("An assistant you connected before gets this only if you connect it again.");
+  });
+
+  it("admin powers (part 5): disabled with the plain reason where it is not available", async () => {
+    await renderWith({ ...consentView, requestedScopes: ["agentdash:read", "agentdash:admin"], companies: [{ id: "c1", name: "Paperclip", adminBatchesAvailable: false }] });
+    const row = container.querySelector('[data-testid="consent-scope-agentdash:admin"]')!;
+    const box = row.querySelector("input")!;
+    expect(box.disabled).toBe(true);
+    expect(box.checked).toBe(false);
+    expect(row.textContent).toContain("you are not an admin of this company, or it has not turned on batch changes");
+  });
 });

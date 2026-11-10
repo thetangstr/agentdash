@@ -67,6 +67,7 @@ import {
   evaluationEvents,
   evaluationScorecards,
   evaluationIngestState,
+  agentCeilingTemplates,
 } from "@paperclipai/db";
 import { HttpError, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -158,6 +159,12 @@ export function companyService(db: Db) {
     feedbackDataSharingConsentByUserId: companies.feedbackDataSharingConsentByUserId,
     feedbackDataSharingTermsVersion: companies.feedbackDataSharingTermsVersion,
     agentVisibilityDefault: companies.agentVisibilityDefault,
+    // AgentDash admin powers: the company switches (Company Settings → Admin powers).
+    adminDirectiveReadEnabled: companies.adminDirectiveReadEnabled,
+    adminTranscriptReadEnabled: companies.adminTranscriptReadEnabled,
+    assistantAdminBatchesEnabled: companies.assistantAdminBatchesEnabled,
+    assistantBatchMaxRecords: companies.assistantBatchMaxRecords,
+    defaultCeilingTemplateId: companies.defaultCeilingTemplateId,
     brandColor: companies.brandColor,
     // AgentDash (AGE-55): FRE Plan B — domain claim on the company.
     emailDomain: companies.emailDomain,
@@ -402,6 +409,21 @@ export function companyService(db: Db) {
       data: Partial<typeof companies.$inferInsert> & { logoAssetId?: string | null },
     ) =>
       db.transaction(async (tx) => {
+        // AgentDash admin powers (review of 94b9e03ee, r3c fix 2): setting the
+        // ceiling for new agents takes the company row's lock FIRST, the lock a
+        // template delete takes before its "is it the default?" check
+        // (services/ceiling-templates.ts remove), and re-checks the template
+        // under it. Either the delete sees the new default and is refused, or
+        // this write sees the template gone and is refused; the FK's
+        // ON DELETE SET NULL never clears a default silently.
+        if (typeof data.defaultCeilingTemplateId === "string") {
+          await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, id)).for("update");
+          const [template] = await tx
+            .select({ id: agentCeilingTemplates.id })
+            .from(agentCeilingTemplates)
+            .where(and(eq(agentCeilingTemplates.id, data.defaultCeilingTemplateId), eq(agentCeilingTemplates.companyId, id)));
+          if (!template) throw unprocessable("That ceiling template is not one of this company's templates.");
+        }
         const existing = await getCompanyQuery(tx)
           .where(eq(companies.id, id))
           .then((rows) => rows[0] ?? null);

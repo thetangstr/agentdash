@@ -49,6 +49,7 @@ import {
 } from "./visibility.js";
 import { deploymentKind } from "../services/license.js";
 import { isBillingDisabled } from "../services/tier-policy.js";
+import { ceilingTemplateService } from "../services/ceiling-templates.js";
 
 // Company-level configuration and destructive actions are an owner/admin
 // decision. One sentence per act, so a refused member reads the rule rather
@@ -767,6 +768,16 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
             error:
               "This workspace profile requires an invite code. Ask the AgentDash team for one.",
           });
+          return;
+        }
+      }
+
+      // AgentDash admin powers: the ceiling for new agents must be one of
+      // THIS company's templates (null clears it).
+      if (typeof body.defaultCeilingTemplateId === "string") {
+        const template = await ceilingTemplateService(db).get(companyId, body.defaultCeilingTemplateId);
+        if (!template) {
+          res.status(422).json({ error: "That ceiling template is not one of this company's templates." });
           return;
         }
       }

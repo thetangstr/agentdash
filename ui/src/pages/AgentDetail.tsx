@@ -55,6 +55,7 @@ import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { MandatesTab } from "../components/agent/MandatesTab";
 import { AgentMemorySection } from "../components/agent/AgentMemorySection";
+import { AgentDirectivesPanel } from "../components/agent/AgentDirectivesPanel";
 // AgentDash: Agent Performance Management gate 1 (read-only Profile, Access and Performance tabs).
 import { AgentProfileTab } from "../components/agent-performance/AgentProfileTab";
 import { AgentAccessTab } from "../components/agent-performance/AgentAccessTab";
@@ -2160,6 +2161,10 @@ function AgentOverview({
       {/* Memory: shown only to the agent's steward and admins; the server
           answers everyone else 404 and the section renders nothing. */}
       <AgentMemorySection companyId={agent.companyId} agentId={agent.id} />
+
+      {/* AgentDash admin powers (part 4): directives, for the steward and, when
+          the company allows it, owners and admins; nothing on a 403 or 404. */}
+      <AgentDirectivesPanel companyId={agent.companyId} agentId={agent.id} />
     </div>
   );
 }

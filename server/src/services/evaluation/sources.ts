@@ -1450,6 +1450,7 @@ export async function readRoutineSnapshots(tx: Tx, companyId: string, cursor: Cu
       .select({
         id: routines.id,
         status: routines.status,
+        deletedAt: routines.deletedAt,
         concurrencyPolicy: routines.concurrencyPolicy,
         catchUpPolicy: routines.catchUpPolicy,
         assigneeAgentId: routines.assigneeAgentId,
@@ -1470,6 +1471,10 @@ export async function readRoutineSnapshots(tx: Tx, companyId: string, cursor: Cu
   const events: EvaluationEventInput[] = rows.flatMap((r) => {
     const facts = {
       status: r.status,
+      // History is kept for a deleted routine (its runs stay evidence); the
+      // snapshot says it is deleted, so it is never read as active. Absent
+      // for every other routine, so their snapshot hashes are unchanged.
+      ...(r.deletedAt ? { deleted: true } : {}),
       concurrencyPolicy: r.concurrencyPolicy,
       catchUpPolicy: r.catchUpPolicy,
       assigneeAgentId: r.assigneeAgentId,

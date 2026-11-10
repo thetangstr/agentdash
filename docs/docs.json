@@ -83,6 +83,7 @@
               "guides/execution-policy",
               "guides/board-operator/costs-and-budgets",
               "guides/board-operator/activity-log",
+              "guides/board-operator/change-many-things-at-once",
               "guides/board-operator/importing-and-exporting"
             ]
           },

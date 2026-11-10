@@ -170,6 +170,14 @@ describe("evaluation routes", () => {
     expect((await request(admin).get(`/api/companies/company-1/evaluation/replay?${q}`)).status).toBe(200);
   });
 
+  it("review of 4de5523e9: the admin-only replay and shadow report refuse an assistant connection", async () => {
+    // An instance-admin actor arriving through an assistant grant: the only thing that refuses it is the source rule.
+    const viaAssistant = await createApp({ ...boardAdmin, source: "assistant_grant", assistantGrantId: "grant-1" });
+    const q = "kind=project&id=22222222-2222-4222-8222-222222222222";
+    expect((await request(viaAssistant).get(`/api/companies/company-1/evaluation/replay?${q}`)).status).toBe(403);
+    expect((await request(viaAssistant).get("/api/companies/company-1/evaluation/shadow-report?refs=project:22222222-2222-4222-8222-222222222222")).status).toBe(403);
+  });
+
   it("a backfill cut short by the lock is audited as such", async () => {
     backfill.mockResolvedValueOnce({ passes: 2, inserted: 5, scanned: 9, exhausted: false, lockedOut: true });
     const app = await createApp(boardAdmin);

@@ -41,6 +41,17 @@ export const routines = pgTable(
     lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * AgentDash admin powers: set by DELETE /routines/:id. A deleted routine
+     * is archived, its triggers are off and it can never run again. It is
+     * hidden from the routine routes (list, detail, writes), from an agent's
+     * responsibilities and performance views, and is not a valid reference
+     * in a profile application. History is kept: its past runs, the issues
+     * they created, its activity rows, and the evaluation ledger (whose
+     * snapshot marks it deleted). routine_runs cascade on a hard delete, so
+     * the row stays as a tombstone.
+     */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (table) => ({
     companyStatusIdx: index("routines_company_status_idx").on(table.companyId, table.status),

@@ -82,6 +82,12 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
     app.post("/api/companies/:companyId/issues", probe);
     app.patch("/api/issues/:id", probe);
     app.post("/api/approvals/:id/approve", probe);
+    // AgentDash admin powers (part 5): the two assistant batch routes and the browser-only batch routes.
+    app.post("/api/companies/:companyId/assistant/batches/prepare", probe);
+    app.post("/api/companies/:companyId/assistant/batches/:batchId/confirm", probe);
+    app.post("/api/companies/:companyId/batches/:batchId/confirm-code", probe);
+    app.post("/api/companies/:companyId/batches/:batchId/apply-here", probe);
+    app.post("/api/companies/:companyId/batches/:batchId/confirm", probe);
     app.use(errorHandler);
   });
 
@@ -378,6 +384,39 @@ describeEmbeddedPostgres("assistant_grant actor authorization", () => {
       expect(res.status).toBe(403);
       expect(res.body.error).toMatch(/cannot write/);
       expect(res.body.reached).toBeUndefined();
+    });
+
+    it("admin powers (part 5): the two batch routes need agentdash:admin (step-up header) and only their own body fields", async () => {
+      const { company } = await seed();
+      const batchId = randomUUID();
+      const routes = [
+        [`/api/companies/${company.id}/assistant/batches/prepare`, { kind: "issue.update", targets: ["ENG-1"], change: { priority: "high" } }],
+        [`/api/companies/${company.id}/assistant/batches/${batchId}/confirm`, { code: "K7QM-3XRD" }],
+      ] as const;
+      const workToken = mintLoopback(company.id, randomUUID(), ["agentdash:read", "agentdash:work", "agentdash:decide"]);
+      for (const [path, body] of routes) {
+        const res = await request(app).post(path).set("authorization", `Bearer ${workToken}`).send(body);
+        expect(res.status, path).toBe(403);
+        expect(res.body).toMatchObject({ error: "insufficient_scope", required_scope: "agentdash:admin" });
+        expect(res.headers["www-authenticate"], path).toBe('Bearer error="insufficient_scope", scope="agentdash:read agentdash:work agentdash:decide agentdash:admin"');
+        expect(res.body.reached).toBeUndefined();
+      }
+      const adminToken = mintLoopback(company.id, randomUUID(), ["agentdash:read", "agentdash:admin"]);
+      for (const [path, body] of routes) {
+        const reached = await request(app).post(path).set("authorization", `Bearer ${adminToken}`).send(body);
+        expect(reached.status, path).toBe(200);
+        expect(reached.body.reached, path).toBe(true);
+        // Anything outside the route's own fields is refused before the route.
+        const widened = await request(app).post(path).set("authorization", `Bearer ${adminToken}`).send({ ...body, handle: "x", origin: "ui" });
+        expect(widened.status, path).toBe(403);
+        expect(widened.body.error).toBe("assistant_write_field_forbidden");
+      }
+      // The browser-only code route and the product confirm are not on the loopback's write list at all.
+      for (const path of [`/api/companies/${company.id}/batches/${batchId}/confirm-code`, `/api/companies/${company.id}/batches/${batchId}/apply-here`, `/api/companies/${company.id}/batches/${batchId}/confirm`]) {
+        const res = await request(app).post(path).set("authorization", `Bearer ${adminToken}`).send({});
+        expect(res.status, path).toBe(403);
+        expect(res.body.error).toMatch(/cannot write/);
+      }
     });
 
     it("an unknown pcin_ token resolves to no actor — no fall-through", async () => {

@@ -220,6 +220,11 @@ describe("deliverable review reasons", () => {
  * interpolated `action:` expressions.
  */
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
+  // AgentDash admin powers (part 4)
+  "audit.exported",
+  "batch.confirm_code_shown",
+  "agent.directives_read_by_admin",
+  "run.content_read_by_admin",
   // AgentDash: Agent Performance Management gate 2 (written from P2.2–P2.4 on)
   "access.policy_changed",
   "access.would_refuse",
@@ -301,6 +306,16 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "asset.created",
   "assistant.gated_action",
   "authz.refused",
+  // AgentDash admin powers (part 2): the batch engine (services/batch/).
+  "batch.completed",
+  "batch.interrupted",
+  "batch.item_refused",
+  "batch.item_failed",
+  "batch.item_unknown",
+  "batch.item_applied_differently",
+  "batch.item_reconciled",
+  "label.updated",
+  "routine.deleted",
   "board_api_key.created",
   "board_api_key.revoked",
   // local-harness bridge

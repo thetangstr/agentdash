@@ -15,6 +15,8 @@ const listAgentsMock = vi.hoisted(() => vi.fn());
 const listIssuesMock = vi.hoisted(() => vi.fn());
 const getMyInboxMock = vi.hoisted(() => vi.fn());
 const listChannelBindingsMock = vi.hoisted(() => vi.fn());
+// AgentDash admin powers: the agents a leaving member looks after (none unless a test says so).
+const stewardedAgentsMock = vi.hoisted(() => vi.fn(async (_companyId: string, _memberId: string) => ({ agents: [] as Array<{ id: string; name: string; status: string }> })));
 
 vi.mock("@/api/access", () => ({
   accessApi: {
@@ -26,6 +28,7 @@ vi.mock("@/api/access", () => ({
       updateMemberAccessMock(companyId, memberId, input),
     archiveMember: (companyId: string, memberId: string, input: unknown) =>
       archiveMemberMock(companyId, memberId, input),
+    stewardedAgents: (companyId: string, memberId: string) => stewardedAgentsMock(companyId, memberId),
     approveJoinRequest: vi.fn(),
     rejectJoinRequest: vi.fn(),
   },
@@ -462,6 +465,51 @@ describe("CompanyAccess", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("hands the leaving member's agents to the people chosen in Their agents (admin powers)", async () => {
+    stewardedAgentsMock.mockResolvedValue({ agents: [{ id: "agent-a", name: "Ada", status: "idle" }, { id: "agent-b", name: "Bo", status: "idle" }] });
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyAccess />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    const removeButtons = Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.includes("Remove"));
+    await act(async () => { removeButtons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await flushReact();
+    await flushReact();
+    const block = document.body.querySelector('[data-testid="their-agents-block"]');
+    expect(block).toBeTruthy();
+    expect(block!.textContent).toContain("A person can look after one agent at a time");
+    const pick = async (label: string, value: string) => {
+      const select = document.body.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+      await act(async () => {
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await flushReact();
+    };
+    const confirm = () => Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "Remove member") as HTMLButtonElement;
+    // The same person for both: refused before anything is sent.
+    await pick("New steward for Ada", "user-2");
+    await pick("New steward for Bo", "user-2");
+    expect(document.body.querySelector('[data-testid="their-agents-problem"]')!.textContent).toBe("A person can look after only one agent, so choose a different person for each agent.");
+    expect(confirm().disabled).toBe(true);
+    await pick("New steward for Bo", "");
+    expect(confirm().disabled).toBe(false);
+    await act(async () => { confirm().dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await flushReact();
+    expect(archiveMemberMock).toHaveBeenCalledWith("company-1", "member-1", expect.objectContaining({
+      stewardTransfers: [{ agentId: "agent-a", toUserId: "user-2" }],
+    }));
+    stewardedAgentsMock.mockResolvedValue({ agents: [] });
+    await act(async () => { root.unmount(); });
   });
 
   it("shows protected member removal reasons from the API", async () => {

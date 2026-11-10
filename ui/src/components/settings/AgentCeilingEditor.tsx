@@ -269,7 +269,7 @@ export function AgentCeilingEditor({ companyId }: Props) {
 
               {!canManage ? (
                 <p className="text-muted-foreground">
-                  Only a company owner or administrator can change ceilings.
+                  You need permission to manage agents to change ceilings.
                 </p>
               ) : null}
             </div>

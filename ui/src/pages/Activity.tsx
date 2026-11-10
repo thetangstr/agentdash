@@ -12,6 +12,8 @@ import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { useIsPhone } from "../hooks/useIsPhone";
+import { useCapability } from "../hooks/useCapability";
+import { Link } from "@/lib/router";
 import {
   Select,
   SelectContent,
@@ -51,6 +53,8 @@ export function Activity() {
   // AgentDash (Scan 3, lane J): system plumbing is hidden unless asked for.
   const [showSystem, setShowSystem] = useState(false);
   const isPhone = useIsPhone();
+  // AgentDash admin powers (part 4): owners and admins get the admin audit.
+  const manage = useCapability(selectedCompanyId, "company:manage");
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Activity" }]);
@@ -129,6 +133,15 @@ export function Activity() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-end gap-3">
+        {!manage.isLoading && manage.allowed && (
+          <Link
+            to="/company/settings/audit"
+            data-testid="activity-audit-link"
+            className="mr-auto text-xs underline underline-offset-2 max-sm:min-h-11 max-sm:inline-flex max-sm:items-center"
+          >
+            Admin audit and CSV export
+          </Link>
+        )}
         {/* The server filters, so the page can't tell whether anything was
             hidden: the toggle is always offered. */}
         <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0" data-testid="activity-show-system">

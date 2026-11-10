@@ -121,6 +121,27 @@ export const updateCompanyMemberWithPermissionsSchema = z.object({
 export type UpdateCompanyMemberWithPermissions = z.infer<typeof updateCompanyMemberWithPermissionsSchema>;
 
 export const archiveCompanyMemberSchema = z.object({
+  /**
+   * AgentDash admin powers: who takes over each agent the member looks after,
+   * applied (as stewardship transfers) before the member's access ends. An
+   * agent left out ends unstewarded, as before. A person looks after one agent
+   * at a time, so no person may appear twice.
+   */
+  stewardTransfers: z
+    .array(z.object({ agentId: z.guid(), toUserId: z.string().trim().min(1).max(256) }).strict())
+    .max(50)
+    .optional()
+    .superRefine((transfers, ctx) => {
+      if (!transfers) return;
+      const people = transfers.map((transfer) => transfer.toUserId);
+      if (new Set(people).size !== people.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A person can look after only one agent, so choose a different person for each agent." });
+      }
+      const agentIds = transfers.map((transfer) => transfer.agentId);
+      if (new Set(agentIds).size !== agentIds.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Each agent can be handed over once." });
+      }
+    }),
   reassignment: z
     .object({
       assigneeAgentId: z.guid().optional().nullable(),

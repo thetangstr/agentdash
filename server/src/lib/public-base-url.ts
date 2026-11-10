@@ -193,6 +193,18 @@ export function approvalUrl(approvalId: string): string | undefined {
 }
 
 /**
+ * AgentDash admin powers (part 5): the review page of a batch the person's own
+ * Claude prepared, where they see every change and the confirm code. Same
+ * contract as `approvalUrl`: undefined when no public URL is advertised.
+ */
+export function batchReviewUrl(companyPrefix: string, batchId: string): string | undefined {
+  const base = configuredPublicBaseUrl();
+  return base
+    ? `${base}/${encodeURIComponent(companyPrefix)}/company/batches/${encodeURIComponent(batchId)}`
+    : undefined;
+}
+
+/**
  * Absolute URL for a server-relative path, or `undefined` when this instance
  * advertises no public URL.
  *

@@ -1,12 +1,12 @@
 import { MarketingShell } from "../MarketingShell";
 import { SectionContainer } from "../components/SectionContainer";
 import { Eyebrow } from "../components/Eyebrow";
-import { AGENT_PERFORMANCE_UPDATE, LAUNCH_WEEK } from "../content/updates";
+import { ADMIN_POWERS_UPDATE, AGENT_PERFORMANCE_UPDATE, LAUNCH_WEEK, isUpdatePublished } from "../content/updates";
 import { useDocumentMeta } from "../hooks/useDocumentMeta";
 import "./WhatsNew.css";
 import "./AgentPerformance.css";
 
-export function WhatsNew() {
+export function WhatsNew({ published }: { published?: readonly string[] }) {
   useDocumentMeta("What's new · AgentDash", "Product updates from AgentDash: what changed, what it means for your team, and the release notes behind it.");
   return (
     <MarketingShell>
@@ -17,6 +17,18 @@ export function WhatsNew() {
           <p className="mkt-body-lg">The work keeps moving. Here’s what changed in AgentDash, and what it means for your team.</p>
           <p><a href="/releases">All release notes <span aria-hidden>→</span></a></p>
         </div>
+        {/* AgentDash: listed once v2026.1110.0 is published; the site builds from main before the cut. */}
+        {isUpdatePublished(ADMIN_POWERS_UPDATE, published) ? (
+          <article className="mkt-update-entry" data-update="admin-powers">
+            <div className="mkt-update-entry__date"><time dateTime={ADMIN_POWERS_UPDATE.date}>November 10, 2026</time><span>Admin powers</span></div>
+            <div className="mkt-update-entry__body">
+              <p className="mkt-updates__versions">{ADMIN_POWERS_UPDATE.versions.join(" + ")}</p>
+              <h2 className="mkt-display-section"><a href={ADMIN_POWERS_UPDATE.path}>{ADMIN_POWERS_UPDATE.title}</a></h2>
+              <p className="mkt-body-lg">{ADMIN_POWERS_UPDATE.summary}</p>
+              <a className="mkt-update-entry__link" href={ADMIN_POWERS_UPDATE.path}>Read the update <span aria-hidden>↗</span></a>
+            </div>
+          </article>
+        ) : null}
         <article className="mkt-update-entry" data-update="agent-performance">
           <div className="mkt-update-entry__date"><time dateTime={AGENT_PERFORMANCE_UPDATE.date}>November 5, 2026</time><span>Agent performance</span></div>
           <div className="mkt-update-entry__body">

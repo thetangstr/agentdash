@@ -59,3 +59,27 @@ export const updateAgentGovernancePolicySchema = z
   .strict();
 
 export type UpdateAgentGovernancePolicy = z.infer<typeof updateAgentGovernancePolicySchema>;
+
+/**
+ * AgentDash admin powers: a named owner ceiling an admin defines once and
+ * applies to many agents (or makes the ceiling for every new agent). The
+ * ceiling is validated with the same schema the ceiling route uses.
+ */
+export const createCeilingTemplateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    ceiling: agentGovernancePolicySchema,
+  })
+  .strict();
+export type CreateCeilingTemplate = z.infer<typeof createCeilingTemplateSchema>;
+
+export const updateCeilingTemplateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    ceiling: agentGovernancePolicySchema.optional(),
+    /** The revision the editor last saw; a stale one is 409. */
+    revision: z.number().int().positive(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.ceiling !== undefined, "Change the name or the ceiling.");
+export type UpdateCeilingTemplate = z.infer<typeof updateCeilingTemplateSchema>;

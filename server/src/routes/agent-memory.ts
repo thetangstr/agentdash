@@ -90,6 +90,8 @@ export function agentMemoryRoutes(db: Db) {
    */
   async function requireReader(req: Request, companyId: string, agentId: string): Promise<void> {
     assertCompanyAccess(req, companyId);
+    // Review of 8f1b669b0: memory can hold credentials or personal details; never through an assistant connection.
+    if (req.actor.source === "assistant_grant") throw notFound("Agent memory not found");
     if (req.actor.type === "agent") {
       if (req.actor.agentId === agentId) return;
       throw notFound("Agent memory not found");

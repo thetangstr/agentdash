@@ -1,3 +1,4 @@
+import { publishedReleases } from "./releases";
 import { GITHUB_URL } from "./site";
 
 /** Release facts are limited to these dated notes; no rollout claim is implied. */
@@ -29,3 +30,23 @@ export const AGENT_PERFORMANCE_SOURCES = [
   { label: "v2026.1102.1 scorecard feed and compatibility", href: `${GITHUB_URL}/releases/tag/v2026.1102.1` },
   { label: "v2026.1031.0 profiles, performance and upgrade guide", href: `${GITHUB_URL}/releases/tag/v2026.1031.0` },
 ] as const;
+
+// AgentDash: admin powers. Shown only once its release is published (see
+// isUpdatePublished): the site builds from main, which carries this entry
+// before the release is cut.
+export const ADMIN_POWERS_UPDATE = {
+  path: "/whats-new/admin-powers",
+  date: "2026-11-10",
+  title: "Change many things at once, and see exactly what happened.",
+  summary: "Bulk changes with a preview and honest per-record results, an audit page with a CSV export, ceiling templates, and batch changes from an admin's own Claude, off by default.",
+  versions: ["v2026.1110.0"],
+} as const;
+export const ADMIN_POWERS_SOURCES = [
+  { label: "Admin guide: change many things at once", href: "/docs/guides/board-operator/change-many-things-at-once" },
+  { label: "v2026.1110.0 release notes", href: "/releases/v2026.1110.0" },
+] as const;
+
+/** An update is shown once every release it describes has a published GitHub Release. */
+export function isUpdatePublished(update: { versions: readonly string[] }, published: readonly string[] = publishedReleases().versions): boolean {
+  return update.versions.every((version) => published.includes(version));
+}

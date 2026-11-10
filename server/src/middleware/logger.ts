@@ -43,7 +43,9 @@ const sharedOpts = {
  * the raw req.body fallback — but both attach it as the same top-level
  * `reqBody` property, so one set of paths covers both.
  */
-const SECRET_BODY_FIELDS = ["password", "newPassword", "currentPassword", "token"];
+// `handle`: a batch confirm handle (admin powers, part 2) — a refused confirm
+// is a 4xx whose body is the single-use handle.
+const SECRET_BODY_FIELDS = ["password", "newPassword", "currentPassword", "token", "handle"];
 export const LOG_REDACT_PATHS = [
   "req.headers.authorization",
   'req.headers["x-agent-key"]',

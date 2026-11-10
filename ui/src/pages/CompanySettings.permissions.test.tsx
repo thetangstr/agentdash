@@ -21,6 +21,9 @@ const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock("../api/health", () => ({ healthApi: mockHealthApi }));
 
 const mockCompaniesApi = vi.hoisted(() => ({ update: vi.fn(), archive: vi.fn() }));
+// AgentDash admin powers: the ceiling-template list behind "Ceiling for new agents".
+const mockCeilingTemplatesApi = vi.hoisted(() => ({ list: vi.fn(async () => ({ templates: [] })) }));
+vi.mock("../api/ceilingTemplates", () => ({ ceilingTemplatesApi: mockCeilingTemplatesApi }));
 vi.mock("../api/companies", () => ({ companiesApi: mockCompaniesApi }));
 
 vi.mock("../api/access", () => ({
@@ -54,6 +57,9 @@ vi.mock("@/components/settings/NeedsReconciliationPanel", () => ({
   NeedsReconciliationPanel: () => null,
   useNeedsReconciliationCount: () => 0,
 }));
+// The Labels card asks its own server; it has its own suite.
+vi.mock("@/components/settings/LabelsCard", () => ({ LabelsCard: () => null }));
+vi.mock("@/components/settings/CeilingTemplatesCard", () => ({ CeilingTemplatesCard: () => null }));
 vi.mock("@/components/settings/AgentCeilingEditor", () => ({ AgentCeilingEditor: () => null }));
 vi.mock("@/components/settings/AgentAccessEnforcementCard", () => ({ AgentAccessEnforcementCard: () => null }));
 vi.mock("@/components/settings/PerformanceManagerCard", () => ({ PerformanceManagerCard: () => null }));
@@ -128,7 +134,14 @@ function toggle(testId: string) {
 }
 
 const EDITABLE_INPUTS = ["Workspace name", "Description", "Logo", "Brand color", "Brand color value", "Attachment size limit in MiB"];
-const TOGGLES = ["company-settings-team-approval-toggle", "company-settings-issue-start-toggle"];
+const TOGGLES = [
+  "company-settings-team-approval-toggle",
+  "company-settings-issue-start-toggle",
+  // Admin powers: the same rule (company:manage) as every other setting.
+  "admin-powers-directive-read-toggle",
+  "admin-powers-transcript-read-toggle",
+  "admin-powers-assistant-batches-toggle",
+];
 
 describe("CompanySettings for a member", () => {
   it("shows the settings read-only with one plain line", async () => {

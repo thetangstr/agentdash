@@ -21,6 +21,9 @@ vi.mock("@/lib/router", () => ({
   useNavigate: () => navigateMock,
   useLocation: () => ({ pathname: "/routines", search: currentSearch ? `?${currentSearch}` : "", hash: "" }),
   useSearchParams: () => [new URLSearchParams(currentSearch), vi.fn()],
+  Link: ({ to, children, ...props }: { to: string; children?: unknown } & Record<string, unknown>) => (
+    <a href={to} {...(props as Record<string, never>)}>{children as never}</a>
+  ),
 }));
 
 vi.mock("../context/CompanyContext", () => ({
@@ -33,6 +36,11 @@ vi.mock("../context/BreadcrumbContext", () => ({
 
 vi.mock("../context/ToastContext", () => ({
   useToastActions: () => ({ pushToast: vi.fn() }),
+}));
+
+// AgentDash admin powers: the bulk bar has its own suite; here it is a stub.
+vi.mock("../components/batch/RoutinesBulkBar", () => ({
+  RoutinesBulkBar: (props: { selectedIds: string[] }) => <div data-testid="routines-bulk-bar" data-selected={props.selectedIds.join(",")} />,
 }));
 
 vi.mock("../api/routines", () => ({
@@ -407,6 +415,38 @@ describe("Routines page", () => {
       "routine-2",
     ]);
     expect(routines.map((routine) => routine.id)).toEqual(["routine-1", "routine-2"]);
+  });
+
+  it("selects routines for the bulk bar (admin powers)", async () => {
+    routinesListMock.mockResolvedValue([
+      createRoutine({ id: "routine-1", title: "Weekly digest" }),
+      createRoutine({ id: "routine-2", title: "Morning sync" }),
+    ]);
+    issuesListMock.mockResolvedValue([]);
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Routines />
+        </QueryClientProvider>,
+      );
+      await flush();
+    });
+    let boxes = [...container.querySelectorAll<HTMLInputElement>('[data-testid="routine-bulk-checkbox"]')];
+    for (let attempts = 0; attempts < 5 && boxes.length === 0; attempts += 1) {
+      await act(async () => { await flush(); });
+      boxes = [...container.querySelectorAll<HTMLInputElement>('[data-testid="routine-bulk-checkbox"]')];
+    }
+    expect(boxes).toHaveLength(2);
+    expect(container.querySelector('[data-testid="routines-bulk-bar"]')).toBeNull();
+    await act(async () => { boxes[0]!.click(); });
+    expect(container.querySelector('[data-testid="routines-bulk-bar"]')!.getAttribute("data-selected")).toBe(
+      boxes[0]!.getAttribute("aria-label") === "Select Weekly digest" ? "routine-1" : "routine-2",
+    );
+    // Phone-sized target.
+    expect(boxes[0]!.closest("label")!.className).toContain("max-sm:min-w-11");
+    await act(async () => { root.unmount(); });
   });
 
   it("renders the routines sort control before the group control", async () => {

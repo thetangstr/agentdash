@@ -1,13 +1,17 @@
 import { Router } from "express";
 import type { Request } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, companies } from "@paperclipai/db";
 import { pushAgentDirectivesSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { agentDirectivesService } from "../services/agent-directives.js";
 import { requireProductProfile } from "../services/companies.js";
-import { assertCompanyAccess } from "./authz.js";
+import { accessService } from "../services/access.js";
+import { logActivity } from "../services/activity-log.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { HttpError, notFound } from "../errors.js";
+import { assertCompanyAccess, getActorInfo, isCompanyAdministrator } from "./authz.js";
 import {
   agentVisibilityParam,
 } from "./visibility.js";
@@ -34,10 +38,16 @@ export function agentDirectivesRoutes(db: Db) {
   router.param("agentId", agentVisibilityParam(db));
   const directives = agentDirectivesService(db);
 
+  const access = accessService(db);
+
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
     const company = await db
-      .select({ id: companies.id, productProfile: companies.productProfile })
+      .select({
+        id: companies.id,
+        productProfile: companies.productProfile,
+        adminDirectiveReadEnabled: companies.adminDirectiveReadEnabled,
+      })
       .from(companies)
       .where(eq(companies.id, companyId))
       .then((rows) => rows[0] ?? null);
@@ -65,11 +75,55 @@ export function agentDirectivesRoutes(db: Db) {
     );
   }
 
+  /**
+   * AgentDash admin powers (part 4.2): READING directives. The steward reads
+   * as before. Otherwise an owner or admin may read, never write, when the
+   * company switched "admins may read agent directives" on, through their
+   * own session (not an assistant grant). This works with no active steward.
+   * Every admin read is logged, every time.
+   */
+  async function requireStewardOrAuditingAdmin(
+    req: Request,
+    company: { id: string; adminDirectiveReadEnabled: boolean },
+    agentId: string,
+  ) {
+    try {
+      await requireSteward(req, company.id, agentId);
+      return;
+    } catch (err) {
+      if (!(err instanceof HttpError) || err.status !== 403) throw err;
+      const allowed =
+        company.adminDirectiveReadEnabled &&
+        req.actor.source !== "assistant_grant" &&
+        (await isCompanyAdministrator(access, req, company.id));
+      if (!allowed) throw err;
+    }
+    const agent = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.companyId, company.id)))
+      .then((rows) => rows[0] ?? null);
+    if (!agent) throw notFound("Agent not found");
+    const steward = await agentStewardshipService(db).activeByAgent(company.id, agentId);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: company.id,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId,
+      runId: actor.runId,
+      action: "agent.directives_read_by_admin",
+      entityType: "agent",
+      entityId: agentId,
+      details: { agentId, stewardUserId: steward?.userId ?? null },
+    });
+  }
+
   router.get("/companies/:companyId/agents/:agentId/directives", async (req, res) => {
     const companyId = req.params.companyId as string;
     const agentId = req.params.agentId as string;
-    await requireProfileCompany(req, companyId);
-    await requireSteward(req, companyId, agentId);
+    const company = await requireProfileCompany(req, companyId);
+    await requireStewardOrAuditingAdmin(req, company, agentId);
     res.json({
       active: await directives.active(companyId, agentId),
       history: await directives.history(companyId, agentId),

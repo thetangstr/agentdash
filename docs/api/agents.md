@@ -287,6 +287,21 @@ curl -X DELETE https://your-instance.example/api/agents/$AGENT_ID/keys/$KEY_ID \
 | 404 | `Agent not found`. |
 | 404 | `Key not found` — no such key, or it belongs to another agent. |
 
+## Ceiling templates
+
+`GET /api/companies/{companyId}/ceiling-templates` · [`listCeilingTemplates`](/api/reference#tag/agents/listCeilingTemplates)
+`POST /api/companies/{companyId}/ceiling-templates` · [`createCeilingTemplate`](/api/reference#tag/agents/createCeilingTemplate)
+`PATCH /api/companies/{companyId}/ceiling-templates/{templateId}` · [`updateCeilingTemplate`](/api/reference#tag/agents/updateCeilingTemplate)
+`DELETE /api/companies/{companyId}/ceiling-templates/{templateId}` · [`deleteCeilingTemplate`](/api/reference#tag/agents/deleteCeilingTemplate)
+
+A ceiling template is a named owner ceiling (the same policy shape as an agent's ceiling: `permissions`, `monthlyBudgetCents`, `destructiveActions`, `dataScopes`, `providers`, `minimumApproval`) that an owner or admin defines once. It can be applied to many agents through a batch (`agent.apply_ceiling`, see the batch changes notes; applying a ceiling, like changing one agent's ceiling, needs permission to manage agents) and chosen as the company's ceiling for new agents (`defaultCeilingTemplateId` on the company). These routes exist where agent ceilings are enabled for the workspace; elsewhere they answer 404.
+
+- Any member reads the list (`{ templates: [...] }`). Creating, editing and deleting need a company owner or admin.
+- Names are unique within a company (409). An edit sends the `revision` it last saw; a stale one is 409, and each edit raises it by one.
+- A template that is the company's ceiling for new agents cannot be deleted (409); choose another, or none, first.
+- A template id from another company is 404.
+- Activity: `ceiling_template.created`, `ceiling_template.updated` (with the previous name and ceiling), `ceiling_template.deleted`.
+
 ## The `Agent` object
 
 From `packages/shared/src/types/agent.ts`. The fields an integration reads:

@@ -42,6 +42,8 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
+import { CompanyAudit } from "./pages/CompanyAudit";
+import { BatchReview } from "./pages/BatchReview";
 import { EvaluationOverviewPage } from "./pages/evaluation/EvaluationOverview";
 import { EvaluationFounder } from "./pages/evaluation/EvaluationFounder";
 import { EvaluationMilestone } from "./pages/evaluation/EvaluationMilestone";
@@ -100,6 +102,7 @@ import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting"
 import { About as MarketingAbout } from "./marketing/pages/About";
 import { AgentPerformance as MarketingAgentPerformance } from "./marketing/pages/AgentPerformance";
 import { AgentPerformanceUpdate as MarketingAgentPerformanceUpdate } from "./marketing/pages/AgentPerformanceUpdate";
+import { AdminPowersUpdate as MarketingAdminPowersUpdate } from "./marketing/pages/AdminPowersUpdate";
 import { WhatsNew as MarketingWhatsNew } from "./marketing/pages/WhatsNew";
 import { LaunchWeek as MarketingLaunchWeek } from "./marketing/pages/LaunchWeek";
 import { Releases as MarketingReleases } from "./marketing/pages/Releases";
@@ -157,6 +160,10 @@ function boardRoutes() {
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
       <Route path="company/settings/health" element={<CompanyHealth />} />
+      {/* AgentDash admin powers (part 4): the admin audit, owners and admins only. */}
+      <Route path="company/settings/audit" element={<CompanyAudit />} />
+      {/* AgentDash admin powers (part 5): review a batch the person's own Claude prepared. */}
+      <Route path="company/batches/:batchId" element={<BatchReview />} />
       {/* O2: the local error sink, instance-admin only. Lives under the
           settings tree because the router treats the FIRST path segment as a
           company prefix — a top-level /instance/errors resolves to "no
@@ -396,6 +403,7 @@ export function App() {
         <Route path="whats-new" element={<MarketingWhatsNew />} />
         <Route path="whats-new/launch-week" element={<MarketingLaunchWeek />} />
         <Route path="whats-new/agent-performance" element={<MarketingAgentPerformanceUpdate />} />
+        <Route path="whats-new/admin-powers" element={<MarketingAdminPowersUpdate />} />
         {/* AgentDash: public release notes; a version is listed once its GitHub Release is published. */}
         <Route path="releases" element={<MarketingReleases />} />
         <Route path="releases/:version" element={<MarketingRelease />} />

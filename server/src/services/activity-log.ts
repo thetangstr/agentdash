@@ -9,6 +9,7 @@ import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "./run-log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
 import { logger } from "../middleware/logger.js";
+import { batchActivityDetails, currentBatchActivityContext } from "../lib/batch-activity-context.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import { instanceSettingsService, readInstanceGeneralSettings } from "./instance-settings.js";
 
@@ -80,6 +81,12 @@ export async function insertActivity(
   return insertActivityWithRedaction(executor, input, settings.censorUsernameInLogs, beforeInsert);
 }
 
+function withoutBatchKey(details: LogActivityInput["details"]): LogActivityInput["details"] {
+  if (!details || !Object.prototype.hasOwnProperty.call(details, "batch")) return details;
+  const { batch: _batch, ...rest } = details;
+  return rest;
+}
+
 async function insertActivityWithRedaction(
   executor: Pick<Db, "insert">,
   input: LogActivityInput,
@@ -87,7 +94,16 @@ async function insertActivityWithRedaction(
   beforeInsert?: () => void,
 ): Promise<ActivityPublication> {
   const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
-  const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
+  // AgentDash admin powers (part 2): a row written while a batch item's
+  // request runs says which batch and item it came from. `details.batch` is
+  // server-derived only: inside the context it is set from the context;
+  // outside it a caller-supplied `batch` key is dropped, so a hand-posted row
+  // (POST /companies/:id/activity) cannot claim to come from a batch.
+  const batch = currentBatchActivityContext();
+  const details = batch && batch.companyId === input.companyId
+    ? { ...(input.details ?? {}), batch: batchActivityDetails(batch) }
+    : withoutBatchKey(input.details);
+  const sanitizedDetails = details ? sanitizeRecord(details) : null;
   const redactedDetails = sanitizedDetails
     ? // AgentDash (GH #992): activity details can carry run output (error
       // messages, excerpts) — the shared secret pass applies on top of the
