@@ -113,13 +113,34 @@ Breaking Changes section with an upgrade path.
 
 ## Step 4 — Categorize for Users
 
-Use these stable changelog sections:
+<!-- AgentDash: public release notes (www.agentdash.cloud/releases) -->
+AgentDash notes after v2026.1105.0 open with exactly these four sections, in
+this order (`scripts/ci/check-release-log.mjs` fails the PR otherwise):
 
-- `Breaking Changes`
+1. `What's new`: what a person using AgentDash will notice, in plain words
+2. `For admins`: settings, permissions, and what an administrator must decide or do
+3. `Upgrade`: migrations, required steps, compatibility
+4. `Security`: fixes and changed boundaries, without exploit detail
+
+Every one of the four needs at least one bullet that survives the public-notes
+sanitizer (`scripts/docs/public-release-notes.mjs`). It keeps bullets only and
+withholds any bullet, with its children, that names the private product
+profile, a customer, person or instance, an email or IP address, a private
+hostname or the upstream project. Write `- No changes.` for a section with
+nothing to report; prose alone publishes empty. These four are what the
+public page and the in-app Changelog show first, so write them for a reader
+outside the team.
+
+After the four, add any technical sections you need:
+
+- `Breaking Changes` (or `Deprecated` / `Removed`, per `docs/api/versioning.md`)
 - `Highlights`
 - `Improvements`
 - `Fixes`
-- `Upgrade Guide` when needed
+- `Contributors`
+
+Notes up to and including v2026.1105.0 are historical: never rewrite them into
+the new format.
 
 Exclude purely internal refactors, CI changes, and docs-only work unless they materially affect users.
 
@@ -158,15 +179,27 @@ Template:
 
 > Released: YYYY-MM-DD
 
-## Breaking Changes
+## What's new
 
-## Highlights
+- **Plain-language headline.** What changed for the people using it.
+
+## For admins
+
+- What an administrator must decide, enable or check. Or: No changes.
+
+## Upgrade
+
+- Migrations, steps and compatibility. Or: No changes.
+
+## Security
+
+- Fixes and changed boundaries. Or: No changes.
+
+## Breaking Changes
 
 ## Improvements
 
 ## Fixes
-
-## Upgrade Guide
 
 ## Contributors
 
@@ -175,7 +208,9 @@ Thank you to everyone who contributed to this release!
 @username1, @username2, @username3
 ```
 
-Omit empty sections except `Highlights`, `Improvements`, and `Fixes`, which should usually exist.
+The four opening sections are required, each with at least one bullet (write
+"No changes." as a bullet). Omit the technical sections after them when they
+are empty.
 
 The `Contributors` section should always be included. List every person who authored
 commits in the release range, @-mentioning them by their **GitHub username** (not their
@@ -201,6 +236,31 @@ Before handing it off:
 1. confirm the heading is the stable version only
 2. confirm there is no `-canary` language in the title or filename
 3. confirm any breaking changes have an upgrade path
-4. present the draft for human sign-off
+4. confirm the four opening sections pass: `node scripts/ci/check-release-log.mjs`
+5. add the row to `releases/README.md` and refresh `releases/published.json`
+   with `node scripts/published-releases.mjs --update-snapshot` (it records
+   the releases already published, so the public site's fallback stays current)
+6. present the draft for human sign-off
+
+Where the note goes after sign-off: the release workflow refuses to tag a
+source commit that does not carry the same file byte for byte, publishes it as
+the GitHub Release body, and, in its last job, checks the published body
+against the file. Once the release is published, www.agentdash.cloud rebuilds
+(Vercel deploy hook) and `/releases/vYYYY.MDD.P` shows the sanitized note; the
+build reads the published list from the GitHub Releases API and, if that
+cannot be read, from `releases/published.json`, which is why the snapshot
+refresh above matters. The in-app Changelog of builds from that tag shows the
+note too.
+
+Merge the note to main before the cut, and cut the stable release from a main
+commit that contains it: the workflow refuses a source commit without it, and
+`check-release-log.mjs` fails a tag cut from a commit without its notes.
+The note's `# ` heading must be the version in its file name.
+
+Once a release is tagged, its notes file is frozen: the public pages build
+from main, and `check-release-log.mjs` fails when main's copy differs from the
+tagged commit's. Put any correction in the next release's notes. If the GitHub
+Release body ever disagrees with the file, edit the body to match the file,
+then rerun the release workflow's `refresh_release_site` job.
 
 This skill never publishes anything. It only prepares the stable changelog artifact.

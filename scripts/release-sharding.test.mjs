@@ -178,3 +178,73 @@ test("actual stable preview uses separate control notes and leaves local source/
     assert.equal(git(["-C", source, "rev-parse", "HEAD"]), sourceSha);
   } finally { rmSync(fixture, { recursive: true, force: true }); }
 });
+
+// Part 6.3: the tagged commit carries its own notes, byte for byte, in both
+// the preview and the live stable job, before anything is tagged.
+test("actual source-notes gate refuses a source commit without identical release notes", () => {
+  const name = "Require the source commit to carry its release notes";
+  for (const jobName of ["preview_stable", "publish_stable"]) {
+    const job = jobs[jobName];
+    const gate = step(job, name);
+    const next = jobName === "preview_stable" ? "Dry-run stable release" : "Publish stable";
+    assert.equal(job.steps.indexOf(gate) + 1, job.steps.indexOf(step(job, next)), `${jobName}: the gate runs right before ${next}`);
+    assert.equal(gate.if, undefined);
+    assert.equal(gate["continue-on-error"], undefined);
+    assert.deepEqual(gate.env, { GITHUB_ACTIONS: "true", REPO_ROOT: "${{ github.workspace }}/source", STABLE_DATE: "${{ inputs.stable_date }}" });
+  }
+  assert.equal(step(jobs.preview_stable, name).run, step(jobs.publish_stable, name).run);
+
+  const fixture = mkdtempSync(path.join(os.tmpdir(), "agentdash-release-source-notes-"));
+  try {
+    const source = path.join(fixture, "source");
+    const control = path.join(fixture, "release-control");
+    const remote = path.join(fixture, "remote.git");
+    for (const directory of [path.join(source, "releases"), path.join(control, "scripts"), path.join(control, "releases")]) mkdirSync(directory, { recursive: true });
+    for (const file of ["release.sh", "release-lib.sh", "release-package-map.mjs"]) {
+      const target = path.join(control, "scripts", file);
+      copyFileSync(path.join(controlRoot, "scripts", file), target);
+      chmodSync(target, 0o755);
+    }
+    const env = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: fixture, TMPDIR: fixture, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_ALLOW_PROTOCOL: "file" };
+    const git = (args) => {
+      const result = spawnSync("git", args, { cwd: fixture, env, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    git(["init", "--bare", "--initial-branch=main", remote]);
+    git(["init", "--initial-branch=main", source]);
+    git(["-C", source, "config", "user.name", "release-fixture"]);
+    git(["-C", source, "config", "user.email", "fixture@example.invalid"]);
+    writeFileSync(path.join(source, "README.md"), "synthetic application source\n");
+    git(["-C", source, "add", "."]);
+    git(["-C", source, "commit", "-m", "fixture"]);
+    git(["-C", source, "remote", "add", "origin", remote]);
+    git(["-C", source, "push", "origin", "main"]);
+
+    const notes = "# v2026.1008.0\n\n> Released: 2026-10-08\n\n## What's new\n\n- Reviewed fixture release\n";
+    const controlNotes = path.join(control, "releases/v2026.1008.0.md");
+    const sourceNotes = path.join(source, "releases/v2026.1008.0.md");
+    const gate = step(jobs.publish_stable, name);
+    const stepEnv = Object.fromEntries(Object.entries(gate.env).map(([key, value]) => [key, value.replace("${{ github.workspace }}", fixture).replace("${{ inputs.stable_date }}", "2026-10-08")]));
+    const run = () => spawnSync("bash", ["-e", "-c", gate.run], { cwd: fixture, env: { ...env, ...stepEnv }, encoding: "utf8", timeout: 30_000 });
+
+    writeFileSync(controlNotes, notes);
+    let result = run();
+    assert.notEqual(result.status, 0, "a source commit without the notes must not be cut");
+    assert.match(result.stderr, /The source commit has no releases\/v2026\.1008\.0\.md/);
+
+    writeFileSync(sourceNotes, notes.replace("Reviewed", "Unreviewed"));
+    result = run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /differs from release-control's copy/);
+
+    writeFileSync(sourceNotes, notes);
+    result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /carries releases\/v2026\.1008\.0\.md, identical to the GitHub Release body/);
+
+    rmSync(controlNotes);
+    result = run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /release-control has no releases\/v2026\.1008\.0\.md/);
+  } finally { rmSync(fixture, { recursive: true, force: true }); }
+});

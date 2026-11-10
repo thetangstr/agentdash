@@ -27,6 +27,7 @@ export function MarketingFooter() {
               <li><a href="/demo">Interactive demo</a></li>
               <li><a href="/agent-performance">Agent performance</a></li>
               <li><a href="/whats-new">What’s new</a></li>
+              <li><a href="/releases">Release notes</a></li>
               <li><a href="/mcp">MCP setup</a></li>
               <li><a href="/docs">Docs</a></li>
               <li><a href={CTA.selfHost.href} target="_blank" rel="noreferrer">Self-host on GitHub</a></li>

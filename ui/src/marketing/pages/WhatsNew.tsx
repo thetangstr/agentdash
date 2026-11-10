@@ -15,6 +15,7 @@ export function WhatsNew() {
           <Eyebrow>Product updates</Eyebrow>
           <h1 className="mkt-display-page">What’s new.</h1>
           <p className="mkt-body-lg">The work keeps moving. Here’s what changed in AgentDash, and what it means for your team.</p>
+          <p><a href="/releases">All release notes <span aria-hidden>→</span></a></p>
         </div>
         <article className="mkt-update-entry" data-update="agent-performance">
           <div className="mkt-update-entry__date"><time dateTime={AGENT_PERFORMANCE_UPDATE.date}>November 5, 2026</time><span>Agent performance</span></div>
