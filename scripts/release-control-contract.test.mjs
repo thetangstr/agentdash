@@ -387,11 +387,80 @@ test("stable image jobs use least privilege, pinned actions, and only GITHUB_TOK
   assert.match(jobBlock(workflow, "record_stable_image_digest"), /permissions:\s*\n\s*contents: write\n\n/);
 
   // Third-party actions in the image jobs are pinned to a full commit SHA.
-  const imageSection = workflow.slice(workflow.indexOf("\n  publish_stable_image:\n"));
+  // The image jobs run from publish_stable_image through
+  // record_stable_image_digest; refresh_release_site follows them and holds
+  // the one non-GitHub secret (its own test below).
+  const imageSection = workflow.slice(
+    workflow.indexOf("\n  publish_stable_image:\n"),
+    workflow.indexOf("\n  refresh_release_site:\n"),
+  );
+  assert.ok(imageSection.includes("\n  record_stable_image_digest:\n"), "image section spans every image job");
   const uses = [...imageSection.matchAll(/uses:\s*(\S+)/g)].map((m) => m[1]);
   for (const ref of uses.filter((u) => !u.startsWith("actions/checkout@"))) {
     assert.match(ref, /@[0-9a-f]{40}$/, `${ref} must be pinned to a commit SHA`);
   }
   assert.match(imageSection, /password: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
   assert.doesNotMatch(imageSection, /secrets\.(?!GITHUB_TOKEN\b)[A-Z_]+/, "no long-lived registry token");
+});
+
+// Part 6: www.agentdash.cloud/releases. The GitHub Release body is checked
+// against the notes only in the last job, once the image digest is recorded;
+// only then is Vercel asked to rebuild the site.
+test("the release-notes site refresh runs last, verifies the body and never prints the hook", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const site = jobBlock(workflow, "refresh_release_site");
+
+  // The body check is not in publish_stable: there it would run after the tag
+  // push, and a failure would skip every image job while release.sh refuses
+  // to rerun publish_stable for an existing tag.
+  assert.doesNotMatch(jobBlock(workflow, "publish_stable"), /check-release-body/);
+  const jobsSection = workflow.slice(workflow.indexOf("\njobs:\n"));
+  const allJobs = [...jobsSection.matchAll(/\n  ([a-z_]+):\n/g)].map((m) => m[1]);
+  for (const name of allJobs.filter((job) => job !== "refresh_release_site")) {
+    assert.doesNotMatch(jobBlock(workflow, name), /check-release-body/, `${name} must not run the body check`);
+  }
+
+  // The site job hangs off the last image job, so it sees the final body.
+  assert.match(site, /if: github\.event_name == 'workflow_dispatch' && !inputs\.dry_run/);
+  assert.match(site, /needs:\s*\[publish_stable, record_stable_image_digest\]/);
+  assert.match(site, /permissions:\s*\n\s*contents: read\n\n/);
+  assert.doesNotMatch(site, /contents: write|packages:|id-token:/);
+  assert.doesNotMatch(site, /continue-on-error/);
+  const siteVerify = site.indexOf("check-release-body.mjs");
+  const hook = site.indexOf("release-site-deploy.mjs");
+  assert.ok(siteVerify >= 0 && hook > siteVerify, "the hook fires only after the published body is verified");
+  assert.match(site, /VERSION: \$\{\{ needs\.publish_stable\.outputs\.version \}\}/);
+  assert.match(site, /check-release-body\.mjs \\\s*\n\s*--tag "v\$\{VERSION\}" \\\s*\n\s*--notes "release-control\/releases\/v\$\{VERSION\}\.md" \\\s*\n\s*--repo "\$GITHUB_REPOSITORY" \\\s*\n\s*--attempts 3\n/);
+
+  // The hook URL only ever travels in the environment, from its secret.
+  assert.deepEqual([...site.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]), ["VERCEL_DEPLOY_HOOK_URL"]);
+  assert.match(site, /VERCEL_DEPLOY_HOOK_URL: \$\{\{ secrets\.VERCEL_DEPLOY_HOOK_URL \}\}\n\s*VERSION: \$\{\{ needs\.publish_stable\.outputs\.version \}\}\n\s*run: node release-control\/scripts\/release-site-deploy\.mjs --expect-version "v\$\{VERSION\}"\n/);
+  // Room for the body-check retries plus the 15-minute wait for the site.
+  assert.match(site, /timeout-minutes: 25\n/);
+  assert.doesNotMatch(site, /echo[^\n]*VERCEL_DEPLOY_HOOK_URL|curl|set -x/);
+  // No other job sees the hook.
+  assert.equal([...workflow.matchAll(/secrets\.VERCEL_DEPLOY_HOOK_URL/g)].length, 1);
+
+  // Vercel's build runs the published-list prebuild before the UI build.
+  const vercel = JSON.parse(readFileSync(path.join(repoRoot, "vercel.json"), "utf8"));
+  const prebuild = vercel.buildCommand.indexOf("node scripts/published-releases.mjs");
+  assert.ok(prebuild >= 0 && prebuild < vercel.buildCommand.indexOf("pnpm --filter @paperclipai/ui build"), vercel.buildCommand);
+});
+
+test("a body-check failure cannot skip the image jobs", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const jobsSection = workflow.slice(workflow.indexOf("\njobs:\n"));
+  const allJobs = [...jobsSection.matchAll(/\n  ([a-z_]+):\n/g)].map((m) => m[1]);
+  const needsOf = (name) => {
+    const match = /\n    needs:\s*(\[[^\]]*\]|[a-z_]+)\n/.exec(`\n${jobBlock(workflow, name)}`);
+    return match ? match[1].replace(/[\[\]\s]/g, "").split(",").filter(Boolean) : [];
+  };
+  // The only job that runs the body check is a leaf: nothing waits on it.
+  for (const name of allJobs) assert.ok(!needsOf(name).includes("refresh_release_site"), `${name} must not need refresh_release_site`);
+  // The image chain depends only on publish_stable and on itself.
+  assert.deepEqual(needsOf("publish_stable_image"), ["publish_stable"]);
+  assert.deepEqual(needsOf("publish_stable_image_manifest"), ["publish_stable", "publish_stable_image"]);
+  assert.deepEqual(needsOf("record_stable_image_digest"), ["publish_stable", "publish_stable_image_manifest"]);
+  // And publish_stable, which they need, never reads the published body.
+  assert.doesNotMatch(jobBlock(workflow, "publish_stable"), /check-release-body|gh release view/);
 });

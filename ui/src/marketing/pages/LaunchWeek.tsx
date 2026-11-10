@@ -59,7 +59,7 @@ export function LaunchWeek() {
             <Eyebrow>The release notes behind this update</Eyebrow>
             <h2 className="mkt-display-section">Read the details.</h2>
             <p>Both October 7 releases require no database migrations. Availability on your instance depends on the version your operator has installed. These illustrations are scripted; they do not run agents or connect to a workspace.</p>
-            <ul>{UPDATE_SOURCES.map((source) => <li key={source.href}><a href={source.href} target="_blank" rel="noreferrer">{source.label} <span aria-hidden>↗</span></a></li>)}</ul>
+            <ul>{UPDATE_SOURCES.map((source) => <li key={source.href}><a href={source.href}>{source.label} <span aria-hidden>→</span></a></li>)}</ul>
             <div className="mkt-update-sources__cta"><Button href={CTA.demo.href}>{CTA.demo.label}</Button><Button href={CTA.walkthrough.href} variant="ghost">{CTA.walkthrough.label}</Button></div>
           </div>
         </SectionContainer>

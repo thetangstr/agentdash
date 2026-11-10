@@ -39,6 +39,7 @@ export const RESERVED_COMPANY_PREFIXES = [
   "oauth",
   "pricing",
   "privacy",
+  "releases",
   "reset-password",
   "setup",
   "share",

@@ -32,6 +32,9 @@ packages/db/seed-*.mjs
 cli/package.dev.json
 
 # Build artifacts in src directories
+# The published-release list Vercel's build writes (scripts/published-releases.mjs).
+ui/src/marketing/content/published-releases.generated.json
+ui/public/releases/published.json
 server/src/**/*.js
 server/src/**/*.js.map
 server/src/**/*.d.ts

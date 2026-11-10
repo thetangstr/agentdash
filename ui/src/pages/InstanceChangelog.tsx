@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { listReleaseNotes } from "@/lib/release-notes";
+import { PUBLIC_RELEASE_NOTES_URL, listReleaseNotes } from "@/lib/release-notes";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 
 const MAX_RELEASES = 8;
@@ -20,8 +20,17 @@ export function InstanceChangelog() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-6">
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-xl font-bold text-foreground">Changelog</h1>
+        {/* AgentDash: every published release, including ones newer than this instance. */}
+        <a
+          href={PUBLIC_RELEASE_NOTES_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+        >
+          All release notes
+        </a>
       </div>
 
       <div className="flex flex-col gap-4">

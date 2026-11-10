@@ -15,6 +15,12 @@ export interface ReleaseNote {
   body: string;
 }
 
+/**
+ * AgentDash: the public release notes on the marketing site. Absolute, because
+ * self-hosted instances link to it from their own Changelog.
+ */
+export const PUBLIC_RELEASE_NOTES_URL = "https://www.agentdash.cloud/releases";
+
 const releaseModules = import.meta.glob("../../../releases/v*.md", {
   eager: true,
   // AgentDash: sanitized at build time; raw historical markdown never ships.

@@ -90,7 +90,7 @@ test.describe("What's new launch update", () => {
     await expect(page.locator("h1")).toContainText("Find your team");
     await expect(page.locator("figure figcaption")).toHaveCount(2);
     for (const caption of await page.locator("figure figcaption").allTextContents()) expect(caption).toContain("Simulated illustration");
-    await expect(page.getByRole("link", { name: "v2026.1007.1 release notes" })).toHaveAttribute("href", /\/blob\/main\/releases\/v2026.1007.1.md$/);
+    await expect(page.getByRole("link", { name: "v2026.1007.1 release notes" })).toHaveAttribute("href", "/releases/v2026.1007.1");
 
     const teams = page.getByRole("figure", { name: "Team sidebar example" });
     const team = teams.locator("details").first();
