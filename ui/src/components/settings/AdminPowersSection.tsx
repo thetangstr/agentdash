@@ -168,7 +168,7 @@ export function AdminPowersSection({
             <Link
               to="/company/settings/audit"
               data-testid="admin-powers-audit-link"
-              className="text-sm underline underline-offset-2"
+              className="text-sm underline underline-offset-2 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
             >
               Open the admin audit
             </Link>

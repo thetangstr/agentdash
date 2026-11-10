@@ -3,11 +3,11 @@ title: "Assistant toolset"
 summary: "The person-facing toolset a cloud assistant relays to a person, filtered by the grant's OAuth scopes."
 ---
 
-> Generated at commit `8f1b669b0` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `2089d203a` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 > 2 tools omitted: engagement-specific.
 
-**19 tools** — measured: the length of the `tools/list` response; 17 are documented here and 2 are omitted as engagement-specific. Source: `buildToolSurface(client, config, "assistant")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/assistant/tools.ts`, `src/assistant/work.ts` and `src/assistant/gated.ts`.
+**22 tools** — measured: the length of the `tools/list` response for a grant holding every scope (19 without `agentdash:admin`); 20 are documented here and 2 are omitted as engagement-specific. Source: `buildToolSurface(client, config, "assistant")` in `packages/mcp-server/src/index.ts`; the tools are defined in `src/assistant/tools.ts`, `src/assistant/work.ts` and `src/assistant/gated.ts`.
 
 Each tool's description is its inline string, verbatim. The input table is rendered from the JSON schema the server advertises in `tools/list` (`toolInputSchema` in `packages/mcp-server/src/schema.ts`, converted from the tool's zod schema). Nested objects are flattened: `a.b` is property `b` of object `a`, and `a[].b` is property `b` of each item of array `a`.
 

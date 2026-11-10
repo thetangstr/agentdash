@@ -510,9 +510,15 @@ export function renderToolPage(page, surface, commit) {
   const listed = surface.connections[text.connection].tools;
   const { kept: tools, omitted } = omitEngagementTools(listed);
   const notes = omitted > 0 ? [omissionNote(omitted, "tool")] : [];
+  // The admin batch tools are served only to a grant that explicitly holds the admin
+  // scope, so the default listing does not contain them; the page documents them, and
+  // the count it states must be the count it documents.
+  const adminCount = page.surface === "assistant" ? (surface.assistantAdminTools?.length ?? 0) : 0;
+  const stated = listed.length + adminCount;
   const lines = [
-    `**${listed.length} tools** — measured: the length of the \`tools/list\` response` +
-      (omitted > 0 ? `; ${tools.length} are documented here and ${omitted} ${omitted === 1 ? "is" : "are"} omitted as ${OMITTED_REASON}` : "") +
+    `**${stated} tools** — measured: the length of the \`tools/list\` response` +
+      (adminCount > 0 ? ` for a grant holding every scope (${listed.length} without \`${surface.scopes.admin}\`)` : "") +
+      (omitted > 0 ? `; ${tools.length + adminCount} are documented here and ${omitted} ${omitted === 1 ? "is" : "are"} omitted as ${OMITTED_REASON}` : "") +
       `. Source: ${text.source}.`,
     "",
     "Each tool's description is its inline string, verbatim. The input table is rendered from the JSON schema the server advertises in `tools/list`" +

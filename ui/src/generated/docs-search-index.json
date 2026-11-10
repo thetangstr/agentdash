@@ -1471,7 +1471,7 @@
         "confirmbatchchange",
         "batchchangestatus"
       ],
-      "firstParagraph": "19 tools — measured: the length of the tools/list response; 17 are documented here and 2 are omitted as engagement-specific. Source: buildToolSurface(client, config, \"assistant\") in packages/mcp-server/src/index.ts; the tools are defined in src/assistant/tools.ts,…"
+      "firstParagraph": "22 tools — measured: the length of the tools/list response for a grant holding every scope (19 without agentdash:admin); 20 are documented here and 2 are omitted as engagement-specific. Source: buildToolSurface(client, config, \"assistant\") in packages/mcp-server/src/index.ts;…"
     },
     {
       "slug": "mcp/tools/human",
