@@ -51,9 +51,22 @@ export const CODE_SHAPED = new RegExp(
   "g",
 );
 
-/** Masks any code-shaped run in text that came from records, so a record can never plant a code. */
+/** Masks the code shapes above in any text a tool relays (server messages and reasons included). */
 export function maskCodeShaped(text: string): string {
   return text.replace(CODE_SHAPED, "····-····");
+}
+
+/** Also four and four lower-case letters with a dash (`abcd-efgh`); only for text that came from records. */
+const LOWER_LETTERS_CODE = /(?<![0-9A-Za-z-])[a-z]{4}-[a-z]{4}(?![0-9A-Za-z-])/g;
+
+/**
+ * Text that came from records (titles, names, labels, the references the
+ * person gave): every code shape, including the letters-only lower-case one.
+ * Server-written sentences use `maskCodeShaped`, so ordinary words such as
+ * "read-only" stay readable there.
+ */
+export function maskRecordText(text: string): string {
+  return maskCodeShaped(text).replace(LOWER_LETTERS_CODE, "····-····");
 }
 
 const POLL_TIMEOUT_MS = 45_000;
@@ -138,7 +151,7 @@ function reasonsOf(batch: BatchViewRow): Array<{ label: string; outcome: string;
     .filter((item) => item.outcome !== "applied" || item.reasonCode === "applied_differently")
     .slice(0, 10)
     .map((item) => ({
-      label: clip(maskCodeShaped(item.label), 120),
+      label: clip(maskRecordText(item.label), 120),
       outcome: item.reasonCode === "applied_differently" ? "applied_differently" : item.outcome,
       reason: clip(maskCodeShaped(redactAssistantValue(item.reason ?? "") as string), FREE_TEXT_LIMIT),
     }));
@@ -205,15 +218,15 @@ export function assistantAdminBatchTools(client: PaperclipApiClient, ctx: Assist
           const missing = problems.filter((problem) => problem.kind === "not_found");
           if (unclear.length > 0) {
             return needsClarification({
-              summary: `Some records could be several things, so nothing was prepared. Ask the person which they mean: ${unclear.map((problem) => `"${clip(maskCodeShaped(problem.ref), 60)}"`).join(", ")}.${missing.length > 0 ? ` Not found: ${missing.map((problem) => `"${clip(maskCodeShaped(problem.ref), 60)}"`).join(", ")}.` : ""}`,
+              summary: `Some records could be several things, so nothing was prepared. Ask the person which they mean: ${unclear.map((problem) => `"${clip(maskRecordText(problem.ref), 60)}"`).join(", ")}.${missing.length > 0 ? ` Not found: ${missing.map((problem) => `"${clip(maskRecordText(problem.ref), 60)}"`).join(", ")}.` : ""}`,
               candidates: unclear.flatMap((problem) => (problem.candidates ?? []).map((candidate) => ({
-                label: clip(maskCodeShaped(candidate.label), 80),
+                label: clip(maskRecordText(candidate.label), 80),
                 ref: candidate.ref,
               }))),
             });
           }
           return notFound({
-            summary: `I couldn't find ${missing.map((problem) => `"${clip(maskCodeShaped(problem.ref), 60)}"`).join(", ")}, so nothing was prepared. Ask the person what they meant.`,
+            summary: `I couldn't find ${missing.map((problem) => `"${clip(maskRecordText(problem.ref), 60)}"`).join(", ")}, so nothing was prepared. Ask the person what they meant.`,
           });
         }
         if (error instanceof PaperclipApiError) return refusalFrom(error);
@@ -222,7 +235,7 @@ export function assistantAdminBatchTools(client: PaperclipApiClient, ctx: Assist
       if (!result.batchId) {
         return ok({
           summary: `${clip(maskCodeShaped(result.summary ?? "Nothing to change."), 300)} Nothing was prepared.`,
-          data: { counts: result.counts ?? {}, notDecidable: (result.notDecidable ?? []).map((entry) => ({ label: maskCodeShaped(entry.label), reason: maskCodeShaped(entry.reason) })) },
+          data: { counts: result.counts ?? {}, notDecidable: (result.notDecidable ?? []).map((entry) => ({ label: maskRecordText(entry.label), reason: maskRecordText(entry.reason) })) },
         });
       }
       const link = result.reviewUrl ?? (await reviewLink(result.batchId));
@@ -232,8 +245,8 @@ export function assistantAdminBatchTools(client: PaperclipApiClient, ctx: Assist
         data: redactAssistantValue({
           batchId: result.batchId,
           counts: result.counts ?? {},
-          sample: (result.sample ?? []).slice(0, 10).map((line) => clip(maskCodeShaped(line), 200)),
-          notDecidable: (result.notDecidable ?? []).map((entry) => ({ label: maskCodeShaped(entry.label), reason: maskCodeShaped(entry.reason) })),
+          sample: (result.sample ?? []).slice(0, 10).map((line) => clip(maskRecordText(line), 200)),
+          notDecidable: (result.notDecidable ?? []).map((entry) => ({ label: maskRecordText(entry.label), reason: maskRecordText(entry.reason) })),
           expiresAt: result.expiresAt,
           reviewUrl: link,
         }),

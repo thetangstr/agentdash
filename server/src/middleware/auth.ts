@@ -9,6 +9,7 @@ import {
   ASSISTANT_ACCESS_TOKEN_PREFIX,
   ASSISTANT_INSUFFICIENT_SCOPE,
   ASSISTANT_SCOPE_ADMIN,
+  ASSISTANT_SCOPE_DECIDE,
   assistantStepUpChallenge,
   ASSISTANT_LOOPBACK_TOKEN_PREFIX,
   ASSISTANT_TASK_CREATE_LIMIT_PER_HOUR,
@@ -423,12 +424,26 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       if (resolved.credential.kind === "assistant") {
         const credential = resolved.credential;
         const [grant] = await db
-          .select({ userId: assistantGrants.userId, companyId: assistantGrants.companyId, scopes: assistantGrants.scopes, revokedAt: assistantGrants.revokedAt })
+          .select({
+            userId: assistantGrants.userId,
+            companyId: assistantGrants.companyId,
+            scopes: assistantGrants.scopes,
+            revokedAt: assistantGrants.revokedAt,
+            decisionsNeedTap: assistantGrants.decisionsNeedTap,
+          })
           .from(assistantGrants)
           .where(eq(assistantGrants.id, credential.grantId));
         if (!grant || grant.revokedAt || grant.userId !== credential.userId || grant.companyId !== resolved.companyId
           || !grant.scopes.includes(ASSISTANT_SCOPE_ADMIN) || resolved.actor.assistantGrantId !== credential.grantId) {
           res.status(403).json({ error: "This assistant connection was revoked, so this record was not changed." });
+          return;
+        }
+        // Review of c5941141b: a decision also needs the decide scope and never
+        // a connection whose decisions need the person's tap, read here too so
+        // a change between the runner's check and the send still stops it.
+        if (resolved.binding.path.startsWith("/api/approvals/")
+          && (!grant.scopes.includes(ASSISTANT_SCOPE_DECIDE) || grant.decisionsNeedTap)) {
+          res.status(403).json({ error: "This assistant connection may no longer decide approvals, so this one was not decided. Decide it in AgentDash, on the Decisions page." });
           return;
         }
       }

@@ -189,4 +189,21 @@ describe("BatchReview", () => {
     expect(container.querySelector("b")).toBeNull();
     expect(byTestId("batch-review-actions")!.textContent).toContain("(evil.example)");
   });
+
+  it("review of c5941141b: inside a frame there is no Show code and no Apply here", async () => {
+    mockBatchesApi.get.mockResolvedValue(batch());
+    const realTop = Object.getOwnPropertyDescriptor(window, "top");
+    Object.defineProperty(window, "top", { configurable: true, get: () => ({}) });
+    try {
+      await render();
+      expect(byTestId("batch-review-framed")?.textContent).toBe("Open this page in its own tab to see the code or apply the change.");
+      expect(byTestId("batch-review-show-code")).toBeNull();
+      expect(byTestId("batch-review-apply-here")).toBeNull();
+      expect(container.querySelectorAll('[data-testid="batch-review-item"]')).toHaveLength(2);
+    } finally {
+      if (realTop) Object.defineProperty(window, "top", realTop);
+    }
+    expect(mockBatchesApi.confirmCode).not.toHaveBeenCalled();
+  });
 });
+

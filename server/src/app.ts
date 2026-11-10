@@ -245,11 +245,25 @@ export function createStaticShellReader(
   };
 }
 
-/** `/<prefix>/company/batches/<id>` (and the unprefixed form), the batch review SPA route. */
-export const BATCH_REVIEW_PAGE_PATH = /^\/(?:[^/]+\/)?company\/batches\/[^/]+\/?$/;
+/**
+ * `/<prefix>/company/batches/<id>` (and the unprefixed form), the batch review
+ * SPA route. Matched the way the router matches it (review of c5941141b): any
+ * letter case, repeated or trailing slashes, and percent-encoded characters.
+ */
+export const BATCH_REVIEW_PAGE_PATH = /^\/(?:[^/]+\/)?company\/batches\/[^/]+(?:\/)*$/i;
+
+export function batchReviewPagePath(rawPath: string): boolean {
+  let path = rawPath;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    // An undecodable path is matched as it is.
+  }
+  return BATCH_REVIEW_PAGE_PATH.test(path.replace(/\/{2,}/g, "/"));
+}
 
 export function batchReviewFramingGuard(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (BATCH_REVIEW_PAGE_PATH.test(req.path)) {
+  if (batchReviewPagePath(req.path)) {
     res.set("Content-Security-Policy", "frame-ancestors 'none'");
     res.set("X-Frame-Options", "DENY");
   }

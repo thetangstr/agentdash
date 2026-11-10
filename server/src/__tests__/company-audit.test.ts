@@ -499,8 +499,12 @@ describeEmbeddedPostgres("admin audit (part 4.1)", () => {
 
     it("exports the audit's rows with the documented columns, and logs audit.exported", async () => {
       const injected = await addRow({ action: "issue.updated", entityType: "issue", entityId: "+cmd|' /C calc'!A0", actorId: TITUS, createdAt: at(20), details: { note: "a \"quoted\", comma" } });
-      const json = await auditAll(admin(), "includeSystem=true");
-      const res = await request(admin()).get(`/api/companies/${COMPANY}/audit.csv?includeSystem=true`);
+      // Pin both reads to one instant: a refusal row an earlier test fired and
+      // forgot can land at any moment, and must not count in one read only.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const pinned = encodeURIComponent(new Date().toISOString());
+      const json = await auditAll(admin(), `includeSystem=true&to=${pinned}`);
+      const res = await request(admin()).get(`/api/companies/${COMPANY}/audit.csv?includeSystem=true&to=${pinned}`);
       expect(res.status).toBe(200);
       expect(res.headers["content-type"]).toMatch(/^text\/csv/);
       expect(res.headers["content-disposition"]).toMatch(/^attachment; filename="audit-\d{4}-\d{2}-\d{2}\.csv"$/);

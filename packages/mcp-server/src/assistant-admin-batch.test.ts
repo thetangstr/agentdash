@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaperclipApiClient } from "./client.js";
 import { PaperclipApiError } from "./client.js";
 import { AssistantContext } from "./assistant/context.js";
-import { assistantAdminBatchTools, CODE_SHAPED, maskCodeShaped } from "./assistant/admin-batch.js";
+import { assistantAdminBatchTools, CODE_SHAPED, maskCodeShaped, maskRecordText } from "./assistant/admin-batch.js";
 
 /**
  * AgentDash admin powers (part 5b): the three connector tools for batch
@@ -242,4 +242,17 @@ describe("assistant admin batch tools", () => {
       expect(maskCodeShaped(`x ${mask} y`)).toBe("x ····-···· y");
     }
   });
+
+  it("review of c5941141b: record text also masks the letters-only lower-case form; server sentences keep ordinary words", async () => {
+    expect(maskRecordText("Task abcd-efgh please")).toBe("Task ····-···· please");
+    expect(maskRecordText("Task K7QM-3XRD")).toBe("Task ····-····");
+    expect(maskCodeShaped("This principal is read-only")).toBe("This principal is read-only");
+    const { client } = seeded((call) => call.method === "POST" ? {
+      ok: true, batchId: BATCH_ID, summary: "1 task would change.", counts: { willChange: 1 },
+      sample: ["ACME-1 code abcd-efgh: priority: low → high"], reviewUrl: `https://dash.example.test/ACME/company/batches/${BATCH_ID}`,
+    } : undefined);
+    const result = await tools(client).get("prepare_batch_change")!.execute({ kind: "issue.update", targets: ["ACME-1"], change: { priority: "high" } });
+    expect(wire(result)).not.toContain("abcd-efgh");
+  });
 });
+

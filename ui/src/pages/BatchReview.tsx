@@ -21,6 +21,19 @@ import { useCompany } from "@/context/CompanyContext";
  * - "Apply here" applies it with the person's own session.
  */
 
+/**
+ * Review of c5941141b: the page is never framed by the server (DENY), but an
+ * in-app navigation inside a same-origin frame makes no new request. Inside
+ * any frame the page shows the changes and nothing to act with.
+ */
+function insideAFrame(): boolean {
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+}
+
 function minutesLeft(expiresAt: string, now: number): number {
   return Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 60_000));
 }
@@ -108,6 +121,7 @@ export function BatchReview() {
   const clientHost = data.assistantClientHost ? plainAssistantClientName(data.assistantClientHost) : null;
   const clientLabel = clientHost ? `${clientName} (${clientHost})` : clientName;
   const busy = showCode.isPending || applyHere.isPending;
+  const framed = insideAFrame();
   const errorText = (err: unknown) => (err instanceof Error ? err.message : "That did not work.");
 
   return (
@@ -119,7 +133,13 @@ export function BatchReview() {
         <p className="text-sm text-muted-foreground" data-testid="batch-review-status">{statusLine(data, now)}</p>
       </div>
 
-      {waiting && fromAssistant ? (
+      {waiting && fromAssistant && framed ? (
+        <p className="rounded-md border border-border p-4 text-sm" data-testid="batch-review-framed">
+          Open this page in its own tab to see the code or apply the change.
+        </p>
+      ) : null}
+
+      {waiting && fromAssistant && !framed ? (
         <div className="space-y-3 rounded-md border border-border p-4" data-testid="batch-review-actions">
           <p className="text-sm">
             Check every change below. To go ahead, show the code and read it to {clientLabel}, or apply it here yourself.

@@ -528,6 +528,24 @@ describeEmbeddedPostgres("batch changes from an admin's own Claude (part 5a)", (
       expect((await t.db.select().from(approvals).where(eq(approvals.id, b.id)))[0]!.status).toBe("pending");
     });
 
+    it.each([
+      ["the decide scope is taken away", { scopes: ADMIN_SCOPES }],
+      ["decisions start needing the person's tap", { decisionsNeedTap: true }],
+    ])("review of c5941141b: when %s between the runner's check and the send, that approval is not decided", async (_label, change) => {
+      const approval = await pendingApproval();
+      const p = await prepare({ kind: "approval.approve", targets: [approval.id], change: {} }, decider());
+      const code = (await mint(p.body.batchId)).body.code;
+      beforeSend = async () => {
+        await t.db.update(assistantGrants).set(change as never).where(eq(assistantGrants.id, decideGrantId));
+      };
+      expect((await confirm(p.body.batchId, code, decider())).status).toBe(202);
+      const done = await batchOf(p.body.batchId);
+      expect(done.items[0]).toMatchObject({ outcome: "refused", reasonCode: BATCH_REASON_CODES.routeRefused, httpStatus: 403 });
+      expect(done.items[0].reason).toMatch(/Decide it in AgentDash/);
+      expect((await t.db.select().from(approvals).where(eq(approvals.id, approval.id)))[0]!.status).toBe("pending");
+      await t.db.update(assistantGrants).set({ decisionsNeedTap: false }).where(eq(assistantGrants.id, decideGrantId));
+    });
+
     it("a grant whose decisions need the person's tap cannot prepare approvals: decide in AgentDash", async () => {
       const approval = await pendingApproval();
       const res = await prepare({ kind: "approval.approve", targets: [approval.id], change: {} }, claude({ grant: tapGrantId, scopes: DECIDE_SCOPES }));
