@@ -109,7 +109,7 @@ function tierDeps(dbOrTx: Db): TierCapacityDeps {
     getCompany: async (id) => ({ planTier: (await companiesSvc.getById(id))?.planTier ?? "free" }),
     counts: {
       humans: async (id) => (await access.listActiveUserMemberships(id)).length,
-      agents: async (id) => agentsSvc.countBillable(id),
+      agents: async (id) => (await agentsSvc.list(id)).length,
     },
   };
 }

@@ -22,7 +22,7 @@ describe("tier-policy free caps", () => {
     });
     expect(freeTierCapExceededPayload("hire")).toEqual({
       code: "agent_cap_exceeded",
-      message: "Free workspaces include one worker agent plus Fred, your included guide. Upgrade to Pro to hire more workers.",
+      message: "Free workspaces include only the Chief of Staff. Upgrade to Pro to hire more agents.",
     });
   });
 

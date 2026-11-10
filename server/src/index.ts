@@ -639,7 +639,7 @@ export async function startServer(): Promise<StartedServer> {
                   humans: async (companyId) =>
                     (await scoped.access.listActiveUserMemberships(companyId)).length,
                   agents: async (companyId) =>
-                    scoped.agents.countBillable(companyId),
+                    (await scoped.agents.list(companyId)).length,
                 },
               }),
             },

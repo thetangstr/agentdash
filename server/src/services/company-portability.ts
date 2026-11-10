@@ -2961,7 +2961,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         humans: async (companyId: string) =>
           (await scopedAccess.listActiveUserMemberships(companyId)).length,
         agents: async (companyId: string) =>
-          scopedAgents.countBillable(companyId),
+          (await scopedAgents.list(companyId)).length,
       },
     };
   }

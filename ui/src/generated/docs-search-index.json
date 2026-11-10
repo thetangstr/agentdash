@@ -1205,7 +1205,6 @@
         "execution-workspaces",
         "feature-flags",
         "first-run",
-        "fred",
         "github-connection",
         "gmail",
         "goals",
@@ -1258,7 +1257,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 678 routes in 91 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest f3d7abd18be2; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 674 routes in 90 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest e82ef8e184b1; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

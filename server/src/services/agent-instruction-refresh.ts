@@ -25,8 +25,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, fredRegistrations } from "@paperclipai/db";
-import { loadFredInstructionsBundle } from "./fred-instructions.js";
+import { agents as agentsTable } from "@paperclipai/db";
 import { and, eq, ne } from "drizzle-orm";
 import { logActivity } from "./activity-log.js";
 import { agentInstructionsService } from "./agent-instructions.js";
@@ -405,9 +404,7 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
     const existing = await instructions.getBundle(agentLike);
     if (existing.mode === "external") return null;
 
-    const [registeredFred] = await db.select({ id: fredRegistrations.id }).from(fredRegistrations)
-      .where(and(eq(fredRegistrations.companyId, agent.companyId), eq(fredRegistrations.agentId, agent.id))).limit(1);
-    const files = registeredFred ? await loadFredInstructionsBundle() : await loadDefaultBundle(agent.role);
+    const files = await loadDefaultBundle(agent.role);
     const materialized = await instructions.materializeManagedBundle(agentLike, files, {
       entryFile: "AGENTS.md",
       replaceExisting: false,

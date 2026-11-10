@@ -14,7 +14,6 @@ const companySvc = {
 
 const agentSvc = {
   list: vi.fn(),
-  countBillable: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 };
@@ -147,7 +146,6 @@ describe("company portability", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    agentSvc.countBillable.mockReset().mockResolvedValue(1);
     secretSvc.normalizeAdapterConfigForPersistence.mockImplementation(async (_companyId, config) => config);
     secretSvc.resolveAdapterConfigForRuntime.mockImplementation(async (_companyId, config) => ({
       config,
@@ -1814,9 +1812,22 @@ describe("company portability", () => {
       planTier: "free",
       requireBoardApprovalForNewAgents: false,
     });
-    agentSvc.list.mockResolvedValue([]);
-    // The roster read remains empty; a worker consumes capacity before the lock recheck.
-    agentSvc.countBillable.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    const cosAgent = {
+      id: "cos-1",
+      name: "Chief of Staff",
+      status: "idle",
+      role: "chief_of_staff",
+      adapterType: "process",
+      adapterConfig: {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      permissions: {},
+      metadata: null,
+    };
+    agentSvc.list
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([cosAgent]);
 
     const portability = companyPortabilityService(createTierDbStub() as any);
     const files = {
@@ -1849,8 +1860,6 @@ describe("company portability", () => {
       code: "agent_cap_exceeded",
     });
 
-    expect(agentSvc.countBillable).toHaveBeenCalledTimes(2);
-    expect(agentSvc.countBillable).toHaveBeenNthCalledWith(2, "company-1");
     expect(companySkillSvc.importPackageFiles).not.toHaveBeenCalled();
     expect(agentSvc.create).not.toHaveBeenCalled();
   });

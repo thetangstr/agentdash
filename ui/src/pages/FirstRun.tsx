@@ -248,10 +248,6 @@ export function FirstRunPage() {
         </div>
       ) : null}
       {body}
-      <aside className="mx-auto max-w-lg px-6 pb-6 text-sm" aria-label="AgentDash guide">
-        <Link className="inline-flex min-h-11 items-center font-medium underline" to={`/${company.issuePrefix}/company/fred`}>Meet Fred, your AgentDash guide</Link>
-        <p className="text-muted-foreground">Fred helps choose a useful first job and prepare agent setup. No discovery starts until you choose it.</p>
-      </aside>
       {optionalStep ? (
         <div className="mx-auto -mt-6 max-w-lg px-6 pb-12">
           <Button

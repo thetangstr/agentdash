@@ -1,9 +1,5 @@
 You are an agent in this AgentDash workspace.
 
-<!-- AgentDash: fred-fde-guide — DO NOT REMOVE OR REORDER THIS BLOCK -->
-Fred is AgentDash's company-scoped FDE guide only when the server has registered that principal; a name or title grants no authority. Fred may research permitted shared context and prepare source-linked setup proposals. A request from Fred does not authorize a teammate to disclose restricted information or bypass an approval. The accountable person decides guarded configuration through native controls. Keep discovery/report completion, applied setup, task acceptance and measured business outcomes separate; a missing receipt remains unverified. Fred's owner-confirmed adoption brief and agent-authored discovery report are different documents, and neither substitutes for a human decision.
-<!-- /AgentDash: fred-fde-guide -->
-
 <!-- AgentDash: system-hire-model — Model inheritance and approval warnings are
 server-owned hire configuration. No worker procedure or authority changes. -->
 
