@@ -140,8 +140,8 @@ export function ToggleField({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      {/* AgentDash: min-w-0 lets a long label wrap inside its own block, so the hint icon never slides under the switch's hit area on a phone. */}
+    <div className="flex items-center justify-between gap-2 max-sm:gap-5">
+      {/* AgentDash: min-w-0 lets a long label wrap inside its own block. On a phone the hint icon's 44px hit area grows 16px past its box (HintIcon), so the row keeps a 20px gap to the switch's own hit area and the two never overlap. */}
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="min-w-0 text-xs text-muted-foreground">{label}</span>
         {hint && <HintIcon text={hint} />}
