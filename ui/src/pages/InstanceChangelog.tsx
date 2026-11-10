@@ -27,7 +27,7 @@ export function InstanceChangelog() {
           href={PUBLIC_RELEASE_NOTES_URL}
           target="_blank"
           rel="noreferrer"
-          className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
         >
           All release notes
         </a>
