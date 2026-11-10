@@ -21,6 +21,9 @@ import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
 import { assistantOAuthService, assistantResourceUri } from "../services/assistant-oauth.js";
 import { resolveAssistantLoopbackToken } from "../services/assistant-loopback.js";
+import { BATCH_ITEM_TOKEN_PREFIX } from "@paperclipai/shared";
+import { batchItemBodyDigest, consumeBatchItemCredential } from "../services/batch/item-credential.js";
+import { runWithBatchActivityContext } from "../lib/batch-activity-context.js";
 import { consumeAssistantWriteAllowance } from "../services/assistant-write-limits.js";
 import { logActivity } from "../services/activity-log.js";
 
@@ -379,6 +382,44 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       req.verifiedCredential = { kind: "assistant", origin: resolved.origin,
         loopback: { expiresAt: resolved.expiresAt, lease: resolved.lease } };
       next();
+      return;
+    }
+
+    // AgentDash admin powers (part 2): one item of a confirmed batch. The
+    // runner (services/batch/runner.ts) mints a `pcbx_` token per item and
+    // sends it over this server's own listener to the record's single-record
+    // route. Resolved on prefix before any credential table is read; a
+    // forged, expired or already-spent token resolves to nothing and the
+    // request stays unauthenticated. The token is good for exactly one
+    // (method, path, body); anything else is refused here, before the route.
+    if (token.startsWith(BATCH_ITEM_TOKEN_PREFIX)) {
+      const resolved = consumeBatchItemCredential(token);
+      if (!resolved) {
+        next();
+        return;
+      }
+      const rawUrl = req.originalUrl || req.url || "";
+      if (
+        req.method.toUpperCase() !== resolved.binding.method
+        || rawUrl.includes("?")
+        || normalizedPath(req) !== resolved.binding.path
+        || batchItemBodyDigest(req.body) !== resolved.binding.bodyDigest
+      ) {
+        res.status(403).json({ error: "This batch credential is not valid for this request" });
+        return;
+      }
+      req.actor = { ...resolved.actor };
+      req.verifiedCredential = {
+        kind: "batch_item",
+        batchId: resolved.batchId,
+        itemId: resolved.itemId,
+        companyId: resolved.companyId,
+        origin: resolved.credential,
+      };
+      runWithBatchActivityContext(
+        { batchId: resolved.batchId, itemId: resolved.itemId, companyId: resolved.companyId, origin: resolved.origin },
+        () => next(),
+      );
       return;
     }
 

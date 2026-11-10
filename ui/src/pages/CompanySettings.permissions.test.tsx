@@ -128,7 +128,14 @@ function toggle(testId: string) {
 }
 
 const EDITABLE_INPUTS = ["Workspace name", "Description", "Logo", "Brand color", "Brand color value", "Attachment size limit in MiB"];
-const TOGGLES = ["company-settings-team-approval-toggle", "company-settings-issue-start-toggle"];
+const TOGGLES = [
+  "company-settings-team-approval-toggle",
+  "company-settings-issue-start-toggle",
+  // Admin powers: the same rule (company:manage) as every other setting.
+  "admin-powers-directive-read-toggle",
+  "admin-powers-transcript-read-toggle",
+  "admin-powers-assistant-batches-toggle",
+];
 
 describe("CompanySettings for a member", () => {
   it("shows the settings read-only with one plain line", async () => {

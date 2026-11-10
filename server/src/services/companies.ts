@@ -158,6 +158,12 @@ export function companyService(db: Db) {
     feedbackDataSharingConsentByUserId: companies.feedbackDataSharingConsentByUserId,
     feedbackDataSharingTermsVersion: companies.feedbackDataSharingTermsVersion,
     agentVisibilityDefault: companies.agentVisibilityDefault,
+    // AgentDash admin powers: the company switches (Company Settings → Admin powers).
+    adminDirectiveReadEnabled: companies.adminDirectiveReadEnabled,
+    adminTranscriptReadEnabled: companies.adminTranscriptReadEnabled,
+    assistantAdminBatchesEnabled: companies.assistantAdminBatchesEnabled,
+    assistantBatchMaxRecords: companies.assistantBatchMaxRecords,
+    defaultCeilingTemplateId: companies.defaultCeilingTemplateId,
     brandColor: companies.brandColor,
     // AgentDash (AGE-55): FRE Plan B — domain claim on the company.
     emailDomain: companies.emailDomain,

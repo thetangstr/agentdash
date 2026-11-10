@@ -4,6 +4,9 @@ export {
   COMPANY_PRODUCT_PROFILES,
   DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
+  ASSISTANT_BATCH_MAX_RECORDS_MIN,
+  ASSISTANT_BATCH_MAX_RECORDS_MAX,
+  ASSISTANT_BATCH_MAX_RECORDS_DEFAULT,
   DEPLOYMENT_MODES,
   DEPLOYMENT_EXPOSURES,
   BIND_MODES,
@@ -1548,3 +1551,6 @@ export * from './reserved-company-prefixes.js';
 export { normalizeEscapedLineBreaks } from './validators/text.js';
 // zod 3 → zod 4 object semantics (refinement-free objects, defaults-free partials).
 export { withoutRefinements, partialWithoutDefaults } from './validators/zod-object.js';
+// AgentDash admin powers, part 2: the one batch engine (numbers, words, request bodies).
+export * from "./batch.js";
+export * from "./validators/batch.js";

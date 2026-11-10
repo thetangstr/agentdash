@@ -2,6 +2,8 @@ import { z } from "zod";
 import { partialWithoutDefaults } from "./zod-object.js";
 import {
   AGENT_VISIBILITIES,
+  ASSISTANT_BATCH_MAX_RECORDS_MAX,
+  ASSISTANT_BATCH_MAX_RECORDS_MIN,
   COMPANY_PRODUCT_PROFILES,
   COMPANY_STATUSES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
@@ -48,6 +50,19 @@ export const updateCompanySchema = partialWithoutDefaults(createCompanySchema)
     brandColor: brandColorSchema,
     logoAssetId: logoAssetIdSchema,
     attachmentMaxBytes: attachmentMaxBytesSchema.optional(),
+    // AgentDash admin powers: the company switches. Administrators only (the
+    // route's company-settings gate); each one is off until an admin turns it on.
+    adminDirectiveReadEnabled: z.boolean().optional(),
+    adminTranscriptReadEnabled: z.boolean().optional(),
+    assistantAdminBatchesEnabled: z.boolean().optional(),
+    assistantBatchMaxRecords: z
+      .number()
+      .int()
+      .min(ASSISTANT_BATCH_MAX_RECORDS_MIN)
+      .max(ASSISTANT_BATCH_MAX_RECORDS_MAX)
+      .optional(),
+    // `defaultCeilingTemplateId` joins with the ceiling-template routes (part
+    // 3), which check that the template belongs to this company.
   });
 
 export type UpdateCompany = z.infer<typeof updateCompanySchema>;

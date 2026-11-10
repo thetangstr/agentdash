@@ -301,6 +301,13 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "asset.created",
   "assistant.gated_action",
   "authz.refused",
+  // AgentDash admin powers (part 2): the batch engine (services/batch/).
+  "batch.completed",
+  "batch.interrupted",
+  "batch.item_refused",
+  "batch.item_failed",
+  "batch.item_unknown",
+  "batch.item_reconciled",
   "board_api_key.created",
   "board_api_key.revoked",
   // local-harness bridge

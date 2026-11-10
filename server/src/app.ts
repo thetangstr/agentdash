@@ -81,6 +81,7 @@ import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
 import { activityRoutes } from "./routes/activity.js";
 import { assistantRoutes } from "./routes/assistant.js";
+import { batchRoutes } from "./routes/batches.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { mspRoutes } from "./routes/msp.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -519,6 +520,9 @@ export async function createApp(
   // through the shared decision-effects service, which needs the worker
   // manager for its wake-up side effects — same wiring as approvalRoutes.
   api.use(assistantRoutes(db, { pluginWorkerManager: workerManager }));
+  // AgentDash admin powers (part 2): the one batch engine. Each item runs
+  // through the record's own single-record route over this listener.
+  api.use(batchRoutes(db));
   api.use(dashboardRoutes(db));
   api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));

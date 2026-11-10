@@ -3352,6 +3352,18 @@ components:
           type: boolean
         agentVisibilityDefault:
           $ref: "#/components/schemas/AgentVisibility"
+        adminDirectiveReadEnabled:
+          type: boolean
+        adminTranscriptReadEnabled:
+          type: boolean
+        assistantAdminBatchesEnabled:
+          type: boolean
+        assistantBatchMaxRecords:
+          type: number
+        defaultCeilingTemplateId:
+          type:
+            - string
+            - "null"
         feedbackDataSharingEnabled:
           type: boolean
         feedbackDataSharingConsentAt:
@@ -7831,6 +7843,16 @@ components:
             - string
             - "null"
           format: uuid
+        adminDirectiveReadEnabled:
+          type: boolean
+        adminTranscriptReadEnabled:
+          type: boolean
+        assistantAdminBatchesEnabled:
+          type: boolean
+        assistantBatchMaxRecords:
+          type: integer
+          minimum: 1
+          maximum: 200
     UpdateGoalRequest:
       type: object
       properties:

@@ -6,6 +6,11 @@ export type CompanyProductProfile = (typeof COMPANY_PRODUCT_PROFILES)[number];
 
 export const DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_COMPANY_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
+// AgentDash admin powers: how many records one batch from an admin's own
+// Claude may hold (company setting `assistantBatchMaxRecords`).
+export const ASSISTANT_BATCH_MAX_RECORDS_MIN = 1;
+export const ASSISTANT_BATCH_MAX_RECORDS_MAX = 200;
+export const ASSISTANT_BATCH_MAX_RECORDS_DEFAULT = 50;
 
 export const DEPLOYMENT_MODES = ["local_trusted", "authenticated"] as const;
 export type DeploymentMode = (typeof DEPLOYMENT_MODES)[number];

@@ -1155,6 +1155,22 @@ export async function startServer(): Promise<StartedServer> {
     inboxEmailHandle.unref?.();
   }
 
+  // AgentDash admin powers (part 2): the batch sweeper. A running batch whose
+  // runner stopped (restart, crash) becomes interrupted — items being sent
+  // become unknown and are never resent — and expired previews are marked.
+  // Conditional updates, so more than one replica is safe.
+  {
+    const { sweepBatches } = await import("./services/batch/sweeper.js");
+    const { BATCH_SWEEP_INTERVAL_MS } = await import("@paperclipai/shared");
+    const sweep = () => {
+      void sweepBatches(db as any).catch((err) => {
+        logger.warn({ err }, "batch sweep failed");
+      });
+    };
+    sweep();
+    setInterval(sweep, BATCH_SWEEP_INTERVAL_MS).unref?.();
+  }
+
   // AgentDash (human control plane, review P2 #859): retention sweep for
   // human action handles, which carry answer text in payload/result.
   {

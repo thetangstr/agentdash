@@ -77,6 +77,17 @@ export function boardMutationGuard(): RequestHandler {
       return;
     }
 
+    // AgentDash admin powers (part 2): one item of a confirmed batch, sent by
+    // the server to itself over loopback with a single-use `pcbx_` bearer
+    // bound to this exact request. Like `assistant_grant` it is a bearer
+    // credential a browser cannot be made to attach; the person's browser
+    // request that confirmed the batch passed this guard itself. Only the
+    // verified credential kind is trusted here, never an actor field.
+    if (req.verifiedCredential?.kind === "batch_item") {
+      next();
+      return;
+    }
+
     if (!isTrustedBoardMutationRequest(req)) {
       res.status(403).json({ error: "Board mutation requires trusted browser origin" });
       return;

@@ -121,6 +121,10 @@ curl -X PATCH https://your-instance.example/api/companies/$COMPANY_ID \
 | `brandColor` | `#rrggbb` or null | |
 | `logoAssetId` | UUID or null | An uploaded asset to use as the logo. |
 | `attachmentMaxBytes` | integer ≥ 1 | |
+| `adminDirectiveReadEnabled` | boolean | Admin powers: owners and admins may read the directives of any agent. Off by default. |
+| `adminTranscriptReadEnabled` | boolean | Admin powers: owners and admins may read run transcripts while document access is on. Off by default. |
+| `assistantAdminBatchesEnabled` | boolean | Admin powers: an owner's or admin's own Claude may prepare batch changes. Off by default. |
+| `assistantBatchMaxRecords` | integer 1 to 200 | The most records one batch from Claude may hold. Default 50. |
 
 An agent may call this only if it is the company's **CEO agent**, and its body is parsed with the narrower `agentCompanyBrandingSchema`: `brandColor` and `logoAssetId`, at least one of them, nothing else.
 
@@ -151,6 +155,9 @@ From `packages/shared/src/types/company.ts`. The fields an integration reads:
 | `budgetMonthlyCents`, `spentMonthlyCents` | integer | The monthly budget and this month's spend, in cents. |
 | `requireBoardApprovalForNewAgents`, `newIssuesStartAsTodo` | boolean | |
 | `agentVisibilityDefault` | `company` · `owner` | |
+| `adminDirectiveReadEnabled`, `adminTranscriptReadEnabled`, `assistantAdminBatchesEnabled` | boolean | The admin powers switches; each is `false` until an owner or admin turns it on. |
+| `assistantBatchMaxRecords` | integer | 1 to 200, default 50. |
+| `defaultCeilingTemplateId` | UUID or null | Reserved: the ceiling every new agent starts with. Not settable yet. |
 | `brandColor`, `logoAssetId`, `logoUrl` | string or null | |
 | `createdAt`, `updatedAt` | ISO 8601 timestamp | |
 

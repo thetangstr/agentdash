@@ -9,6 +9,7 @@ import { redactCurrentUserValue } from "../log-redaction.js";
 import { redactRunLogValue } from "./run-log-redaction.js";
 import { sanitizeRecord } from "../redaction.js";
 import { logger } from "../middleware/logger.js";
+import { batchActivityDetails, currentBatchActivityContext } from "../lib/batch-activity-context.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import { instanceSettingsService, readInstanceGeneralSettings } from "./instance-settings.js";
 
@@ -87,7 +88,14 @@ async function insertActivityWithRedaction(
   beforeInsert?: () => void,
 ): Promise<ActivityPublication> {
   const currentUserRedactionOptions = { enabled: censorUsernameInLogs };
-  const sanitizedDetails = input.details ? sanitizeRecord(input.details) : null;
+  // AgentDash admin powers (part 2): a row written while a batch item's
+  // request runs says which batch and item it came from. Server-derived, so it
+  // replaces any `batch` a caller put in details.
+  const batch = currentBatchActivityContext();
+  const details = batch && batch.companyId === input.companyId
+    ? { ...(input.details ?? {}), batch: batchActivityDetails(batch) }
+    : input.details;
+  const sanitizedDetails = details ? sanitizeRecord(details) : null;
   const redactedDetails = sanitizedDetails
     ? // AgentDash (GH #992): activity details can carry run output (error
       // messages, excerpts) — the shared secret pass applies on top of the

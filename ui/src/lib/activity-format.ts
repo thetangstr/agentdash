@@ -77,6 +77,14 @@ export { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS };
  * fallback at the bottom of `formatActivityVerb`.
  */
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
+  // AgentDash admin powers (part 2): the batch engine's own rows. An applied
+  // record's row is the route's own (for example "updated"), carrying details.batch.
+  "batch.completed": "finished a batch change",
+  "batch.interrupted": "recorded an interrupted batch change",
+  "batch.item_refused": "was refused a batch change to",
+  "batch.item_failed": "could not apply a batch change to",
+  "batch.item_unknown": "has an unconfirmed batch change on",
+  "batch.item_reconciled": "recorded what happened to a batch change on",
   // Agent lifecycle and configuration
   // AgentDash: Agent Performance Management gate 2 — V2 access (shadow logs, outside-profile changes)
   "access.policy_changed": "changed the access rules of",
@@ -689,6 +697,10 @@ const COMPANY_UPDATE_FIELD_LABELS: Record<string, string> = {
   requireBoardApprovalForNewAgents: "changed the hire-approval rule",
   newIssuesStartAsTodo: "changed the default status for new issues",
   agentVisibilityDefault: "changed the default agent visibility",
+  adminDirectiveReadEnabled: "changed whether admins can read agent directives",
+  adminTranscriptReadEnabled: "changed whether admins can read run transcripts",
+  assistantAdminBatchesEnabled: "changed whether admins' own Claude can prepare batch changes",
+  assistantBatchMaxRecords: "changed the most records in a batch from Claude",
   feedbackDataSharingEnabled: "changed the feedback data-sharing setting",
   attachmentMaxBytes: "changed the attachment size limit",
   budgetMonthlyCents: "updated the company budget",

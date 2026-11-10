@@ -10,6 +10,7 @@ import { AgentAccessEnforcementCard } from "@/components/settings/AgentAccessEnf
 import { PerformanceManagerCard } from "@/components/settings/PerformanceManagerCard";
 import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
+import { AdminPowersSection } from "@/components/settings/AdminPowersSection";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCapability } from "../hooks/useCapability";
@@ -507,6 +508,13 @@ export function CompanySettings() {
           />
         </div>
       </div>
+
+      {/* AgentDash admin powers: the company switches, for every company. */}
+      <AdminPowersSection
+        company={selectedCompany}
+        canManage={canManage}
+        showReadOnlyNotice={showReadOnlyNotice}
+      />
 
       {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
       <ReadinessAssessmentCard />
