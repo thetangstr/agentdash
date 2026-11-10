@@ -1,7 +1,7 @@
 import type { AgentGovernancePolicy } from "@paperclipai/shared";
 import { api } from "./client";
 
-/** AgentDash admin powers: named owner ceilings (agentdash_mk companies; 404 elsewhere). */
+/** AgentDash admin powers: named owner ceilings (the server answers 404 where agent ceilings are off). */
 export interface CeilingTemplate {
   id: string;
   companyId: string;
