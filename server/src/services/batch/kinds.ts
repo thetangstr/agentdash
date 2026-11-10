@@ -49,6 +49,8 @@ export interface BatchKindItemRef {
   before: Record<string, unknown>;
   /** For routes that take an idempotency key: unguessable, stable for this item. */
   idempotencyKey: string;
+  /** Part 5: the item is carried out by the person's assistant connection (confirmed with the browser-shown code). */
+  viaAssistant?: boolean;
 }
 
 export interface BatchKind<Change = unknown, Record extends BatchKindRecord = BatchKindRecord> {
@@ -70,6 +72,12 @@ export interface BatchKind<Change = unknown, Record extends BatchKindRecord = Ba
    * what the route will do (for example a person who stewards an agent).
    */
   load(ctx: BatchKindContext, ids: readonly string[], change: Change): Promise<Map<string, Record>>;
+  /**
+   * Part 5: a record this kind never decides in a batch prepared by an
+   * assistant (for example a hire, which keeps its own one-at-a-time path and
+   * budget). Returned as "left out" with the reason; never sent.
+   */
+  assistantExclusion?(record: Record): { reasonCode: string; reason: string } | null;
   /**
    * `before` and `after` of the record. `before` is also the drift
    * fingerprint: it is hashed at preview and compared with a fresh read

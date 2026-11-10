@@ -96,6 +96,8 @@ describe("agentdash-connect mcp", () => {
     expect(byName.inbox_sync).toMatch(/review/i);
     // Placeholder names only: this package is public.
     expect(byName.inbox_propose).toContain("'have Agent A draft X'");
+    // Admin powers (part 5b): big changes go to the connector, never this inbox.
+    expect(byName.inbox_propose).toContain("For changes to more than 10 records at once, use the AgentDash connector in Claude (batch changes, which an admin must turn on). This inbox does not do bulk.");
   });
 
   /**

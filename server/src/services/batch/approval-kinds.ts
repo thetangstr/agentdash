@@ -82,6 +82,16 @@ function decisionKind(key: "approval.approve" | "approval.reject"): BatchKind<Ap
       }
       return out;
     },
+    // Review of 8f1b669b0: a hire keeps its own one-at-a-time assistant path
+    // (prepare_decision + confirm_action) and its hourly hire budget, so an
+    // assistant batch never decides one.
+    assistantExclusion(record) {
+      if (record.type !== "hire_agent") return null;
+      return {
+        reasonCode: BATCH_REASON_CODES.hireNotInAssistantBatch,
+        reason: `${record.label} is a hire: hires are decided one at a time, in AgentDash or with your assistant's single-decision step, so it was left out.`,
+      };
+    },
     describe(record) {
       const before = { status: record.status, revision: record.revision };
       const after = { status: decided, revision: record.revision };
@@ -133,7 +143,11 @@ function decisionKind(key: "approval.approve" | "approval.reject"): BatchKind<Ap
           revision: previewedRevision,
           // Unguessable and stable for this item (runner.ts batchItemIdempotencyKey).
           idempotencyKey: item.idempotencyKey,
-          channel: "web",
+          // Part 5: a decision the person's assistant carries out (confirmed
+          // with the browser-shown code) is recorded as one; the route accepts
+          // "assistant" only from a grant actor, which the item actor is.
+          // "Apply here" is the person deciding on the page: "web".
+          channel: item.viaAssistant ? "assistant" : "web",
         },
       };
     },

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, assistantGrants, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import { EVALUATOR_AGENT_ROLE, EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
 import {
@@ -414,6 +414,23 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       ) {
         res.status(403).json({ error: "This batch credential is not valid for this request" });
         return;
+      }
+      // Review of 8f1b669b0: an item of an assistant-prepared batch re-reads
+      // its grant here, at the moment the request arrives, so a connection
+      // revoked (or stripped of the admin scope) after the runner's per-item
+      // check cannot carry the item. The runner and the issue routes check
+      // too; this closes the window between them and the send.
+      if (resolved.credential.kind === "assistant") {
+        const credential = resolved.credential;
+        const [grant] = await db
+          .select({ userId: assistantGrants.userId, companyId: assistantGrants.companyId, scopes: assistantGrants.scopes, revokedAt: assistantGrants.revokedAt })
+          .from(assistantGrants)
+          .where(eq(assistantGrants.id, credential.grantId));
+        if (!grant || grant.revokedAt || grant.userId !== credential.userId || grant.companyId !== resolved.companyId
+          || !grant.scopes.includes(ASSISTANT_SCOPE_ADMIN) || resolved.actor.assistantGrantId !== credential.grantId) {
+          res.status(403).json({ error: "This assistant connection was revoked, so this record was not changed." });
+          return;
+        }
       }
       req.actor = { ...resolved.actor };
       req.verifiedCredential = {

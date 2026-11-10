@@ -61,6 +61,8 @@ export const BATCH_REASON_CODES = {
   accessEnded: "access_ended",
   /** Part 5: the assistant connection was revoked, the person is no longer an admin, or the company switch was turned off. */
   assistantAccessEnded: "assistant_access_ended",
+  /** Part 5 (review of 8f1b669b0): hires are decided one at a time, never in a batch from an assistant. */
+  hireNotInAssistantBatch: "hire_not_in_assistant_batch",
   /** Applied, but the record now differs from the preview: the route did something else (see `actual`). */
   appliedDifferently: "applied_differently",
   /** Left out at preview: the record's review or approval steps decide this change, not the batch. */
@@ -155,9 +157,29 @@ export interface BatchView {
   createdAt: string;
   /** Part 5: the connection that prepared it, when the person's own Claude did (never any code or hash). */
   assistantClientName?: string | null;
+  /** The OAuth client's redirect host (for example `claude.ai`), shown next to its self-chosen name. */
+  assistantClientHost?: string | null;
   items?: BatchItemView[];
 }
 
 export function emptyBatchCounts(): BatchCounts {
   return { applied: 0, refused: 0, failed: 0, unknown: 0, appliedDifferently: 0 };
 }
+
+/**
+ * An OAuth client's self-chosen display name, made safe to show a person:
+ * no control or formatting characters, no markup brackets, one line, at most
+ * 40 characters. The name is chosen by whoever registered the client, so it
+ * is shown as a label, never as an instruction.
+ */
+export function plainAssistantClientName(name: string | null | undefined): string {
+  const cleaned = (name ?? "")
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, " ")
+    .replace(/[<>`*_[\]{}#|\\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "your assistant";
+  return cleaned.length > 40 ? `${cleaned.slice(0, 39).trimEnd()}…` : cleaned;
+}
+

@@ -9,7 +9,9 @@ import {
   ASSISTANT_BATCH_PREPARE_LIMIT_PER_HOUR,
   ASSISTANT_BATCH_RECORD_LIMIT_PER_HOUR,
   ASSISTANT_SCOPE_ADMIN,
+  ASSISTANT_SCOPE_DECIDE,
   isUuidLike,
+  plainAssistantClientName,
   BATCH_MAX_CONFIRMED_RECORDS_PER_HOUR,
   BATCH_MAX_OPEN_PREVIEWS_PER_USER,
   BATCH_PREVIEW_TTL_MS,
@@ -158,7 +160,7 @@ export function confirmCodeMatches(batchId: string, input: string, storedHash: s
 type BatchRow = typeof batchOperations.$inferSelect;
 type ItemRow = typeof batchOperationItems.$inferSelect;
 
-function batchView(row: BatchRow, items?: ItemRow[], assistantClientName?: string | null): BatchView {
+function batchView(row: BatchRow, items?: ItemRow[], assistant?: { clientName: string | null; redirectHost: string | null } | null): BatchView {
   return {
     id: row.id,
     companyId: row.companyId,
@@ -173,7 +175,12 @@ function batchView(row: BatchRow, items?: ItemRow[], assistantClientName?: strin
     confirmedAt: iso(row.confirmedAt),
     completedAt: iso(row.completedAt),
     createdAt: row.createdAt.toISOString(),
-    ...(row.origin === "assistant" ? { assistantClientName: assistantClientName ?? null } : {}),
+    ...(row.origin === "assistant"
+      ? {
+          assistantClientName: assistant?.clientName ? plainAssistantClientName(assistant.clientName) : null,
+          assistantClientHost: assistant?.redirectHost ?? null,
+        }
+      : {}),
     ...(items
       ? {
           items: items.map((item): BatchItemView => ({
@@ -244,6 +251,12 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       for (const id of ids) {
         const record = records.get(id);
         if (!record) { omitted.notFound++; continue; }
+        const excluded = opts.origin === "assistant" ? kind.assistantExclusion?.(record) ?? null : null;
+        if (excluded) {
+          omitted.notDecidable++;
+          notDecidable.push({ entityType: record.entityType, entityId: record.entityId, label: record.label, ...excluded });
+          continue;
+        }
         const described = kind.describe(record, change);
         if (described.noop) { omitted.noop++; continue; }
         if (described.notDecidable) {
@@ -352,7 +365,7 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
    * `agentdash:admin`; the person is an admin of the company (read from the
    * database); the company switch is on. Read fresh on every call.
    */
-  async function assistantBatchAccess(req: Request, companyId: string) {
+  async function assistantBatchAccess(req: Request, companyId: string, kindKey?: string) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
     if (req.actor.source !== "assistant_grant" || !req.actor.assistantGrantId || !req.actor.userId) {
@@ -366,6 +379,16 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     }
     if (!grant.scopes.includes(ASSISTANT_SCOPE_ADMIN)) {
       throw new HttpError(403, "This assistant connection was not given batch changes as an admin. Reconnect it and check that option.", { required_scope: ASSISTANT_SCOPE_ADMIN, scopes: grant.scopes }, "insufficient_scope");
+    }
+    // Review of 8f1b669b0: deciding approvals in a batch also needs the decide
+    // scope, and never for a connection whose decisions need the person's tap.
+    if (kindKey && kindFor(kindKey).entityType === "approval") {
+      if (!grant.scopes.includes(ASSISTANT_SCOPE_DECIDE)) {
+        throw new HttpError(403, "This assistant connection was not given decisions. Reconnect it and check that option, or decide these in AgentDash on the Decisions page.", { required_scope: ASSISTANT_SCOPE_DECIDE, scopes: grant.scopes }, "insufficient_scope");
+      }
+      if (grant.decisionsNeedTap) {
+        throw forbidden("This connection is set so that decisions need your tap. Decide these in AgentDash, on the Decisions page.");
+      }
     }
     const company = await assertAdminBatchesOn(req, companyId);
     return { grantId, userId, clientName: grant.clientName, maxRecords: company.assistantBatchMaxRecords };
@@ -416,8 +439,8 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     },
 
     /** Part 5: the assistant-side gate (grant live with the admin scope, admin, switch on), for routes that work before previewing. */
-    async assertAssistantAccess(req: Request, companyId: string): Promise<void> {
-      await assistantBatchAccess(req, companyId);
+    async assertAssistantAccess(req: Request, companyId: string, kindKey?: string): Promise<void> {
+      await assistantBatchAccess(req, companyId, kindKey);
     },
 
     /**
@@ -431,7 +454,7 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       companyId: string,
       input: BatchPreviewRequest,
     ): Promise<BatchPreviewResult & { maxRecords: number }> {
-      const access = await assistantBatchAccess(req, companyId);
+      const access = await assistantBatchAccess(req, companyId, input.kind);
       if (!(ASSISTANT_BATCH_KINDS as readonly string[]).includes(input.kind)) {
         throw badRequest("This kind of batch change cannot be prepared from an assistant.");
       }
@@ -502,6 +525,8 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
         throw notFound("Batch not found");
       }
       const kind = kindFor(existing.kind);
+      // The kind's own assistant rules (decide scope, decisions-need-tap) hold at confirm too.
+      await assistantBatchAccess(req, companyId, existing.kind);
       await kind.previewGuard?.({ db, req, companyId });
       const origin = loopbackOrigin(req);
       const outcome = await db.transaction(async (tx) => {
@@ -720,9 +745,9 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
         .where(eq(batchOperationItems.batchId, batchId))
         .orderBy(asc(batchOperationItems.ordinal));
       const [grant] = row.assistantGrantId
-        ? await db.select({ clientName: assistantGrants.clientName }).from(assistantGrants).where(eq(assistantGrants.id, row.assistantGrantId))
+        ? await db.select({ clientName: assistantGrants.clientName, redirectHost: assistantGrants.redirectHost }).from(assistantGrants).where(eq(assistantGrants.id, row.assistantGrantId))
         : [];
-      return batchView(row, items, grant?.clientName ?? null);
+      return batchView(row, items, grant ?? null);
     },
 
     async list(req: Request, companyId: string, opts: { limit?: number } = {}): Promise<BatchView[]> {

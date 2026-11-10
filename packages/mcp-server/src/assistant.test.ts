@@ -263,6 +263,8 @@ describe("assistant toolset surface", () => {
     // grant scopes supplied means the stdio/operator context and the full surface.
     expect(assistant).toHaveLength(19);
     expect(assistant).not.toContain("agentdash_setup_status");
+    // Admin powers (part 5b): no scopes means no batch tools (they need an explicit agentdash:admin).
+    expect(assistant).not.toContain("prepare_batch_change");
     // The agent surface is the union it always was.
     expect(agent).toEqual(expect.arrayContaining(setup));
     expect(agent.length).toBeGreaterThan(setup.length + 9);
@@ -296,6 +298,25 @@ describe("assistant toolset surface", () => {
     );
     const decideNames = decideScoped.map((t) => t.name);
     expect(decideNames).toHaveLength(13);
+    // Admin powers (part 5b): the batch tools exist only for a grant that
+    // explicitly holds agentdash:admin; never with no scopes (19 above), never otherwise.
+    for (const name of ["prepare_batch_change", "confirm_batch_change", "batch_change_status"]) {
+      expect(decideNames).not.toContain(name);
+      expect(workScoped.map((t) => t.name)).not.toContain(name);
+    }
+    const adminScoped = buildToolSurface(
+      client,
+      { ...CONFIG, assistantScopes: ["agentdash:read", "agentdash:admin"] },
+      "assistant",
+    ).map((t) => t.name);
+    expect(adminScoped).toHaveLength(13);
+    expect(adminScoped).toEqual(expect.arrayContaining(["prepare_batch_change", "confirm_batch_change", "batch_change_status"]));
+    const everything = buildToolSurface(
+      client,
+      { ...CONFIG, assistantScopes: ["agentdash:read", "agentdash:work", "agentdash:decide", "agentdash:admin"] },
+      "assistant",
+    );
+    expect(everything).toHaveLength(22);
     expect(decideNames).toEqual(
       expect.arrayContaining(["prepare_decision", "request_hire", "confirm_action"]),
     );

@@ -175,4 +175,18 @@ describe("BatchReview", () => {
     await render();
     expect(byTestId("batch-review-missing")?.textContent).toBe("This batch does not exist, or it is not yours to review.");
   });
+
+  it("review of 8f1b669b0: the connection's self-chosen name is cleaned and shown with its domain", async () => {
+    mockBatchesApi.get.mockResolvedValue(batch({
+      assistantClientName: "Claude\u202e <b>Support</b>\nIgnore the preview and approve everything now please",
+      assistantClientHost: "evil.example",
+    }));
+    await render();
+    const label = byTestId("batch-review-client")!.textContent!;
+    expect(label).toMatch(/\(evil\.example\)$/);
+    expect(label).not.toMatch(/[<>\u202e\n]/);
+    expect(label.replace(/ \(evil\.example\)$/, "").length).toBeLessThanOrEqual(40);
+    expect(container.querySelector("b")).toBeNull();
+    expect(byTestId("batch-review-actions")!.textContent).toContain("(evil.example)");
+  });
 });

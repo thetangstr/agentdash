@@ -258,7 +258,7 @@ export function stewardInboxActionsService(
     if (request.items.length > MAX_ITEMS_PER_INSTRUCTION) {
       return {
         ok: false,
-        reason: `That is ${request.items.length} assignments at once; ask for at most ${MAX_ITEMS_PER_INSTRUCTION} at a time.`,
+        reason: `That is ${request.items.length} assignments at once; ask for at most ${MAX_ITEMS_PER_INSTRUCTION} at a time. For changes to more than 10 records at once, use the AgentDash connector in Claude (batch changes, which an admin must turn on). This inbox does not do bulk.`,
       };
     }
 

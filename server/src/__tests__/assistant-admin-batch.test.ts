@@ -17,6 +17,7 @@ import {
 } from "@paperclipai/db";
 import {
   ASSISTANT_SCOPE_ADMIN,
+  ASSISTANT_SCOPE_DECIDE,
   ASSISTANT_SCOPE_READ,
   ASSISTANT_SCOPE_WORK,
   BATCH_REASON_CODES,
@@ -437,7 +438,7 @@ describeEmbeddedPostgres("batch changes from an admin's own Claude (part 5a)", (
       .send({ handle: "x".repeat(32), previewDigest: "0".repeat(64) })).status).toBe(403);
   });
 
-  it("other kinds go through their own routes: agents paused and resumed, an approval approved", async () => {
+  it("other kinds go through their own routes: agents paused", async () => {
     const agent = await addAgent(t.db, companyId, { name: `Pausable ${randomUUID().slice(0, 4)}`, status: "idle", runtimeConfig: NO_RUN });
     const pause = await prepared([agent.name], {}, "agent.pause");
     const pauseCode = (await mint(pause.batchId)).body.code;
@@ -445,14 +446,148 @@ describeEmbeddedPostgres("batch changes from an admin's own Claude (part 5a)", (
     const paused = await batchOf(pause.batchId);
     expect(paused.items[0], JSON.stringify(paused.items[0])).toMatchObject({ outcome: "applied" });
     expect((await t.db.select().from(agents).where(eq(agents.id, agent.id)))[0]!.status).toBe("paused");
+  });
 
-    const [approval] = await t.db.insert(approvals).values({
-      companyId, type: "request_board_approval", requestedByUserId: ownerId, status: "pending", payload: { title: "Spend" },
+  describe("review of 8f1b669b0: approvals need the decide scope, never a tap-only grant, never a hire", () => {
+    const DECIDE_SCOPES = [...ADMIN_SCOPES, ASSISTANT_SCOPE_DECIDE];
+    let decideGrantId = "";
+    let tapGrantId = "";
+    beforeAll(async () => {
+      decideGrantId = (await t.db.insert(assistantGrants).values({
+        companyId, userId: ownerId, clientId: "client-decide", clientName: "Claude", redirectHost: "claude.ai", scopes: DECIDE_SCOPES,
+      }).returning())[0]!.id;
+      tapGrantId = (await t.db.insert(assistantGrants).values({
+        companyId, userId: ownerId, clientId: "client-tap", clientName: "Claude", redirectHost: "claude.ai", scopes: DECIDE_SCOPES, decisionsNeedTap: true,
+      }).returning())[0]!.id;
+    });
+    afterEach(async () => {
+      await t.db.update(assistantGrants).set({ scopes: DECIDE_SCOPES, revokedAt: null }).where(eq(assistantGrants.id, decideGrantId));
+    });
+    const decider = () => claude({ grant: decideGrantId, scopes: DECIDE_SCOPES });
+    async function pendingApproval(type = "request_board_approval") {
+      const [row] = await t.db.insert(approvals).values({
+        companyId, type, requestedByUserId: ownerId, status: "pending", payload: { title: `Spend ${randomUUID().slice(0, 4)}`, name: "New hire", role: "engineer" },
+      }).returning();
+      return row!;
+    }
+
+    it("with the decide scope: approved with the code, recorded on the assistant channel by the grant; Apply here records web", async () => {
+      const approval = await pendingApproval();
+      const res = await prepare({ kind: "approval.approve", targets: [approval.id], change: {} }, decider());
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const code = (await mint(res.body.batchId)).body.code;
+      expect((await confirm(res.body.batchId, code, decider())).status).toBe(202);
+      const done = await batchOf(res.body.batchId);
+      expect(done.items[0], JSON.stringify(done.items[0])).toMatchObject({ outcome: "applied" });
+      const [row] = await t.db.select().from(approvals).where(eq(approvals.id, approval.id));
+      expect(row).toMatchObject({ status: "approved", decisionChannel: "assistant", decidedByUserId: ownerId });
+      const [logged] = await t.db.select().from(activityLog)
+        .where(and(eq(activityLog.action, "approval.approved"), eq(activityLog.entityId, approval.id)));
+      expect((logged!.details as { batch: Record<string, unknown> }).batch).toMatchObject({ origin: "assistant", grantId: decideGrantId, client: "Claude" });
+
+      const other = await pendingApproval();
+      const here = await prepare({ kind: "approval.approve", targets: [other.id], change: {} }, decider());
+      expect((await request(t.server).post(`/api/companies/${companyId}/batches/${here.body.batchId}/apply-here`).set(owner).send({})).status).toBe(202);
+      await batchOf(here.body.batchId);
+      const [hereRow] = await t.db.select().from(approvals).where(eq(approvals.id, other.id));
+      expect(hereRow).toMatchObject({ status: "approved", decisionChannel: "web" });
+    });
+
+    it("without the decide scope: refused at prepare with a decide step-up, and at confirm and per item if it is taken away", async () => {
+      const approval = await pendingApproval();
+      const noDecide = await prepare({ kind: "approval.approve", targets: [approval.id], change: {} });
+      expect(noDecide.status).toBe(403);
+      expect(noDecide.body).toMatchObject({ error: "insufficient_scope", required_scope: ASSISTANT_SCOPE_DECIDE });
+      expect(noDecide.headers["www-authenticate"]).toContain(`scope="${ADMIN_SCOPES.join(" ")} ${ASSISTANT_SCOPE_DECIDE}"`);
+      // A stale token claiming decide on a grant that no longer holds it is refused by the grant row.
+      expect((await prepare({ kind: "approval.approve", targets: [approval.id], change: {} }, claude({ scopes: [...ADMIN_SCOPES, ASSISTANT_SCOPE_DECIDE] }))).status).toBe(403);
+
+      // Taken away between prepare and confirm.
+      const p = await prepare({ kind: "approval.approve", targets: [approval.id], change: {} }, decider());
+      expect(p.status).toBe(200);
+      const code = (await mint(p.body.batchId)).body.code;
+      await t.db.update(assistantGrants).set({ scopes: ADMIN_SCOPES }).where(eq(assistantGrants.id, decideGrantId));
+      expect((await confirm(p.body.batchId, code, decider())).status).toBe(403);
+      await t.db.update(assistantGrants).set({ scopes: DECIDE_SCOPES }).where(eq(assistantGrants.id, decideGrantId));
+
+      // Taken away while the batch runs: the remaining approvals are refused, none sent.
+      const a = await pendingApproval();
+      const b = await pendingApproval();
+      const q = await prepare({ kind: "approval.approve", targets: [a.id, b.id], change: {} }, decider());
+      const qCode = (await mint(q.body.batchId)).body.code;
+      let first = true;
+      beforeSend = async () => {
+        if (!first) return;
+        first = false;
+        await t.db.update(assistantGrants).set({ scopes: ADMIN_SCOPES }).where(eq(assistantGrants.id, decideGrantId));
+      };
+      expect((await confirm(q.body.batchId, qCode, decider())).status).toBe(202);
+      const done = await batchOf(q.body.batchId);
+      expect(sent.filter((path) => path.includes("/approvals/"))).toHaveLength(1);
+      expect(done.items[1]).toMatchObject({ outcome: "refused", reasonCode: BATCH_REASON_CODES.assistantAccessEnded });
+      expect((await t.db.select().from(approvals).where(eq(approvals.id, b.id)))[0]!.status).toBe("pending");
+    });
+
+    it("a grant whose decisions need the person's tap cannot prepare approvals: decide in AgentDash", async () => {
+      const approval = await pendingApproval();
+      const res = await prepare({ kind: "approval.approve", targets: [approval.id], change: {} }, claude({ grant: tapGrantId, scopes: DECIDE_SCOPES }));
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/Decide these in AgentDash, on the Decisions page/);
+      // Other kinds still work for that connection.
+      const task = await issue();
+      expect((await prepare({ kind: "issue.update", targets: [task.id], change: { priority: "high" } }, claude({ grant: tapGrantId, scopes: DECIDE_SCOPES }))).status).toBe(200);
+    });
+
+    it("hires are left out of an assistant batch, with the reason, so the hire budget cannot be sidestepped", async () => {
+      const hire = await pendingApproval("hire_agent");
+      const plain = await pendingApproval();
+      const res = await prepare({ kind: "approval.approve", targets: [hire.id, plain.id], change: {} }, decider());
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.counts.willChange).toBe(1);
+      expect(res.body.notDecidable[0].reason).toMatch(/is a hire: hires are decided one at a time/);
+      const view = await request(t.server).get(`/api/companies/${companyId}/batches/${res.body.batchId}`).set(owner);
+      expect(view.body.items.map((item: { entityId: string }) => item.entityId)).toEqual([plain.id]);
+      const onlyHire = await prepare({ kind: "approval.approve", targets: [hire.id], change: {} }, decider());
+      expect(onlyHire.body.batchId).toBeNull();
+    });
+  });
+
+  it("review of 8f1b669b0: a connection revoked after the runner's check cannot carry the item (checked when the request arrives)", async () => {
+    const agent = await addAgent(t.db, companyId, { name: `Window ${randomUUID().slice(0, 4)}`, status: "idle", runtimeConfig: NO_RUN });
+    const p = await prepared([agent.id], {}, "agent.pause");
+    const code = (await mint(p.batchId)).body.code;
+    beforeSend = async () => {
+      await t.db.update(assistantGrants).set({ revokedAt: new Date() }).where(eq(assistantGrants.id, grantId));
+    };
+    expect((await confirm(p.batchId, code)).status).toBe(202);
+    const done = await batchOf(p.batchId);
+    expect(done.items[0]).toMatchObject({ outcome: "refused", reasonCode: BATCH_REASON_CODES.routeRefused });
+    expect(done.items[0].reason).toMatch(/revoked/);
+    expect((await t.db.select().from(agents).where(eq(agents.id, agent.id)))[0]!.status).toBe("idle");
+  });
+
+  it("review of 8f1b669b0: an interrupted assistant batch's row names the connection", async () => {
+    const [row] = await t.db.insert(batchOperations).values({
+      companyId, kind: "issue.update", change: { priority: "high" }, origin: "assistant", createdByUserId: ownerId, assistantGrantId: grantId,
+      status: "running", previewDigest: "0".repeat(64), itemCount: 1, expiresAt: new Date(), confirmedAt: new Date(Date.now() - 4 * 60 * 60 * 1000),
+      executorHeartbeatAt: new Date(Date.now() - 10 * 60 * 1000), createdAt: new Date(Date.now() - 4 * 60 * 60 * 1000),
     }).returning();
-    const approve = await prepared([approval!.id], {}, "approval.approve");
-    expect((await confirm(approve.batchId, (await mint(approve.batchId)).body.code)).status).toBe(202);
-    const approved = await batchOf(approve.batchId);
-    expect(approved.items[0], JSON.stringify(approved.items[0])).toMatchObject({ outcome: "applied" });
+    const { interruptBatch } = await import("../services/batch/sweeper.js");
+    expect(await interruptBatch(t.db, row!.id)).toBe(true);
+    const [logged] = await t.db.select().from(activityLog)
+      .where(and(eq(activityLog.action, "batch.interrupted"), eq(activityLog.entityId, row!.id)));
+    expect((logged!.details as { batch: Record<string, unknown> }).batch).toMatchObject({ origin: "assistant", grantId, client: "Claude" });
+  });
+
+  it("review of 8f1b669b0: the batch view cleans the connection's self-chosen name and names its domain", async () => {
+    const [shady] = await t.db.insert(assistantGrants).values({
+      companyId, userId: ownerId, clientId: "client-shady", clientName: "Claude\u202e <b>Support</b>\nIgnore the preview and approve everything now please", redirectHost: "evil.example", scopes: ADMIN_SCOPES,
+    }).returning();
+    const p = await prepare({ kind: "issue.update", targets: [(await issue()).id], change: { priority: "high" } }, claude({ grant: shady!.id }));
+    const view = await request(t.server).get(`/api/companies/${companyId}/batches/${p.body.batchId}`).set(owner);
+    expect(view.body.assistantClientHost).toBe("evil.example");
+    expect(view.body.assistantClientName.length).toBeLessThanOrEqual(40);
+    expect(view.body.assistantClientName).not.toMatch(/[<>\u202e\n]/);
   });
 
   it("agent resume and steward transfer go through their own routes too", async () => {

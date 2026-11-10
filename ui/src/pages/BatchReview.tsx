@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { BatchItemView, BatchView } from "@paperclipai/shared";
+import { plainAssistantClientName, type BatchItemView, type BatchView } from "@paperclipai/shared";
 import { useParams } from "@/lib/router";
 import { batchesApi } from "@/api/batches";
 import { ApiError } from "@/api/client";
@@ -102,6 +102,11 @@ export function BatchReview() {
   const items: BatchItemView[] = data.items ?? [];
   const waiting = data.status === "previewed" && new Date(data.expiresAt).getTime() > now;
   const fromAssistant = data.origin === "assistant";
+  // The name is the OAuth client's own choice: shown cleaned, as a label, with
+  // the domain it signs in through beside it (review of 8f1b669b0).
+  const clientName = plainAssistantClientName(data.assistantClientName);
+  const clientHost = data.assistantClientHost ? plainAssistantClientName(data.assistantClientHost) : null;
+  const clientLabel = clientHost ? `${clientName} (${clientHost})` : clientName;
   const busy = showCode.isPending || applyHere.isPending;
   const errorText = (err: unknown) => (err instanceof Error ? err.message : "That did not work.");
 
@@ -109,7 +114,7 @@ export function BatchReview() {
     <div className="mx-auto w-full max-w-3xl min-w-0 space-y-5" data-testid="batch-review-page" data-status={data.status}>
       <div className="space-y-1">
         <h1 className="text-lg font-semibold">
-          {fromAssistant ? `A batch change prepared by ${data.assistantClientName ?? "your assistant"}` : "A batch change"}
+          {fromAssistant ? <>A batch change prepared by <span data-testid="batch-review-client">{clientLabel}</span></> : "A batch change"}
         </h1>
         <p className="text-sm text-muted-foreground" data-testid="batch-review-status">{statusLine(data, now)}</p>
       </div>
@@ -117,13 +122,13 @@ export function BatchReview() {
       {waiting && fromAssistant ? (
         <div className="space-y-3 rounded-md border border-border p-4" data-testid="batch-review-actions">
           <p className="text-sm">
-            Check every change below. To go ahead, show the code and read it to {data.assistantClientName ?? "your assistant"}, or apply it here yourself.
+            Check every change below. To go ahead, show the code and read it to {clientLabel}, or apply it here yourself.
           </p>
           {code ? (
             <div className="space-y-1" data-testid="batch-review-code-box">
               <p className="font-mono text-3xl font-semibold tracking-widest" data-testid="batch-review-code">{code}</p>
               <p className="text-xs text-muted-foreground">
-                Read this to {data.assistantClientName ?? "your assistant"}. It works once and expires in {minutesLeft(data.expiresAt, now)} minute{minutesLeft(data.expiresAt, now) === 1 ? "" : "s"}. Showing a new code replaces this one.
+                Read this to {clientLabel}. It works once and expires in {minutesLeft(data.expiresAt, now)} minute{minutesLeft(data.expiresAt, now) === 1 ? "" : "s"}. Showing a new code replaces this one.
               </p>
             </div>
           ) : null}

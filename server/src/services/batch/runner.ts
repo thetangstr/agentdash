@@ -6,6 +6,7 @@ import type { Db } from "@paperclipai/db";
 import { assistantGrants, authSessions, batchOperationItems, batchOperations, companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import {
   ASSISTANT_SCOPE_ADMIN,
+  ASSISTANT_SCOPE_DECIDE,
   BATCH_HEARTBEAT_INTERVAL_MS,
   BATCH_ITEM_TIMEOUT_MS,
   BATCH_REASON_CODES,
@@ -227,6 +228,7 @@ async function refreshAssistantAccess(
       scopes: assistantGrants.scopes,
       clientName: assistantGrants.clientName,
       revokedAt: assistantGrants.revokedAt,
+      decisionsNeedTap: assistantGrants.decisionsNeedTap,
     })
     .from(assistantGrants)
     .where(eq(assistantGrants.id, credential.grantId));
@@ -237,6 +239,11 @@ async function refreshAssistantAccess(
     || grant.companyId !== ctx.companyId
     || !grant.scopes.includes(ASSISTANT_SCOPE_ADMIN)
   ) return { ok: false, assistant: true };
+  // Review of 8f1b669b0: deciding approvals also needs the decide scope, and
+  // never for a connection whose decisions need the person's tap.
+  if (ctx.kind.entityType === "approval" && (!grant.scopes.includes(ASSISTANT_SCOPE_DECIDE) || grant.decisionsNeedTap)) {
+    return { ok: false, assistant: true };
+  }
   const [membership] = await db
     .select({ membershipRole: companyMemberships.membershipRole, status: companyMemberships.status })
     .from(companyMemberships)
@@ -397,6 +404,7 @@ async function runItem(ctx: BatchRunnerContext, change: unknown, item: ItemRow, 
     itemId: item.id,
     before: item.before,
     idempotencyKey: batchItemIdempotencyKey(ctx.itemKeyNonce ?? null, ctx.batchId, item.id),
+    viaAssistant: ctx.credential.kind === "assistant",
   });
   const body = JSON.stringify(request.body);
   const claimed = await db

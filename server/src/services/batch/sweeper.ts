@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, or, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { batchOperationItems, batchOperations } from "@paperclipai/db";
+import { assistantGrants, batchOperationItems, batchOperations } from "@paperclipai/db";
 import { BATCH_HEARTBEAT_STALE_MS, BATCH_REASON_CODES, type BatchOrigin } from "@paperclipai/shared";
 import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js";
 import { logActivity } from "../activity-log.js";
@@ -45,7 +45,17 @@ export async function interruptBatch(db: Db, batchId: string): Promise<boolean> 
     })
     .where(and(eq(batchOperationItems.batchId, batchId), eq(batchOperationItems.outcome, "pending")));
   const counts = await recountBatch(db, batchId);
-  await runWithBatchActivityContext({ batchId, companyId: batch.companyId, origin: batch.origin as BatchOrigin }, () =>
+  // Part 5b: an assistant-prepared batch names its connection here too.
+  const [grant] = batch.assistantGrantId
+    ? await db.select({ clientName: assistantGrants.clientName }).from(assistantGrants).where(eq(assistantGrants.id, batch.assistantGrantId))
+    : [];
+  await runWithBatchActivityContext({
+    batchId,
+    companyId: batch.companyId,
+    origin: batch.origin as BatchOrigin,
+    ...(batch.assistantGrantId ? { grantId: batch.assistantGrantId } : {}),
+    ...(grant?.clientName ? { client: grant.clientName } : {}),
+  }, () =>
     logActivity(db, {
       companyId: batch.companyId,
       actorType: "system",

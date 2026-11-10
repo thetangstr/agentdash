@@ -79,6 +79,8 @@ describe("unified server composition", () => {
       await consumer.connect(consumerTransport);
       const { tools: advertised } = await consumer.listTools();
       const propose = advertised.find((tool) => tool.name === "inbox_propose")!;
+      // Admin powers (part 5b): big changes go to the connector, never this inbox.
+      expect(propose.description).toContain("For changes to more than 10 records at once, use the AgentDash connector in Claude (batch changes, which an admin must turn on). This inbox does not do bulk.");
       const sync = advertised.find((tool) => tool.name === "inbox_sync")!;
       expect(propose.inputSchema).toEqual({
         type: "object",

@@ -245,6 +245,17 @@ export function createStaticShellReader(
   };
 }
 
+/** `/<prefix>/company/batches/<id>` (and the unprefixed form), the batch review SPA route. */
+export const BATCH_REVIEW_PAGE_PATH = /^\/(?:[^/]+\/)?company\/batches\/[^/]+\/?$/;
+
+export function batchReviewFramingGuard(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (BATCH_REVIEW_PAGE_PATH.test(req.path)) {
+    res.set("Content-Security-Policy", "frame-ancestors 'none'");
+    res.set("X-Frame-Options", "DENY");
+  }
+  next();
+}
+
 export async function createApp(
   db: Db,
   opts: {
@@ -807,6 +818,13 @@ export async function createApp(
     res.set("X-Frame-Options", "DENY");
     next();
   });
+
+  /**
+   * AgentDash admin powers (review of 8f1b669b0): the batch review page shows
+   * the confirm code and "Apply here", so it may not be framed either (a
+   * hostile page could overlay the click or read the code off screen).
+   */
+  app.use(batchReviewFramingGuard);
 
   if (opts.uiMode === "static") {
     // Try published location first (server/ui-dist/), then monorepo dev location (../../ui/dist)

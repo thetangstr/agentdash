@@ -29,6 +29,8 @@ import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } fro
 import { agentDirectivesRoutes } from "../routes/agent-directives.js";
 import { agentRoutes } from "../routes/agents.js";
 import { accessRoutes } from "../routes/access.js";
+import { agentMemoryRoutes } from "../routes/agent-memory.js";
+import { agentdashMkInboxRoutes } from "../routes/agentdash-mk-inbox.js";
 import {
   ADMIN_TRANSCRIPT_READ_LOG_WINDOW_MS,
   resetAdminTranscriptReadLogForTests,
@@ -145,6 +147,8 @@ describeEmbeddedPostgres("admin-switched reads (parts 4.2, 4.3)", () => {
     app.use("/api", agentDirectivesRoutes(db));
     app.use("/api", agentRoutes(db));
     app.use("/api", accessRoutes(db, { deploymentMode: "authenticated", deploymentExposure: "private", bindHost: "127.0.0.1", allowedHostnames: [] }));
+    app.use("/api", agentMemoryRoutes(db));
+    app.use("/api", agentdashMkInboxRoutes(db));
     app.use(errorHandler);
     return app;
   }
@@ -320,6 +324,21 @@ describeEmbeddedPostgres("admin-switched reads (parts 4.2, 4.3)", () => {
       const viaAssistant = await request(appAs(asAssistant(ADMIN, "admin"))).get(path);
       expect(viaAssistant.status).toBe(403);
       expect(JSON.stringify(viaAssistant.body)).not.toContain(STEWARDED);
+    });
+  });
+
+  describe("review of 8f1b669b0: memory and the override inbox are not for assistant connections", () => {
+    it("an admin reads an agent's memory and the override inbox in the product, never through an assistant grant", async () => {
+      for (const path of [`/api/companies/${MK}/agents/${STEWARDED}/memory`, `/api/companies/${MK}/agents/${STEWARDED}/memory/history`]) {
+        expect((await request(admin()).get(path)).status, path).toBe(200);
+        expect((await request(steward()).get(path)).status, path).toBe(200);
+        expect((await request(appAs(asAssistant(ADMIN, "admin"))).get(path)).status, path).toBe(404);
+        expect((await request(appAs(asAssistant(STEWARD, "member"))).get(path)).status, path).toBe(404);
+      }
+      const inbox = `/api/companies/${MK}/inbox/override`;
+      expect((await request(admin()).get(inbox)).status).toBe(200);
+      const viaAssistant = await request(appAs(asAssistant(ADMIN, "admin"))).get(inbox);
+      expect(viaAssistant.status).toBe(403);
     });
   });
 });

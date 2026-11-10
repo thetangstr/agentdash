@@ -5,6 +5,7 @@ import { companies } from "@paperclipai/db";
 import {
   ASSISTANT_BATCH_KINDS,
   ASSISTANT_SCOPE_ADMIN,
+  ASSISTANT_SCOPE_DECIDE,
   assistantBatchConfirmSchema,
   assistantBatchPrepareSchema,
   assistantStepUpChallenge,
@@ -91,13 +92,16 @@ export function batchRoutes(db: Db, options: BatchServiceOptions = {}) {
    * The admin scope is a step-up: a grant without it is told exactly which
    * scopes to ask for on reconnect (RFC 6750 `insufficient_scope`).
    */
-  function requireAdminScope(req: Request, res: Response): boolean {
+  function requireAdminScope(req: Request, res: Response, also?: string): boolean {
     if (req.actor.source !== "assistant_grant") return true; // the engine refuses anyone else
     const scopes = req.actor.assistantScopes ?? [];
-    if (scopes.includes(ASSISTANT_SCOPE_ADMIN)) return true;
-    res.set("WWW-Authenticate", assistantStepUpChallenge(scopes, ASSISTANT_SCOPE_ADMIN));
-    res.status(403).json({ error: "insufficient_scope", required_scope: ASSISTANT_SCOPE_ADMIN });
-    return false;
+    for (const required of [ASSISTANT_SCOPE_ADMIN, ...(also ? [also] : [])]) {
+      if (scopes.includes(required)) continue;
+      res.set("WWW-Authenticate", assistantStepUpChallenge(scopes, required));
+      res.status(403).json({ error: "insufficient_scope", required_scope: required });
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -108,8 +112,9 @@ export function batchRoutes(db: Db, options: BatchServiceOptions = {}) {
   router.post("/companies/:companyId/assistant/batches/prepare", validate(assistantBatchPrepareSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    if (!requireAdminScope(req, res)) return;
     const { kind: kindKey, targets, change } = req.body as { kind: string; targets: string[]; change: Record<string, unknown> };
+    // Deciding approvals also needs the decide scope (review of 8f1b669b0).
+    if (!requireAdminScope(req, res, kindKey.startsWith("approval.") ? ASSISTANT_SCOPE_DECIDE : undefined)) return;
     const kinds = options.kinds ?? BATCH_KINDS;
     const kind = Object.prototype.hasOwnProperty.call(kinds, kindKey) ? kinds[kindKey] : undefined;
     if (!kind) throw badRequest("This kind of batch change is not available.");
@@ -117,7 +122,7 @@ export function batchRoutes(db: Db, options: BatchServiceOptions = {}) {
       throw badRequest("This kind of batch change cannot be prepared from an assistant.");
     }
     // Access first (grant, admin, switch), so nothing is resolved for someone who may not prepare.
-    await svc.assertAssistantAccess(req, companyId);
+    await svc.assertAssistantAccess(req, companyId, kindKey);
     const parsedChange = kind.parseChange(change);
     const resolved = await resolveAssistantTargets(db, req, companyId, kind, parsedChange, targets);
     if (!resolved.ok) {
