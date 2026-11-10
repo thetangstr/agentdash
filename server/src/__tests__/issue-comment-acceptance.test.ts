@@ -88,7 +88,8 @@ describe('standalone comment acceptance over HTTP and PostgreSQL', () => {
       confirmations: await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.issueId, f.issue.id)),
       decisions: await db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, f.issue.id)),
       references: await db.select().from(issueReferenceMentions).where(eq(issueReferenceMentions.companyId, f.company.id)),
-      audit: await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)),
+      // Insertion order (ctid): rows from one transaction share created_at, and since the audit indexes (0161) an unordered read may follow an index.
+      audit: await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)).orderBy(sql`ctid`),
     };
   }
 

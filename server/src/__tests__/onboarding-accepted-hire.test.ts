@@ -144,7 +144,8 @@ describe('onboarding accepted hires and postcommit materialization', () => {
       const [enrollment] = await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.agentId, accepted.id));
       expect(enrollment.installedSkillKeys).toHaveLength(1);
       expect(enrollment.skillInstallError).toBeNull();
-      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).map(row => row.action)).toEqual(['workforce.enrolled', 'agent.created', 'workforce.skills_installed']);
+      // Insertion order (ctid): rows from one transaction share created_at, and since the audit indexes (0161) an unordered read may follow an index.
+      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)).orderBy(sql`ctid`)).map(row => row.action)).toEqual(['workforce.enrolled', 'agent.created', 'workforce.skills_installed']);
       expect(events).toEqual(['workforce.enrolled', 'agent.created']);
       expect(lostAcknowledgements).toBe(1);
       expect(JSON.stringify(response.body)).toContain(accepted.id);

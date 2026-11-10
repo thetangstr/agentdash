@@ -42,6 +42,7 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
+import { CompanyAudit } from "./pages/CompanyAudit";
 import { EvaluationOverviewPage } from "./pages/evaluation/EvaluationOverview";
 import { EvaluationFounder } from "./pages/evaluation/EvaluationFounder";
 import { EvaluationMilestone } from "./pages/evaluation/EvaluationMilestone";
@@ -155,6 +156,8 @@ function boardRoutes() {
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
       <Route path="company/settings/health" element={<CompanyHealth />} />
+      {/* AgentDash admin powers (part 4): the admin audit, owners and admins only. */}
+      <Route path="company/settings/audit" element={<CompanyAudit />} />
       {/* O2: the local error sink, instance-admin only. Lives under the
           settings tree because the router treats the FIRST path segment as a
           company prefix — a top-level /instance/errors resolves to "no

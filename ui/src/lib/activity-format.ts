@@ -86,6 +86,10 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "batch.item_unknown": "has an unconfirmed batch change on",
   "batch.item_applied_differently": "had a batch change land differently than previewed on",
   "batch.item_reconciled": "recorded what happened to a batch change on",
+  // AgentDash admin powers (part 4): the admin audit and the two switched reads.
+  "audit.exported": "exported the audit log of",
+  "agent.directives_read_by_admin": "read, as an admin, the directives of",
+  "run.content_read_by_admin": "read, as an admin, the transcript of a run on",
   // AgentDash admin powers (part 3b): the new single-record routes.
   "label.updated": "updated a label",
   "routine.deleted": "deleted a routine",
@@ -878,6 +882,14 @@ function formatStructuredIssueChange(input: {
   }
 
   return null;
+}
+
+/**
+ * AgentDash admin powers (part 4): the action names the audit page offers in
+ * its action picker, from the same catalogue the activity rows use.
+ */
+export function knownActivityActions(): string[] {
+  return Object.keys(ACTIVITY_ROW_VERBS).sort();
 }
 
 export function formatActivityVerb(

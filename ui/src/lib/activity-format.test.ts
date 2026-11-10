@@ -220,6 +220,10 @@ describe("deliverable review reasons", () => {
  * interpolated `action:` expressions.
  */
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
+  // AgentDash admin powers (part 4)
+  "audit.exported",
+  "agent.directives_read_by_admin",
+  "run.content_read_by_admin",
   // AgentDash: Agent Performance Management gate 2 (written from P2.2–P2.4 on)
   "access.policy_changed",
   "access.would_refuse",

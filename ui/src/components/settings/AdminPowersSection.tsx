@@ -7,6 +7,7 @@ import {
   type Company,
 } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
+import { Link } from "@/lib/router";
 import { companiesApi } from "../../api/companies";
 import { ceilingTemplatesApi } from "../../api/ceilingTemplates";
 import { ApiError } from "../../api/client";
@@ -22,7 +23,8 @@ import { Field, ToggleField } from "../agent-config-primitives";
  *
  * Each power is off until an admin turns it on. "Ceiling for new agents"
  * picks one of the company's ceiling templates (or none); it applies to
- * agents created from then on. The admin audit link arrives with part 4.
+ * agents created from then on. Owners and admins also get the link to the
+ * admin audit (part 4), which is on for them by default.
  */
 export function AdminPowersSection({
   company,
@@ -158,6 +160,20 @@ export function AdminPowersSection({
             <p className="mt-1 text-xs text-muted-foreground">Applies to agents created from now on; existing agents keep their ceilings.</p>
           ) : null}
         </Field>
+        {canManage && (
+          <Field
+            label="Admin audit"
+            hint="Who did what in this company, filtered by person, action and dates, with a CSV export. On for owners and admins."
+          >
+            <Link
+              to="/company/settings/audit"
+              data-testid="admin-powers-audit-link"
+              className="text-sm underline underline-offset-2"
+            >
+              Open the admin audit
+            </Link>
+          </Field>
+        )}
         {mutation.isError && (
           <p className="text-xs text-destructive" role="alert">
             {mutation.error instanceof Error ? mutation.error.message : "The change was not saved."}

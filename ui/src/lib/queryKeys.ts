@@ -17,6 +17,9 @@ export const queryKeys = {
   },
   // AgentDash admin powers: a company's ceiling templates.
   ceilingTemplates: (companyId: string) => ["ceiling-templates", companyId] as const,
+  // AgentDash admin powers (part 4): the admin audit, one entry per filter set.
+  audit: (companyId: string, filters: unknown) => ["audit", companyId, filters] as const,
+  agentDirectives: (companyId: string, agentId: string) => ["agent-directives", companyId, agentId] as const,
   agents: {
     list: (companyId: string) => ["agents", companyId] as const,
     detail: (id: string) => ["agents", "detail", id] as const,

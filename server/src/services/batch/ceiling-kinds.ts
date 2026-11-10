@@ -59,7 +59,8 @@ async function requireCeilingManagement(ctx: BatchKindContext) {
   if (company?.productProfile !== "agentdash_mk") throw new HttpError(404, "Agent ceilings are not available in this workspace.");
   if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
   const allowed = await accessService(db).canUser(companyId, req.actor.userId, "agents:create");
-  if (!allowed) throw forbidden("Only a company owner or administrator can change agent policy ceilings.");
+  // The same check as the single-agent ceiling route, and the same words.
+  if (!allowed) throw forbidden("You need permission to manage agents to change agent policy ceilings.");
 }
 
 export const agentApplyCeilingBatchKind: BatchKind<AgentApplyCeilingBatchChange, CeilingRecord> = {

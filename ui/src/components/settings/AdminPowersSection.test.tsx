@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,13 @@ const mockCompaniesApi = vi.hoisted(() => ({ update: vi.fn() }));
 const mockCeilingTemplatesApi = vi.hoisted(() => ({ list: vi.fn(async () => ({ templates: [] })) }));
 vi.mock("../../api/ceilingTemplates", () => ({ ceilingTemplatesApi: mockCeilingTemplatesApi }));
 vi.mock("../../api/companies", () => ({ companiesApi: mockCompaniesApi }));
+vi.mock("@/lib/router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/router")>();
+  return {
+    ...actual,
+    Link: ({ to, children, ...props }: { to: string; children?: ReactNode }) => <a href={to} {...props}>{children}</a>,
+  };
+});
 
 const { AdminPowersSection } = await import("./AdminPowersSection");
 
@@ -88,6 +95,15 @@ describe("AdminPowersSection", () => {
     expect(mockCompaniesApi.update).not.toHaveBeenCalled();
     // Plain wording: no internal names on the page.
     expect(container.textContent).not.toMatch(/assistant_admin|admin_directive|company:manage/);
+  });
+
+  it("links owners and admins to the admin audit; members get no link", async () => {
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    expect(byTestId<HTMLAnchorElement>("admin-powers-audit-link")?.getAttribute("href")).toBe("/company/settings/audit");
+    act(() => root.unmount());
+    root = createRoot(container);
+    await render({ company: company(), canManage: false, showReadOnlyNotice: true });
+    expect(byTestId("admin-powers-audit-link")).toBeNull();
   });
 
   it("lets an admin turn each power on through the company settings PATCH", async () => {

@@ -96,7 +96,8 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
       routines: await db.select().from(routineRuns).where(eq(routineRuns.companyId, f.company.id)),
       decisions: await db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, f.issue.id)),
       references: await db.select().from(issueReferenceMentions).where(eq(issueReferenceMentions.companyId, f.company.id)),
-      audit: await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)),
+      // Insertion order (ctid): rows from one transaction share created_at, and since the audit indexes (0161) an unordered read may follow an index.
+      audit: await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)).orderBy(sql`ctid`),
     };
   }
 
@@ -360,7 +361,7 @@ describe('canonical issue mutation acceptance over HTTP and PostgreSQL', () => {
     const [issue] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
     const [agent] = await db.select().from(agents).where(eq(agents.id, f.agent.id));
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, f.company.id));
-    const audit = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+    const audit = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)).orderBy(sql`ctid`);
     return { issue, agent, runs, audit };
   }
 

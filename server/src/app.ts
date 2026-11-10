@@ -83,6 +83,7 @@ import { activityRoutes } from "./routes/activity.js";
 import { assistantRoutes } from "./routes/assistant.js";
 import { batchRoutes } from "./routes/batches.js";
 import { ceilingTemplateRoutes } from "./routes/ceiling-templates.js";
+import { companyAuditRoutes } from "./routes/company-audit.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { mspRoutes } from "./routes/msp.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -471,6 +472,7 @@ export async function createApp(
   api.use(agentGovernanceRoutes(db));
   // AgentDash admin powers: named ceilings applied to many agents, and the default for new ones.
   api.use(ceilingTemplateRoutes(db));
+  api.use(companyAuditRoutes(db));
   // AgentDash: Agent Performance Management gate 1 (read-only access, profile and performance views).
   api.use(agentAccessRoutes(db));
   api.use(agentPerformanceRoutes(db));

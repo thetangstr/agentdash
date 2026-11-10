@@ -20,6 +20,12 @@ vi.mock("../api/access", () => ({ accessApi: { listUserDirectory: vi.fn().mockRe
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => ({ selectedCompanyId: "company-1" }) }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }) }));
 vi.mock("../hooks/useIsPhone", () => ({ useIsPhone: () => false }));
+// AgentDash admin powers (part 4): the header links owners and admins to the audit.
+const capability = vi.hoisted(() => ({ current: { allowed: false, isLoading: false } }));
+vi.mock("../hooks/useCapability", () => ({ useCapability: () => capability.current }));
+vi.mock("@/lib/router", () => ({
+  Link: ({ to, children, ...props }: { to: string; children?: unknown }) => <a href={to} {...(props as object)}>{children as never}</a>,
+}));
 vi.mock("../components/ActivityRow", () => ({
   ActivityRow: ({ event }: { event: ActivityEvent }) => <div data-testid="activity-row">{event.action}</div>,
 }));
@@ -107,5 +113,26 @@ describe("Activity page — APM gate 2 rows", () => {
     mockActivityApi.list.mockResolvedValue([event("3", "agent_profile.applied"), system, event("5", "environment.lease_acquired")]);
     await renderActivity();
     expect(rows()).toEqual(["agent_profile.applied", "budget.hard_threshold_crossed", "environment.lease_acquired"]);
+  });
+
+  it("links owners and admins to the admin audit, and nobody else (nor while it is being checked)", async () => {
+    mockActivityApi.list.mockResolvedValue([]);
+    const link = () => container!.querySelector<HTMLAnchorElement>("[data-testid='activity-audit-link']");
+    capability.current = { allowed: true, isLoading: false };
+    await renderActivity();
+    expect(link()?.getAttribute("href")).toBe("/company/settings/audit");
+    act(() => root!.unmount());
+    container!.remove();
+    root = null;
+    capability.current = { allowed: false, isLoading: false };
+    await renderActivity();
+    expect(link()).toBeNull();
+    act(() => root!.unmount());
+    container!.remove();
+    root = null;
+    capability.current = { allowed: true, isLoading: true };
+    await renderActivity();
+    expect(link()).toBeNull();
+    capability.current = { allowed: false, isLoading: false };
   });
 });

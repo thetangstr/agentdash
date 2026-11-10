@@ -22,6 +22,7 @@ import { agentStewardshipRoutes } from "../../routes/agent-stewardships.js";
 import { routineRoutes } from "../../routes/routines.js";
 import { agentGovernanceRoutes } from "../../routes/agent-governance.js";
 import { ceilingTemplateRoutes } from "../../routes/ceiling-templates.js";
+import { companyAuditRoutes } from "../../routes/company-audit.js";
 import { companyRoutes } from "../../routes/companies.js";
 import { accessRoutes } from "../../routes/access.js";
 import { assertBoard, assertCompanyAccess, getActorInfo, setAuthzRefusalDb } from "../../routes/authz.js";
@@ -142,6 +143,7 @@ export async function startBatchTestApp(
   api.use(routineRoutes(db));
   api.use(agentGovernanceRoutes(db));
   api.use(ceilingTemplateRoutes(db));
+  api.use(companyAuditRoutes(db));
   api.use("/companies", companyRoutes(db, undefined, { allowMultiCompany: true, allowMultiTenantPerDomain: true, deploymentMode: "authenticated" }));
   api.use(accessRoutes(db, { deploymentMode: "authenticated", deploymentExposure: "private", bindHost: "127.0.0.1", allowedHostnames: [] }));
   const batchRouter = batchRoutes(db, {

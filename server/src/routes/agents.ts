@@ -5418,7 +5418,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, run.companyId);
-    await documentRuns.assertRunContentReadable(req, run);
+    await documentRuns.assertRunContentReadableForDetail(req, run, { runId, route: "run" });
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
     // AgentDash (GH #992): the run row carries `error`, `resultJson` and the
     // excerpts — provider 401s can echo credentials into all of them.
@@ -5523,7 +5523,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, run.companyId);
-    await documentRuns.assertRunContentReadable(req, run);
+    await documentRuns.assertRunContentReadableForDetail(req, run, { runId, route: "events" });
 
     const afterSeq = Number(req.query.afterSeq ?? 0);
     const limit = Number(req.query.limit ?? 200);
@@ -5550,7 +5550,7 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, run.companyId);
-    await documentRuns.assertRunContentReadable(req, run);
+    await documentRuns.assertRunContentReadableForDetail(req, run, { runId, route: "log" });
 
     const offset = Number(req.query.offset ?? 0);
     const limitBytes = readRunLogLimitBytes(req.query.limitBytes);

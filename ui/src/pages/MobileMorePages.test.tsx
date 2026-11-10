@@ -23,6 +23,9 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
+// AgentDash admin powers (part 4): the Activity header asks for company:manage.
+vi.mock("../hooks/useCapability", () => ({ useCapability: () => ({ allowed: false, isLoading: false }) }));
+
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({ selectedCompanyId: "company-1", loading: false }),
 }));

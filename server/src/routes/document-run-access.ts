@@ -13,12 +13,40 @@
 import type { Request } from "express";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentStewardships } from "@paperclipai/db";
+import { agentStewardships, companies } from "@paperclipai/db";
 import { FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import { notFound } from "../errors.js";
 import { featureFlagsService } from "../services/feature-flags.js";
+import { accessService } from "../services/access.js";
+import { logActivity } from "../services/activity-log.js";
+import { getActorInfo, isCompanyAdministrator } from "./authz.js";
 
 type Actor = Request["actor"];
+
+/**
+ * AgentDash admin powers (part 4.3): an admin's transcript read is logged once
+ * per (company, person, run) per 10 minutes. The run viewer polls `/log` every
+ * 2 s while a run streams (ui/src/components/transcript/useLiveRunTranscripts.ts
+ * LOG_POLL_INTERVAL_MS, and AgentDetail's live run), which would otherwise
+ * write a row per poll. In memory, per server process.
+ */
+export const ADMIN_TRANSCRIPT_READ_LOG_WINDOW_MS = 10 * 60 * 1000;
+const adminTranscriptReadsLogged = new Map<string, number>();
+
+export function resetAdminTranscriptReadLogForTests(): void {
+  adminTranscriptReadsLogged.clear();
+}
+
+function shouldLogAdminTranscriptRead(key: string, now: number): boolean {
+  const last = adminTranscriptReadsLogged.get(key);
+  if (last !== undefined && now - last < ADMIN_TRANSCRIPT_READ_LOG_WINDOW_MS) return false;
+  if (adminTranscriptReadsLogged.size > 10_000) {
+    for (const [k, at] of adminTranscriptReadsLogged) {
+      if (now - at >= ADMIN_TRANSCRIPT_READ_LOG_WINDOW_MS) adminTranscriptReadsLogged.delete(k);
+    }
+  }
+  return true;
+}
 
 /** The local board and instance admins read every run. */
 export function actorBypassesDocumentRunRule(actor: Actor): boolean {
@@ -67,6 +95,50 @@ export function documentRunAccess(db: Db) {
   }
 
   /**
+   * AgentDash admin powers (part 4.3), for the three run DETAIL routes only
+   * (GET /heartbeat-runs/:runId, /events, /log): `canReadRunContent`, or an
+   * owner or admin of the company when its switch "admins may read run
+   * transcripts" is on, through their own session (an assistant grant's
+   * `pcin_` loopback may GET any route, so it never qualifies). Listings keep
+   * `readableAgentIds`, so an admin never reads content in bulk. An admin
+   * read that only the switch allowed is logged (de-duplicated, see above).
+   */
+  async function assertRunContentReadableForDetail(
+    req: Request,
+    run: { companyId: string; agentId: string },
+    meta: { runId: string; route: "run" | "events" | "log" },
+  ): Promise<void> {
+    if (await canReadRunContent(req.actor, run)) return;
+    const actor = req.actor;
+    if (actor.type !== "board" || !actor.userId || actor.source === "assistant_grant") {
+      throw notFound("Heartbeat run not found");
+    }
+    const company = await db
+      .select({ adminTranscriptReadEnabled: companies.adminTranscriptReadEnabled })
+      .from(companies)
+      .where(eq(companies.id, run.companyId))
+      .then((rows) => rows[0] ?? null);
+    if (!company?.adminTranscriptReadEnabled || !(await isCompanyAdministrator(accessService(db), req, run.companyId))) {
+      throw notFound("Heartbeat run not found");
+    }
+    const logKey = `${run.companyId}:${actor.userId}:${meta.runId}`;
+    if (!shouldLogAdminTranscriptRead(logKey, Date.now())) return;
+    const info = getActorInfo(req);
+    await logActivity(db, {
+      companyId: run.companyId,
+      actorType: info.actorType,
+      actorId: info.actorId,
+      agentId: run.agentId,
+      action: "run.content_read_by_admin",
+      entityType: "heartbeat_run",
+      entityId: meta.runId,
+      details: { runId: meta.runId, agentId: run.agentId, route: meta.route },
+    });
+    // Only once the row is written: a failed write leaves the next read to log.
+    adminTranscriptReadsLogged.set(logKey, Date.now());
+  }
+
+  /**
    * For listings: null when the actor may read every run of the company, else
    * the agents whose runs it may read (those it currently stewards).
    */
@@ -93,6 +165,7 @@ export function documentRunAccess(db: Db) {
     currentStewardUserId,
     canReadRunContent,
     assertRunContentReadable,
+    assertRunContentReadableForDetail,
     readableAgentIds,
   };
 }

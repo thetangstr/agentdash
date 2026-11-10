@@ -78,15 +78,27 @@ export function ceilingTemplateService(db: Db) {
     async remove(companyId: string, templateId: string) {
       const existing = await get(companyId, templateId);
       if (!existing) throw notFound("Ceiling template not found");
-      const [company] = await db.select({ defaultCeilingTemplateId: companies.defaultCeilingTemplateId }).from(companies).where(eq(companies.id, companyId));
-      if (company?.defaultCeilingTemplateId === templateId) {
-        throw conflict("This template is the ceiling for new agents. Choose another one, or none, in Admin powers before deleting it.");
-      }
-      const [row] = await db
-        .delete(agentCeilingTemplates)
-        .where(and(eq(agentCeilingTemplates.id, templateId), eq(agentCeilingTemplates.companyId, companyId)))
-        .returning();
-      return row ?? existing;
+      // Review of 94b9e03ee (r3c fix 2): the check and the delete are one
+      // transaction under the company row's lock, the same lock the company
+      // PATCH takes before it sets the default (services/companies.ts update).
+      // Without it a concurrent "make this the default" could commit between
+      // the check and the delete, and the FK's ON DELETE SET NULL would then
+      // clear the new default silently.
+      return db.transaction(async (tx) => {
+        const [company] = await tx
+          .select({ defaultCeilingTemplateId: companies.defaultCeilingTemplateId })
+          .from(companies)
+          .where(eq(companies.id, companyId))
+          .for("update");
+        if (company?.defaultCeilingTemplateId === templateId) {
+          throw conflict("This template is the ceiling for new agents. Choose another one, or none, in Admin powers before deleting it.");
+        }
+        const [row] = await tx
+          .delete(agentCeilingTemplates)
+          .where(and(eq(agentCeilingTemplates.id, templateId), eq(agentCeilingTemplates.companyId, companyId)))
+          .returning();
+        return row ?? existing;
+      });
     },
   };
 }

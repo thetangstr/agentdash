@@ -73,6 +73,66 @@ const ISSUE_FEED_HIDDEN_ACTIONS = [
 // system-actor row, filtered in SQL so the limit applies to visible rows.
 const COMPANY_FEED_HIDDEN_ACTIONS = [...HIDDEN_FEED_ACTIVITY_ACTIONS];
 
+/**
+ * The company feed's `includeSystem` rule, shared by `list` (the feed) and
+ * `listPage` (the admin audit) so "Show system events" means one thing.
+ */
+function includeSystemConditions(includeSystem: boolean | undefined): SQL[] {
+  const conditions: SQL[] = [];
+  if (includeSystem !== true) {
+    // AgentDash: APM gate 2 — out of every default feed, in SQL so the
+    // limit counts the rows a reader sees; "Show system events" (true)
+    // brings them back.
+    conditions.push(notInArray(activityLog.action, [...ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS]));
+  }
+  if (includeSystem === false) {
+    // AgentDash (c4 trust, review #1026): "hide system events" must not
+    // bury a budget hard-stop, a failed hire, or a system-opened approval —
+    // the same keep-list Home already applies to system actors.
+    const keepCriticalSystem = or(
+      ne(activityLog.actorType, "system"),
+      inArray(activityLog.action, [...IMPORTANT_SYSTEM_ACTIVITY_ACTIONS]),
+    );
+    if (keepCriticalSystem) conditions.push(keepCriticalSystem);
+    conditions.push(notInArray(activityLog.action, COMPANY_FEED_HIDDEN_ACTIONS));
+  }
+  return conditions;
+}
+
+/** AgentDash admin powers (part 4): a keyset position in the audit. */
+export interface ActivityPageCursor {
+  /** `created_at` in UTC at microsecond precision (a JS Date would lose it). */
+  createdAt: string;
+  id: string;
+}
+
+export interface ActivityPageFilters {
+  companyId: string;
+  actorType?: "user" | "agent" | "system";
+  actorId?: string;
+  /** Exact action names and `prefix.` prefixes (from `prefix.*`), OR-ed. */
+  actions?: { exact: string[]; prefixes: string[] };
+  entityType?: string;
+  entityId?: string;
+  /** Inclusive bounds on `created_at`. */
+  from?: Date;
+  to?: Date;
+  includeSystem: boolean;
+  /** From buildActivityReadScope: the same read filter as the feed. */
+  visibleWhere?: SQL;
+  cursor?: ActivityPageCursor | null;
+  /** The caller bounds it (the audit: 1..200; its CSV: pages of 1000). */
+  limit: number;
+  /** Only for the CSV's "is there a row past the cap?" probe. */
+  offset?: number;
+}
+
+export const MAX_ACTIVITY_PAGE_LIMIT = 1000;
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 export function normalizeActivityLimit(limit: number | undefined) {
   if (!Number.isFinite(limit)) return DEFAULT_ACTIVITY_LIMIT;
   return Math.max(1, Math.min(MAX_ACTIVITY_LIMIT, Math.floor(limit ?? DEFAULT_ACTIVITY_LIMIT)));
@@ -394,23 +454,7 @@ export function activityService(db: Db) {
       if (filters.visibleWhere) {
         conditions.push(filters.visibleWhere);
       }
-      if (filters.includeSystem !== true) {
-        // AgentDash: APM gate 2 — out of every default feed, in SQL so the
-        // limit counts the rows a reader sees; "Show system events" (true)
-        // brings them back.
-        conditions.push(notInArray(activityLog.action, [...ACTIVITY_DEFAULT_FEED_HIDDEN_ACTIONS]));
-      }
-      if (filters.includeSystem === false) {
-        // AgentDash (c4 trust, review #1026): "hide system events" must not
-        // bury a budget hard-stop, a failed hire, or a system-opened approval —
-        // the same keep-list Home already applies to system actors.
-        const keepCriticalSystem = or(
-          ne(activityLog.actorType, "system"),
-          inArray(activityLog.action, [...IMPORTANT_SYSTEM_ACTIVITY_ACTIONS]),
-        );
-        if (keepCriticalSystem) conditions.push(keepCriticalSystem);
-        conditions.push(notInArray(activityLog.action, COMPANY_FEED_HIDDEN_ACTIONS));
-      }
+      conditions.push(...includeSystemConditions(filters.includeSystem));
 
       return db
         .select({ activityLog })
@@ -434,6 +478,66 @@ export function activityService(db: Db) {
         .orderBy(desc(activityLog.createdAt))
         .limit(limit)
         .then((rows) => rows.map((r) => r.activityLog));
+    },
+
+    /**
+     * AgentDash admin powers (part 4): one keyset page of the activity log
+     * for the admin audit, newest first by `(created_at, id)`. It joins and
+     * excludes hidden issues exactly as `list` does; the caller passes the
+     * shared read scope as `visibleWhere`. No 500 cap: the caller bounds it.
+     */
+    listPage: async (filters: ActivityPageFilters) => {
+      const limit = Math.max(1, Math.min(MAX_ACTIVITY_PAGE_LIMIT, Math.floor(filters.limit)));
+      const conditions: (SQL | undefined)[] = [eq(activityLog.companyId, filters.companyId)];
+      if (filters.actorType) conditions.push(eq(activityLog.actorType, filters.actorType));
+      if (filters.actorId) conditions.push(eq(activityLog.actorId, filters.actorId));
+      if (filters.actions && (filters.actions.exact.length > 0 || filters.actions.prefixes.length > 0)) {
+        conditions.push(or(
+          filters.actions.exact.length > 0 ? inArray(activityLog.action, filters.actions.exact) : undefined,
+          ...filters.actions.prefixes.map((prefix) => sql`${activityLog.action} like ${`${escapeLikePattern(prefix)}%`}`),
+        ));
+      }
+      if (filters.entityType) conditions.push(eq(activityLog.entityType, filters.entityType));
+      if (filters.entityId) conditions.push(eq(activityLog.entityId, filters.entityId));
+      if (filters.from) conditions.push(gte(activityLog.createdAt, filters.from));
+      if (filters.to) conditions.push(sql`${activityLog.createdAt} <= ${filters.to.toISOString()}::timestamptz`);
+      if (filters.visibleWhere) conditions.push(filters.visibleWhere);
+      conditions.push(...includeSystemConditions(filters.includeSystem));
+      if (filters.cursor) {
+        const at = sql`${filters.cursor.createdAt}::timestamptz`;
+        conditions.push(sql`(${activityLog.createdAt} < ${at} or (${activityLog.createdAt} = ${at} and ${activityLog.id} < ${filters.cursor.id}::uuid))`);
+      }
+      const rows = await db
+        .select({
+          activityLog,
+          cursorAt: sql<string>`to_char(${activityLog.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+        })
+        .from(activityLog)
+        .leftJoin(
+          issues,
+          and(
+            eq(activityLog.entityType, sql`'issue'`),
+            eq(activityLog.entityId, issueIdAsText),
+          ),
+        )
+        .where(
+          and(
+            ...conditions,
+            or(
+              sql`${activityLog.entityType} != 'issue'`,
+              isNull(issues.hiddenAt),
+            ),
+          ),
+        )
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+        .limit(limit + 1)
+        .offset(Math.max(0, Math.floor(filters.offset ?? 0)));
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      return {
+        rows: page.map((r) => r.activityLog),
+        nextCursor: rows.length > limit && last ? { createdAt: last.cursorAt, id: last.activityLog.id } : null,
+      };
     },
 
     // AgentDash (batch 2 review lane): the issue page feed has no "show

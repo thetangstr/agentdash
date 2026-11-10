@@ -1032,6 +1032,7 @@
       "headings": [
         "Who may call it",
         "List activity",
+        "The admin audit",
         "The ActivityEvent object",
         "Everything else"
       ],
@@ -1196,6 +1197,7 @@
         "bridge",
         "ceiling-templates",
         "companies",
+        "company-audit",
         "company-skills",
         "connect-codes",
         "connector-send-executions",
@@ -1262,7 +1264,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 687 routes in 92 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest 4a6be2c61678; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 689 routes in 93 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest e394885bae4d; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",

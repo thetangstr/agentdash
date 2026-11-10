@@ -2123,6 +2123,196 @@ paths:
         - bearerAgentKey: []
         - session: []
       x-stability: stable
+  /api/companies/{companyId}/audit:
+    get:
+      operationId: listCompanyAudit
+      summary: "The admin audit: the activity feed's rows for an owner or admin, filtered and paged by cursor."
+      tags:
+        - activity
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: actorType
+          in: query
+          required: false
+          description: "`user`, `agent` or `system`."
+          schema:
+            type: string
+            enum:
+              - user
+              - agent
+              - system
+        - name: actorId
+          in: query
+          required: false
+          description: Only rows by this person or agent.
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          description: Comma-separated action names, each exact or `prefix.*`; at most 20.
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          required: false
+          description: Only rows about this kind of entity.
+          schema:
+            type: string
+        - name: entityId
+          in: query
+          required: false
+          description: Only rows about this entity.
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: Only rows at or after this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Only rows at or before this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: includeSystem
+          in: query
+          required: false
+          description: "Default `true`: every row. `false`: as the activity feed's `false`."
+          schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+        - name: cursor
+          in: query
+          required: false
+          description: The `nextCursor` of the previous page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Rows per page, 1 to 200. Default 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
+  /api/companies/{companyId}/audit.csv:
+    get:
+      operationId: exportCompanyAuditCsv
+      summary: The admin audit as CSV (at most 50,000 rows), for an owner or admin; each export is logged.
+      tags:
+        - activity
+      parameters:
+        - name: companyId
+          in: path
+          required: true
+          description: Company id (UUID).
+          schema:
+            type: string
+        - name: actorType
+          in: query
+          required: false
+          description: "`user`, `agent` or `system`."
+          schema:
+            type: string
+            enum:
+              - user
+              - agent
+              - system
+        - name: actorId
+          in: query
+          required: false
+          description: Only rows by this person or agent.
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          description: Comma-separated action names, each exact or `prefix.*`; at most 20.
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          required: false
+          description: Only rows about this kind of entity.
+          schema:
+            type: string
+        - name: entityId
+          in: query
+          required: false
+          description: Only rows about this entity.
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: Only rows at or after this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Only rows at or before this ISO 8601 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: includeSystem
+          in: query
+          required: false
+          description: "Default `true`: every row. `false`: as the activity feed's `false`."
+          schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+      responses:
+        "200":
+          description: Success. Response schema not generated.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+      description: "Response schema not generated: the route returns no named shared type."
+      security:
+        - bearerBoardKey: []
+        - session: []
+      x-stability: stable
   /api/companies/{companyId}/dashboard:
     get:
       operationId: getDashboard
