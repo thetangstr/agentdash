@@ -510,8 +510,8 @@ export function CompanySettings() {
           />
         </div>
         {/* AgentDash admin powers: the company's labels. Any member manages
-            labels today (the label routes' rule), so this is not gated on
-            company:manage. */}
+            labels one at a time (the label routes' rule), so the card is not
+            gated on company:manage; its multi-delete is, inside the card. */}
         {selectedCompany?.id ? <LabelsCard companyId={selectedCompany.id} /> : null}
       </div>
 

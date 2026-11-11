@@ -173,8 +173,8 @@ describe("Agents", () => {
     }
     const boxes = () => [...container.querySelectorAll<HTMLInputElement>('[data-testid="agent-bulk-checkbox"]')];
 
-    it("offers checkboxes and the bar to people who can manage agents", async () => {
-      mockCapabilitiesApi.get.mockResolvedValue({ companyId: "company-1", actorType: "board", membershipRole: "owner", isInstanceAdmin: false, capabilities: { "agents:create": true } });
+    it("offers checkboxes and the bar to owners and admins", async () => {
+      mockCapabilitiesApi.get.mockResolvedValue({ companyId: "company-1", actorType: "board", membershipRole: "owner", isInstanceAdmin: false, capabilities: { "agents:create": true, "company:manage": true } });
       await renderList();
       expect(boxes()).toHaveLength(2);
       expect(container.querySelector('[data-testid="agents-bulk-bar"]')).toBeNull();
@@ -182,6 +182,14 @@ describe("Agents", () => {
       expect(container.querySelector('[data-testid="agents-bulk-bar"]')!.getAttribute("data-selected")).toBe("a2");
       await act(async () => { container.querySelector<HTMLInputElement>('[data-testid="agents-select-visible"] input')!.click(); });
       expect(container.querySelector('[data-testid="agents-bulk-bar"]')!.getAttribute("data-selected")!.split(",").sort()).toEqual(["a1", "a2"]);
+    });
+
+    it("shows nothing to a member, even one who can manage agents: bulk changes are for owners and admins", async () => {
+      mockCapabilitiesApi.get.mockResolvedValue({ companyId: "company-1", actorType: "board", membershipRole: "member", isInstanceAdmin: false, capabilities: { "agents:create": true, "company:manage": false } });
+      await renderList();
+      expect(container.querySelectorAll('[data-testid="agent-bulk-checkbox"]')).toHaveLength(0);
+      expect(container.querySelector('[data-testid="agents-select-visible"]')).toBeNull();
+      expect(container.textContent).toContain("Alpha");
     });
 
     it("shows nothing to people who cannot manage agents", async () => {

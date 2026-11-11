@@ -27,6 +27,7 @@ import { DecisionsOtherSources } from "./DecisionsOtherSources";
 import { ReviewWaitingRow } from "../components/ReviewWaitingRow";
 import { StoppedAgentIssueRow } from "../components/StoppedAgentIssueRow";
 import { useIsPhone } from "../hooks/useIsPhone";
+import { useCanBulkChange } from "../hooks/useCapability";
 
 /**
  * AgentDash: UX-7 (GH #788) — one Decisions page instead of Inbox +
@@ -160,8 +161,10 @@ export function Decisions() {
   const [showOther, setShowOther] = useState(false);
   const isPhone = useIsPhone();
   const queryClient = useQueryClient();
-  // AgentDash admin powers: decide several at once. Only rows the person may
-  // decide can be selected; the server re-checks each one when it is sent.
+  // AgentDash admin powers: owners and admins decide several at once. Only
+  // rows the person may decide can be selected; the server re-checks each one
+  // when it is sent. Everyone else decides one at a time, as before.
+  const canBulkChange = useCanBulkChange(selectedCompanyId);
   const [selectedApprovalIds, setSelectedApprovalIds] = useState<string[]>([]);
   const [sharedNote, setSharedNote] = useState("");
   const [batchKind, setBatchKind] = useState<"approval.approve" | "approval.reject" | null>(null);
@@ -192,7 +195,7 @@ export function Decisions() {
   // manual main list, `otherTasksAssignedToYou` the machine-filed group.
   const decisions = waiting?.decisions ?? [];
   // Only what is still listed and decidable stays selected.
-  const selectedApprovals = selectedApprovalIds.filter((id) => decisions.some((decision) => decision.approvalId === id && decision.canDecide));
+  const selectedApprovals = !canBulkChange ? [] : selectedApprovalIds.filter((id) => decisions.some((decision) => decision.approvalId === id && decision.canDecide));
   const manualTasks = waiting?.tasksAssignedToYou ?? [];
   const otherTasks = waiting?.otherTasksAssignedToYou ?? [];
   const otherTasksTotal = waiting?.otherTasksAssignedToYouTotal ?? otherTasks.length;
@@ -250,7 +253,7 @@ export function Decisions() {
                 key={decision.approvalId}
                 decision={decision}
                 selected={selectedApprovalIds.includes(decision.approvalId)}
-                onSelectedChange={decision.canDecide
+                onSelectedChange={canBulkChange && decision.canDecide
                   ? (selected) => setSelectedApprovalIds((current) => selected
                     ? [...current.filter((id) => id !== decision.approvalId), decision.approvalId]
                     : current.filter((id) => id !== decision.approvalId))

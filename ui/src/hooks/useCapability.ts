@@ -45,6 +45,19 @@ export function useCapability(companyId: string | null | undefined, key: Capabil
 }
 
 /**
+ * May this person make bulk changes (select several records and change them
+ * together)? Bulk changes are for company owners and admins: the server's
+ * batch preview and confirm ask exactly the question `company:manage` answers.
+ * Every multi-select surface asks here, so they all hide the same way. False
+ * while the answer is loading: members see the page exactly as before, and an
+ * admin's checkboxes appear once the server has said so.
+ */
+export function useCanBulkChange(companyId: string | null | undefined): boolean {
+  const { allowed, isLoading } = useCapability(companyId, "company:manage");
+  return allowed && !isLoading;
+}
+
+/**
  * The sentence to show when the server refuses.
  *
  * A toast that says "Error" is how a permission boundary gets mistaken for a

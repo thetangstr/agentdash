@@ -29,7 +29,7 @@ import {
   type BatchView,
 } from "@paperclipai/shared";
 import { badRequest, conflict, forbidden, HttpError, notFound } from "../../errors.js";
-import { assertBoard, assertCompanyAccess, isCompanyAdministrator } from "../../routes/authz.js";
+import { assertBoard, assertCompanyAccess, assertCompanyAdministrator, isCompanyAdministrator } from "../../routes/authz.js";
 import { accessService } from "../access.js";
 import { logActivity } from "../activity-log.js";
 import { runWithBatchActivityContext } from "../../lib/batch-activity-context.js";
@@ -48,6 +48,8 @@ import { fingerprintOf, runBatch, type BatchItemSender } from "./runner.js";
  * and answers 202; the runner sends each item through the record's own
  * single-record route (runner.ts). A batch is bound to one company and one
  * person, and every item is re-checked by that route for that person.
+ * Only company owners and admins start batches (assertMayBatch); members
+ * change records one at a time.
  */
 
 export interface BatchServiceOptions {
@@ -59,6 +61,7 @@ export interface BatchServiceOptions {
 }
 
 const BATCH_SOURCES_MESSAGE = "Batch changes need you signed in to AgentDash in the browser.";
+const BATCH_ADMIN_ONLY_MESSAGE = "Bulk changes are for company owners and admins.";
 
 function tooMany(message: string) {
   return new HttpError(429, message);
@@ -394,6 +397,17 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
     return { grantId, userId, clientName: grant.clientName, maxRecords: company.assistantBatchMaxRecords };
   }
 
+  /**
+   * Who may start a batch in the product: a company owner or admin (the local
+   * operator and instance admins count, as everywhere else). Asked at preview
+   * and again at confirm, since the role can change in between. This is the
+   * one place that decides it; members keep every single-record action, each
+   * guarded by its own route.
+   */
+  async function assertMayBatch(req: Request, companyId: string): Promise<void> {
+    await assertCompanyAdministrator(access, req, companyId, BATCH_ADMIN_ONLY_MESSAGE);
+  }
+
   /** The person is an admin of the company and its "batch changes from Claude" switch is on. */
   async function assertAdminBatchesOn(req: Request, companyId: string) {
     if (!(await isCompanyAdministrator(access, req, companyId))) {
@@ -435,6 +449,7 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
       credentialOrigin(req);
+      await assertMayBatch(req, companyId);
       return planAndStore(req, companyId, input, { origin: "ui" });
     },
 
@@ -656,6 +671,8 @@ export function batchService(db: Db, options: BatchServiceOptions = {}) {
       assertBoard(req);
       assertCompanyAccess(req, companyId);
       const credential = credentialOrigin(req);
+      // Again at confirm: the person may have lost the owner or admin role since the preview.
+      await assertMayBatch(req, companyId);
       const existing = await loadOwnBatch(req, companyId, batchId);
       if (existing.origin !== "ui") throw forbidden("This batch is confirmed from its review page.");
       const kind = kindFor(existing.kind);

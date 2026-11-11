@@ -213,7 +213,7 @@ describeEmbeddedPostgres("batch kinds: agents, routines and labels", () => {
     it("archives; an archived one is a no-op", async () => {
       const a = await routine();
       const b = await routine({ status: "archived" });
-      const { preview: p, batch } = await run(member, { kind: "routine.archive", ids: [a.id, b.id], change: {} });
+      const { preview: p, batch } = await run(owner, { kind: "routine.archive", ids: [a.id, b.id], change: {} });
       expect(p.omitted.noop).toBe(1);
       expect(batch.items[0]).toMatchObject({ outcome: "applied", reasonCode: null });
       const [row] = await t.db.select({ status: routines.status }).from(routines).where(eq(routines.id, a.id));
@@ -225,7 +225,7 @@ describeEmbeddedPostgres("batch kinds: agents, routines and labels", () => {
       const [made] = await t.db.insert(issues).values({ companyId, title: "Made by the routine", status: "todo", priority: "medium", originKind: "routine_execution", originId: r.id }).returning();
       await t.db.insert(routineRuns).values({ companyId, routineId: r.id, source: "schedule", status: "completed", linkedIssueId: made!.id });
       await t.db.insert(activityLog).values({ companyId, actorType: "user", actorId: ownerId, action: "routine.created", entityType: "routine", entityId: r.id, origin: "server" });
-      const { preview: p, batch } = await run(member, { kind: "routine.delete", ids: [r.id], change: {} });
+      const { preview: p, batch } = await run(owner, { kind: "routine.delete", ids: [r.id], change: {} });
       expect(p.items[0].notes[0]).toBe("Deleting removes the routine for good; it cannot be restored. Its past runs, the tasks they created and its history are kept.");
       expect(batch.items[0]).toMatchObject({ outcome: "applied", reasonCode: null, actual: { state: "deleted" } });
       expect((await request(t.server).get(`/api/routines/${r.id}`).set(member)).status).toBe(404);
@@ -276,7 +276,11 @@ describeEmbeddedPostgres("batch kinds: agents, routines and labels", () => {
     it("recolors several labels in one batch", async () => {
       const a = await label("One");
       const b = await label("Two");
-      const { batch } = await run(member, { kind: "label.update", ids: [a.id, b.id], change: { color: "#00aa00" } });
+      // A member changes labels one at a time (above), never in bulk.
+      const refused = await preview(member, { kind: "label.update", ids: [a.id, b.id], change: { color: "#00aa00" } });
+      expect(refused.status).toBe(403);
+      expect(refused.body.error).toBe("Bulk changes are for company owners and admins.");
+      const { batch } = await run(owner, { kind: "label.update", ids: [a.id, b.id], change: { color: "#00aa00" } });
       expect(batch.counts).toMatchObject({ applied: 2, appliedDifferently: 0 });
     });
 
@@ -286,7 +290,7 @@ describeEmbeddedPostgres("batch kinds: agents, routines and labels", () => {
       const [i1] = await t.db.insert(issues).values({ companyId, title: "x", status: "todo", priority: "medium" }).returning();
       const [i2] = await t.db.insert(issues).values({ companyId, title: "y", status: "todo", priority: "medium" }).returning();
       await t.db.insert(issueLabels).values([{ issueId: i1!.id, labelId: used.id, companyId }, { issueId: i2!.id, labelId: used.id, companyId }, { issueId: i1!.id, labelId: busy.id, companyId }]);
-      const { preview: p, batch } = await run(member, { kind: "label.delete", ids: [used.id, busy.id], change: {} }, async () => {
+      const { preview: p, batch } = await run(owner, { kind: "label.delete", ids: [used.id, busy.id], change: {} }, async () => {
         await t.db.insert(issueLabels).values({ issueId: i2!.id, labelId: busy.id, companyId });
       });
       const notes = new Map(p.items.map((item: { entityId: string; notes: string[] }) => [item.entityId, item.notes[0]]));

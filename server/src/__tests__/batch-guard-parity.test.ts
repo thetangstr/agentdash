@@ -17,8 +17,9 @@ import { BATCH_KINDS } from "../services/batch/kinds.js";
  * change against twin records: one twin through the single-record route
  * directly, the other through a batch (preview → confirm → runner →
  * loopback). A batch must never allow what the single route refuses for that
- * actor. For board sessions the two answers must be identical; actors who may
- * not start a batch at all (agents) must be refused at preview.
+ * actor. For owners and admins the two answers must be identical; actors who
+ * may not start a batch at all (agents, and members who are not owners or
+ * admins) must be refused at preview.
  *
  * Part 3 kinds join here: add an entry to SCENARIOS for each new kind, and
  * the "every kind is covered" test fails until one exists.
@@ -80,7 +81,9 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
       ["admin", ownerId], ["memberCreator", creatorId], ["memberOther", otherId], ["suspendedMember", suspendedId],
       ["instanceAdminNonMember", instanceAdminId], ["outsider", outsiderId],
     ] as const) {
-      actors.set(key, { key, headers: t.browser(await t.signIn(userId)), batches: true });
+      // Bulk changes are for owners and admins: members are refused at preview.
+      const batches = key === "admin" || key === "instanceAdminNonMember" || key === "outsider";
+      actors.set(key, { key, headers: t.browser(await t.signIn(userId)), batches });
     }
     actors.set("agent", { key: "agent", headers: { authorization: "Bearer parity-agent-key" }, batches: false });
   }, 120_000);
@@ -223,6 +226,7 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
           const byBatchId = new Map([...records].map(([key, pair]) => [pair.batch.id, key]));
           const preview = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(actor.headers)
             .send({ kind: kindKey, ids: [...byBatchId.keys()], change: kindKey === "agent.transfer_steward" ? await changeFor() : change });
+          if (!actor.batches) expect([401, 403], `${actor.key} preview: ${JSON.stringify(preview.body)}`).toContain(preview.status);
           if (preview.status === 403 || preview.status === 401) {
             for (const key of records.keys()) batch.set(key, "deny");
           } else {
@@ -254,7 +258,7 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
           // not a member may still act on some single routes (the stewardship
           // routes let instance admins through); a batch never lets them.
           else if (row.actor === "instanceAdminNonMember") expect(row.batch, label).toBe("deny");
-          // Board sessions get exactly the single route's answer.
+          // Owners and admins get exactly the single route's answer.
           else if (actors.get(row.actor)!.batches) expect(row.batch, label).toBe(row.direct);
           // Actors who may not start a batch are refused at preview.
           else expect(row.batch, label).toBe("deny");
@@ -266,7 +270,8 @@ describeEmbeddedPostgres("batch guard parity: the batch path never allows what t
         const find = (actor: ActorKey, record: RecordKey) => table.find((row) => row.actor === actor && row.record === record)!;
         if (kind.entityType === "issue") {
           expect(find("admin", "restrictedByOwner")).toMatchObject({ direct: "allow", batch: "allow" });
-          expect(find("memberCreator", "restrictedByCreator")).toMatchObject({ direct: "allow", batch: "allow" });
+          // A member still changes their own restricted work one record at a time, never in bulk.
+          expect(find("memberCreator", "restrictedByCreator")).toMatchObject({ direct: "allow", batch: "deny" });
           expect(find("memberOther", "restrictedByCreator")).toMatchObject({ direct: "deny", batch: "deny" });
         }
         for (const actor of actors.keys()) expect(find(actor, "foreign").batch).toBe("deny");
@@ -298,7 +303,7 @@ describeEmbeddedPostgres("batch guard parity: agent.apply_ceiling (agentdash_mk 
     const actingAgent = await addAgent(t.db, companyId, { name: "Acting CEO", role: "ceo", status: "idle" });
     await t.db.insert(agentApiKeys).values({ agentId: actingAgent.id, companyId, name: "parity-ceiling", keyHash: createHash("sha256").update("parity-ceiling-key").digest("hex") });
     for (const [key, userId] of [["admin", ownerId], ["member", memberId], ["suspended", suspendedId], ["instanceAdminNonMember", instanceAdminId], ["outsider", outsiderId]] as const) {
-      actors.push({ key, headers: t.browser(await t.signIn(userId)), batches: true, member: key !== "instanceAdminNonMember" && key !== "outsider" });
+      actors.push({ key, headers: t.browser(await t.signIn(userId)), batches: key !== "member" && key !== "suspended", member: key !== "instanceAdminNonMember" && key !== "outsider" });
     }
     actors.push({ key: "agent", headers: { authorization: "Bearer parity-ceiling-key" }, batches: false, member: false });
     const created = await request(t.server).post(`/api/companies/${companyId}/ceiling-templates`).set(actors[0]!.headers).send({ name: "Parity tight", ceiling: TIGHT });

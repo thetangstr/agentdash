@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock("../api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
 
-const { useCapability, refusalMessage } = await import("./useCapability");
+const { useCanBulkChange, useCapability, refusalMessage } = await import("./useCapability");
 
 /**
  * The state that gets forgotten is "not yet known".
@@ -125,5 +125,45 @@ describe("refusalMessage", () => {
   it("falls back to something human when there is nothing to surface", () => {
     expect(refusalMessage(null)).toMatch(/permission/i);
     expect(refusalMessage({})).toMatch(/permission/i);
+  });
+});
+
+describe("useCanBulkChange", () => {
+  function BulkProbe() {
+    return <span data-testid="bulk">{String(useCanBulkChange("company-1"))}</span>;
+  }
+
+  async function renderBulk() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <BulkProbe />
+        </QueryClientProvider>,
+      );
+    });
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    }
+    return container.querySelector('[data-testid="bulk"]')?.textContent;
+  }
+
+  it("is true for an owner or admin: the server's company:manage answer", async () => {
+    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: { "company:manage": true } });
+    expect(await renderBulk()).toBe("true");
+  });
+
+  it("is false for a member, even one with other permissions", async () => {
+    mockCapabilitiesApi.get.mockResolvedValue({ capabilities: { "company:manage": false, "agents:create": true, "tasks:assign": true } });
+    expect(await renderBulk()).toBe("false");
+  });
+
+  it("is false while the answer is loading and when the request fails", async () => {
+    mockCapabilitiesApi.get.mockReturnValue(new Promise(() => undefined));
+    expect(await renderBulk()).toBe("false");
+    act(() => root.unmount());
+    root = createRoot(container);
+    mockCapabilitiesApi.get.mockRejectedValue(new Error("network"));
+    expect(await renderBulk()).toBe("false");
   });
 });

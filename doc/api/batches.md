@@ -5,6 +5,13 @@ Available in every company. Not in the public contract yet: the routes are
 listed as `internal` in `docs/api/route-index.md` and may change while the
 product kinds (part 3) and batches from a person's own Claude (part 5) land.
 
+Only a company owner or admin may start a batch (the local operator and
+instance admins count, as on other owner and admin routes). Preview and
+confirm both check it, so a person who stops being an admin after the
+preview cannot confirm; a member gets `403` "Bulk changes are for company
+owners and admins." (since v2026.1110.1). Members keep every single-record
+route.
+
 A batch never has authority of its own. Each record is sent, one at a time,
 through that record's own single-record route, as the person who confirmed
 the batch, and that route's guards decide. A batch can never do something the

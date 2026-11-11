@@ -26,6 +26,7 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
   let ownerId = "";
   let memberId = "";
   let owner: Record<string, string> = {};
+  let admin: Record<string, string> = {};
   let member: Record<string, string> = {};
 
   beforeAll(async () => {
@@ -34,6 +35,7 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
     ownerId = await addUser(t.db, companyId, "owner");
     memberId = await addUser(t.db, companyId, "member");
     owner = t.browser(await t.signIn(ownerId));
+    admin = t.browser(await t.signIn(await addUser(t.db, companyId, "admin")));
     member = t.browser(await t.signIn(memberId));
   }, 120_000);
 
@@ -86,17 +88,17 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
       const a = await issue();
       const b = await issue();
       await t.db.insert(issueLabels).values([{ issueId: a.id, labelId: bug.id, companyId }, { issueId: b.id, labelId: ui.id, companyId }]);
-      const noop = await preview(member, { kind: "issue.update", ids: [a.id], change: { addLabelIds: [bug.id] } });
+      const noop = await preview(admin, { kind: "issue.update", ids: [a.id], change: { addLabelIds: [bug.id] } });
       expect(noop.batchId).toBeNull();
       expect(noop.omitted.noop).toBe(1);
 
-      const p = await preview(member, { kind: "issue.update", ids: [a.id, b.id], change: { addLabelIds: [ui.id], removeLabelIds: [bug.id] } });
+      const p = await preview(admin, { kind: "issue.update", ids: [a.id, b.id], change: { addLabelIds: [ui.id], removeLabelIds: [bug.id] } });
       const byId = new Map(p.items.map((item: { entityId: string }) => [item.entityId, item]));
       expect((byId.get(a.id) as { before: { labelIds: string[] }; after: { labelIds: string[] } }).before.labelIds).toEqual([bug.id]);
       expect((byId.get(a.id) as { after: { labelIds: string[] } }).after.labelIds).toEqual([ui.id]);
       // b already has `ui` and lacks `bug`: nothing changes, so it is left out.
       expect(p.items).toHaveLength(1);
-      const batch = await apply(member, p);
+      const batch = await apply(admin, p);
       expect(batch.items[0]).toMatchObject({ outcome: "applied", reasonCode: null });
       expect(await labelIdsOf(a.id)).toEqual([ui.id]);
     });
@@ -105,8 +107,8 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
       const x = await label("X");
       const y = await label("Y");
       const a = await issue();
-      const p = await preview(member, { kind: "issue.update", ids: [a.id], change: { addLabelIds: [x.id] } });
-      const batch = await apply(member, p, async () => {
+      const p = await preview(admin, { kind: "issue.update", ids: [a.id], change: { addLabelIds: [x.id] } });
+      const batch = await apply(admin, p, async () => {
         await t.db.insert(issueLabels).values({ issueId: a.id, labelId: y.id, companyId });
       });
       expect(batch.items[0]).toMatchObject({ outcome: "refused", reasonCode: "changed_since_preview", reason: "This task changed after you previewed it, so nothing was done to it." });
@@ -115,18 +117,19 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
 
     it("moves tasks to another project; the route's own project check applies", async () => {
       const [target] = await t.db.insert(projects).values({ companyId, name: `Launch ${randomUUID().slice(0, 4)}` }).returning();
-      const [restricted] = await t.db.insert(projects).values({ companyId, name: "Hidden", visibility: "restricted", createdByUserId: ownerId }).returning();
+      const other = (await addCompany(t.db, "Kinds elsewhere", "default")).id;
+      const [foreignProject] = await t.db.insert(projects).values({ companyId: other, name: "Theirs" }).returning();
       const a = await issue();
-      const p = await preview(member, { kind: "issue.update", ids: [a.id], change: { projectId: target!.id } });
+      const p = await preview(admin, { kind: "issue.update", ids: [a.id], change: { projectId: target!.id } });
       expect(p.items[0]).toMatchObject({ before: { projectId: null }, after: { projectId: target!.id } });
-      const batch = await apply(member, p);
+      const batch = await apply(admin, p);
       expect(batch.items[0]).toMatchObject({ outcome: "applied", reasonCode: null });
       const [row] = await t.db.select({ projectId: issues.projectId }).from(issues).where(eq(issues.id, a.id));
       expect(row!.projectId).toBe(target!.id);
-      // A project the member cannot see: refused by the route, nothing moves.
+      // A project in another company: refused by the route, nothing moves.
       const b = await issue();
-      const q = await preview(member, { kind: "issue.update", ids: [b.id], change: { projectId: restricted!.id } });
-      const refused = await apply(member, q);
+      const q = await preview(admin, { kind: "issue.update", ids: [b.id], change: { projectId: foreignProject!.id } });
+      const refused = await apply(admin, q);
       expect(refused.items[0].outcome).toBe("refused");
       const [still] = await t.db.select({ projectId: issues.projectId }).from(issues).where(eq(issues.id, b.id));
       expect(still!.projectId).toBeNull();
@@ -179,30 +182,34 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
   });
 
   describe("security review of round 3a (3534361b4)", () => {
-    it("fix 1: an approval raised by an agent the person cannot see is not named or counted as not decidable", async () => {
+    it("fix 1: an approval raised by an agent a member cannot see is never named: members are refused bulk changes outright", async () => {
       const hidden = await addAgent(t.db, companyId, { name: "Hidden agent", visibility: "owner", createdByUserId: ownerId, status: "idle", runtimeConfig: NO_RUN } as never);
       const [secret] = await t.db.insert(approvals).values({ companyId, type: "hire_agent", status: "pending", payload: { name: "Secret Hire", title: "CFO" }, requestedByAgentId: hidden.id }).returning();
       expect((await request(t.server).get(`/api/approvals/${secret!.id}`).set(member)).status).toBe(404);
-      const shown = await preview(member, { kind: "approval.approve", ids: [secret!.id], change: {} });
-      const missing = await preview(member, { kind: "approval.approve", ids: [randomUUID()], change: {} });
-      expect(JSON.stringify(shown)).not.toContain("Secret Hire");
-      expect(shown.notDecidable).toEqual([]);
-      expect(shown.omitted).toEqual({ notFound: 1, noop: 0, notDecidable: 0 });
-      // Indistinguishable from an id that does not exist.
-      expect(shown).toEqual(missing);
+      // Bulk changes are for owners and admins: a member is refused before
+      // any record is read, the same way for a hidden id and a missing one.
+      const shown = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(member)
+        .send({ kind: "approval.approve", ids: [secret!.id], change: {} });
+      const missing = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(member)
+        .send({ kind: "approval.approve", ids: [randomUUID()], change: {} });
+      expect(shown.status).toBe(403);
+      expect(JSON.stringify(shown.body)).not.toContain("Secret Hire");
+      expect(shown.body).toEqual(missing.body);
     });
 
-    it("fix 2: assigning a person who looks after a hidden agent previews (and does) what the route does: the person keeps it", async () => {
+    it("fix 2: assigning a person who looks after a hidden agent: a member cannot batch it, and the single route does what it always did", async () => {
       const steward = await addUser(t.db, companyId, "member");
       const hidden = await addAgent(t.db, companyId, { name: "Hidden helper", visibility: "owner", createdByUserId: ownerId, status: "idle", runtimeConfig: NO_RUN } as never);
       await t.db.insert(agentStewardships).values({ companyId, agentId: hidden.id, userId: steward, assignedByUserId: ownerId });
       const a = await issue();
-      const p = await preview(member, { kind: "issue.update", ids: [a.id], change: { assignee: { userId: steward } } });
-      expect(p.items[0]).toMatchObject({ after: { assigneeAgentId: null, assigneeUserId: steward } });
-      expect(p.items[0].notes ?? []).toEqual([]);
-      expect(JSON.stringify(p)).not.toContain(hidden.id);
-      const batch = await apply(member, p);
-      expect(batch.items[0]).toMatchObject({ outcome: "applied", reasonCode: null });
+      // A member is refused a batch outright, so the hidden agent is never named...
+      const refused = await request(t.server).post(`/api/companies/${companyId}/batches/preview`).set(member)
+        .send({ kind: "issue.update", ids: [a.id], change: { assignee: { userId: steward } } });
+      expect(refused.status).toBe(403);
+      expect(JSON.stringify(refused.body)).not.toContain(hidden.id);
+      // ...and the single-record route does for them what it always did: the person keeps it.
+      const single = await request(t.server).patch(`/api/issues/${a.id}`).set(member).send({ assigneeUserId: steward });
+      expect(single.status, JSON.stringify(single.body)).toBe(200);
       const [row] = await t.db.select({ assigneeUserId: issues.assigneeUserId, assigneeAgentId: issues.assigneeAgentId }).from(issues).where(eq(issues.id, a.id));
       expect(row).toEqual({ assigneeUserId: steward, assigneeAgentId: null });
     });
@@ -289,7 +296,8 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
     it("approvals the person may not decide are left out as not decidable, with a reason", async () => {
       const mk = (await addCompany(t.db, "Kinds MK", "agentdash_mk")).id;
       const mkOwner = await addUser(t.db, mk, "owner");
-      const steward = await addUser(t.db, mk, "member");
+      const steward = await addUser(t.db, mk, "admin");
+      const memberSteward = await addUser(t.db, mk, "member");
       const agent = await addAgent(t.db, mk, { name: "Requester", status: "idle", runtimeConfig: NO_RUN });
       await t.db.insert(agentStewardships).values({ companyId: mk, agentId: agent.id, userId: steward, assignedByUserId: mkOwner });
       const [approval] = await t.db.insert(approvals).values({
@@ -303,11 +311,24 @@ describeEmbeddedPostgres("batch kinds: issues and approvals", () => {
       expect(res.body.batchId).toBeNull();
       expect(res.body.omitted.notDecidable).toBe(1);
       expect(res.body.notDecidable[0].reasonCode).toMatch(/not_waiting_on_you|not_yours_to_decide/);
-      // The steward can.
+      // The steward, an admin, can.
       const stewardHeaders = t.browser(await t.signIn(steward));
       const ok = await request(t.server).post(`/api/companies/${mk}/batches/preview`).set(stewardHeaders)
         .send({ kind: "approval.approve", ids: [approval!.id], change: {} });
       expect(ok.body.items).toHaveLength(1);
+      // A steward who is a plain member decides one at a time, never in bulk.
+      const memberAgent = await addAgent(t.db, mk, { name: "Member's requester", status: "idle", runtimeConfig: NO_RUN });
+      await t.db.insert(agentStewardships).values({ companyId: mk, agentId: memberAgent.id, userId: memberSteward, assignedByUserId: mkOwner });
+      const [mine] = await t.db.insert(approvals).values({
+        companyId: mk, type: "request_board_approval", requestedByAgentId: memberAgent.id, status: "pending", payload: { title: "Renew a license" },
+      }).returning();
+      const memberHeaders = t.browser(await t.signIn(memberSteward));
+      const bulk = await request(t.server).post(`/api/companies/${mk}/batches/preview`).set(memberHeaders)
+        .send({ kind: "approval.approve", ids: [mine!.id], change: {} });
+      expect(bulk.status).toBe(403);
+      const single = await request(t.server).post(`/api/approvals/${mine!.id}/approve`).set(memberHeaders)
+        .send({ revision: mine!.revision, idempotencyKey: randomUUID(), channel: "web" });
+      expect(single.status, JSON.stringify(single.body)).toBe(200);
       void companies;
       void and;
       void batchOperationItems;
