@@ -1061,6 +1061,51 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       expect(res.body.error).toBe("invalid_client_metadata");
     });
 
+    it("accepts a native client's loopback redirect_uris (Claude Code's document) on any port", async () => {
+      // The shape Claude Code publishes: the document is on its vendor's
+      // origin, the callback is on the person's own machine.
+      stubCimdHttps(JSON.stringify({
+        client_id: CIMD_URL,
+        client_name: "Native Client",
+        redirect_uris: ["http://localhost/callback", "http://127.0.0.1/callback"],
+        token_endpoint_auth_method: "none",
+      }));
+      const company = await seedCompany();
+      const { challenge, verifier } = pkcePair();
+      const authz = await authorize({
+        client_id: CIMD_URL,
+        redirect_uri: "http://localhost:51487/callback",
+        code_challenge: challenge,
+      });
+      expect(authz.status).toBe(302);
+      const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+      const decision = await request(app)
+        .post(`/oauth/consent/${requestId}/decision`)
+        .set("Origin", PUBLIC_BASE)
+        .send({ approved: true, companyId: company.id, scopes: ["agentdash:read"] });
+      const redirect = new URL(decision.body.redirect);
+      expect(redirect.origin).toBe("http://localhost:51487");
+      const token = await request(app).post("/oauth/token").send({
+        grant_type: "authorization_code",
+        code: redirect.searchParams.get("code")!,
+        client_id: CIMD_URL,
+        redirect_uri: "http://localhost:51487/callback",
+        code_verifier: verifier,
+        resource: CANONICAL_RESOURCE,
+      });
+      expect(token.status).toBe(200);
+    });
+
+    it("still rejects an off-origin https redirect listed beside loopback ones", async () => {
+      stubCimdHttps(JSON.stringify({
+        client_name: "Mixed",
+        redirect_uris: ["http://localhost/callback", "https://victim.example/callback"],
+      }));
+      const res = await authorize({ client_id: CIMD_URL, redirect_uri: "http://localhost:4000/callback" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_client_metadata");
+    });
+
     it("rejects a document whose client_id field does not match the document URL", async () => {
       stubCimdHttps(JSON.stringify({
         client_id: "https://other.example/not-this-doc.json",

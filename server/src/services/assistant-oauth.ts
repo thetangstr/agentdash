@@ -595,7 +595,13 @@ export function assistantOAuthService(db: Db) {
       // The document may only speak for its own origin. A metadata document at
       // attacker.example naming a redirect on victim.example must not turn a
       // consent screen into a code-delivery mechanism for that origin.
-      if (new URL(validated).origin !== docOrigin) {
+      // Loopback is the exception: a native client (Claude Code's document at
+      // claude.ai lists http://localhost/callback) receives the code on the
+      // person's own machine, which no remote origin can claim, and PKCE
+      // still binds the code to the client that started the flow.
+      const target = new URL(validated);
+      const loopback = target.protocol === "http:" && isLoopbackHostname(target.hostname);
+      if (!loopback && target.origin !== docOrigin) {
         throw new OAuthError(
           "invalid_client_metadata",
           "CIMD redirect_uris must share the client_id document's origin",
