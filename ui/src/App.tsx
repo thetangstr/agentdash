@@ -93,6 +93,7 @@ import { TrialClaimPage } from "./pages/TrialClaim";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSAskPage, CoSEntryRoute } from "./pages/CoSConversation";
+import { FredPage } from "./pages/Fred";
 import { MemberOnboardingPage } from "./pages/MemberOnboarding";
 import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
@@ -151,6 +152,7 @@ function boardRoutes() {
       <Route path="dashboard/live" element={<DashboardLive />} />
       {/* AgentDash: Ask — the Chief of Staff conversation, inside the sidebar Layout. */}
       <Route path="cos" element={<CoSAskPage />} />
+      <Route path="company/fred" element={<FredPage />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
@@ -470,6 +472,7 @@ export function App() {
               company code. Without these, /dashboard looked for a company
               called DASHBOARD and said it could not find one. */}
           <Route path="my-agent" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/fred" element={<UnprefixedBoardRedirect />} />
           <Route path="guides" element={<UnprefixedBoardRedirect />} />
           <Route path="guides/*" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard" element={<UnprefixedBoardRedirect />} />

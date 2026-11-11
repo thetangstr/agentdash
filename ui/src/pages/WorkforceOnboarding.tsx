@@ -11,6 +11,7 @@ import { accessApi } from '@/api/access';
 import { goalsApi } from '@/api/goals';
 import { stewardshipsApi } from '@/api/stewardships';
 import { queryKeys } from '@/lib/queryKeys';
+import { useCapability } from '@/hooks/useCapability';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -165,7 +166,10 @@ export function WorkforceWorkspace({ companyId }: { companyId: string }) {
   const brief = useQuery({ queryKey: workforceKeys.brief(companyId), queryFn: () => workforceApi.brief(companyId) });
   const agents = useQuery({ queryKey: queryKeys.agents.list(companyId), queryFn: () => agentsApi.list(companyId) });
   const selected = agents.data?.find(a => a.id === agentId) ?? agents.data?.[0];
+  // AgentDash: Fred is set up and started by an owner or admin (company:manage).
+  const fredAccess = useCapability(companyId, 'company:manage');
   return <div className="mx-auto max-w-4xl space-y-6 py-6">
+    {fredAccess.allowed && !fredAccess.isLoading && <p className="text-sm text-muted-foreground">Need help choosing the next useful job? <Link className="inline-flex min-h-11 items-center font-medium underline" to="/company/fred">Meet Fred, your AgentDash guide</Link></p>}
     <header className="space-y-2">
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Workforce setup</p>
       <h1 className="text-2xl font-semibold">Give your team the context to do good work</h1>

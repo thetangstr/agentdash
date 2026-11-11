@@ -1,5 +1,6 @@
 import { humanControlRoutes } from "./routes/human-control.js";
 import { workforceRoutes } from "./routes/workforce.js";
+import { fredRoutes } from "./routes/fred.js";
 import express, { Router, type Request as ExpressRequest } from "express";
 import { setAuthzRefusalDb } from "./routes/authz.js";
 import path from "node:path";
@@ -624,6 +625,7 @@ export async function createApp(
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(workforceRoutes(db));
+  api.use(fredRoutes(db));
   api.use("/human-control", humanControlRoutes(db));
   // AgentDash: Company Evaluator (Stage 1 shadow)
   api.use(evaluationRoutes(db));
