@@ -64,7 +64,8 @@
     "react-router-dom": "^7.15.0",
     "remark-gfm": "^4.0.1",
     "remotion": "4.0.522",
-    "tailwind-merge": "^3.4.1"
+    "tailwind-merge": "^3.4.1",
+    "three": "0.160.0"
   },
   "devDependencies": {
     "@storybook/addon-a11y": "10.3.5",
@@ -74,6 +75,7 @@
     "@types/node": "^25.2.3",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
+    "@types/three": "0.160.0",
     "@vitejs/plugin-react": "^4.3.4",
     "storybook": "10.3.5",
     "tailwindcss": "^4.0.7",

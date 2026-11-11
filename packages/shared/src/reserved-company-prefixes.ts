@@ -31,6 +31,7 @@ export const RESERVED_COMPANY_PREFIXES = [
   "docs",
   "find",
   "forgot-password",
+  "how-it-works",
   "instance",
   "invite",
   "investors",

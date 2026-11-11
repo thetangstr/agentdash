@@ -112,7 +112,7 @@
       "permanent": false
     },
     {
-      "source": "/:path((?!(?:demo|agent-performance|consulting|about|whats-new|releases|mcp|docs|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
+      "source": "/:path((?!(?:demo|how-it-works|agent-performance|consulting|about|whats-new|releases|mcp|docs|start|find|terms|privacy|pricing|investors|assess|api|assets|brands)(?:/|$))[^.]+)",
       "destination": "/find",
       "permanent": false
     }

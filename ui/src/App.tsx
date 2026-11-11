@@ -133,6 +133,8 @@ const RunTranscriptUxLab = import.meta.env.DEV
   ? lazy(() => import("./pages/RunTranscriptUxLab").then((module) => ({ default: module.RunTranscriptUxLab })))
   : null;
 const Docs = lazy(() => import("./pages/Docs").then((module) => ({ default: module.Docs })));
+// AgentDash: /how-it-works loads on demand, so three and its story scenes never reach the landing bundle.
+const MarketingHowItWorks = lazy(() => import("./marketing/pages/HowItWorks").then((module) => ({ default: module.HowItWorks })));
 
 // AgentDash: billing page wrapper — pulls companyId from context.
 function BillingPageRoute() {
@@ -399,6 +401,7 @@ export function App() {
             Landing redirects logged-in users to /companies on its own. */}
         <Route path="/" element={<MarketingLanding />} />
         <Route path="demo" element={<MarketingDemo />} />
+        <Route path="how-it-works" element={<Suspense fallback={null}><MarketingHowItWorks /></Suspense>} />
         <Route path="agent-performance" element={<MarketingAgentPerformance />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
