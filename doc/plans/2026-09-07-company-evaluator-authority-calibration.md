@@ -276,7 +276,7 @@ the small piece of work that makes ev-2…ev-7 measurable (no decision needed, l
 
 ## 5. Evaluator-agent wake policy (bounded)
 
-What already runs, and needs no model: **ingest** every 5 minutes (`AGENTDASH_EVALUATION_INGEST_ENABLED`)
+What already runs, and needs no model: **ingest** every 5 minutes (on by default; `AGENTDASH_EVALUATION_INGEST_ENABLED=false` turns it off)
 and the **snapshot cadence** daily (`AGENTDASH_EVALUATION_SNAPSHOT_ENABLED`) — cards, exceptions
 and review items are deterministic projections. The evaluator **agent** is a separate thing: a
 `hermes_local` agent, status **paused**, no heartbeat schedule (`runtimeConfig.heartbeat` carries

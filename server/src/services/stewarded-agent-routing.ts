@@ -1,5 +1,7 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
+import { visibleAgentIdsFor } from "../routes/visibility.js";
 import { activityLog, agents, agentStewardships } from "@paperclipai/db";
 import {
   evaluateAgentHarnessPreflightReadiness,
@@ -173,4 +175,83 @@ export async function routedStewardForCurrentAssignment(
     userId: routed.fromUserId,
   });
   return stillSteward ? routed.fromUserId : null;
+}
+
+/** Whether an execution policy names this person as a stage participant. */
+export function namesStageUser(policy: unknown, userId: string): boolean {
+  const stages = (policy as { stages?: unknown } | null | undefined)?.stages;
+  if (!Array.isArray(stages)) return false;
+  return stages.some((stage) => {
+    const participants = (stage as { participants?: unknown } | null)?.participants;
+    return Array.isArray(participants) && participants.some((participant) => {
+      const p = participant as { type?: unknown; userId?: unknown } | null;
+      return p?.type === "user" && p.userId === userId;
+    });
+  });
+}
+
+/**
+ * AgentDash: work assigned to a person who stewards an agent goes to that
+ * agent, whoever assigns it. Returns the input with `assignToPerson` removed
+ * — it is a request flag, never stored — and the assignee moved when the rule
+ * applies. On an update, a person who already holds the issue is not a new
+ * assignment and is left alone, and an agent handing its issue back to the
+ * person who created it (the return-to-creator exemption in
+ * issue-patch-actions.ts) is returning work for review, not delegating it, so
+ * it is left alone too. Work is never given to an agent the caller cannot see
+ * (agent visibility), so a hidden steward's agent leaves the assignment with
+ * the person. A person assigning themselves is taking the work, and a person
+ * named as a reviewer or approver by the issue's execution policy is that
+ * stage's participant: both keep the assignment.
+ *
+ * One implementation for the issue routes and the batch preview
+ * (services/batch/kinds.ts), so a preview never promises a routing the route
+ * would not do, and never names an agent the caller cannot see.
+ */
+export async function routePersonAssignee<
+  T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
+>(
+  db: Pick<Db, "select" | "execute">,
+  req: Request,
+  companyId: string,
+  input: T,
+  current?: {
+    assigneeUserId: string | null;
+    assigneeAgentId: string | null;
+    createdByUserId: string | null;
+    executionPolicy?: unknown;
+  },
+): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
+  const { assignToPerson, ...fields } = input;
+  const rest = fields as T;
+  if (current && input.assigneeUserId === current.assigneeUserId) return { input: rest, routed: null };
+  const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
+  if (
+    current &&
+    actorAgentId &&
+    current.assigneeAgentId === actorAgentId &&
+    !!current.createdByUserId &&
+    input.assigneeUserId === current.createdByUserId
+  ) {
+    return { input: rest, routed: null };
+  }
+  const requestedPolicy = (input as { executionPolicy?: unknown }).executionPolicy;
+  if (
+    typeof input.assigneeUserId === "string" &&
+    namesStageUser(requestedPolicy !== undefined ? requestedPolicy : current?.executionPolicy, input.assigneeUserId)
+  ) {
+    return { input: rest, routed: null };
+  }
+  const routed = await resolveStewardedAgentRoute(db, {
+    companyId,
+    actorAgentId,
+    actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
+    assigneeAgentId: input.assigneeAgentId,
+    assigneeUserId: input.assigneeUserId,
+    assignToPerson,
+  });
+  if (!routed) return { input: rest, routed: null };
+  const visibleIds = await visibleAgentIdsFor(db, req, companyId);
+  if (visibleIds !== null && !visibleIds.has(routed.toAgentId)) return { input: rest, routed: null };
+  return { input: { ...rest, assigneeAgentId: routed.toAgentId, assigneeUserId: null }, routed };
 }

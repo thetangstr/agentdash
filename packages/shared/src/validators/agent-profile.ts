@@ -266,7 +266,7 @@ const SHA256_K = new Uint32Array([
  * this module is shared with the browser bundle, where `node:crypto` is not
  * available and WebCrypto is async. Not for secrets — only for content hashes.
  */
-function sha256Hex(text: string): string {
+export function sha256Hex(text: string): string {
   const bytes = new TextEncoder().encode(text);
   const bitLength = bytes.length * 8;
   const paddedLength = (((bytes.length + 9 + 63) >> 6) << 6);

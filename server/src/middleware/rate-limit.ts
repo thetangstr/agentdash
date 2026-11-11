@@ -177,9 +177,18 @@ export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}
       if (isHealthPath(req)) return true;
       if (isPreflightMethod(req.method)) return true;
       if (isBridgePollPath(req) && isEnrolledBridgeEndpoint(req)) return true;
+      // AgentDash admin powers (part 2): a batch item. One 200-record batch
+      // would otherwise spend the person's whole mutation window; the batch
+      // has its own caps (5 open previews, 1,000 confirmed records an hour).
+      if (isBatchItemRequest(req)) return true;
       return isSafeReadMethod(req.method) && hasAuthenticatedActor(req);
     },
   });
+}
+
+/** Only the verified credential kind the auth middleware set, never anything the request carries. */
+function isBatchItemRequest(req: Request): boolean {
+  return (req as { verifiedCredential?: { kind?: string } }).verifiedCredential?.kind === "batch_item";
 }
 
 /**

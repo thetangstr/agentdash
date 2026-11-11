@@ -394,6 +394,46 @@ describeEmbeddedPostgres("telegram connector", () => {
     expect(stored.decidedByUserId).toBe(steward.principalId);
   });
 
+  // A CEO hire is company-wide authority: approvalService.approve, where every
+  // channel meets, needs a company administrator. A member steward's tap is
+  // refused with a plain answer and the approval stays pending.
+  it("refuses a member steward approving a pending CEO hire, plainly", async () => {
+    const { company, agent, binding } = await seed();
+    const ceoHire = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "hire_agent",
+        requestedByAgentId: agent.id,
+        status: "pending",
+        payload: { name: `CEO ${randomUUID().slice(0, 8)}`, role: "ceo", adapterType: "process" },
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const token = await telegramConnectorService(db).issueCallbackToken({
+      companyId: company.id,
+      approvalId: ceoHire.id,
+      revision: ceoHire.revision,
+      decision: "approved",
+      bindingId: binding.id,
+    });
+
+    await call(createApp(), (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send({
+          update_id: 91,
+          callback_query: { id: "cbq-ceo", from: { id: 1 }, message: { chat: { id: 1 } }, data: token },
+        }),
+    );
+
+    const stored = await db.select().from(approvals).where(eq(approvals.id, ceoHire.id)).then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
+    const answers = telegramCalls.filter((c) => c.method === "answerCallbackQuery");
+    expect(JSON.stringify(answers.at(-1)?.body)).toContain("Only owners and admins can approve this hire.");
+  });
+
   it("ignores a message from an unpaired telegram user", async () => {
     await seed();
     const app = createApp();

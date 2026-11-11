@@ -1,5 +1,6 @@
 import { humanControlRoutes } from "./routes/human-control.js";
 import { workforceRoutes } from "./routes/workforce.js";
+import { fredRoutes } from "./routes/fred.js";
 import express, { Router, type Request as ExpressRequest } from "express";
 import { setAuthzRefusalDb } from "./routes/authz.js";
 import path from "node:path";
@@ -81,6 +82,9 @@ import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
 import { activityRoutes } from "./routes/activity.js";
 import { assistantRoutes } from "./routes/assistant.js";
+import { batchRoutes } from "./routes/batches.js";
+import { ceilingTemplateRoutes } from "./routes/ceiling-templates.js";
+import { companyAuditRoutes } from "./routes/company-audit.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { mspRoutes } from "./routes/msp.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -240,6 +244,31 @@ export function createStaticShellReader(
     }
     return cache?.html ?? "";
   };
+}
+
+/**
+ * `/<prefix>/company/batches/<id>` (and the unprefixed form), the batch review
+ * SPA route. Matched the way the router matches it (review of c5941141b): any
+ * letter case, repeated or trailing slashes, and percent-encoded characters.
+ */
+export const BATCH_REVIEW_PAGE_PATH = /^\/(?:[^/]+\/)?company\/batches\/[^/]+(?:\/)*$/i;
+
+export function batchReviewPagePath(rawPath: string): boolean {
+  let path = rawPath;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    // An undecodable path is matched as it is.
+  }
+  return BATCH_REVIEW_PAGE_PATH.test(path.replace(/\/{2,}/g, "/"));
+}
+
+export function batchReviewFramingGuard(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (batchReviewPagePath(req.path)) {
+    res.set("Content-Security-Policy", "frame-ancestors 'none'");
+    res.set("X-Frame-Options", "DENY");
+  }
+  next();
 }
 
 export async function createApp(
@@ -467,6 +496,9 @@ export async function createApp(
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(agentStewardshipRoutes(db));
   api.use(agentGovernanceRoutes(db));
+  // AgentDash admin powers: named ceilings applied to many agents, and the default for new ones.
+  api.use(ceilingTemplateRoutes(db));
+  api.use(companyAuditRoutes(db));
   // AgentDash: Agent Performance Management gate 1 (read-only access, profile and performance views).
   api.use(agentAccessRoutes(db));
   api.use(agentPerformanceRoutes(db));
@@ -519,6 +551,9 @@ export async function createApp(
   // through the shared decision-effects service, which needs the worker
   // manager for its wake-up side effects — same wiring as approvalRoutes.
   api.use(assistantRoutes(db, { pluginWorkerManager: workerManager }));
+  // AgentDash admin powers (part 2): the one batch engine. Each item runs
+  // through the record's own single-record route over this listener.
+  api.use(batchRoutes(db));
   api.use(dashboardRoutes(db));
   api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));
@@ -590,6 +625,7 @@ export async function createApp(
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(workforceRoutes(db));
+  api.use(fredRoutes(db));
   api.use("/human-control", humanControlRoutes(db));
   // AgentDash: Company Evaluator (Stage 1 shadow)
   api.use(evaluationRoutes(db));
@@ -798,6 +834,13 @@ export async function createApp(
     res.set("X-Frame-Options", "DENY");
     next();
   });
+
+  /**
+   * AgentDash admin powers (review of 8f1b669b0): the batch review page shows
+   * the confirm code and "Apply here", so it may not be framed either (a
+   * hostile page could overlay the click or read the code off screen).
+   */
+  app.use(batchReviewFramingGuard);
 
   if (opts.uiMode === "static") {
     // Try published location first (server/ui-dist/), then monorepo dev location (../../ui/dist)

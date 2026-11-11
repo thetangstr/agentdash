@@ -111,3 +111,10 @@ export async function refreshCodexModels(): Promise<AdapterModel[]> {
 export function resetCodexModelsCacheForTests() {
   cached = null;
 }
+
+// AgentDash (#1122): chat and system hires share this fallback. Keeping it in
+// one place prevents a new worker from disagreeing with the interview model.
+// The default retains chat's existing account-compatible selection.
+export function resolveCodexChatModel(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTDASH_CODEX_CHAT_MODEL?.trim() || "gpt-5.6-terra";
+}

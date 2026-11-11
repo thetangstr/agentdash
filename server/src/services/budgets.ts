@@ -886,7 +886,12 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
     getIncidentContext: async (
       companyId: string,
       incidentId: string,
-    ): Promise<{ agentScopeId: string | null; projectScopeId: string | null; approvalId: string | null } | null> => {
+    ): Promise<{
+      agentScopeId: string | null;
+      projectScopeId: string | null;
+      companyScope: boolean;
+      approvalId: string | null;
+    } | null> => {
       const incident = await db
         .select()
         .from(budgetIncidents)
@@ -902,6 +907,8 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
         agentScopeId: policy?.scopeType === "agent" ? policy.scopeId : null,
         // AgentDash (GH #902): the route checks project visibility on this.
         projectScopeId: incident.scopeType === "project" ? incident.scopeId : null,
+        // The route makes a company-scope budget change or resume admin-only.
+        companyScope: policy?.scopeType === "company",
         approvalId: incident.approvalId ?? null,
       };
     },

@@ -42,7 +42,7 @@ const mockProfiles = vi.hoisted(() => ({
 }));
 // Gate 4: revision history marks the performance manager's proposals from each revision's
 // `proposedByCapacity`; it must not read approvals (GET /approvals/:id) to do so.
-const defaultApprovalGet = vi.hoisted(() => async (path: string) => ({ id: path.replace("/approvals/", ""), type: "agent_profile_change", payload: {} }));
+const defaultApprovalGet = vi.hoisted(() => async (path: string): Promise<unknown> => ({ id: path.replace("/approvals/", ""), type: "agent_profile_change", payload: {} }));
 const mockClient = vi.hoisted(() => ({ get: vi.fn(defaultApprovalGet), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() }));
 
 vi.mock("../../api/agent-performance", async (importOriginal) => {
@@ -331,6 +331,7 @@ afterEach(() => {
   root = null;
   container = null;
   vi.clearAllMocks();
+  mockClient.get.mockImplementation(defaultApprovalGet);
 });
 
 function noApplicationCalls() {
@@ -535,7 +536,9 @@ describe("AgentProfileTab — active revision", () => {
 
     expect(node.textContent).toContain("Revision 1 · Active");
     const labels = Array.from(node.querySelectorAll("[data-testid='agent-profile-active-body'] [data-testid='agent-pm-provenance']")).map((el) => el.textContent);
-    expect(labels).toContain("Proposed — from the agent record (name)");
+    // The revision is applied: what was proposed was approved with it.
+    expect(labels).toContain("Approved — from the agent record (name)");
+    expect(labels.some((label) => label?.startsWith("Proposed"))).toBe(false);
     expect(labels).toContain("Confirmed by a person");
     expect(labels).toContain("Missing");
     expect(labels).toContain("Source not recorded");
@@ -551,6 +554,64 @@ describe("AgentProfileTab — active revision", () => {
     expect(diff).toContain("Changed: Identity › Title");
     expect(diff).toContain("“Revenue analyst”");
     expect(diff).toContain("“Head of revenue”");
+  });
+
+  // A label matches the field as shown: the stored map can lag the body (an API save that
+  // leaves provenance out keeps it), so a filled field never reads "Missing" and an empty one always does.
+  it("labels each field by what it shows, not by a stale stored label", async () => {
+    const active = revision({
+      id: "rev-1",
+      revisionNumber: 1,
+      state: "applied",
+      body: body({
+        identity: {
+          name: "Ivy",
+          title: "",
+          summary: "Keeps the pipeline report current",
+          audience: "The marketing and sales teams",
+          style: { tone: "", uncertaintyRule: "" },
+        },
+      }),
+      provenance: {
+        "/identity/audience": { state: "missing" },
+        "/identity/title": { state: "proposed", sourceRef: "agent.title" },
+      },
+    });
+    mockPerf.profile.mockResolvedValue(view({ profileId: "profile-1", active, derived: null }));
+    mockProfiles.revisions.mockResolvedValue([summary(active)]);
+    const node = await render();
+    const fact = (label: string) =>
+      Array.from(node.querySelectorAll<HTMLElement>("[data-testid='agent-profile-active-body'] dt")).find((dt) => dt.textContent === label)
+        ?.nextElementSibling as HTMLElement | undefined;
+    const audience = fact("Who it serves")!;
+    expect(audience.textContent).toContain("The marketing and sales teams");
+    expect(audience.querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Source not recorded");
+    const title = fact("Title")!;
+    expect(title.textContent).toContain("Not recorded");
+    expect(title.querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Missing");
+  });
+
+  it("names listed projects and people where the app has their names, and keeps the id where it doesn't", async () => {
+    const PROJECT = "e3133a1b-0000-4000-8000-000000000001";
+    const UNKNOWN = "f0000000-0000-4000-8000-000000000002";
+    const access = { ...DEFAULT_AGENT_GOVERNANCE_POLICY, policyVersion: 2, see: { projects: { mode: "listed", ids: [PROJECT, UNKNOWN] } } };
+    const active = revision({ id: "rev-1", revisionNumber: 1, state: "applied", body: body({ access } as Partial<AgentOperatingProfileV1>) });
+    mockPerf.profile.mockResolvedValue(view({ profileId: "profile-1", active, derived: null }));
+    mockProfiles.revisions.mockResolvedValue([summary(active)]);
+    const lists: Record<string, unknown> = {
+      "/companies/company-1/projects": [{ id: PROJECT, name: "Website relaunch" }],
+      "/companies/company-1/agents": [{ id: "agent-1", name: "Ivy" }],
+      "/companies/company-1/user-directory": { users: [{ principalId: "user-yang", status: "active", user: { name: "Yang" } }] },
+    };
+    mockClient.get.mockImplementation(((path: string) => (path in lists ? Promise.resolve(lists[path]) : defaultApprovalGet(path))) as typeof defaultApprovalGet);
+    const node = await render();
+    await flush();
+    const text = node.querySelector("[data-testid='agent-profile-active-body']")?.textContent ?? "";
+    expect(text).toContain(`2 listed projects (Website relaunch, ${UNKNOWN})`);
+    expect(text).not.toContain(PROJECT);
+    // Reports to and the escalation contact are people the directory names.
+    expect(text).toContain("Yang");
+    expect(text).not.toContain("Person user-yang");
   });
 
   // Gate 4 (P4.2/P4.3): a revision the performance manager proposed is marked, from the
@@ -602,6 +663,226 @@ async function renderWithDraft(draft = revision()) {
 }
 
 describe("AgentProfileTab — draft editor", () => {
+  it("requires an explicit expected target when selecting exact proof, then saves the owner's correction without losing identity or provenance", async () => {
+    const draft = revision();
+    draft.body.responsibilities[0].performance.criteria = [{ id: "keep-id", text: "Exact result", source: "import", check: { kind: "record", record: "custom.original" } }];
+    draft.provenance = { "/responsibilities/0/performance/thresholds": { state: "proposed", sourceRef: "retained-import" } };
+    const { editor } = await renderWithDraft(draft);
+    const proof = field(editor, "Proof type") as unknown as HTMLSelectElement;
+    await act(async () => { proof.value = "document_sha256"; proof.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(field(editor, "Expected text").value).toBe("");
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft).not.toHaveBeenCalled();
+    await type(field(editor, "Expected text"), "hello");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft).toHaveBeenCalledTimes(1);
+    const saved = mockProfiles.saveDraft.mock.calls[0][4];
+    expect(saved.body.responsibilities[0].performance.criteria[0]).toEqual({ id: "keep-id", text: "Exact result", source: "import", check: { kind: "record", record: "document.sha256:result:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" } });
+    expect(saved.provenance["/responsibilities/0/performance/thresholds"]).toEqual({ state: "proposed", sourceRef: "retained-import" });
+    expect(saved.provenance["/responsibilities/0/performance/criteria/0/check"].state).toBe("owner_confirmed");
+    noApplicationCalls();
+  });
+
+  it("preserves a saved exact empty-document digest when expected text is untouched", async () => {
+    const draft = revision();
+    const check = { kind: "record" as const, record: "document.sha256:result:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" };
+    draft.body.responsibilities[0].performance.criteria = [{ id: "empty-explicit", text: "Empty result", source: "import", check }];
+    const { editor } = await renderWithDraft(draft);
+    expect(field(editor, "Expected text").value).toBe("");
+    await type(field(editor, "Criterion text"), "Explicitly empty result");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft.mock.calls[0][4].body.responsibilities[0].performance.criteria[0]).toEqual({ id: "empty-explicit", text: "Explicitly empty result", source: "import", check });
+    noApplicationCalls();
+  });
+
+  it("stores exact document proof from readable expected text and preserves its saved digest", async () => {
+    const { editor, draft } = await renderWithDraft();
+    await click(button(editor, "Add criterion"));
+    await type(field(editor, "Criterion text"), "Exact result");
+    const proof = field(editor, "Proof type") as unknown as HTMLSelectElement;
+    await act(async () => { proof.value = "document_sha256"; proof.dispatchEvent(new Event("change", { bubbles: true })); });
+    await type(field(editor, "Document key"), "result");
+    await type(field(editor, "Expected text"), "hello");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    const criteria = mockProfiles.saveDraft.mock.calls[0][4].body.responsibilities[0].performance.criteria;
+    expect(criteria[0].check).toEqual({ kind: "record", record: "document.sha256:result:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" });
+    expect(editor.textContent).toContain("2cf24dba5fb0a30e");
+    await type(field(editor, "Document key"), "");
+    expect(field(editor, "Document key").value).toBe("");
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft).toHaveBeenCalledTimes(1);
+    noApplicationCalls();
+  });
+
+  it("edits criterion leaves while retaining identity, advanced settings and unrelated provenance", async () => {
+    const draft = revision();
+    draft.body.responsibilities[0].performance = {
+      criteria: [{ id: "original-id", text: "Original check", source: "import", check: { kind: "record", record: "custom.legacy" } }],
+      coverage: ["independent_check"], expectedHumanSteps: ["sign_off"], outcomeLinks: [],
+      judges: { automated: ["harness"], human: { userId: "owner", sampleRate: 0.25, minPerWindow: 2 } },
+      deadline: { kind: "after_assignment", hours: 24 }, thresholds: { quality: 0.8 },
+    };
+    draft.provenance = { "/responsibilities/0/performance/thresholds": { state: "proposed", sourceRef: "import" } };
+    const original = structuredClone(draft.body.responsibilities[0].performance);
+    const { editor } = await renderWithDraft(draft);
+    expect(editor.textContent).toContain("custom.legacy");
+    expect(editor.textContent).toContain("Unsupported check preserved");
+    await type(field(editor, "Criterion text"), "Revised check");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    const input = mockProfiles.saveDraft.mock.calls[0][4];
+    expect(input.body.responsibilities[0].performance).toEqual({ ...original, criteria: [{ ...original.criteria[0], text: "Revised check" }] });
+    expect(input.provenance["/responsibilities/0/performance/criteria/0/text"].state).toBe("owner_confirmed");
+    expect(input.provenance["/responsibilities/0/performance/thresholds"]).toEqual({ state: "proposed", sourceRef: "import" });
+    expect(input.provenance["/responsibilities/0/performance"]).toBeUndefined();
+  });
+
+  it("keeps work-family suggestions out of the draft until explicitly added, with proposed provenance", async () => {
+    const { editor, draft } = await renderWithDraft();
+    expect(editor.textContent).toContain("Work-family suggestions");
+    await type(field(editor, "Name"), "Ivy updated");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft.mock.calls[0][4].body.responsibilities[0].performance.criteria).toEqual([]);
+    await click(button(editor, "Add suggestion"));
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    const input = mockProfiles.saveDraft.mock.calls[1][4];
+    expect(input.body.responsibilities[0].performance.criteria).toMatchObject([{ source: "template:software", check: { kind: "record", record: "ci.green" } }]);
+    expect(input.body.responsibilities[0].performance.thresholds).toBeUndefined();
+    expect(input.provenance["/responsibilities/0/performance/criteria/0"]).toEqual({ state: "proposed", sourceRef: "template:software" });
+    expect(input.provenance["/responsibilities/0/performance"]).toBeUndefined();
+    noApplicationCalls();
+  });
+
+  it.each(["support", "other"])("keeps %s suggestions proposed and unmeasurable until proof is defined", async (family) => {
+    const { editor, draft } = await renderWithDraft();
+    const familySelect = field(editor, "Work-family suggestions") as unknown as HTMLSelectElement;
+    expect([...familySelect.options].map((option) => option.value)).toContain(family);
+    await act(async () => { familySelect.value = family; familySelect.dispatchEvent(new Event("change", { bubbles: true })); });
+    await click(button(editor, "Add suggestion"));
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    const input = mockProfiles.saveDraft.mock.calls[0][4];
+    expect(input.body.responsibilities[0].performance.criteria[0]).toMatchObject({ source: `template:${family}` });
+    expect(input.body.responsibilities[0].performance.criteria[0].check).toBeUndefined();
+    expect(input.provenance["/responsibilities/0/performance/criteria/0"]).toEqual({ state: "proposed", sourceRef: `template:${family}` });
+    expect(editor.textContent).toContain("Unmeasurable");
+  });
+
+  it("selects named human and goal proof through readable choices while storing their stable IDs", async () => {
+    mockClient.get.mockImplementation(async (path: string) => {
+      if (path.endsWith("/user-directory")) return { users: [{ principalId: "reviewer-1", user: { name: "Nora Reviewer", email: null } }] };
+      if (path.endsWith("/goals")) return [{ id: "11111111-1111-4111-8111-111111111111", title: "Improve support resolution" }];
+      return defaultApprovalGet(path);
+    });
+    const { editor, draft } = await renderWithDraft();
+    await click(button(editor, "Add criterion"));
+    await type(field(editor, "Criterion text"), "Response is correct");
+    async function select(label: string, value: string) {
+      const element = field(editor, label) as unknown as HTMLSelectElement;
+      await act(async () => { element.value = value; element.dispatchEvent(new Event("change", { bubbles: true })); });
+      await flush();
+    }
+    await select("Proof type", "human_attest");
+    expect(field(editor, "Human reviewer").textContent).toContain("Nora Reviewer");
+    await select("Human reviewer", "reviewer-1");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft.mock.calls[0][4].body.responsibilities[0].performance.criteria[0].check).toEqual({ kind: "human_attest", attesterUserId: "reviewer-1" });
+    await select("Proof type", "goal_metric");
+    expect(field(editor, "Goal").textContent).toContain("Improve support resolution");
+    await select("Goal", "11111111-1111-4111-8111-111111111111");
+    await type(field(editor, "Goal target"), "20");
+    await type(field(editor, "Goal unit"), "resolutions");
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft.mock.calls[1][4].body.responsibilities[0].performance.criteria[0].check.metricKey).toBe("goal:11111111-1111-4111-8111-111111111111");
+  });
+
+  it("retains invalid goal target input and blocks incomplete goal IDs", async () => {
+    const { editor, draft } = await renderWithDraft();
+    await click(button(editor, "Add criterion"));
+    await type(field(editor, "Criterion text"), "Increase output");
+    const proof = field(editor, "Proof type") as unknown as HTMLSelectElement;
+    await act(async () => { proof.value = "goal_metric"; proof.dispatchEvent(new Event("change", { bubbles: true })); });
+    await type(field(editor, "Goal target"), "not a number");
+    await type(field(editor, "Goal unit"), "units");
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(field(editor, "Goal target").value).toBe("not a number");
+    expect(mockProfiles.saveDraft).not.toHaveBeenCalled();
+    await type(field(editor, "Goal target"), "20");
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft).not.toHaveBeenCalled();
+    await type(field(editor, "Goal ID"), "11111111-1111-4111-8111-111111111111");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft.mock.calls[0][4].body.responsibilities[0].performance.criteria[0].check).toEqual({ kind: "metric", metricKey: "goal:11111111-1111-4111-8111-111111111111", target: 20, unit: "units" });
+  });
+
+  it("removes a criterion while preserving later criterion identity and provenance", async () => {
+    const draft = revision();
+    draft.body.responsibilities[0].performance.criteria = [
+      { id: "first", text: "First", source: "human" },
+      { id: "second", text: "Second", source: "legacy", check: { kind: "metric", metricKey: "external_metric", target: 10, unit: "cases" } },
+    ];
+    draft.provenance = { "/responsibilities/0/performance/criteria/1/check": { state: "proposed", sourceRef: "import" } };
+    const { editor } = await renderWithDraft(draft);
+    await click(button(editor, "Remove criterion"));
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    const input = mockProfiles.saveDraft.mock.calls[0][4];
+    expect(input.body.responsibilities[0].performance.criteria).toEqual([draft.body.responsibilities[0].performance.criteria[1]]);
+    expect(input.provenance["/responsibilities/0/performance/criteria/0/check"]).toEqual({ state: "proposed", sourceRef: "import" });
+    expect(editor.textContent).toContain("external_metric");
+  });
+
+  it("blocks whitespace-only criterion text while preserving raw input, identity, check and unrelated provenance", async () => {
+    const draft = revision();
+    draft.body.responsibilities[0].performance.criteria = [{ id: "criterion-stable", text: "Readable requirement", source: "import", check: { kind: "record", record: "ci.green" } }];
+    draft.provenance = {
+      "/responsibilities/0/performance/criteria/0/check": { state: "proposed", sourceRef: "original-check" },
+      "/responsibilities/0/performance/thresholds": { state: "proposed", sourceRef: "original-thresholds" },
+    };
+    const { editor } = await renderWithDraft(draft);
+    await type(field(editor, "Criterion text"), "  \t  ");
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft).not.toHaveBeenCalled();
+    expect(field(editor, "Criterion text").value).toBe("  \t  ");
+    expect(editor.querySelector("[role='alert']")?.textContent).toContain("readable criterion text");
+    expect(editor.textContent).toContain("criterion-stable");
+
+    await type(field(editor, "Criterion text"), "Corrected requirement");
+    mockProfiles.saveDraft.mockResolvedValue(draft);
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    const input = mockProfiles.saveDraft.mock.calls[0][4];
+    expect(input.body.responsibilities[0].performance.criteria).toEqual([{ ...draft.body.responsibilities[0].performance.criteria[0], text: "Corrected requirement" }]);
+    expect(input.provenance["/responsibilities/0/performance/criteria/0/check"]).toEqual(draft.provenance["/responsibilities/0/performance/criteria/0/check"]);
+    expect(input.provenance["/responsibilities/0/performance/thresholds"]).toEqual(draft.provenance["/responsibilities/0/performance/thresholds"]);
+    expect(input.provenance["/responsibilities/0/performance/criteria/0/text"].state).toBe("owner_confirmed");
+  });
+
+  it.each(["ci.green", "dod.present"])("explains the limited claim of the %s recorded fact", async (record) => {
+    const draft = revision();
+    draft.body.responsibilities[0].performance.criteria = [{ id: "bounded-proof", text: "The final answer is correct", source: "human", check: { kind: "record", record } }];
+    const { editor } = await renderWithDraft(draft);
+    const recordSelect = field(editor, "Recorded fact");
+    const descriptions = recordSelect.getAttribute("aria-describedby")!.split(" ").map((id) => document.getElementById(id)?.textContent).join(" ");
+    expect(descriptions).toContain("each prove only the named fact");
+    expect(descriptions).toContain("final-answer correctness need separate verification");
+    expect(recordSelect.value).toBe(record);
+  });
+
+  it("blocks save for empty criterion text without silently dropping the criterion", async () => {
+    const { editor } = await renderWithDraft();
+    await click(button(editor, "Add criterion"));
+    await click(editor.querySelector<HTMLButtonElement>("[data-testid='agent-profile-save']")!);
+    expect(mockProfiles.saveDraft).not.toHaveBeenCalled();
+    expect(editor.querySelector("[role='alert']")?.textContent).toContain("nothing was saved");
+    expect(field(editor, "Criterion text").value).toBe("");
+  });
+
   it("shows the sections in the LLD order with provenance on every field", async () => {
     const { editor } = await renderWithDraft();
     const headings = Array.from(editor.querySelectorAll("h3")).map((h) => h.textContent?.trim());
@@ -743,7 +1024,11 @@ describe("AgentProfileTab — draft editor", () => {
     const rows = editor.querySelectorAll("[data-testid='agent-profile-edit-responsibility']");
     expect(rows).toHaveLength(1);
     expect((field(rows[0] as HTMLElement, "Key") as HTMLInputElement).value).toBe("responsibility-2");
-    expect(rows[0].querySelector("[data-testid='agent-pm-provenance']")?.textContent).toBe("Confirmed by a person");
+    // The added row's label moved with it: its key is the person's; its title is still empty, so missing.
+    const label = (pointer: string) =>
+      rows[0].querySelector(`[data-testid='agent-profile-field'][data-pointer='${pointer}'] [data-testid='agent-pm-provenance']`)?.textContent;
+    expect(label("/responsibilities/0/key")).toBe("Confirmed by a person");
+    expect(label("/responsibilities/0/title")).toBe("Missing");
   });
 
   it("asks for approval only for a saved draft, then reports it without applying", async () => {

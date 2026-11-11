@@ -10,8 +10,14 @@ import { AgentAccessEnforcementCard } from "@/components/settings/AgentAccessEnf
 import { PerformanceManagerCard } from "@/components/settings/PerformanceManagerCard";
 import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
+import { AdminPowersSection } from "@/components/settings/AdminPowersSection";
+import { SettingsSaveBar } from "@/components/settings/SettingsSaveBar";
+import { LabelsCard } from "@/components/settings/LabelsCard";
+import { CeilingTemplatesCard } from "@/components/settings/CeilingTemplatesCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useCapability } from "../hooks/useCapability";
+import { useSettingsDraft } from "../hooks/useSettingsDraft";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { healthApi } from "../api/health";
@@ -33,8 +39,32 @@ type AgentSnippetInput = {
 };
 
 const BYTES_PER_MIB = 1024 * 1024;
-const DEFAULT_COMPANY_ATTACHMENT_MAX_MIB = DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES / BYTES_PER_MIB;
 const MAX_COMPANY_ATTACHMENT_MAX_MIB = MAX_COMPANY_ATTACHMENT_MAX_BYTES / BYTES_PER_MIB;
+
+/** General + Appearance as the fields hold them; mapped to the company PATCH on save. */
+type GeneralForm = {
+  name: string;
+  description: string;
+  brandColor: string;
+  attachmentMaxMiB: string;
+};
+
+function generalPatch(changes: Partial<GeneralForm>) {
+  const patch: {
+    name?: string;
+    description?: string | null;
+    brandColor?: string | null;
+    attachmentMaxBytes?: number;
+  } = {};
+  if (changes.name !== undefined) patch.name = changes.name.trim();
+  if (changes.description !== undefined) patch.description = changes.description.trim() || null;
+  if (changes.brandColor !== undefined) patch.brandColor = changes.brandColor || null;
+  if (changes.attachmentMaxMiB !== undefined) {
+    patch.attachmentMaxBytes = Number.parseInt(changes.attachmentMaxMiB, 10) * BYTES_PER_MIB;
+  }
+  return patch;
+}
+
 export function CompanySettings() {
   const {
     companies,
@@ -44,6 +74,17 @@ export function CompanySettings() {
   } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
+  // Owners and admins change company settings; everyone else reads them. The
+  // server decides (`company:manage` is the predicate the settings routes
+  // enforce). While the answer is loading the page shows neither state: the
+  // fields stay disabled and the destructive controls hidden, and the
+  // read-only line appears only once the server has said no.
+  const companyManage = useCapability(selectedCompanyId, "company:manage");
+  const canManage = companyManage.allowed && !companyManage.isLoading;
+  const showReadOnlyNotice = !companyManage.isLoading && !companyManage.allowed;
+  // The OpenClaw invite needs `users:invite`, the regular invite rule.
+  const inviteCapability = useCapability(selectedCompanyId, "users:invite");
+  const canInvite = inviteCapability.allowed && !inviteCapability.isLoading;
   const { data: health } = useQuery({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
@@ -57,23 +98,41 @@ export function CompanySettings() {
   // AgentDash (scan 4, lane O2): reconciliation waits under Advanced only
   // while nothing needs a verdict; with items it sits in the main page.
   const reconciliationCount = useNeedsReconciliationCount(selectedCompanyId ?? "");
-  // General settings local state
-  const [companyName, setCompanyName] = useState("");
-  const [description, setDescription] = useState("");
-  const [brandColor, setBrandColor] = useState("");
-  const [attachmentMaxMiB, setAttachmentMaxMiB] = useState(String(DEFAULT_COMPANY_ATTACHMENT_MAX_MIB));
+  // Every section below is a draft until its "Save changes", which sends
+  // only the changed fields in one request. The logo is the exception: a
+  // file upload (or "Remove logo") is itself the explicit action.
+  const invalidateCompanies = () => queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+  const generalDraft = useSettingsDraft<GeneralForm>({
+    resetKey: selectedCompanyId ?? "",
+    saved: {
+      name: selectedCompany?.name ?? "",
+      description: selectedCompany?.description ?? "",
+      brandColor: selectedCompany?.brandColor ?? "",
+      attachmentMaxMiB: String(Math.round((selectedCompany?.attachmentMaxBytes ?? DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES) / BYTES_PER_MIB)),
+    },
+    save: (changes) => companiesApi.update(selectedCompanyId!, generalPatch(changes)),
+    onSaved: invalidateCompanies,
+  });
+  const hiringDraft = useSettingsDraft({
+    resetKey: selectedCompanyId ?? "",
+    saved: { requireBoardApprovalForNewAgents: !!selectedCompany?.requireBoardApprovalForNewAgents },
+    save: (changes) => companiesApi.update(selectedCompanyId!, changes),
+    onSaved: invalidateCompanies,
+  });
+  const workDraft = useSettingsDraft({
+    resetKey: selectedCompanyId ?? "",
+    saved: { newIssuesStartAsTodo: !!selectedCompany?.newIssuesStartAsTodo },
+    save: (changes) => companiesApi.update(selectedCompanyId!, changes),
+    onSaved: invalidateCompanies,
+  });
+  const { name: companyName, description, brandColor, attachmentMaxMiB } = generalDraft.values;
   const [logoUrl, setLogoUrl] = useState("");
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
 
-  // Sync local state from selected company
+  // Sync the logo from the selected company
   useEffect(() => {
-    if (!selectedCompany) return;
-    setCompanyName(selectedCompany.name);
-    setDescription(selectedCompany.description ?? "");
-    setBrandColor(selectedCompany.brandColor ?? "");
-    setAttachmentMaxMiB(String(Math.round((selectedCompany.attachmentMaxBytes ?? DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES) / BYTES_PER_MIB)));
-    setLogoUrl(selectedCompany.logoUrl ?? "");
-  }, [selectedCompany]);
+    setLogoUrl(selectedCompany?.logoUrl ?? "");
+  }, [selectedCompany?.logoUrl]);
 
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
@@ -85,43 +144,6 @@ export function CompanySettings() {
     Number.isInteger(attachmentMaxBytes)
     && attachmentMaxBytes >= BYTES_PER_MIB
     && attachmentMaxBytes <= MAX_COMPANY_ATTACHMENT_MAX_BYTES;
-
-  const generalDirty =
-    !!selectedCompany &&
-    (companyName !== selectedCompany.name ||
-      description !== (selectedCompany.description ?? "") ||
-      brandColor !== (selectedCompany.brandColor ?? "") ||
-      attachmentMaxBytes !== (selectedCompany.attachmentMaxBytes ?? DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES));
-
-  const generalMutation = useMutation({
-    mutationFn: (data: {
-      name: string;
-      description: string | null;
-      brandColor: string | null;
-      attachmentMaxBytes: number;
-    }) => companiesApi.update(selectedCompanyId!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-    }
-  });
-
-  const settingsMutation = useMutation({
-    mutationFn: (requireApproval: boolean) =>
-      companiesApi.update(selectedCompanyId!, {
-        requireBoardApprovalForNewAgents: requireApproval
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-    }
-  });
-
-  const issueStartMutation = useMutation({
-    mutationFn: (startAsTodo: boolean) =>
-      companiesApi.update(selectedCompanyId!, { newIssuesStartAsTodo: startAsTodo }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-    }
-  });
 
   const inviteMutation = useMutation({
     mutationFn: () =>
@@ -255,21 +277,17 @@ export function CompanySettings() {
     );
   }
 
-  function handleSaveGeneral() {
-    generalMutation.mutate({
-      name: companyName.trim(),
-      description: description.trim() || null,
-      brandColor: brandColor || null,
-      attachmentMaxBytes
-    });
-  }
-
   return (
     <div className="max-w-2xl space-y-6">
       <div className="flex items-center gap-2">
         <Settings className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-lg font-semibold">Workspace settings</h1>
       </div>
+      {showReadOnlyNotice && (
+        <p className="text-sm text-muted-foreground" data-testid="company-settings-read-only">
+          Only owners and admins can change company settings.
+        </p>
+      )}
 
       {/* General */}
       <div className="space-y-4">
@@ -283,7 +301,8 @@ export function CompanySettings() {
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
               type="text"
               value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
+              disabled={!canManage}
+              onChange={(e) => generalDraft.set("name", e.target.value)}
             />
           </Field>
           <Field
@@ -296,7 +315,8 @@ export function CompanySettings() {
               type="text"
               value={description}
               placeholder="Optional workspace description"
-              onChange={(e) => setDescription(e.target.value)}
+              disabled={!canManage}
+              onChange={(e) => generalDraft.set("description", e.target.value)}
             />
           </Field>
         </div>
@@ -328,10 +348,11 @@ export function CompanySettings() {
                     type="file"
                     aria-label="Logo"
                     accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                    disabled={!canManage}
                     onChange={handleLogoFileChange}
                     className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none file:mr-4 file:rounded-md file:border-0 file:bg-muted file:px-2.5 file:py-1 file:text-xs"
                   />
-                  {logoUrl && (
+                  {logoUrl && canManage && (
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
@@ -370,27 +391,29 @@ export function CompanySettings() {
                     type="color"
                     aria-label="Brand color"
                     value={brandColor || "#6366f1"}
-                    onChange={(e) => setBrandColor(e.target.value)}
+                    disabled={!canManage}
+                    onChange={(e) => generalDraft.set("brandColor", e.target.value)}
                     className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0 max-sm:h-11 max-sm:w-11"
                   />
                   <input
                     type="text"
                     aria-label="Brand color value"
                     value={brandColor}
+                    disabled={!canManage}
                     onChange={(e) => {
                       const v = e.target.value;
                       if (v === "" || /^#[0-9a-fA-F]{0,6}$/.test(v)) {
-                        setBrandColor(v);
+                        generalDraft.set("brandColor", v);
                       }
                     }}
                     placeholder="Auto"
                     className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm font-mono outline-none"
                   />
-                  {brandColor && (
+                  {brandColor && canManage && (
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setBrandColor("")}
+                      onClick={() => generalDraft.set("brandColor", "")}
                       className="text-xs text-muted-foreground"
                     >
                       Clear
@@ -411,7 +434,8 @@ export function CompanySettings() {
                       max={MAX_COMPANY_ATTACHMENT_MAX_MIB}
                       step={1}
                       value={attachmentMaxMiB}
-                      onChange={(e) => setAttachmentMaxMiB(e.target.value)}
+                      disabled={!canManage}
+                      onChange={(e) => generalDraft.set("attachmentMaxMiB", e.target.value)}
                       className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
                     />
                     <span className="text-xs text-muted-foreground">MiB</span>
@@ -429,26 +453,12 @@ export function CompanySettings() {
       </div>
 
       {/* Save button for General + Appearance */}
-      {generalDirty && (
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            onClick={handleSaveGeneral}
-            disabled={generalMutation.isPending || !companyName.trim() || !attachmentMaxValid}
-          >
-            {generalMutation.isPending ? "Saving..." : "Save changes"}
-          </Button>
-          {generalMutation.isSuccess && (
-            <span className="text-xs text-muted-foreground">Saved</span>
-          )}
-          {generalMutation.isError && (
-            <span className="text-xs text-destructive">
-              {generalMutation.error instanceof Error
-                  ? generalMutation.error.message
-                  : "Failed to save"}
-            </span>
-          )}
-        </div>
+      {canManage && (
+        <SettingsSaveBar
+          draft={generalDraft}
+          canSave={!!companyName.trim() && attachmentMaxValid}
+          testId="company-settings-general"
+        />
       )}
 
       {/* Hiring */}
@@ -456,14 +466,16 @@ export function CompanySettings() {
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           Hiring
         </div>
-        <div className="rounded-md border border-border px-4 py-3">
+        <div className="space-y-3 rounded-md border border-border px-4 py-3">
           <ToggleField
             label="Require your approval for new hires"
             hint="New agent hires stay pending until you approve them."
-            checked={!!selectedCompany.requireBoardApprovalForNewAgents}
-            onChange={(v) => settingsMutation.mutate(v)}
+            checked={hiringDraft.values.requireBoardApprovalForNewAgents}
+            onChange={(v) => hiringDraft.set("requireBoardApprovalForNewAgents", v)}
             toggleTestId="company-settings-team-approval-toggle"
+            disabled={!canManage || hiringDraft.isSaving}
           />
+          {canManage && <SettingsSaveBar draft={hiringDraft} testId="company-settings-hiring" />}
         </div>
       </div>
 
@@ -472,16 +484,29 @@ export function CompanySettings() {
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           Work
         </div>
-        <div className="rounded-md border border-border px-4 py-3">
+        <div className="space-y-3 rounded-md border border-border px-4 py-3">
           <ToggleField
             label="Start new issues right away"
             hint="Issues created without a status start as To do, and the assigned agent begins immediately. When off they go to Backlog and wait. Unassigned To do issues go to the Chief of Staff."
-            checked={!!selectedCompany.newIssuesStartAsTodo}
-            onChange={(v) => issueStartMutation.mutate(v)}
+            checked={workDraft.values.newIssuesStartAsTodo}
+            onChange={(v) => workDraft.set("newIssuesStartAsTodo", v)}
             toggleTestId="company-settings-issue-start-toggle"
+            disabled={!canManage || workDraft.isSaving}
           />
+          {canManage && <SettingsSaveBar draft={workDraft} testId="company-settings-work" />}
         </div>
+        {/* AgentDash admin powers: the company's labels. Any member manages
+            labels one at a time (the label routes' rule), so the card is not
+            gated on company:manage; its multi-delete is, inside the card. */}
+        {selectedCompany?.id ? <LabelsCard companyId={selectedCompany.id} /> : null}
       </div>
+
+      {/* AgentDash admin powers: the company switches, for every company. */}
+      <AdminPowersSection
+        company={selectedCompany}
+        canManage={canManage}
+        showReadOnlyNotice={showReadOnlyNotice}
+      />
 
       {/* AgentDash (GH #785): the optional readiness assessment, for every company */}
       <ReadinessAssessmentCard />
@@ -519,6 +544,7 @@ export function CompanySettings() {
           <span className="ml-2 normal-case tracking-normal font-normal">Outside agents, import and export, agent limits</span>
         </summary>
         <div className="mt-2 space-y-6">
+          {canInvite && (
           <div className="space-y-2" data-testid="company-settings-invites-section">
             <div className="text-xs font-medium text-muted-foreground">Connect an outside agent (OpenClaw)</div>
             <div className="mt-2 space-y-3 rounded-md border border-border px-4 py-4">
@@ -594,9 +620,11 @@ export function CompanySettings() {
               )}
             </div>
           </div>
+          )}
 
-          {/* Import / Export */}
-          <div className="space-y-4">
+          {/* Import / Export: owner/admin only; the routes refuse everyone else. */}
+          {canManage && (
+          <div className="space-y-4" data-testid="company-settings-packages">
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               Workspace Packages
             </div>
@@ -617,6 +645,7 @@ export function CompanySettings() {
               </div>
             </div>
           </div>
+          )}
 
           {selectedCompany?.id ? (
             <>
@@ -625,13 +654,17 @@ export function CompanySettings() {
               {/* AgentDash: APM gate 4 — admins choose the performance manager; members read it. */}
               <PerformanceManagerCard companyId={selectedCompany.id} />
               <AgentCeilingEditor companyId={selectedCompany.id} />
+              {/* AgentDash admin powers: named ceilings applied to many agents. */}
+              <CeilingTemplatesCard companyId={selectedCompany.id} canManage={canManage} />
               {reconciliationCount === 0 ? <NeedsReconciliationPanel companyId={selectedCompany.id} /> : null}
             </>
           ) : null}
         </div>
       </details>
 
-      {/* Danger zone: collapsed, last. Archiving is rare and irreversible from here. */}
+      {/* Danger zone: collapsed, last. Archiving is rare and irreversible from here.
+          Owners and admins only: the archive route refuses everyone else. */}
+      {canManage && (
       <details className="group space-y-4" data-testid="company-settings-danger-zone">
         <summary className="flex min-h-11 cursor-pointer select-none items-center text-xs font-medium uppercase tracking-wide text-destructive">
           Danger zone
@@ -683,6 +716,7 @@ export function CompanySettings() {
           </div>
         </div>
       </details>
+      )}
 
     </div>
   );

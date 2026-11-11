@@ -124,6 +124,14 @@ vi.mock("./IssueRow", () => ({
   ),
 }));
 
+// AgentDash admin powers: the bulk bar is tested on its own; here it is a stub
+// that shows what the list hands it, so nothing reaches the batch API.
+vi.mock("./batch/IssuesBulkBar", () => ({
+  IssuesBulkBar: (props: { selectedIds: string[] }) => (
+    <div data-testid="issues-bulk-bar" data-selected={props.selectedIds.join(",")}>{props.selectedIds.length} selected</div>
+  ),
+}));
+
 vi.mock("./KanbanBoard", () => ({
   KanbanBoard: (props: { issues: Issue[] }) => {
     mockKanbanBoard(props);
@@ -1747,5 +1755,83 @@ describe("issue grouping view rules", () => {
     expect(resolveEffectiveGroupBy("board", "steward")).toBe("steward");
     expect(resolveEffectiveGroupBy("list", "priority")).toBe("priority");
     expect(resolveEffectiveGroupBy("list", "none")).toBe("none");
+  });
+});
+
+describe("IssuesList bulk selection (admin powers)", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    mockIssuesApi.list.mockResolvedValue([]);
+    mockIssuesApi.listLabels.mockResolvedValue([]);
+    mockAuthApi.getSession.mockResolvedValue({ user: { id: "me" }, session: null });
+    mockAccessApi.listMembers.mockResolvedValue({ members: [], access: {} });
+    mockAccessApi.listUserDirectory.mockResolvedValue({ users: [] });
+    mockExecutionWorkspacesApi.list.mockResolvedValue([]);
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([]);
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    setDocumentScrollMetrics({ innerHeight: 600, scrollY: 0, scrollHeight: 2400 });
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  const issues = [
+    createIssue({ id: "a", identifier: "PAP-1", title: "First" }),
+    createIssue({ id: "b", identifier: "PAP-2", title: "Second" }),
+    createIssue({ id: "c", identifier: "PAP-3", title: "Third" }),
+  ];
+
+  function render(bulkEdit: boolean) {
+    return renderWithQueryClient(
+      <IssuesList issues={issues} agents={[]} projects={[]} viewStateKey="paperclip:test-issues" bulkEdit={bulkEdit} onUpdateIssue={() => undefined} />,
+      container,
+    );
+  }
+
+  const checkboxes = () => [...container.querySelectorAll<HTMLInputElement>('[data-testid="issue-bulk-checkbox"]')];
+  async function toggle(input: HTMLInputElement) {
+    await act(async () => {
+      input.click();
+    });
+  }
+
+  it("offers no checkboxes in embedded lists (no bulk edit)", async () => {
+    const { root } = render(false);
+    await waitForAssertion(() => expect(container.querySelectorAll('[data-testid="issue-row"]')).toHaveLength(3));
+    expect(checkboxes()).toHaveLength(0);
+    expect(container.querySelector('[data-testid="issues-select-visible"]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("selects rows one by one and all shown at once, and shows the action bar only with a selection", async () => {
+    const { root } = render(true);
+    await waitForAssertion(() => expect(checkboxes()).toHaveLength(3));
+    expect(container.querySelector('[data-testid="issues-bulk-bar"]')).toBeNull();
+    await toggle(checkboxes()[1]!);
+    expect(container.querySelector('[data-testid="issues-bulk-bar"]')!.getAttribute("data-selected")).toBe("b");
+    const all = container.querySelector<HTMLInputElement>('[data-testid="issues-select-visible"] input')!;
+    expect(container.querySelector('[data-testid="issues-select-visible"]')!.textContent).toContain("Select all 3 shown");
+    await toggle(all);
+    expect(container.querySelector('[data-testid="issues-bulk-bar"]')!.getAttribute("data-selected")!.split(",").sort()).toEqual(["a", "b", "c"]);
+    expect(container.querySelector('[data-testid="issues-select-visible"]')!.textContent).toContain("All 3 shown selected");
+    await toggle(all);
+    expect(container.querySelector('[data-testid="issues-bulk-bar"]')).toBeNull();
+    // Each checkbox is a 44px target on phones.
+    expect(checkboxes()[0]!.closest("label")!.className).toContain("max-sm:min-w-11");
+    act(() => root.unmount());
+  });
+
+  it("is not on the board", async () => {
+    localStorage.setItem("paperclip:test-issues:company-1", JSON.stringify({ viewMode: "board" }));
+    const { root } = render(true);
+    await waitForAssertion(() => expect(container.querySelector('[data-testid="kanban-board"]')).not.toBeNull());
+    expect(checkboxes()).toHaveLength(0);
+    expect(container.querySelector('[data-testid="issues-select-visible"]')).toBeNull();
+    act(() => root.unmount());
   });
 });

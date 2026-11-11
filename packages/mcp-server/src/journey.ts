@@ -49,12 +49,38 @@ export interface SetupStatusSnapshot {
   pendingApprovals: number;
   /** Open (not done/cancelled) tasks count. */
   openTasks: number;
+  /**
+   * The model the hired agents run on (the box's Hermes provider), from
+   * GET /onboarding/adapter-status. Null or absent when it can't be read (no
+   * API key on this session yet, or an older server).
+   */
+  agentModel?: AgentModelStatus | null;
+}
+
+export interface AgentModelOption {
+  provider: string;
+  label: string;
+  defaultModel: string;
+  keyHint: string;
+}
+
+export interface AgentModelStatus {
+  /** True on a hosted box, where the agents have no model until one is set. */
+  required: boolean;
+  configured: boolean;
+  /** This session's user may set it (the instance admin). */
+  canConfigure: boolean;
+  provider: string | null;
+  model: string | null;
+  /** The box's own provider menu, the same one the web wizard shows. */
+  options: AgentModelOption[];
 }
 
 export type SetupPhase =
   | "install"
   | "sign_up"
   | "setup_adapter"
+  | "setup_agent_model"
   | "bootstrap"
   | "interview"
   | "plan_review"
@@ -95,6 +121,41 @@ export function computeNextAction(snapshot: SetupStatusSnapshot): NextAction {
         + "session has no API key. Ask the human for their email and name (NEVER invent an "
         + "email), then call agentdash_sign_up — it creates the founding user, returns a board "
         + "API key, and signs this session in.",
+    };
+  }
+  // AgentDash (hosted model providers): a hosted box's agents run on Hermes,
+  // whose model is set per workspace (the box's Hermes provider). The classic
+  // presets in the adapter gate below only pick the interview/plan model, so a
+  // hosted box whose agents have no model yet is routed here instead.
+  const agentModel = snapshot.agentModel;
+  if (agentModel?.required && !agentModel.configured) {
+    if (!snapshot.companyId) {
+      return {
+        phase: "bootstrap",
+        nextAction: "agentdash_start_interview",
+        nextActionReason:
+          "This is a hosted workspace, and its agents' model is set per workspace, so create the "
+          + "workspace first (this step needs no model). agentdash_setup_status then routes you to "
+          + "set the agents' model before the interview.",
+      };
+    }
+    if (!agentModel.canConfigure) {
+      return {
+        phase: "setup_agent_model",
+        nextAction: "agentdash_setup_status",
+        nextActionReason:
+          "This hosted workspace's agents have no model yet, and only the instance admin can add "
+          + "one. Ask the human to have the admin add a provider key in the AgentDash web UI, and "
+          + "re-check agentdash_setup_status only after the human says it's done (don't poll).",
+      };
+    }
+    return {
+      phase: "setup_agent_model",
+      nextAction: "agentdash_setup_adapter",
+      nextActionReason:
+        "This hosted workspace's agents have no model yet. Show the human the providers in "
+        + "agentModel.options, ask which one and for an API key from it (NEVER invent a key), "
+        + "then call agentdash_setup_adapter with preset \"hermes\", that provider and the key.",
     };
   }
   // Adapter gate: the deep-interview follow-ups + the agent-team plan are
@@ -231,6 +292,49 @@ function readString(record: Record<string, unknown>, key: string): string | null
   return typeof value === "string" ? value : null;
 }
 
+/** The `hermesProvider` block of GET /onboarding/adapter-status. Never carries key material. */
+export function readAgentModel(adapterStatus: unknown): AgentModelStatus | null {
+  const record = adapterStatus && typeof adapterStatus === "object" ? adapterStatus as Record<string, unknown> : {};
+  const block = record.hermesProvider;
+  if (!block || typeof block !== "object") return null;
+  const hermes = block as Record<string, unknown>;
+  return {
+    required: hermes.required === true,
+    configured: hermes.configured === true,
+    canConfigure: hermes.canConfigure === true,
+    provider: readString(hermes, "provider"),
+    model: readString(hermes, "model"),
+    options: asArray(hermes.options).flatMap((option) => {
+      const provider = readString(option, "provider");
+      if (!provider) return [];
+      return [{
+        provider,
+        label: readString(option, "label") ?? provider,
+        defaultModel: readString(option, "defaultModel") ?? "",
+        keyHint: readString(option, "keyHint") ?? "",
+      }];
+    }),
+  };
+}
+
+/** The company to act in: the argument, the session default, or the user's only company. */
+async function resolveCompanyId(client: PaperclipApiClient, companyId?: string | null): Promise<string> {
+  const explicit = companyId?.trim() || client.defaults.companyId;
+  if (explicit) return explicit;
+  const companies = asArray(await client.requestJson("GET", "/companies"));
+  if (companies.length === 1) {
+    const only = readString(companies[0]!, "id");
+    if (only) return only;
+  }
+  if (companies.length === 0) {
+    throw new Error(
+      "No workspace exists yet. Create it with agentdash_start_interview, then set the agents' model.",
+    );
+  }
+  const ids = companies.map((company) => readString(company, "id")).filter(Boolean).join(", ");
+  throw new Error(`This user belongs to ${companies.length} companies. Pass companyId (one of: ${ids}).`);
+}
+
 interface ConversationMessage extends Record<string, unknown> {
   cardKind?: string | null;
   cardPayload?: Record<string, unknown> | null;
@@ -307,6 +411,15 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           }
         }
 
+        let agentModel: AgentModelStatus | null = null;
+        if (serverHealthy && apiKeyConfigured) {
+          try {
+            agentModel = readAgentModel(await client.requestJson("GET", "/onboarding/adapter-status"));
+          } catch {
+            agentModel = null;
+          }
+        }
+
         let agents: Array<Record<string, unknown>> = [];
         let dashboard: Record<string, unknown> | null = null;
         let pendingApprovals = 0;
@@ -367,6 +480,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           planReady,
           pendingApprovals,
           openTasks,
+          agentModel,
         };
         const next = computeNextAction(snapshot);
 
@@ -375,6 +489,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           serverHealthy,
           bootstrapStatus,
           adapterReady,
+          agentModel,
           apiKeyConfigured,
           companyId,
           agentCount: agents.length,
@@ -463,30 +578,96 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
     ),
     makeTool(
       "agentdash_setup_adapter",
-      "Configure the model adapter your agents will run on — a required onboarding step before the "
-        + "interview can produce a real team plan. Offer the human the choices from the preset menu "
-        + "(Claude / OpenAI / Gemini — each needs an API key — or 'stub' for a no-key placeholder that "
-        + "produces canned plans). Ask the human which provider and collect the key in conversation "
-        + "(NEVER invent a key). After applying, re-check agentdash_setup_status to confirm "
-        + "adapterReady before continuing the interview.",
+      "Set the model AgentDash runs on, a required onboarding step. On a hosted workspace "
+        + "(agentdash_setup_status shows agentModel.required), pass preset \"hermes\" with a provider "
+        + "from agentModel.options and the human's API key for it: this is the model the hired agents "
+        + "and the Chief of Staff run on, checked with one small call to the provider and stored only "
+        + "on the box. On a self-hosted install, pick from the preset menu instead (Claude / OpenAI / "
+        + "Gemini, each needing an API key, or 'stub' for a no-key placeholder that produces canned "
+        + "plans). Ask the human which provider and collect the key in conversation (NEVER invent a "
+        + "key); it is never echoed back. Then re-check agentdash_setup_status.",
       z.object({
         preset: z
-          .enum(["claude", "openai", "gemini", "stub"])
+          .enum(["claude", "openai", "gemini", "stub", "hermes"])
           .describe(
             "claude=ANTHROPIC_API_KEY; openai=OPENAI_COMPAT_API_KEY (api.openai.com); "
-              + "gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans.",
+              + "gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans; "
+              + "hermes=the agents' model: with a provider, sets the box's Hermes provider (hosted "
+              + "workspaces); without one, selects a self-hosted Hermes that holds its own keys.",
           ),
         apiKey: z
           .string()
           .min(1)
-          .max(400)
+          .max(1024)
           .optional()
           .describe(
-            "The provider API key. Required for claude/openai/gemini. Omit for stub. "
-              + "Collected from the human — NEVER invented.",
+            "The provider API key. Required for claude/openai/gemini and for hermes with a provider. "
+              + "Omit for stub. Collected from the human — NEVER invented.",
           ),
+        provider: z
+          .string()
+          .min(1)
+          .max(64)
+          .optional()
+          .describe(
+            "With preset hermes: a provider id from agentdash_setup_status agentModel.options "
+              + "(the box's own list, the same one the web wizard shows).",
+          ),
+        model: z
+          .string()
+          .min(1)
+          .max(128)
+          .optional()
+          .describe("With preset hermes and a provider: a model id. Omit for the provider's default."),
+        companyId: companyIdOptional.describe(
+          "With preset hermes and a provider: the workspace whose agents use the model. Omit when "
+            + "the user belongs to exactly one company.",
+        ),
       }),
-      async ({ preset, apiKey }) => {
+      async ({ preset, apiKey, provider, model, companyId }) => {
+        if (preset === "hermes" && provider) {
+          if (!apiKey) throw new Error(`apiKey is required with provider "${provider}". Ask the human for it.`);
+          // The menu comes from the box, so this tool and the wizard can't drift apart.
+          const options = readAgentModel(
+            await client.requestJson("GET", "/onboarding/adapter-status"),
+          )?.options ?? [];
+          if (!options.some((option) => option.provider === provider)) {
+            const menu = options.map((option) => `${option.provider} (${option.label})`).join(", ");
+            throw new Error(`provider must be one of this box's: ${menu || "none listed"}`);
+          }
+          const targetCompanyId = await resolveCompanyId(client, companyId);
+          const result = await client.requestJson<{
+            status: { ready: boolean };
+            hermesProvider: { configured: boolean; provider: string; label: string; model: string };
+            profilesUpdated: number;
+            applied: string[];
+          }>("POST", "/onboarding/setup-adapter", {
+            body: { preset, provider, apiKey, companyId: targetCompanyId, ...(model ? { model } : {}) },
+          });
+          return {
+            preset,
+            provider: result.hermesProvider.provider,
+            label: result.hermesProvider.label,
+            model: result.hermesProvider.model,
+            companyId: targetCompanyId,
+            agentModelConfigured: result.hermesProvider.configured,
+            adapterReady: result.status.ready,
+            profilesUpdated: result.profilesUpdated,
+            applied: result.applied,
+            next:
+              "Re-check agentdash_setup_status. With the agents' model set, it continues with the "
+              + "interview (agentdash_interview_turn).",
+          };
+        }
+        if (provider || model) {
+          throw new Error('provider and model go with preset "hermes".');
+        }
+        if (preset === "hermes" && apiKey) {
+          // Without a provider the hermes preset takes no key: refuse before sending it anywhere.
+          throw new Error(
+            'With preset "hermes", pass the provider the key is for (from agentdash_setup_status agentModel.options).',
+          );
+        }
         const result = await client.requestJson<{
           status: { adapter: string; ready: boolean; preset: string; reason: string | null };
           applied: string[];
@@ -531,26 +712,44 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         });
 
         // Boundary default: hires beyond the confirmed plan must be gated
-        // behind human approval in the AgentDash UI.
+        // behind human approval in the AgentDash UI. Company settings are an
+        // owner/admin decision, so for anyone else the PATCH is refused; the
+        // tool then reports the company's real setting rather than the one it
+        // meant to set.
         let requiredManualStep: string | null = null;
+        let hiresRequireApproval: boolean | null = true;
         try {
           await client.requestJson("PATCH", `/companies/${bootstrap.companyId}`, {
             body: { requireBoardApprovalForNewAgents: true },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          requiredManualStep =
-            "REQUIRED: could not set requireBoardApprovalForNewAgents=true automatically "
-            + `(${message}). A board user must PATCH /api/companies/${bootstrap.companyId} `
-            + 'with {"requireBoardApprovalForNewAgents": true}, or enable "Require board approval '
-            + 'for new agents" in the AgentDash company settings, before any agents are hired.';
+          try {
+            const company = await client.requestJson<{ requireBoardApprovalForNewAgents?: boolean | null }>(
+              "GET",
+              `/companies/${bootstrap.companyId}`,
+            );
+            hiresRequireApproval = company.requireBoardApprovalForNewAgents === true;
+          } catch {
+            // Unknown, not "on": never report a boundary that was not confirmed.
+            hiresRequireApproval = null;
+          }
+          if (hiresRequireApproval !== true) {
+            requiredManualStep =
+              "REQUIRED: new agent hires do not "
+              + (hiresRequireApproval === null ? "provably " : "")
+              + "require approval in this workspace, and this connection could not turn that on "
+              + `(${message}). A company owner or admin must enable "Require your approval for new hires" `
+              + `in the AgentDash company settings (or PATCH /api/companies/${bootstrap.companyId} with `
+              + '{"requireBoardApprovalForNewAgents": true}) before any agents are hired.';
+          }
         }
 
         return {
           companyId: bootstrap.companyId,
           conversationId: bootstrap.conversationId,
           cosAgentId: bootstrap.cosAgentId,
-          boundaries: { hiresRequireApproval: true },
+          boundaries: { hiresRequireApproval },
           ...(requiredManualStep ? { requiredManualStep } : {}),
         };
       },

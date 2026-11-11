@@ -13,6 +13,7 @@ vi.mock("../routes/document-run-access.js", async (importOriginal) => ({
     currentStewardUserId: async () => null,
     canReadRunContent: async () => true,
     assertRunContentReadable: async () => undefined,
+    assertRunContentReadableForDetail: async () => undefined,
     readableAgentIds: async () => null,
   }),
 }));

@@ -1,7 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useNavigate, useLocation } from "@/lib/router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
+import { accessApi } from "../api/access";
+import { useCanBulkChange, useCapability } from "../hooks/useCapability";
+import { buildCompanyUserLabelMap } from "../lib/company-members";
+import { AgentsBulkBar } from "../components/batch/AgentsBulkBar";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
@@ -113,6 +117,7 @@ export function Agents() {
   // AgentDash: UX-11 — the Team page explains who hires agents and points at
   // Ask. Same for every company (one UX).
   const { openNewAgent } = useDialogActions();
+  const queryClient = useQueryClient();
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const location = useLocation();
@@ -130,6 +135,18 @@ export function Agents() {
     queryKey: queryKeys.agents.list(selectedCompanyId!),
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  // AgentDash admin powers: owners and admins who can manage agents select
+  // several and change them together. Nothing is shown while the answer is loading.
+  const canBulkChange = useCanBulkChange(selectedCompanyId);
+  const agentsManage = useCapability(selectedCompanyId, "agents:create");
+  const canBulkManage = canBulkChange && agentsManage.allowed && !agentsManage.isLoading;
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
+  const { data: userDirectory } = useQuery({
+    queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),
+    queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
+    enabled: !!selectedCompanyId && canBulkManage,
   });
 
   const { data: orgTree } = useQuery({
@@ -179,6 +196,22 @@ export function Agents() {
   }
 
   const filtered = filterAgents(agents ?? [], tab, showTerminated);
+  const bulkEnabled = canBulkManage && effectiveView === "list";
+  const selectedShown = filtered.filter((agent) => selectedAgentIds.includes(agent.id));
+  const toggleAgent = (agentId: string, checked: boolean) =>
+    setSelectedAgentIds((current) => (checked ? [...current.filter((id) => id !== agentId), agentId] : current.filter((id) => id !== agentId)));
+  const selectBox = (agent: Agent) => bulkEnabled ? (
+    <label className="flex shrink-0 cursor-pointer items-center px-2 max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center">
+      <input
+        type="checkbox"
+        className="h-4 w-4"
+        aria-label={`Select ${agent.name}`}
+        data-testid="agent-bulk-checkbox"
+        checked={selectedAgentIds.includes(agent.id)}
+        onChange={(event) => toggleAgent(agent.id, event.target.checked)}
+      />
+    </label>
+  ) : null;
   const filteredOrg = filterOrgTree(orgTree ?? [], tab, showTerminated);
 
   return (
@@ -298,13 +331,16 @@ export function Agents() {
       {effectiveView === "list" && filtered.length > 0 && isPhone && (
         <ul className="divide-y divide-border rounded-lg border border-border" data-testid="agents-phone-list">
           {filtered.map((agent) => (
-            <li key={agent.id}>
+            <li key={agent.id} className={bulkEnabled ? "flex items-center" : undefined}>
+              {selectBox(agent)}
+              <div className={bulkEnabled ? "min-w-0 flex-1" : undefined}>
               <PhoneAgentCard
                 agent={agent}
                 liveRun={liveRunByAgent.get(agent.id)}
                 dimmed={!!agent.pausedAt && tab !== "paused"}
                 hideUnpaired={hideUnpaired}
               />
+              </div>
             </li>
           ))}
         </ul>
@@ -313,7 +349,7 @@ export function Agents() {
       {effectiveView === "list" && filtered.length > 0 && !isPhone && (
         <div className="border border-border">
           {filtered.map((agent) => {
-            return (
+            const row = (
               <EntityRow
                 key={agent.id}
                 title={agent.name}
@@ -378,9 +414,41 @@ export function Agents() {
                 }
               />
             );
+            return bulkEnabled ? (
+              <div key={agent.id} className="flex items-center">
+                {selectBox(agent)}
+                <div className="min-w-0 flex-1">{row}</div>
+              </div>
+            ) : row;
           })}
         </div>
       )}
+
+      {bulkEnabled && filtered.length > 0 ? (
+        <label className="flex min-h-9 cursor-pointer items-center gap-2 px-2 text-xs text-muted-foreground max-sm:min-h-11" data-testid="agents-select-visible">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            aria-label="Select all shown agents"
+            checked={selectedShown.length === filtered.length}
+            onChange={(event) => setSelectedAgentIds(event.target.checked ? filtered.map((agent) => agent.id) : [])}
+          />
+          {selectedShown.length === filtered.length ? `All ${filtered.length} shown selected` : `Select all ${filtered.length} shown`}
+        </label>
+      ) : null}
+
+      {bulkEnabled && selectedShown.length > 0 ? (
+        <AgentsBulkBar
+          companyId={selectedCompanyId}
+          selected={selectedShown.map((agent) => ({ id: agent.id, name: agent.name, adapterType: agent.adapterType }))}
+          people={(userDirectory?.users ?? []).map((user) => ({ id: user.principalId, name: buildCompanyUserLabelMap(userDirectory?.users).get(user.principalId) ?? "A teammate" }))}
+          onClear={() => setSelectedAgentIds([])}
+          onFinished={() => {
+            setSelectedAgentIds([]);
+            void queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(selectedCompanyId) });
+          }}
+        />
+      ) : null}
 
       {effectiveView === "list" && agents && agents.length > 0 && filtered.length === 0 && (
         <p className="text-sm text-muted-foreground text-center py-8">

@@ -384,7 +384,9 @@ export function routineService(
     return db
       .select()
       .from(routines)
-      .where(eq(routines.id, id))
+      // A deleted routine (DELETE /routines/:id) is gone from the routine
+      // routes; its history stays (see the deletedAt column).
+      .where(and(eq(routines.id, id), isNull(routines.deletedAt)))
       .then((rows) => rows[0] ?? null);
   }
 
@@ -847,7 +849,7 @@ export function routineService(
       accepted = await db.transaction(async tx => {
         const txDb = tx as unknown as Db;
         await tx.execute(sql`select id from ${companies} where id = ${input.routine.companyId} for no key update`);
-        const [routine] = await txDb.select().from(routines).where(and(eq(routines.id, input.routine.id), eq(routines.companyId, input.routine.companyId))).for("update");
+        const [routine] = await txDb.select().from(routines).where(and(eq(routines.id, input.routine.id), eq(routines.companyId, input.routine.companyId), isNull(routines.deletedAt))).for("update");
         if (!routine) throw notFound("Routine not found");
         if (routine.status === "archived") throw conflict("Routine is archived");
         const trigger = input.trigger ? await txDb.select().from(routineTriggers).where(and(eq(routineTriggers.id, input.trigger.id), eq(routineTriggers.routineId, routine.id), eq(routineTriggers.companyId, routine.companyId))).for("update").then(rows => rows[0]) : null;
@@ -1106,7 +1108,7 @@ export function routineService(
       companyId: string,
       filters?: { projectId?: string | null },
     ): Promise<RoutineListItem[]> => {
-      const conditions = [eq(routines.companyId, companyId)];
+      const conditions = [eq(routines.companyId, companyId), isNull(routines.deletedAt)];
       if (filters?.projectId) conditions.push(eq(routines.projectId, filters.projectId));
 
       const rows = await db
@@ -1266,6 +1268,27 @@ export function routineService(
         })
         .returning();
       return created;
+    },
+
+    /**
+     * AgentDash admin powers: delete a routine. It is archived, its triggers
+     * go off and it is tombstoned: hidden from the routine routes, agents'
+     * responsibilities and profile references; its past runs, the issues
+     * they created, its activity rows and evaluation history are kept. A hard
+     * delete would cascade the runs away.
+     */
+    remove: async (id: string): Promise<Routine | null> => {
+      const now = new Date();
+      return db.transaction(async (tx) => {
+        const [removed] = await tx
+          .update(routines)
+          .set({ deletedAt: now, status: "archived", updatedAt: now })
+          .where(and(eq(routines.id, id), isNull(routines.deletedAt)))
+          .returning();
+        if (!removed) return null;
+        await tx.update(routineTriggers).set({ enabled: false, updatedAt: now }).where(eq(routineTriggers.routineId, id));
+        return removed as Routine;
+      });
     },
 
     update: async (id: string, patch: UpdateRoutine, actor: Actor): Promise<Routine | null> => {

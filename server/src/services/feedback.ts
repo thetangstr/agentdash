@@ -123,6 +123,12 @@ type FeedbackTraceRow = typeof feedbackExports.$inferSelect & {
 
 type PendingFeedbackExportRow = typeof feedbackExports.$inferSelect;
 
+// Server-only authorization hook; the identity comes from the source run's
+// owning DB row, never the redacted bundle projection.
+type FeedbackSourceRunAccessCheck = (
+  run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId" | "agentId"> | null,
+) => Promise<void>;
+
 type IssueFeedbackContext = {
   id: string;
   companyId: string;
@@ -269,12 +275,14 @@ function buildExportId(feedbackVoteId: string, sharedAt: Date) {
 
 function resolveSourceRunId(payloadSnapshot: Record<string, unknown> | null) {
   const targetRunId = asString(asRecord(payloadSnapshot?.target)?.createdByRunId);
-  if (targetRunId) return targetRunId;
-
   const bundle = asRecord(payloadSnapshot?.bundle);
   const agentContext = asRecord(bundle?.agentContext);
   const runtime = asRecord(agentContext?.runtime);
-  return asString(asRecord(runtime?.sourceRun)?.id);
+  const sourceRunId = targetRunId ?? asString(asRecord(runtime?.sourceRun)?.id);
+  // Legacy/redacted payloads may no longer contain a queryable UUID.
+  return sourceRunId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceRunId)
+    ? sourceRunId
+    : null;
 }
 
 function makeBundleFile(input: {
@@ -1473,6 +1481,7 @@ async function buildPayloadArtifacts(
 async function buildFeedbackTraceBundleFromRow(
   db: Db,
   row: FeedbackTraceRow,
+  assertSourceRunReadable?: FeedbackSourceRunAccessCheck,
 ): Promise<FeedbackTraceBundle> {
   const trace = mapTraceRow(row, true);
   const payloadSnapshot = asRecord(trace.payloadSnapshot);
@@ -1487,6 +1496,7 @@ async function buildFeedbackTraceBundleFromRow(
   let adapterType: string | null = null;
 
   if (!sourceRunId) {
+    await assertSourceRunReadable?.(null);
     appendNote(notes, "source_run_missing");
   } else {
     const run = await db
@@ -1523,8 +1533,10 @@ async function buildFeedbackTraceBundleFromRow(
       .then((rows) => rows[0] ?? null);
 
     if (!run || run.companyId !== row.companyId) {
+      await assertSourceRunReadable?.(null);
       appendNote(notes, "source_run_unavailable");
     } else {
+      await assertSourceRunReadable?.(run);
       adapterType = run.adapterType;
       const events = await db
         .select()
@@ -1796,7 +1808,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
       return row ? mapTraceRow(row, includePayload) : null;
     },
 
-    getFeedbackTraceBundle: async (traceId: string) => {
+    getFeedbackTraceBundle: async (traceId: string, assertSourceRunReadable?: FeedbackSourceRunAccessCheck) => {
       const row = await db
         .select({
           ...feedbackExportColumns,
@@ -1807,7 +1819,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
         .innerJoin(issues, eq(feedbackExports.issueId, issues.id))
         .where(eq(feedbackExports.id, traceId))
         .then((rows) => rows[0] ?? null);
-      return row ? buildFeedbackTraceBundleFromRow(db, row) : null;
+      return row ? buildFeedbackTraceBundleFromRow(db, row, assertSourceRunReadable) : null;
     },
 
     flushPendingFeedbackTraces: async (input?: {
@@ -1951,6 +1963,14 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
       authorUserId: string;
       reason?: string | null;
       allowSharing?: boolean;
+      /**
+       * Whether this voter may turn on the company's feedback sharing (and
+       * answer the instance-wide sharing prompt). Routes pass
+       * `isCompanyAdministrator`; omitted means allowed, for internal callers.
+       * A voter who may not still has their vote recorded, and it is shared
+       * only when the company already shares.
+       */
+      mayEnableCompanySharing?: boolean;
     }) =>
       db.transaction(async (tx) => {
         const issue = await tx
@@ -1983,7 +2003,13 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
         const normalizedReason = normalizeReason(input.vote, input.reason);
         // Document access (slice 6b): never share a flagged company's traces;
         // the vote is still recorded, locally.
-        const sharedWithLabs = input.allowSharing === true && !(await documentAccessEnabledFor(tx, issue.companyId));
+        const voterMayEnableSharing = input.mayEnableCompanySharing !== false;
+        const sharingNeedsAdministrator =
+          input.allowSharing === true && !voterMayEnableSharing && !existingCompany.feedbackDataSharingEnabled;
+        const sharedWithLabs =
+          input.allowSharing === true
+          && !sharingNeedsAdministrator
+          && !(await documentAccessEnabledFor(tx, issue.companyId));
         let consentEnabledNow = false;
         let consentVersion = existingCompany.feedbackDataSharingTermsVersion ?? null;
         let persistedSharingPreference: "allowed" | "not_allowed" | null = null;
@@ -2036,7 +2062,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
             .then((rows) => rows[0] ?? null));
 
         const currentGeneral = normalizeInstanceGeneralSettings(currentInstanceSettings?.general);
-        if (currentInstanceSettings && currentGeneral.feedbackDataSharingPreference === "prompt") {
+        if (voterMayEnableSharing && currentInstanceSettings && currentGeneral.feedbackDataSharingPreference === "prompt") {
           const nextSharingPreference = sharedWithLabs ? "allowed" : "not_allowed";
           const currentGeneralRaw = asRecord(currentInstanceSettings.general) ?? {};
           await tx
@@ -2169,6 +2195,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
           consentEnabledNow,
           persistedSharingPreference,
           sharingEnabled: sharedWithLabs,
+          sharingNeedsAdministrator,
         };
       }),
   };

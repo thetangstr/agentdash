@@ -4,7 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { approvals, channelCallbackTokens, channelPairingChallenges } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { approvalAuthorityService } from "./approval-authority.js";
-import { approvalService } from "./approvals.js";
+import { approvalService, privilegedHireRefusalMessage } from "./approvals.js";
 import { humanChannelService } from "./human-channels.js";
 import { stewardAgentReplier, type StewardAgentReplierDeps } from "./steward-agent-replier.js";
 import { logActivity } from "./activity-log.js";
@@ -242,9 +242,12 @@ export function telegramConnectorService(db: Db, deps: StewardAgentReplierDeps =
         // A stale revision or a lost stewardship is a legitimate refusal, not a
         // server fault — tell the human and stop.
         logger.info({ err: error, approvalId: record.approvalId }, "telegram decision refused");
+        // A privileged hire (CEO, Chief of Staff, agent creator) refused by
+        // approvalService.approve says so plainly rather than "Not permitted."
         await answerCallbackQuery(
           callbackId,
-          status === 409 ? "This request changed; open AgentDash to review." : "Not permitted.",
+          privilegedHireRefusalMessage(error)
+            ?? (status === 409 ? "This request changed; open AgentDash to review." : "Not permitted."),
         );
       }
       return;

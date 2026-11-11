@@ -354,10 +354,10 @@ function QualityBody({ body, ui }: { body: AgentCardQualitySection; ui: DrillUi 
 }
 
 const FACTS: Array<{ key: keyof AgentCardAcceptanceSection["facts"]; label: string; caseFact: AgentAcceptanceFact }> = [
-  { key: "automatedAcceptance", label: "Passed automated checks", caseFact: "automated" },
+  { key: "automatedAcceptance", label: "Automated acceptance", caseFact: "automated" },
   { key: "humanAcceptance", label: "Accepted by a person", caseFact: "human" },
   { key: "use", label: "Used", caseFact: "use" },
-  { key: "outcome", label: "Moved the result", caseFact: "outcome" },
+  { key: "outcome", label: "Linked-goal status (context)", caseFact: "outcome" },
 ];
 
 function FactCounts({ fact, label, caseFact, ui }: { fact: AgentCardFactCount; label: string; caseFact: AgentAcceptanceFact; ui: DrillUi }) {
@@ -381,7 +381,7 @@ function FactCounts({ fact, label, caseFact, ui }: { fact: AgentCardFactCount; l
   );
 }
 
-function AcceptanceBody({ body, ui }: { body: AgentCardAcceptanceSection; ui: DrillUi }) {
+function AcceptanceBody({ body, ui, formulaVersion }: { body: AgentCardAcceptanceSection; ui: DrillUi; formulaVersion: string }) {
   const byResponsibility = Object.entries(body.delivered.byResponsibility).sort(([a], [b]) => a.localeCompare(b));
   return (
     <>
@@ -398,6 +398,8 @@ function AcceptanceBody({ body, ui }: { body: AgentCardAcceptanceSection; ui: Dr
           ) : null}
         </Fact>
       </FactList>
+      <p className="text-xs text-text-secondary">Measured business impact, causal attribution, and delayed outcomes need separate evidence.</p>
+      {formulaVersion === "agent-metrics/2" ? <p className="text-xs text-text-secondary">Automated acceptance requires verified native output and every required automated check. Recorded quality observations remain separate.</p> : null}
       <SubHeading>Projects it led and goals it owned</SubHeading>
       {body.accountable.length === 0 ? (
         <EmptyNote>It led no projects and owned no goals in this window.</EmptyNote>
@@ -484,7 +486,7 @@ function CostBody({ body, ui, personName }: { body: AgentCardCostSection; ui: Dr
       {body.byPerson === null ? (
         <EmptyNote>Visible to company admins and the agent's accountable person.</EmptyNote>
       ) : body.byPerson.length === 0 ? (
-        <EmptyNote>Nobody spent time on this agent in this window.</EmptyNote>
+        <EmptyNote>No person-time records for this agent in this window.</EmptyNote>
       ) : (
         <ul className="space-y-1 text-sm" data-testid="agent-card-by-person">
           {body.byPerson.map((row) => (
@@ -828,6 +830,9 @@ export function AgentCardDisplay({
               }.`
             : "No applied profile: no criteria are declared, so whether work is accepted can't be decided."}
         </p>
+        <p>Formula {view.formulaVersion}{view.formulaMismatch ? " · Historical formula differs from the installed evaluator" : ""}</p>
+        {view.nativeOutputStatus === "captured" ? <p>Output proof belongs to the captured ledger cut shown above.</p> : null}
+        {view.nativeOutputStatus === "stale" ? <p role="status">Native output has changed since this ledger cut. Captured results are historical. Refresh evidence for current acceptance.</p> : null}
         {view.restricted ? <p>Numbers count only the records you can read.</p> : null}
         {view.markers.length > 0 ? <p>Notes: {view.markers.join(" · ")}</p> : null}
       </div>
@@ -871,7 +876,7 @@ export function AgentCardDisplay({
           view={view.worker.acceptance}
           aside={drill("acceptance")}
         >
-          {(body) => <AcceptanceBody body={body} ui={ui} />}
+          {(body) => <AcceptanceBody body={body} ui={ui} formulaVersion={view.formulaVersion} />}
         </CardSection>
         <CardSection
           id="agent-card-cost"

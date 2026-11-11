@@ -15,16 +15,19 @@
     {
       "slug": "start/quickstart",
       "title": "Start on AgentDash Cloud",
-      "summary": "Sign up for a hosted workspace, claim it, and get through the three setup steps",
+      "summary": "Sign up for a hosted workspace, use an invitation code or waitlist, claim it, and configure your model",
       "headings": [
         "1. Sign up",
+        "Invitation codes and waitlist admission",
         "2. Wait for your workspace",
         "3. Claim it",
         "4. Set it up",
+        "Your model provider and API key",
+        "Your repo and first issue",
         "Next",
         "Signing in later"
       ],
-      "firstParagraph": "AgentDash Cloud gives you your own workspace at your-name.agentdash.cloud, with a Chief of Staff agent already in it. Setup takes a few minutes, plus however long the waitlist is."
+      "firstParagraph": "AgentDash Cloud gives you your own workspace at your-name.agentdash.cloud, with a Chief of Staff agent already in it. Workspace creation takes a few minutes after admission and when capacity is available. Before the Chief of Staff can reply, you will need your own model provider…"
     },
     {
       "slug": "start/first-agent",
@@ -374,6 +377,23 @@
         "Debugging with it"
       ],
       "firstParagraph": "AgentDash writes an activity entry for changes across the company: who acted, what they did, and to what."
+    },
+    {
+      "slug": "guides/board-operator/change-many-things-at-once",
+      "title": "Change many things at once as an admin",
+      "summary": "Bulk changes with a preview and honest per-record results, the admin audit and its CSV export, ceiling templates, steward hand-over, routine delete, labels, the Admin powers switches, and batch changes from your own Claude",
+      "headings": [
+        "Change many records with a preview",
+        "Read the results",
+        "See who did what: the admin audit",
+        "Ceiling templates",
+        "Remove a member and hand over their agents",
+        "Delete a routine",
+        "Rename and recolor labels",
+        "The Admin powers switches",
+        "Batch changes from your own Claude"
+      ],
+      "firstParagraph": "These tools arrived in v2026.1110.0. Most of them need no setting: a batch is the same change you could make one record at a time, done for many records after one preview. Only the Admin powers switches are off until an owner or admin turns them on."
     },
     {
       "slug": "guides/board-operator/importing-and-exporting",
@@ -914,6 +934,7 @@
         "List an agent's keys",
         "Create an agent key",
         "Revoke an agent key",
+        "Ceiling templates",
         "The Agent object",
         "Everything else"
       ],
@@ -933,6 +954,7 @@
         "Release an issue",
         "List an issue's comments",
         "Add a comment",
+        "Rename or recolor a label",
         "The Issue object",
         "The IssueComment object",
         "Everything else"
@@ -999,6 +1021,7 @@
         "Get a routine",
         "Create a routine",
         "Update a routine",
+        "Delete a routine",
         "Run a routine",
         "The Routine object",
         "Everything else"
@@ -1026,6 +1049,7 @@
       "headings": [
         "Who may call it",
         "List activity",
+        "The admin audit",
         "The ActivityEvent object",
         "Everything else"
       ],
@@ -1116,6 +1140,7 @@
         "Protected-resource metadata",
         "Protected-resource metadata, path-suffixed",
         "Authorization-server metadata",
+        "The admin scope (agentdash:admin)",
         "Everything else"
       ],
       "firstParagraph": "An assistant that connects to POST /api/mcp/assistant gets its access token through OAuth 2.1. These three documents tell the client where to get one. They are public, take no credential, and are served at the app root, not under /api."
@@ -1125,6 +1150,12 @@
       "title": "API changelog",
       "summary": "The API-affecting lines of every AgentDash release note, newest first. Generated from releases/*.md.",
       "headings": [
+        "v2026.1111.0 — 2026-11-11",
+        "v2026.1110.1 — 2026-11-10",
+        "v2026.1110.0 — 2026-11-10",
+        "v2026.1109.1 — 2026-11-09",
+        "v2026.1104.0 — 2026-11-04",
+        "v2026.1102.1 — 2026-11-02",
         "v2026.1102.0 — 2026-11-02",
         "v2026.1031.0 — 2026-10-31",
         "v2026.1014.1 — 2026-10-14",
@@ -1155,7 +1186,7 @@
         "v2026.827.1 — 2026-08-27",
         "v2026.827.0 — 2026-08-27"
       ],
-      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 108 lines from 29 releases, out of 39 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words…"
+      "firstParagraph": "Generated from releases/.md by scripts/docs/generate-api-changelog.mjs: 137 lines from 35 releases, out of 46 AgentDash releases read. A line is kept when it names an /api/… path or a method and path, a contract operation, a status code, a header, a validator, or the words…"
     },
     {
       "slug": "api/route-index",
@@ -1182,9 +1213,12 @@
         "assets",
         "assistant",
         "auth",
+        "batches",
         "billing",
         "bridge",
+        "ceiling-templates",
         "companies",
+        "company-audit",
         "company-skills",
         "connect-codes",
         "connector-send-executions",
@@ -1199,6 +1233,7 @@
         "execution-workspaces",
         "feature-flags",
         "first-run",
+        "fred",
         "github-connection",
         "gmail",
         "goals",
@@ -1251,7 +1286,7 @@
         "workforce",
         "zk-permission-proofs"
       ],
-      "firstParagraph": "Measured: 674 routes in 90 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest e82ef8e184b1; it changes exactly when a route is added, removed,…"
+      "firstParagraph": "Measured: 697 routes in 94 route files under server/src/routes/, counted by scripts/docs/generate-route-index.mjs from each router.( call and resolved against the mounts in server/src/app.ts. Route-list digest ae801921510b; it changes exactly when a route is added, removed,…"
     },
     {
       "slug": "mcp/overview",
@@ -1450,9 +1485,13 @@
         "Gated tools — grants with agentdash:decide",
         "preparedecision",
         "requesthire",
-        "confirmaction"
+        "confirmaction",
+        "Admin batch tools — grants that explicitly hold agentdash:admin",
+        "preparebatchchange",
+        "confirmbatchchange",
+        "batchchangestatus"
       ],
-      "firstParagraph": "19 tools — measured: the length of the tools/list response; 17 are documented here and 2 are omitted as engagement-specific. Source: buildToolSurface(client, config, \"assistant\") in packages/mcp-server/src/index.ts; the tools are defined in src/assistant/tools.ts,…"
+      "firstParagraph": "22 tools — measured: the length of the tools/list response for a grant holding every scope (19 without agentdash:admin); 20 are documented here and 2 are omitted as engagement-specific. Source: buildToolSurface(client, config, \"assistant\") in packages/mcp-server/src/index.ts;…"
     },
     {
       "slug": "mcp/tools/human",

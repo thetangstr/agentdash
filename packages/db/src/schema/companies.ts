@@ -4,6 +4,8 @@ import type { AgentAccessEnforcementMode, CompanyProductProfile } from "@papercl
 // AgentDash: APM gate 4 — the designated performance manager references agents
 // (agents.ts imports this file; the lazy reference keeps the cycle safe).
 import { agents } from "./agents.js";
+// AgentDash admin powers: the company's ceiling for new agents (lazy, as above).
+import { agentCeilingTemplates } from "./agent_ceiling_templates.js";
 
 export const companies = pgTable(
   "companies",
@@ -60,6 +62,18 @@ export const companies = pgTable(
     performanceManagerAgentId: uuid("performance_manager_agent_id").references((): AnyPgColumn => agents.id, {
       onDelete: "set null",
     }),
+    /**
+     * AgentDash admin powers: the company switches, set in Company Settings →
+     * Admin powers by owners and admins only. Each power is off until an admin
+     * turns it on, so nothing changes on upgrade.
+     */
+    adminDirectiveReadEnabled: boolean("admin_directive_read_enabled").notNull().default(false),
+    adminTranscriptReadEnabled: boolean("admin_transcript_read_enabled").notNull().default(false),
+    assistantAdminBatchesEnabled: boolean("assistant_admin_batches_enabled").notNull().default(false),
+    assistantBatchMaxRecords: integer("assistant_batch_max_records").notNull().default(50),
+    defaultCeilingTemplateId: uuid("default_ceiling_template_id").references((): AnyPgColumn => agentCeilingTemplates.id, {
+      onDelete: "set null",
+    }),
     feedbackDataSharingEnabled: boolean("feedback_data_sharing_enabled")
       .notNull()
       .default(false),
@@ -90,6 +104,10 @@ export const companies = pgTable(
     agentVisibilityDefaultCk: check(
       "companies_agent_visibility_default_ck",
       sql`${table.agentVisibilityDefault} in ('company', 'owner')`,
+    ),
+    assistantBatchMaxRecordsCk: check(
+      "companies_assistant_batch_max_records_ck",
+      sql`${table.assistantBatchMaxRecords} between 1 and 200`,
     ),
     agentAccessEnforcementCk: check(
       "companies_agent_access_enforcement_ck",

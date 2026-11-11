@@ -10,12 +10,24 @@ import {
 
 describe("company routes", () => {
   it("keeps What's new index and article URLs global when a company is selected", () => {
-    for (const path of ["/whats-new", "/whats-new/launch-week", "/whats-new/launch-week?preview=1#transcript-follow"]) {
+    for (const path of ["/whats-new", "/whats-new/launch-week", "/whats-new/launch-week?preview=1#transcript-follow", "/agent-performance", "/whats-new/agent-performance"]) {
       expect(extractCompanyPrefixFromPath(path)).toBeNull();
       expect(applyCompanyPrefix(path, "ACME")).toBe(path);
       expect(toCompanyRelativePath(path)).toBe(path);
     }
     expect(isReservedCompanyPrefix("WHATS-NEW")).toBe(true);
+    expect(isReservedCompanyPrefix("AGENT-PERFORMANCE")).toBe(true);
+    expect(applyCompanyPrefix("/evaluation", "ACME")).toBe("/ACME/evaluation");
+  });
+  it("keeps the release-notes index and version pages global when a company is selected", () => {
+    for (const path of ["/releases", "/releases/v2026.1105.0", "/releases/v2026.1105.0#upgrade"]) {
+      expect(extractCompanyPrefixFromPath(path)).toBeNull();
+      expect(applyCompanyPrefix(path, "ACME")).toBe(path);
+      expect(toCompanyRelativePath(path)).toBe(path);
+    }
+    expect(isReservedCompanyPrefix("RELEASES")).toBe(true);
+    expect(isReservedCompanyPrefix("releases")).toBe(true);
+    expect(isReservedCompanyPrefix("RELEASE")).toBe(false);
   });
   it("treats execution workspace paths as board routes that need a company prefix", () => {
     expect(isBoardPathWithoutPrefix("/execution-workspaces/workspace-123")).toBe(true);
@@ -114,6 +126,14 @@ describe("board route roots stay in step with the router", () => {
 
  it('treats workforce as a company route and preserves its query and brief anchor', () => {
  expect(applyCompanyPrefix('/workforce?agent=a#company-brief', 'ACME')).toBe('/ACME/workforce?agent=a#company-brief');
+ });
+
+ it('keeps the guide scoped without breaking existing FRED company prefixes', () => {
+ expect(applyCompanyPrefix('/company/fred?review=1#brief', 'ACME')).toBe('/ACME/company/fred?review=1#brief');
+ expect(extractCompanyPrefixFromPath('/FRED/issues')).toBe('FRED');
+ expect(applyCompanyPrefix('/FRED/issues','ACME')).toBe('/FRED/issues');
+ expect(toCompanyRelativePath('/ACME/company/fred')).toBe('/company/fred');
+ expect(isReservedCompanyPrefix('FRED')).toBe(false);
  });
 
  it('strips the company prefix from /:prefix/onboarding so a remembered path never doubles it', () => {

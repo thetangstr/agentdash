@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tansta
 import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
 import { useStewardedRoutingNotice } from "../hooks/useStewardedRoutingNotice";
+import { useCanBulkChange } from "../hooks/useCapability";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { heartbeatsApi } from "../api/heartbeats";
@@ -92,6 +93,7 @@ export function issueUpdateErrorToast(err: unknown, issueId: string, identifier?
 
 export function Issues() {
   const { selectedCompanyId } = useCompany();
+  const canBulkChange = useCanBulkChange(selectedCompanyId);
   const { setBreadcrumbs } = useBreadcrumbs();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -245,6 +247,8 @@ export function Issues() {
         initialSearch={syncedSearch}
         onSearchChange={handleSearchChange}
         enableRoutineVisibilityFilter
+        // AgentDash admin powers: owners and admins select tasks and change them together.
+        bulkEdit={canBulkChange}
         hasMoreIssues={hasMoreServerIssues}
         onLoadMoreIssues={loadMoreServerIssues}
         onUpdateIssue={(id, data) => {

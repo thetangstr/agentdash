@@ -21,6 +21,36 @@ interface ActivityFormatOptions {
   agentMap?: Map<string, Agent>;
   userProfileMap?: Map<string, CompanyUserProfile>;
   currentUserId?: string | null;
+  /**
+   * The row's actor is the agent the row is about (`isAgentRowAboutItself`):
+   * the verb then says "its" and stands alone, and the row adds no name.
+   */
+  aboutItself?: boolean;
+}
+
+/** Refusal rows whose actor and subject can be one agent: its own access rules refused it. */
+const SELF_REFUSAL_ACTIONS = new Set(["authz.refused", "access.would_refuse"]);
+
+/**
+ * An agent's refusal row about itself: the actor is the agent the row names.
+ * "Builder was refused a project by the access rules of Builder" said the
+ * name twice; the row reads "Builder was refused a project by its access
+ * rules" instead. A refusal another party caused (contact refused by an
+ * agent's inbound rules) keeps naming the agent whose rules refused it.
+ */
+export function isAgentRowAboutItself(event: {
+  action: string;
+  actorType: string;
+  actorId: string;
+  entityType: string;
+  entityId: string;
+}): boolean {
+  return (
+    SELF_REFUSAL_ACTIONS.has(event.action) &&
+    event.actorType === "agent" &&
+    event.entityType === "agent" &&
+    event.actorId === event.entityId
+  );
 }
 
 /**
@@ -47,6 +77,27 @@ export { IMPORTANT_SYSTEM_ACTIVITY_ACTIONS };
  * fallback at the bottom of `formatActivityVerb`.
  */
 const ACTIVITY_ROW_VERBS: Record<string, string> = {
+  // AgentDash admin powers (part 2): the batch engine's own rows. An applied
+  // record's row is the route's own (for example "updated"), carrying details.batch.
+  "batch.completed": "finished a batch change",
+  "batch.interrupted": "recorded an interrupted batch change",
+  "batch.item_refused": "was refused a batch change to",
+  "batch.item_failed": "could not apply a batch change to",
+  "batch.item_unknown": "has an unconfirmed batch change on",
+  "batch.item_applied_differently": "had a batch change land differently than previewed on",
+  "batch.item_reconciled": "recorded what happened to a batch change on",
+  // AgentDash admin powers (part 5): the code itself is never in the row.
+  "batch.confirm_code_shown": "showed the confirm code for a batch change prepared by their assistant",
+  // AgentDash admin powers (part 4): the admin audit and the two switched reads.
+  "audit.exported": "exported the audit log of",
+  "agent.directives_read_by_admin": "read, as an admin, the directives of",
+  "run.content_read_by_admin": "read, as an admin, the transcript of a run on",
+  // AgentDash admin powers (part 3b): the new single-record routes.
+  "label.updated": "updated a label",
+  "routine.deleted": "deleted a routine",
+  "ceiling_template.created": "created a ceiling template",
+  "ceiling_template.updated": "updated a ceiling template",
+  "ceiling_template.deleted": "deleted a ceiling template",
   // Agent lifecycle and configuration
   // AgentDash: Agent Performance Management gate 2 — V2 access (shadow logs, outside-profile changes)
   "access.policy_changed": "changed the access rules of",
@@ -310,6 +361,11 @@ const ACTIVITY_ROW_VERBS: Record<string, string> = {
   "model_key.requested": "requested a model key",
   "onboarding.member_advanced": "moved onboarding forward",
   "onboarding.member_completed": "finished onboarding",
+  // AgentDash: preparation and request receipts never claim work completed.
+  "fred.registered": "registered the built-in guide",
+  "fred.setup_completed": "prepared the setup for",
+  "fred.brief_saved": "saved the adoption brief on",
+  "fred.discovery_requested": "requested discovery work on",
   "plugin.config.updated": "updated a plugin's settings",
   "plugin.disabled": "disabled a plugin",
   "plugin.enabled": "enabled a plugin",
@@ -659,6 +715,10 @@ const COMPANY_UPDATE_FIELD_LABELS: Record<string, string> = {
   requireBoardApprovalForNewAgents: "changed the hire-approval rule",
   newIssuesStartAsTodo: "changed the default status for new issues",
   agentVisibilityDefault: "changed the default agent visibility",
+  adminDirectiveReadEnabled: "changed whether admins can read agent directives",
+  adminTranscriptReadEnabled: "changed whether admins can read run transcripts",
+  assistantAdminBatchesEnabled: "changed whether admins' own Claude can prepare batch changes",
+  assistantBatchMaxRecords: "changed the most records in a batch from Claude",
   feedbackDataSharingEnabled: "changed the feedback data-sharing setting",
   attachmentMaxBytes: "changed the attachment size limit",
   budgetMonthlyCents: "updated the company budget",
@@ -749,11 +809,22 @@ const ACCESS_POLICY_DIMENSION_OBJECTS: Record<string, string> = {
   "talk.inbound": "contact",
 };
 
-function formatAccessPolicyRefusedVerb(details: ActivityDetails): string | null {
+function formatAccessPolicyRefusedVerb(details: ActivityDetails, aboutItself: boolean): string | null {
   if (details?.reasonCode !== "ACCESS_POLICY_REFUSED") return null;
   const dimension = typeof details.dimension === "string" ? details.dimension : "";
   const object = ACCESS_POLICY_DIMENSION_OBJECTS[dimension];
-  return object ? `was refused ${object} by the access rules of` : "was refused by the access rules of";
+  const rules = aboutItself ? "by its access rules" : "by the access rules of";
+  return object ? `was refused ${object} ${rules}` : `was refused ${rules}`;
+}
+
+/**
+ * Profile rows (`agent_profile.*`) are about a revision, a profile or an
+ * application; the row names the agent they belong to instead. A draft for
+ * a role nobody holds yet has no agent, and says so.
+ */
+function formatProfileVerb(action: string, details: ActivityDetails): string | null {
+  if (action === "agent_profile.draft_saved" && details?.unbound === true) return "saved a draft profile for a new role";
+  return null;
 }
 
 function formatDetailAwareVerb(
@@ -761,7 +832,9 @@ function formatDetailAwareVerb(
   details: ActivityDetails,
   options: ActivityFormatOptions,
 ): string | null {
-  if (action === "authz.refused") return formatAccessPolicyRefusedVerb(details);
+  if (action === "authz.refused") return formatAccessPolicyRefusedVerb(details, options.aboutItself === true);
+  const profileVerb = formatProfileVerb(action, details);
+  if (profileVerb) return profileVerb;
   const approvalVerb = APPROVAL_ACTION_VERBS[action];
   if (approvalVerb) return approvalVerb(approvalObject(details));
   if (action === "company.updated") return formatCompanyUpdatedVerb(details);
@@ -816,6 +889,14 @@ function formatStructuredIssueChange(input: {
   }
 
   return null;
+}
+
+/**
+ * AgentDash admin powers (part 4): the action names the audit page offers in
+ * its action picker, from the same catalogue the activity rows use.
+ */
+export function knownActivityActions(): string[] {
+  return Object.keys(ACTIVITY_ROW_VERBS).sort();
 }
 
 export function formatActivityVerb(

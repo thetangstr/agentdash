@@ -17,6 +17,7 @@ import {
   createDb,
   featureFlags,
 } from "@paperclipai/db";
+import { KNOWN_FEATURE_FLAG_KEYS } from "@paperclipai/shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -215,6 +216,44 @@ describeEmbeddedPostgres("feature-flag routes", () => {
       const missing = await request(app(actor)).get(`/api/companies/${company.id}/feature-flags/not_a_flag`);
       expect(missing.status).toBe(404);
     }
+  });
+
+  describe("only known flag keys", () => {
+    const putKey = (actor: Record<string, unknown>, companyId: string, key: string, body: unknown = { enabled: true }) =>
+      request(app(actor)).put(`/api/companies/${companyId}/feature-flags/${key}`).send(body as object);
+
+    it("refuses an unknown key with a 400 that names the known ones, and writes nothing", async () => {
+      const { company, owner } = await seed();
+      const res = await putKey(owner, company.id, "coworker_bridge_enabeld");
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Unknown feature flag "coworker_bridge_enabeld"');
+      for (const known of KNOWN_FEATURE_FLAG_KEYS) expect(res.body.error).toContain(known);
+      expect(await db.select().from(featureFlags)).toHaveLength(0);
+      expect(await activity("feature_flag.updated")).toHaveLength(0);
+    });
+
+    it("accepts every known key for an admin, the UI-only avatar flags included", async () => {
+      const { company, admin } = await seed();
+      for (const key of KNOWN_FEATURE_FLAG_KEYS) {
+        const res = await putKey(admin, company.id, key);
+        expect(res.status, `${key}: ${JSON.stringify(res.body)}`).toBe(200);
+      }
+      expect((await db.select().from(featureFlags)).map((row) => row.flagKey).sort()).toEqual(
+        [...KNOWN_FEATURE_FLAG_KEYS].sort(),
+      );
+    });
+
+    it("still refuses a member or an agent before looking at the key", async () => {
+      const { company, member, agentActor } = await seed();
+      expect((await putKey(member, company.id, "not_a_flag")).status).toBe(403);
+      expect((await putKey(agentActor, company.id, "not_a_flag")).status).toBe(403);
+    });
+
+    it("lets the local implicit board change a known flag", async () => {
+      const { company } = await seed();
+      const res = await putKey({ type: "board", userId: "local-board", source: "local_implicit" }, company.id, FLAG);
+      expect(res.status).toBe(200);
+    });
   });
 
   it("still refuses an agent of another company before the role check", async () => {

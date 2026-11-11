@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatActivityVerb,
   formatIssueActivityAction,
+  isAgentRowAboutItself,
   isSystemPlumbingActivity,
 } from "./activity-format";
 
@@ -219,6 +220,11 @@ describe("deliverable review reasons", () => {
  * interpolated `action:` expressions.
  */
 const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
+  // AgentDash admin powers (part 4)
+  "audit.exported",
+  "batch.confirm_code_shown",
+  "agent.directives_read_by_admin",
+  "run.content_read_by_admin",
   // AgentDash: Agent Performance Management gate 2 (written from P2.2–P2.4 on)
   "access.policy_changed",
   "access.would_refuse",
@@ -300,6 +306,16 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "asset.created",
   "assistant.gated_action",
   "authz.refused",
+  // AgentDash admin powers (part 2): the batch engine (services/batch/).
+  "batch.completed",
+  "batch.interrupted",
+  "batch.item_refused",
+  "batch.item_failed",
+  "batch.item_unknown",
+  "batch.item_applied_differently",
+  "batch.item_reconciled",
+  "label.updated",
+  "routine.deleted",
   "board_api_key.created",
   "board_api_key.revoked",
   // local-harness bridge
@@ -505,6 +521,10 @@ const SERVER_WRITTEN_ACTIVITY_ACTIONS = [
   "model_key.requested",
   "onboarding.member_advanced",
   "onboarding.member_completed",
+  "fred.registered",
+  "fred.setup_completed",
+  "fred.brief_saved",
+  "fred.discovery_requested",
   // plugins
   "plugin.config.updated",
   "plugin.disabled",
@@ -970,6 +990,20 @@ describe("APM gate 3 enforced refusals", () => {
     expect(verb("see.connections")).toBe("was refused a connection by the access rules of");
     // A dimension this build doesn't know still reads as a sentence, never a raw code.
     expect(verb("future.dimension")).toBe("was refused by the access rules of");
+  });
+
+  it("says \"its access rules\" when the refused agent is the row's actor", () => {
+    const verb = (dimension: string) =>
+      formatActivityVerb("authz.refused", { reasonCode: "ACCESS_POLICY_REFUSED", dimension }, { aboutItself: true });
+    expect(verb("see.projects")).toBe("was refused a project by its access rules");
+    expect(verb("talk.people")).toBe("was refused contact with a person by its access rules");
+    expect(verb("future.dimension")).toBe("was refused by its access rules");
+    const row = { action: "authz.refused", actorType: "agent", actorId: "a-1", entityType: "agent", entityId: "a-1" };
+    expect(isAgentRowAboutItself(row)).toBe(true);
+    expect(isAgentRowAboutItself({ ...row, action: "access.would_refuse" })).toBe(true);
+    expect(isAgentRowAboutItself({ ...row, actorType: "user", actorId: "u-1" })).toBe(false);
+    expect(isAgentRowAboutItself({ ...row, entityId: "a-2" })).toBe(false);
+    expect(isAgentRowAboutItself({ ...row, action: "agent.updated" })).toBe(false);
   });
 
   it("keeps the generic wording for other refusals", () => {

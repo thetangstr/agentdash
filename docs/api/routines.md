@@ -155,6 +155,26 @@ curl -X PATCH https://your-instance.example/api/routines/$ROUTINE_ID \
 | 422 | `Scheduled routines require defaults for required variables: <names>`. |
 | 422 | `… must belong to same company`, or a variable default that does not fit its type — as for create. |
 
+## Delete a routine
+
+`DELETE /api/routines/{id}` · [`deleteRoutine`](/api/reference#tag/routines/deleteRoutine)
+
+Removes the routine for good: it is archived, its triggers go off, and it disappears from the routine routes, from agents' responsibilities and from profile references; it can never run again and cannot be restored (archive it instead if you may want it back). Its past runs, the issues those runs created and its activity history are kept. The guard is the same as for an update: `tasks:assign`, and agents are refused.
+
+```bash
+curl -X DELETE https://your-instance.example/api/routines/$ROUTINE_ID \
+  -H "Authorization: Bearer $AGENTDASH_KEY"
+```
+
+**Response** `200` — `{ "id": "<routine id>", "deleted": true }`. The activity row is `routine.deleted`.
+
+| Status | When |
+| --- | --- |
+| 403 | `Agents cannot create or change routines. Ask an owner, admin or operator.` — the caller is an agent. |
+| 403 | `Missing permission: tasks:assign`. |
+| 403 | Not a member, an inactive membership, or an agent key for another company. |
+| 404 | `Routine not found` — including a routine already deleted. |
+
 ## Run a routine
 
 `POST /api/routines/{id}/run` · [`runRoutine`](/api/reference#tag/routines/runRoutine)

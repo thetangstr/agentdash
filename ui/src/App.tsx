@@ -42,6 +42,8 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
+import { CompanyAudit } from "./pages/CompanyAudit";
+import { BatchReview } from "./pages/BatchReview";
 import { EvaluationOverviewPage } from "./pages/evaluation/EvaluationOverview";
 import { EvaluationFounder } from "./pages/evaluation/EvaluationFounder";
 import { EvaluationMilestone } from "./pages/evaluation/EvaluationMilestone";
@@ -91,6 +93,7 @@ import { TrialClaimPage } from "./pages/TrialClaim";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSAskPage, CoSEntryRoute } from "./pages/CoSConversation";
+import { FredPage } from "./pages/Fred";
 import { MemberOnboardingPage } from "./pages/MemberOnboarding";
 import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
@@ -98,8 +101,13 @@ import { Landing as MarketingLanding } from "./marketing/pages/Landing";
 import { Demo as MarketingDemo } from "./marketing/pages/Demo";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
 import { About as MarketingAbout } from "./marketing/pages/About";
+import { AgentPerformance as MarketingAgentPerformance } from "./marketing/pages/AgentPerformance";
+import { AgentPerformanceUpdate as MarketingAgentPerformanceUpdate } from "./marketing/pages/AgentPerformanceUpdate";
+import { AdminPowersUpdate as MarketingAdminPowersUpdate } from "./marketing/pages/AdminPowersUpdate";
 import { WhatsNew as MarketingWhatsNew } from "./marketing/pages/WhatsNew";
 import { LaunchWeek as MarketingLaunchWeek } from "./marketing/pages/LaunchWeek";
+import { Releases as MarketingReleases } from "./marketing/pages/Releases";
+import { ReleaseRoute as MarketingRelease } from "./marketing/pages/Release";
 import { isMarketingPath } from "./marketing/marketing-path";
 // AgentDash (SC-7, GH #768): the self-serve front door on www.
 import { Start as MarketingStart } from "./marketing/pages/Start";
@@ -146,6 +154,7 @@ function boardRoutes() {
       <Route path="dashboard/live" element={<DashboardLive />} />
       {/* AgentDash: Ask — the Chief of Staff conversation, inside the sidebar Layout. */}
       <Route path="cos" element={<CoSAskPage />} />
+      <Route path="company/fred" element={<FredPage />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
@@ -155,6 +164,10 @@ function boardRoutes() {
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
       <Route path="company/settings/health" element={<CompanyHealth />} />
+      {/* AgentDash admin powers (part 4): the admin audit, owners and admins only. */}
+      <Route path="company/settings/audit" element={<CompanyAudit />} />
+      {/* AgentDash admin powers (part 5): review a batch the person's own Claude prepared. */}
+      <Route path="company/batches/:batchId" element={<BatchReview />} />
       {/* O2: the local error sink, instance-admin only. Lives under the
           settings tree because the router treats the FIRST path segment as a
           company prefix — a top-level /instance/errors resolves to "no
@@ -389,10 +402,16 @@ export function App() {
         <Route path="/" element={<MarketingLanding />} />
         <Route path="demo" element={<MarketingDemo />} />
         <Route path="how-it-works" element={<Suspense fallback={null}><MarketingHowItWorks /></Suspense>} />
+        <Route path="agent-performance" element={<MarketingAgentPerformance />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
         <Route path="whats-new" element={<MarketingWhatsNew />} />
         <Route path="whats-new/launch-week" element={<MarketingLaunchWeek />} />
+        <Route path="whats-new/agent-performance" element={<MarketingAgentPerformanceUpdate />} />
+        <Route path="whats-new/admin-powers" element={<MarketingAdminPowersUpdate />} />
+        {/* AgentDash: public release notes; a version is listed once its GitHub Release is published. */}
+        <Route path="releases" element={<MarketingReleases />} />
+        <Route path="releases/:version" element={<MarketingRelease />} />
         {/* AgentDash (SC-7, GH #768): signup, magic-link landing, progress and returning users. */}
         {/* AgentDash: www-only (they call /api/cloud); a hosted box sends them to its own sign-in. */}
         <Route path="start" element={<WwwOnlyRoute><MarketingStart /></WwwOnlyRoute>} />
@@ -456,6 +475,7 @@ export function App() {
               company code. Without these, /dashboard looked for a company
               called DASHBOARD and said it could not find one. */}
           <Route path="my-agent" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/fred" element={<UnprefixedBoardRedirect />} />
           <Route path="guides" element={<UnprefixedBoardRedirect />} />
           <Route path="guides/*" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard" element={<UnprefixedBoardRedirect />} />

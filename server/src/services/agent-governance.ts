@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agentCeilingTemplates,
   agentGovernancePolicies,
   agents,
   approvals,
@@ -68,6 +69,11 @@ export interface UpdateAgentGovernanceInput {
    * steward request edit.
    */
   source?: AccessPolicyChangeSource;
+  /**
+   * AgentDash admin powers: a system write (the company default ceiling)
+   * names its actor and adds details to its own activity rows.
+   */
+  systemActor?: { actorId: string; details: Record<string, unknown> };
 }
 
 /** Where a governance write came from (access LLD §3.4). */
@@ -76,6 +82,8 @@ export const ACCESS_POLICY_CHANGE_SOURCES = [
   "steward_request_edit",
   "harness_narrowing",
   "profile_application",
+  // AgentDash admin powers: the company's ceiling for new agents, applied at creation.
+  "company_default",
 ] as const;
 export type AccessPolicyChangeSource = (typeof ACCESS_POLICY_CHANGE_SOURCES)[number];
 
@@ -172,6 +180,29 @@ function mergeGovernanceSide(
 ): StoredAgentGovernancePolicy {
   if (stored && !safeParseAccessPolicy(stored).success) return normalizeAgentGovernancePolicy(write);
   return mergeAccessPolicyWrite(stored, write);
+}
+
+/**
+ * What a write to one governance side produces: the next ceiling, the next
+ * steward request and the effective policy (the ceiling clamping the
+ * request). Pure, and the ONLY place this is computed: `applyUpdate` writes
+ * exactly this, and the batch preview of applying a ceiling template
+ * (services/batch/ceiling-kinds.ts) shows exactly this, so a preview can
+ * never promise a different result than the write.
+ */
+export function governanceWriteOutcome(
+  current: { ownerCeiling: unknown; stewardRequest: unknown },
+  target: AgentGovernanceTarget,
+  write: AgentAccessPolicyWrite,
+): { nextCeiling: AgentGovernancePolicy; nextRequest: AgentGovernancePolicy; effectivePolicy: AgentGovernancePolicy } {
+  const requested = mergeGovernanceSide(
+    (target === "owner_ceiling" ? current.ownerCeiling : current.stewardRequest) as StoredAgentGovernancePolicy,
+    write,
+  );
+  const nextCeiling = target === "owner_ceiling" ? requested : (current.ownerCeiling as AgentGovernancePolicy);
+  const nextRequest = target === "steward_request" ? requested : (current.stewardRequest as AgentGovernancePolicy);
+  const effectivePolicy = computeEffectiveAgentPolicy(toV1GovernancePolicy(nextCeiling), toV1GovernancePolicy(nextRequest));
+  return { nextCeiling: nextCeiling as AgentGovernancePolicy, nextRequest: nextRequest as AgentGovernancePolicy, effectivePolicy };
 }
 
 export function agentGovernanceService(db: Db) {
@@ -331,13 +362,7 @@ export function agentGovernanceService(db: Db) {
     // With no V2 dimension stored or written the result is the normalized V1
     // policy — byte-identical to today's rows. V2 is never flattened into the
     // effective policy, which stays V1 (`computeEffectiveAgentPolicy`).
-    const requested = mergeGovernanceSide(
-      (target === "owner_ceiling" ? current.ownerCeiling : current.stewardRequest) as StoredAgentGovernancePolicy,
-      input.policy,
-    );
-
-    const nextCeiling = target === "owner_ceiling" ? requested : (current.ownerCeiling as AgentGovernancePolicy);
-    const nextRequest = target === "steward_request" ? requested : (current.stewardRequest as AgentGovernancePolicy);
+    const { nextCeiling, nextRequest, effectivePolicy } = governanceWriteOutcome(current, target, input.policy);
 
     // Owners may always tighten: a lowered ceiling clamps an over-broad standing
     // steward request rather than failing. A steward request, by contrast, must
@@ -364,7 +389,6 @@ export function agentGovernanceService(db: Db) {
       }
     }
 
-    const effectivePolicy = computeEffectiveAgentPolicy(toV1GovernancePolicy(nextCeiling), toV1GovernancePolicy(nextRequest));
     const nextRevision = current.revision + 1;
     const now = new Date();
     void agent;
@@ -584,8 +608,8 @@ export function agentGovernanceService(db: Db) {
         if (source !== "profile_application" && changed.length > 0) {
           await logActivity(tx as unknown as Db, {
             companyId,
-            actorType: "user",
-            actorId: input.actorUserId ?? "board",
+            actorType: input.systemActor ? "system" : "user",
+            actorId: input.systemActor?.actorId ?? input.actorUserId ?? "board",
             action: "access.policy_changed",
             entityType: "agent",
             entityId: agentId,
@@ -597,7 +621,7 @@ export function agentGovernanceService(db: Db) {
               changed,
               // The V2 dimensions the written side still holds: a V1-shaped
               // write keeps them (mergeAccessPolicyWrite).
-              v2Dimensions: definedAccessV2Dimensions(requested),
+              v2Dimensions: definedAccessV2Dimensions(target === "owner_ceiling" ? nextCeiling : nextRequest),
               fromRevision: input.revision,
               toRevision: updated.revision,
             },
@@ -606,8 +630,8 @@ export function agentGovernanceService(db: Db) {
 
         await logActivity(tx as unknown as Db, {
           companyId,
-          actorType: "user",
-          actorId: input.actorUserId ?? "board",
+          actorType: input.systemActor ? "system" : "user",
+          actorId: input.systemActor?.actorId ?? input.actorUserId ?? "board",
           action:
             target === "owner_ceiling"
               ? "agent.governance_ceiling_updated"
@@ -622,6 +646,7 @@ export function agentGovernanceService(db: Db) {
             fromRevision: input.revision,
             toRevision: updated.revision,
             effectivePolicy,
+            ...(input.systemActor?.details ?? {}),
           },
         });
 
@@ -651,6 +676,42 @@ export function agentGovernanceService(db: Db) {
 
   async function updateOwnerCeiling(companyId: string, agentId: string, input: UpdateAgentGovernanceInput) {
     return applyUpdate(companyId, agentId, "owner_ceiling", input);
+  }
+
+  /**
+   * AgentDash admin powers: the company's ceiling for new agents. Called once,
+   * when an agent is CREATED (services/agents.ts create, the funnel every hire
+   * path goes through). A no-op when the company has no default. Writes the
+   * owner ceiling through the same `applyUpdate` as an admin's edit, at
+   * revision 1 (a new agent has no policy row yet), logged with
+   * `{source: "company_default", templateId}` as the system. Never applied at
+   * read time: existing agents are never narrowed by it.
+   */
+  async function applyCompanyDefaultCeiling(companyId: string, agentId: string): Promise<AgentGovernancePolicyRow | null> {
+    const [company] = await db
+      .select({ defaultCeilingTemplateId: companies.defaultCeilingTemplateId })
+      .from(companies)
+      .where(eq(companies.id, companyId));
+    const templateId = company?.defaultCeilingTemplateId ?? null;
+    if (!templateId) return null;
+    const [template] = await db
+      .select({ id: agentCeilingTemplates.id, ceiling: agentCeilingTemplates.ceiling })
+      .from(agentCeilingTemplates)
+      .where(and(eq(agentCeilingTemplates.id, templateId), eq(agentCeilingTemplates.companyId, companyId)));
+    if (!template) return null;
+    const current = await readRow(companyId, agentId);
+    // Only a brand-new agent: a policy row already written means someone set
+    // its ceiling on purpose, and a default never overrides that.
+    if (current && current.revision !== 1) return null;
+    const policy = await applyUpdate(companyId, agentId, "owner_ceiling", {
+      policy: template.ceiling as AgentGovernancePolicy,
+      revision: 1,
+      actorUserId: null,
+      channel: "system",
+      source: "company_default",
+      systemActor: { actorId: "company-default-ceiling", details: { source: "company_default", templateId: template.id } },
+    });
+    return policy;
   }
 
   async function updateStewardRequest(companyId: string, agentId: string, input: UpdateAgentGovernanceInput) {
@@ -836,6 +897,7 @@ export function agentGovernanceService(db: Db) {
     resolveAgentPolicy,
     materialize,
     updateOwnerCeiling,
+    applyCompanyDefaultCeiling,
     updateStewardRequest,
     pushHarnessStewardRequest,
     assertAgentMutationWithinCeiling,

@@ -1,3 +1,4 @@
+import { isUniqueViolation } from "../lib/pg-error.js";
 import { workforceIssueInputs } from './workforce-inputs.js';
 import { Buffer } from "node:buffer";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
@@ -4047,6 +4048,25 @@ export function issueService(db: Db) {
         })
         .returning();
       return created;
+    },
+
+    /** AgentDash admin powers: rename or recolor. A duplicate name in the company is 409. */
+    updateLabel: async (id: string, data: { name?: string; color?: string }) => {
+      try {
+        const [updated] = await db
+          .update(labels)
+          .set({
+            ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+            ...(data.color !== undefined ? { color: data.color } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(labels.id, id))
+          .returning();
+        return updated ?? null;
+      } catch (error) {
+        if (isUniqueViolation(error)) throw conflict("A label with this name already exists.");
+        throw error;
+      }
     },
 
     deleteLabel: async (id: string) =>

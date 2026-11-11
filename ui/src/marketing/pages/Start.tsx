@@ -19,7 +19,7 @@ type SlugState = { kind: "idle" } | { kind: "checking" } | { kind: "ok" } | { ki
 export function Start() {
   useDocumentMeta(
     "Create your AgentDash workspace",
-    "Your own AgentDash workspace at your-name.agentdash.cloud, with a Chief of Staff agent ready to interview you.",
+    "Your own AgentDash workspace at your-name.agentdash.cloud, with a Chief of Staff agent to configure with your model provider.",
   );
   const [config, setConfig] = useState<CloudConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -115,7 +115,13 @@ export function Start() {
             <h1 className="mkt-display-page">Create your workspace.</h1>
             <p className="mkt-body-lg">
               Your own AgentDash at <strong>{slug || "your-name"}.{config?.edgeDomain ?? "agentdash.cloud"}</strong>, with a Chief of Staff
-              agent ready to interview you. Once admitted and capacity is available, setup usually takes about three minutes.
+              agent. Once admitted and capacity is available, workspace creation usually takes about three minutes.
+            </p>
+            <p className="mkt-cloud__note">
+              Hosted agents need your model provider and API key configured
+              before the Chief of Staff can reply. Provider usage is billed separately.
+              You add the key in your workspace after claiming it, not on this form.
+              See <a href="/docs/start/quickstart">cloud setup</a>.
             </p>
             {(config?.waitlist || config?.invitationCodesEnabled === true) && (
               <p className="mkt-cloud__note" data-testid="waitlist-note">

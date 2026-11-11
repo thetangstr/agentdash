@@ -32,7 +32,12 @@ import {
   type MemberOnboardingStep,
 } from "../services/member-onboarding.js";
 import { HttpError, unauthorized, badRequest, forbidden, notFound, conflict } from "../errors.js";
-import { assertCompanyAccess, assertCanSetCompanyDirection, assertInstanceAdmin } from "./authz.js";
+import {
+  assertBoardUserCompanyPermission,
+  assertCompanyAccess,
+  assertCanSetCompanyDirection,
+  assertInstanceAdmin,
+} from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { actorMayApplyAdapterPreset } from "../services/adapter-host-execution-policy.js";
 import {
@@ -52,6 +57,7 @@ import { redactRunLogValue } from "../services/run-log-redaction.js";
 import { parseTrailer, WORKFORCE_PROPOSAL_GUIDANCE } from "../services/cos-replier.js";
 import { listCompanyMemberNames, PLAN_INTRO_GUIDANCE, planNamingGuidance, preparePlanForPosting } from "../services/cos-plan-naming.js";
 import { applyModelTierStamp, hermesModelTierStamp, stampPlanModelTiers } from "../services/hermes-model-tiers.js";
+import { resolveSystemHireModel } from "../services/system-hire-model.js";
 import { emitMessageUpdated } from "../realtime/conversation-events.js";
 import {
   applyAdapterPreset,
@@ -112,6 +118,7 @@ type OnboardingTierCapacityServices = {
   };
   agents: {
     list: (companyId: string) => Promise<unknown[]>;
+    countBillable: (companyId: string) => Promise<number>;
   };
 };
 
@@ -389,7 +396,7 @@ export function onboardingV2Routes(db: Db) {
         humans: async (companyId) =>
           (await services.access.listActiveUserMemberships(companyId)).length,
         agents: async (companyId) =>
-          (await services.agents.list(companyId)).length,
+          services.agents.countBillable(companyId),
       },
     };
   }
@@ -835,7 +842,7 @@ export function onboardingV2Routes(db: Db) {
     // same write on the first confirm and on a retry that found the receipt
     // but not the approval — one helper keeps the payloads identical.
     const fileHireApproval = async (
-      hired: { id: string; name: string; role: string; title?: string | null; reportsTo?: string | null; adapterType?: string | null },
+      hired: { id: string; name: string; role: string; title?: string | null; reportsTo?: string | null; adapterType?: string | null; adapterConfig?: Record<string, unknown> | null; metadata?: Record<string, unknown> | null },
       fallbackAdapterType?: string,
     ): Promise<string> => {
       const approval = await approvalService(db).create(companyId, {
@@ -849,6 +856,12 @@ export function onboardingV2Routes(db: Db) {
           title: hired.title ?? null,
           reportsTo: hired.reportsTo ?? null,
           adapterType: hired.adapterType ?? fallbackAdapterType ?? null,
+          // Copy only the public model fields, including on approval repair.
+          adapterConfig: {
+            ...(typeof hired.adapterConfig?.model === "string" ? { model: hired.adapterConfig.model } : {}),
+            ...(typeof hired.adapterConfig?.provider === "string" ? { provider: hired.adapterConfig.provider } : {}),
+          },
+          modelSelection: hired.metadata?.systemHireModel ?? null,
           // AgentDash (review-1028): the resolved tier+model ride in the
           // payload so the approval card shows what the server applied.
           ...hermesModelTierStamp({
@@ -1006,8 +1019,14 @@ export function onboardingV2Routes(db: Db) {
       // hire strands the phase mid-flow if a later step fails, and the retry
       // would then replay the onboarding message and goals.
       if (index === 0 && !alreadyReady) await cosOnboardingStateService(acceptance.executor).advancePhase(conversationId, 'materializing');
-      const cos = (await txAgents.list(companyId)).find(a => a.role === 'chief_of_staff') ?? null;
+      const peers = await txAgents.list(companyId);
+      const cos = peers.find(a => a.role === 'chief_of_staff') ?? null;
       const planAgent = payload.agents[index];
+      const modelChoice = resolveSystemHireModel({
+        companyId, adapterType: planAgent.adapterType,
+        role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.title?.trim() || planAgent.role), peers,
+      });
+      const materializationPause = onboardingMaterializationPause();
       // AgentDash (scan 3, lane H): plan hires answer to the human who confirmed
       // the plan (autonomous, accountable = them) instead of "Needs a steward".
       // The membership is read inside the hire transaction.
@@ -1018,13 +1037,15 @@ export function onboardingV2Routes(db: Db) {
         // wording stays as the title.
         // AgentDash (scan 4, lane N): the CoS-written title, verbatim (trimmed).
         name: planAgent.name, role: mapProposedAgentRole(planAgent.role), title: proposedRoleTitle(planAgent.title?.trim() || planAgent.role), adapterType: planAgent.adapterType,
-        workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: {}, reportsTo: cos?.id ?? null,
+        workforceTemplateId: planAgent.workforceTemplateId, adapterConfig: modelChoice.adapterConfig, reportsTo: cos?.id ?? null,
         // AgentDash (c4-hire-ux): the person who confirmed the plan is the
         // creator — AgentDetail reads this for "Dana Whitfield, via Chief of
         // Staff" instead of the wrong "Hired by an agent".
         createdByUserId: req.actor.userId ?? null,
         ...hireAccountability,
-        ...onboardingMaterializationPause(), spentMonthlyCents: 0, lastHeartbeatAt: null,
+        ...materializationPause,
+        metadata: { ...materializationPause.metadata, systemHireModel: modelChoice.selection },
+        spentMonthlyCents: 0, lastHeartbeatAt: null,
       }, acceptance);
       // AgentDash (scan 5, lane access): the plan-card hire path creates agents
       // inline, so the route owns the agent.created audit — same atomicity as
@@ -1449,6 +1470,16 @@ No greetings. No markdown headings outside the JSON block.`;
       throw badRequest(`Too many invites (max ${MAX_INVITE_BATCH} per request)`);
     }
     assertCompanyAccess(req, companyId);
+    // The same permission the regular invite route requires (`users:invite`,
+    // which admins hold by role), through the same predicate. Without it any
+    // member could mint up to 25 invites per request from the wizard door.
+    await assertBoardUserCompanyPermission(
+      access,
+      req,
+      companyId,
+      "users:invite",
+      "You do not have permission to invite people to this company. Ask an owner or admin.",
+    );
 
     // AgentDash (#547): two audiences, two bases. The URL in this response
     // is read by the inviter, so it echoes the origin they used when that

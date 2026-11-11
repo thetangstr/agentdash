@@ -22,6 +22,7 @@ vi.mock("../services/activity-log.js", () => ({
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
+  countBillable: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
   createApiKey: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock("../services/default-agent-instructions.js", () => ({
 }));
 
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.ts";
+import { defaultAgentPlanAdapterType } from "../services/cos-replier.js";
 
 const C = "11111111-1111-1111-1111-111111111111";
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -159,6 +161,7 @@ function makeDb(script: DbScript) {
 }
 
 beforeEach(() => {
+  mockAgentService.countBillable.mockImplementation(async (companyId: string) => (await mockAgentService.list(companyId)).length);
   mockLogActivity.mockClear();
   mockAgentService.create.mockReset();
   mockAgentService.list.mockReset();
@@ -193,6 +196,25 @@ afterEach(() => {
 });
 
 describe("cosReviewerAutoHire — approval-gated hire", () => {
+  it("pins the pending reviewer and its approval to a company peer's model", async () => {
+    vi.mocked(defaultAgentPlanAdapterType).mockReturnValueOnce("codex_local");
+    mockAgentService.list.mockResolvedValue([{
+      id: "working-cos", companyId: C, status: "idle", role: "chief_of_staff",
+      adapterType: "codex_local", adapterConfig: { model: "company-codex-model", env: { PRIVATE_KEY: "do-not-copy" } },
+    }]);
+    mockAgentService.create.mockResolvedValue({ id: "reviewer-model" });
+    const db = makeDb({ activeReviewerSeq: [[]], depthSeq: [], inserts: [] });
+    const result = await cosReviewerAutoHire(db, { provisionReviewer: vi.fn() })
+      .evaluateAndHireIfNeeded(C, "neutrality_conflict");
+    expect(result.hired).toBe(true);
+    const created = mockAgentService.create.mock.calls[0]![1];
+    const payload = mockApprovalService.create.mock.calls[0]![1].payload;
+    expect(created.adapterConfig).toEqual({ model: "company-codex-model" });
+    expect(created.metadata.systemHireModel).toMatchObject({ source: "company_agent", agentId: "working-cos" });
+    expect(payload.adapterConfig).toEqual({ model: "company-codex-model" });
+    expect(payload.modelSelection).toEqual(created.metadata.systemHireModel);
+  });
+
   it("takes the per-company advisory lock before reading any counts", async () => {
     const db = makeDb({ activeReviewerSeq: [[]], depthSeq: [], inserts: [] });
     const svc = cosReviewerAutoHire(db, {

@@ -85,12 +85,12 @@ test.describe("What's new launch update", () => {
     await page.goto("/whats-new");
     await expect(page).toHaveTitle(/What's new/);
     await expect(page.locator(".mkt-header__nav").getByRole("link", { name: "What’s new" })).toHaveAttribute("href", "/whats-new");
-    await page.getByRole("link", { name: "Read the update" }).click();
+    await page.locator('[data-update="launch-week"]').getByRole("link", { name: "Read the update" }).click();
     await expect(page).toHaveURL(/\/whats-new\/launch-week$/);
     await expect(page.locator("h1")).toContainText("Find your team");
     await expect(page.locator("figure figcaption")).toHaveCount(2);
     for (const caption of await page.locator("figure figcaption").allTextContents()) expect(caption).toContain("Simulated illustration");
-    await expect(page.getByRole("link", { name: "v2026.1007.1 release notes" })).toHaveAttribute("href", /\/blob\/main\/releases\/v2026.1007.1.md$/);
+    await expect(page.getByRole("link", { name: "v2026.1007.1 release notes" })).toHaveAttribute("href", "/releases/v2026.1007.1");
 
     const teams = page.getByRole("figure", { name: "Team sidebar example" });
     const team = teams.locator("details").first();
@@ -134,5 +134,44 @@ test.describe("What's new launch update", () => {
     await page.keyboard.press("Enter");
     await expect(transcript).toContainText("Draft prepared");
     await expect(transcript.getByRole("button", { name: "Play output" })).toHaveCount(0);
+  });
+});
+
+
+// AgentDash: public agent-performance story and fictional task evidence.
+test.describe("agent performance customer update", () => {
+  test("is discoverable and explains the actual owner steps", async ({ page }) => {
+    await page.goto("/whats-new");
+    await page.locator('[data-update="agent-performance"]').getByRole("link", { name: "Read the update" }).click();
+    await expect(page).toHaveURL(/\/whats-new\/agent-performance$/);
+    await expect(page.locator("h1")).toContainText("Better evidence");
+    await expect(page.locator("#how-to-use")).toContainText("Draft changes");
+    await expect(page.locator("#how-to-use")).toContainText("Map responsibility");
+    await expect(page.locator("#release-notes")).toContainText("Availability depends on the version your operator has installed");
+    await page.getByRole("link", { name: "Explore the task-evidence example" }).click();
+    await expect(page).toHaveURL(/\/agent-performance#task-evidence$/);
+    await expect(page.locator(".mkt-evidence")).toContainText("Simulated walkthrough");
+    await page.getByRole("button", { name: /Convincing false success/ }).click();
+    await expect(page.locator(".mkt-evidence").getByRole("status")).toHaveText("False success detected");
+    await page.getByRole("button", { name: /Missing proof/ }).click();
+    await expect(page.locator('[data-check="total"]')).toContainText("Unverified");
+    await expect(page.locator(".mkt-evidence__outcomes")).toContainText("Owner decision not recorded");
+    await page.getByRole("button", { name: /Approval required/ }).click();
+    await expect(page.locator(".mkt-evidence").getByRole("status")).toHaveText("Approval blocked");
+    await expect(page.locator(".mkt-evidence")).toContainText("not a platform error");
+  });
+  test("supports narrow screens and keyboard selection without inventing acceptance", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    for (const width of [360, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/agent-performance");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+      await page.getByRole("button", { name: /Approval required/ }).focus();
+      await page.keyboard.press("Home");
+      await expect(page.locator(".mkt-evidence").getByRole("status")).toHaveText("Evidence checked");
+      await expect(page.locator(".mkt-evidence__outcomes")).toContainText("Owner decision not recorded");
+      await page.goto("/whats-new/agent-performance");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    }
   });
 });

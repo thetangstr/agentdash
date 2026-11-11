@@ -138,6 +138,23 @@ describeEmbeddedPostgres("issue responsibility mapping", () => {
   const mappingActivity = (companyId: string) =>
     db.select().from(activityLog).where(and(eq(activityLog.companyId, companyId), eq(activityLog.action, "issue.responsibility_mapped"))).orderBy(asc(activityLog.createdAt));
 
+  it("returns mapping authority from the write guard only after company, issue and agent scope checks", async () => {
+    const s = await seed();
+    const get = (actor: Actor, companyId = s.company.id, issueId = s.issue.id) => request(app(actor)).get(path(companyId, issueId));
+    const allowed = await get(member(s.company.id, s.stewardUserId));
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.viewer).toEqual({ assigneeAgentId: s.writer.id, canMapAssignee: true });
+    const refused = await get(member(s.company.id, s.outsiderUserId));
+    expect(refused.status).toBe(200);
+    expect(refused.body.viewer).toEqual({ assigneeAgentId: s.writer.id, canMapAssignee: false });
+    const evaluator = await get(agentActor(s.cos.id, s.company.id, { principalKind: "evaluator", readOnly: true }));
+    expect(evaluator.body.viewer.canMapAssignee).toBe(false);
+    const foreign = await get(member(s.company.id, s.ownerUserId), s.company.id, s.foreignIssue.id);
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.viewer).toBeUndefined();
+    expect(await mappingActivity(s.company.id)).toEqual([]);
+  });
+
   it("keeps an interval history: a remap closes the current row and opens a new one", async () => {
     const s = await seed();
     const steward = { type: "user" as const, userId: s.stewardUserId, source: "session" };
@@ -170,6 +187,7 @@ describeEmbeddedPostgres("issue responsibility mapping", () => {
     const s = await seed();
     const actor = { type: "agent" as const, agentId: s.writer.id };
     const first = await mapIssueResponsibility(db, { companyId: s.company.id, issueId: s.issue.id, agentId: s.writer.id, responsibilityKey: "weekly-report" }, actor);
+    await seedActiveProfile(db, { companyId: s.company.id, agentId: s.writer.id, body: profileBody([responsibility("weekly-report")]), revisionNumber: 2 });
     const again = await mapIssueResponsibility(db, { companyId: s.company.id, issueId: s.issue.id, agentId: s.writer.id, responsibilityKey: "weekly-report", reason: "again" }, actor);
     expect(again).toEqual(first);
     expect(await responsibilityHistory(db, { companyId: s.company.id, issueId: s.issue.id })).toHaveLength(1);
@@ -254,9 +272,55 @@ describeEmbeddedPostgres("issue responsibility mapping", () => {
     expect((await request(app(accountable)).get(path(s.company.id, hiddenIssue.id))).status).toBe(404);
 
     const hiddenAgent = await addAgent(s.company.id, { name: "Hidden", visibility: "owner", createdByUserId: s.ownerUserId });
+    const assignedHidden = await db.insert(issues).values({ companyId: s.company.id, title: "Visible task with private worker", status: "todo", assigneeAgentId: hiddenAgent.id }).returning().then((rows) => rows[0]!);
+    const hiddenRead = await request(app(member(s.company.id, s.stewardUserId))).get(path(s.company.id, assignedHidden.id));
+    expect(hiddenRead.status).toBe(404);
+    expect(hiddenRead.body.viewer).toBeUndefined();
     expect((await request(app(member(s.company.id, s.stewardUserId))).post(path(s.company.id, s.issue.id)).send({ agentId: hiddenAgent.id, responsibilityKey: "ad-hoc" })).status).toBe(404);
 
     expect(await db.select().from(issueResponsibilities)).toHaveLength(0);
+  });
+
+  it.each(["visible", "unassigned"])("refuses hidden current mapping metadata when the issue assignee is %s", async (assignment) => {
+    const s = await seed();
+    const hidden = await addAgent(s.company.id, { name: "Private mapper", visibility: "owner", createdByUserId: s.ownerUserId });
+    await seedActiveProfile(db, { companyId: s.company.id, agentId: hidden.id, body: profileBody([responsibility("private-duty")]) });
+    const mapped = await mapIssueResponsibility(db, {
+      companyId: s.company.id, issueId: s.issue.id, agentId: hidden.id,
+      responsibilityKey: "private-duty", reason: "Private mapping reason",
+    }, { type: "user", userId: s.ownerUserId, source: "session" });
+    if (assignment === "unassigned") await db.update(issues).set({ assigneeAgentId: null }).where(eq(issues.id, s.issue.id));
+
+    const refused = await request(app(member(s.company.id, s.outsiderUserId))).get(path(s.company.id, s.issue.id));
+    expect(refused.status).toBe(404);
+    expect(refused.body.current).toBeUndefined();
+    expect(refused.body.history).toBeUndefined();
+    expect(JSON.stringify(refused.body)).not.toContain(hidden.id);
+    expect(JSON.stringify(refused.body)).not.toContain("private-duty");
+    expect(JSON.stringify(refused.body)).not.toContain("Private mapping reason");
+    const ownerRead = await request(app(member(s.company.id, s.ownerUserId, "owner"))).get(path(s.company.id, s.issue.id));
+    expect(ownerRead.status).toBe(200);
+    expect(ownerRead.body.current).toEqual(mapped);
+  });
+
+  it("refuses hidden historical mapping metadata even when the current mapping and assignee are visible", async () => {
+    const s = await seed();
+    const hidden = await addAgent(s.company.id, { name: "Former private mapper", visibility: "owner", createdByUserId: s.ownerUserId });
+    await seedActiveProfile(db, { companyId: s.company.id, agentId: hidden.id, body: profileBody([responsibility("private-history")]) });
+    const actor = { type: "user" as const, userId: s.ownerUserId, source: "session" };
+    await mapIssueResponsibility(db, { companyId: s.company.id, issueId: s.issue.id, agentId: hidden.id, responsibilityKey: "private-history", reason: "Private historical reason" }, actor);
+    const current = await mapIssueResponsibility(db, { companyId: s.company.id, issueId: s.issue.id, agentId: s.writer.id, responsibilityKey: "weekly-report" }, actor);
+
+    const refused = await request(app(member(s.company.id, s.outsiderUserId))).get(path(s.company.id, s.issue.id));
+    expect(refused.status).toBe(404);
+    expect(refused.body.current).toBeUndefined();
+    expect(refused.body.history).toBeUndefined();
+    expect(JSON.stringify(refused.body)).not.toContain(hidden.id);
+    expect(JSON.stringify(refused.body)).not.toContain("private-history");
+    const ownerRead = await request(app(member(s.company.id, s.ownerUserId, "owner"))).get(path(s.company.id, s.issue.id));
+    expect(ownerRead.status).toBe(200);
+    expect(ownerRead.body.current).toEqual(current);
+    expect(ownerRead.body.history.map((entry: IssueResponsibilityDto) => entry.agentId)).toEqual([hidden.id, s.writer.id]);
   });
 
   it("serves the current mapping and the history, and accepts the issue identifier", async () => {
@@ -264,7 +328,7 @@ describeEmbeddedPostgres("issue responsibility mapping", () => {
     const viewer = agentActor(s.peer.id, s.company.id);
     const empty = await request(app(viewer)).get(path(s.company.id, s.issue.id));
     expect(empty.status).toBe(200);
-    expect(empty.body).toEqual({ current: null, history: [] });
+    expect(empty.body).toEqual({ current: null, history: [], viewer: { assigneeAgentId: s.writer.id, canMapAssignee: false } });
 
     const writer = agentActor(s.writer.id, s.company.id);
     const mapped = await request(app(writer)).post(path(s.company.id, `${s.prefix}-1`)).send({ agentId: s.writer.id, responsibilityKey: "ad-hoc", reason: "Started the draft" });

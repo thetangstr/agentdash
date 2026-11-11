@@ -13,7 +13,7 @@ A company is the tenant everything else belongs to: its agents, issues, projects
 | --- | --- |
 | `listCompanies`, `createCompany` | a person (board key or session) — an agent gets 403 `Board access required` |
 | `getCompany` | a person who is a member, or an agent in that company |
-| `updateCompany` | a member; an agent only if it is the company's CEO agent, and only for colour and logo |
+| `updateCompany` | a company owner or admin (an instance admin and the local operator also pass); an agent only if it is the company's CEO agent, and only for colour and logo |
 
 Every company-scoped call checks membership first (`assertCompanyAccess` in `server/src/routes/authz.ts`): a person who is not a member answers 403 `User does not have access to this company`, an agent from another company answers 403 `Agent key cannot access another company`, and a member whose membership is not active answers 403 `User does not have active company access` on any write.
 
@@ -99,7 +99,7 @@ A company for your email domain may already exist. That is not an error: the ser
 
 `PATCH /api/companies/{companyId}` · [`updateCompany`](/api/reference#tag/companies/updateCompany)
 
-Send only the fields you are changing.
+Send only the fields you are changing. Every field is an owner or admin decision: a member who is not an administrator gets 403 whatever the body holds (`assertCompanyAdministrator` in `server/src/routes/authz.ts`).
 
 ```bash
 curl -X PATCH https://your-instance.example/api/companies/$COMPANY_ID \
@@ -117,10 +117,15 @@ curl -X PATCH https://your-instance.example/api/companies/$COMPANY_ID \
 | `budgetMonthlyCents` | integer ≥ 0 | |
 | `requireBoardApprovalForNewAgents` | boolean | New hires wait for a person's approval. |
 | `newIssuesStartAsTodo` | boolean | An issue created without a status starts as `todo` instead of `backlog`. |
-| `agentVisibilityDefault` | `company` · `owner` | `company`: everyone sees every agent (the default). `owner`: people see the agents they answer for. Needs a company owner or admin. |
+| `agentVisibilityDefault` | `company` · `owner` | `company`: everyone sees every agent (the default). `owner`: people see the agents they answer for. |
 | `brandColor` | `#rrggbb` or null | |
 | `logoAssetId` | UUID or null | An uploaded asset to use as the logo. |
 | `attachmentMaxBytes` | integer ≥ 1 | |
+| `adminDirectiveReadEnabled` | boolean | Admin powers: owners and admins may read (never push) the directives of any agent, `GET /api/companies/{companyId}/agents/{agentId}/directives`, even with no active steward. Their own session only: an assistant grant does not qualify. Every such read is logged as `agent.directives_read_by_admin` with `{ agentId, stewardUserId }`. Off by default. |
+| `adminTranscriptReadEnabled` | boolean | Admin powers: while document access is on, owners and admins may open one run's detail, events and log (`GET /api/heartbeat-runs/{runId}`, `/events`, `/log`) through their own session (not an assistant grant). Run listings stay blanked for them. A read only this allows is logged as `run.content_read_by_admin` with `{ runId, agentId, route }`, once per person and run per 10 minutes. Off by default. |
+| `assistantAdminBatchesEnabled` | boolean | Admin powers: an owner's or admin's own Claude may prepare batch changes. Off by default. |
+| `assistantBatchMaxRecords` | integer 1 to 200 | The most records one batch from Claude may hold. Default 50. |
+| `defaultCeilingTemplateId` | UUID or null | The ceiling template every new agent starts with (one of this company's templates, else 422); null clears it. Applied once, when an agent is created; existing agents are never changed by it. |
 
 An agent may call this only if it is the company's **CEO agent**, and its body is parsed with the narrower `agentCompanyBrandingSchema`: `brandColor` and `logoAssetId`, at least one of them, nothing else.
 
@@ -131,7 +136,7 @@ An agent may call this only if it is the company's **CEO agent**, and its body i
 | 400 | `Validation error` — the body fails the schema, or an agent sent a field other than `brandColor` / `logoAssetId`. |
 | 403 | `Only CEO agents or board users may update company settings` — an agent that is not the CEO agent. |
 | 403 | `An agent cannot change the company's …` — the CEO agent sent `name` or `description`; the message names the field or fields it sent. |
-| 403 | `Company owner or admin access required` — a member who is not an administrator sent `agentVisibilityDefault`. |
+| 403 | `Only owners and admins can change company settings.` — the caller is a person who is not a company owner or admin. |
 | 403 | Not a member, an inactive membership, or an agent key for another company (messages above). |
 | 404 | `Company not found`. |
 
@@ -151,6 +156,9 @@ From `packages/shared/src/types/company.ts`. The fields an integration reads:
 | `budgetMonthlyCents`, `spentMonthlyCents` | integer | The monthly budget and this month's spend, in cents. |
 | `requireBoardApprovalForNewAgents`, `newIssuesStartAsTodo` | boolean | |
 | `agentVisibilityDefault` | `company` · `owner` | |
+| `adminDirectiveReadEnabled`, `adminTranscriptReadEnabled`, `assistantAdminBatchesEnabled` | boolean | The admin powers switches; each is `false` until an owner or admin turns it on. |
+| `assistantBatchMaxRecords` | integer | 1 to 200, default 50. |
+| `defaultCeilingTemplateId` | UUID or null | The ceiling template every new agent starts with, or none. |
 | `brandColor`, `logoAssetId`, `logoUrl` | string or null | |
 | `createdAt`, `updatedAt` | ISO 8601 timestamp | |
 
@@ -158,4 +166,4 @@ The complete schema is in [the reference](/api/reference#tag/companies/getCompan
 
 ## Everything else
 
-Any operation can also answer 401 when no credential resolves and 429 when rate limited — see [Conventions](/api/conventions). Other routes on this resource (archive, delete, branding, logo upload, import and export, stats) are internal — see [the route index](/api/route-index), under `companies`.
+Any operation can also answer 401 when no credential resolves and 429 when rate limited — see [Conventions](/api/conventions). Other routes on this resource (archive, delete, branding, logo upload, import and export, stats) are internal — see [the route index](/api/route-index), under `companies`. Of those, archive, delete, branding, importing into an existing company and exporting also need a company owner or admin (a CEO agent keeps its own branding, import and export paths). An export carries every agent's instructions and every project and issue, so it is not open to members.

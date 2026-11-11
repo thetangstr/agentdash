@@ -5,6 +5,7 @@ import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest
 import { and, eq, sql } from 'drizzle-orm';
 import { agents, companies, companyMemberships, authUsers, boardApiKeys, assistantConversations, assistantMessages, agentApiKeys, activityLog, workforceEnrollments, cosOnboardingStates, goals, createDb, type Db } from '@paperclipai/db';
 import { startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
+import { approvals } from '@paperclipai/db';
 import { actorMiddleware } from '../middleware/auth.js';
 import { errorHandler } from '../middleware/error-handler.js';
 import { hashBearerToken } from '../services/board-auth.js';
@@ -143,7 +144,8 @@ describe('onboarding accepted hires and postcommit materialization', () => {
       const [enrollment] = await db.select().from(workforceEnrollments).where(eq(workforceEnrollments.agentId, accepted.id));
       expect(enrollment.installedSkillKeys).toHaveLength(1);
       expect(enrollment.skillInstallError).toBeNull();
-      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id))).map(row => row.action)).toEqual(['workforce.enrolled', 'agent.created', 'workforce.skills_installed']);
+      // Insertion order (ctid): rows from one transaction share created_at, and since the audit indexes (0161) an unordered read may follow an index.
+      expect((await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id)).orderBy(sql`ctid`)).map(row => row.action)).toEqual(['workforce.enrolled', 'agent.created', 'workforce.skills_installed']);
       expect(events).toEqual(['workforce.enrolled', 'agent.created']);
       expect(lostAcknowledgements).toBe(1);
       expect(JSON.stringify(response.body)).toContain(accepted.id);
@@ -167,6 +169,30 @@ describe('onboarding accepted hires and postcommit materialization', () => {
     } }).returning(); return row;
   }
   function confirmPlan(f: Awaited<ReturnType<typeof fixture>>, application = app) { return request(application).post('/api/onboarding/confirm-plan').set('authorization', `Bearer ${f.token}`).send({ conversationId: f.conversation.id }); }
+  it('persists the company model through plan materialization and approval repair', async () => {
+    const f = await fixture();
+    await db.update(companies).set({ requireBoardApprovalForNewAgents: true }).where(eq(companies.id, f.company.id));
+    await db.update(agents).set({ status: 'idle', adapterConfig: { model: 'working-company-model', env: { PRIVATE_KEY: 'not-for-new-hires' } } }).where(eq(agents.id, f.leader.id));
+    await plan(f);
+    boundary.materialize = async agent => ({ adapterConfig: { ...agent.adapterConfig, nativeBundle: true } });
+    boundary.failApproval = true;
+    expect((await confirmPlan(f)).status).toBe(409);
+    const created = await hires(f);
+    expect(created).toHaveLength(2);
+    for (const hire of created) {
+      expect(hire.status).toBe('pending_approval');
+      expect(hire.adapterConfig).toMatchObject({ model: 'working-company-model', nativeBundle: true });
+      expect(hire.adapterConfig).not.toHaveProperty('env');
+      expect(hire.metadata).toMatchObject({ systemHireModel: { source: 'company_agent', agentId: f.leader.id, model: 'working-company-model' } });
+    }
+    expect((await confirmPlan(f)).status).toBe(200);
+    const pending = await db.select().from(approvals).where(eq(approvals.companyId, f.company.id));
+    expect(pending).toHaveLength(2);
+    for (const approval of pending) {
+      expect(approval.payload).toMatchObject({ adapterConfig: { model: 'working-company-model' }, modelSelection: { source: 'company_agent', agentId: f.leader.id } });
+      expect(JSON.stringify(approval.payload)).not.toContain('not-for-new-hires');
+    }
+  });
   function faultDatabase(mode: 'rollback' | 'unknown' | 'second') {
     let calls = 0;
     return new Proxy(db, { get(target, key, receiver) {

@@ -16,6 +16,12 @@ import { Button } from "@/components/ui/button";
  * resolve approvals, and "checked by default" is how a scope nobody asked for
  * gets granted. Read and work default on because they are the surface the
  * consent screen exists to describe.
+ *
+ * AgentDash admin powers (part 5): `agentdash:admin` ("Batch changes as an
+ * admin") is never pre-checked either, and is offered only for a company
+ * where the person is an admin and the switch is on (`adminBatchesAvailable`);
+ * elsewhere it is shown disabled with the reason. The server drops it from
+ * the grant in that case anyway.
  */
 
 interface ConsentView {
@@ -24,7 +30,7 @@ interface ConsentView {
   redirectHost: string;
   requestedScopes: string[];
   resource: string;
-  companies: Array<{ id: string; name: string }>;
+  companies: Array<{ id: string; name: string; adminBatchesAvailable?: boolean }>;
 }
 
 const SCOPE_LABELS: Record<string, { label: string; description: string }> = {
@@ -40,7 +46,15 @@ const SCOPE_LABELS: Record<string, { label: string; description: string }> = {
     label: "Decide for you",
     description: "Resolve approvals and hires. Off by default — check it only if you mean it.",
   },
+  "agentdash:admin": {
+    label: "Batch changes as an admin",
+    description:
+      "Prepare changes to many records at once, such as moving 40 work items or pausing agents. Nothing changes until you open the preview in AgentDash and give your assistant the code shown there. Only for admins, and only if your company has turned it on. Off by default: check it only if you mean it.",
+  },
 };
+
+/** Scopes that are never checked for the person; they must choose them. */
+const OFF_BY_DEFAULT = new Set(["agentdash:decide", "agentdash:admin"]);
 
 async function consentRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -85,7 +99,9 @@ export function OAuthConsent() {
     () => (view.data?.requestedScopes ?? []).filter((scope) => scope in SCOPE_LABELS),
     [view.data],
   );
-  const nothingGranted = requestedScopes.every((scope) => !granted.has(scope));
+  const adminBatchesAvailable = companies.find((company) => company.id === selectedCompany)?.adminBatchesAvailable === true;
+  const usable = (scope: string) => scope !== "agentdash:admin" || adminBatchesAvailable;
+  const nothingGranted = requestedScopes.every((scope) => !granted.has(scope) || !usable(scope));
 
   function toggle(scope: string) {
     setGranted((current) => {
@@ -107,7 +123,7 @@ export function OAuthConsent() {
           body: JSON.stringify({
             approved,
             companyId: approved ? selectedCompany : undefined,
-            scopes: approved ? [...granted].filter((scope) => requestedScopes.includes(scope)) : [],
+            scopes: approved ? [...granted].filter((scope) => requestedScopes.includes(scope) && usable(scope)) : [],
           }),
         },
       );
@@ -196,22 +212,25 @@ export function OAuthConsent() {
                   ) : (
                     requestedScopes.map((scope) => {
                       const meta = SCOPE_LABELS[scope]!;
-                      const isDecide = scope === "agentdash:decide";
+                      const offByDefault = OFF_BY_DEFAULT.has(scope);
+                      const unavailable = !usable(scope);
                       return (
                         <label
                           key={scope}
-                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border px-3 py-2"
+                          data-testid={`consent-scope-${scope}`}
+                          className={`flex items-start gap-2.5 rounded-md border border-border px-3 py-2 ${unavailable ? "opacity-60" : "cursor-pointer"}`}
                         >
                           <input
                             type="checkbox"
                             className="mt-0.5"
-                            checked={granted.has(scope)}
+                            checked={granted.has(scope) && !unavailable}
+                            disabled={unavailable}
                             onChange={() => toggle(scope)}
                           />
                           <span>
                             <span className="block text-sm font-medium">
                               {meta.label}
-                              {isDecide ? (
+                              {offByDefault ? (
                                 <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
                                   Off by default
                                 </span>
@@ -220,6 +239,13 @@ export function OAuthConsent() {
                             <span className="block text-xs text-muted-foreground">
                               {meta.description}
                             </span>
+                            {scope === "agentdash:admin" ? (
+                              <span className="mt-1 block text-xs text-muted-foreground" data-testid="consent-admin-note">
+                                {unavailable
+                                  ? "Not available here: you are not an admin of this company, or it has not turned on batch changes from an admin's own Claude."
+                                  : "An assistant you connected before gets this only if you connect it again."}
+                              </span>
+                            ) : null}
                           </span>
                         </label>
                       );

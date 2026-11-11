@@ -30,6 +30,7 @@ vi.mock("../services/evaluation/access-class.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/evaluation/access-class.js")>();
   return {
     ...actual,
+    nativeDocumentViewerAccess: vi.fn(async () => ({ condition: undefined, reads: () => true, readsRevision: () => true })),
     resolveEvaluationViewer: vi.fn(async (_db: unknown, req: { actor: Record<string, unknown> }, companyId: string) => {
       const admin = req.actor.type === "board" && req.actor.isInstanceAdmin === true;
       return {
@@ -167,6 +168,14 @@ describe("evaluation routes", () => {
     const admin = await createApp(boardAdmin);
     expect((await request(admin).get(`/api/companies/company-1/evaluation/scorecards?${q}&verify=true`)).status).toBe(200);
     expect((await request(admin).get(`/api/companies/company-1/evaluation/replay?${q}`)).status).toBe(200);
+  });
+
+  it("review of 4de5523e9: the admin-only replay and shadow report refuse an assistant connection", async () => {
+    // An instance-admin actor arriving through an assistant grant: the only thing that refuses it is the source rule.
+    const viaAssistant = await createApp({ ...boardAdmin, source: "assistant_grant", assistantGrantId: "grant-1" });
+    const q = "kind=project&id=22222222-2222-4222-8222-222222222222";
+    expect((await request(viaAssistant).get(`/api/companies/company-1/evaluation/replay?${q}`)).status).toBe(403);
+    expect((await request(viaAssistant).get("/api/companies/company-1/evaluation/shadow-report?refs=project:22222222-2222-4222-8222-222222222222")).status).toBe(403);
   });
 
   it("a backfill cut short by the lock is audited as such", async () => {

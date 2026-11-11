@@ -156,6 +156,15 @@ export const proposeUnboundAgentProfileSchema = proposeAgentProfileRevisionSchem
     budgetMonthlyCents: z.number().int().nonnegative().optional(),
     /** The brief's planning issue, linked to the hire approval. */
     sourceIssueId: z.guid().optional().nullable(),
+    /**
+     * The new agent's adapter settings, e.g. the `command` a `process` agent
+     * runs. A hire field given by whoever files the hire, not a profile field:
+     * it reaches the hire validator and the hire path exactly as a direct
+     * `POST /agent-hires` body's `adapterConfig` does (completeness, env
+     * bindings, and the instance-admin rule for host commands, argv, env and
+     * cwd), and the hire approval shows it.
+     */
+    adapterConfig: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 export type ProposeUnboundAgentProfile = z.infer<typeof proposeUnboundAgentProfileSchema>;

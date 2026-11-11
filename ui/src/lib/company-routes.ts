@@ -62,6 +62,7 @@ const BOARD_ROUTE_ROOTS = new Set([
 // "/SETUP/cos" ("Company not found"). company-routes.test.ts parses App.tsx
 // and fails when a top-level route is in neither set.
 const GLOBAL_ROUTE_ROOTS = new Set([
+  "agent-performance",
   "auth",
   "forgot-password",
   "reset-password",
@@ -85,6 +86,7 @@ const GLOBAL_ROUTE_ROOTS = new Set([
   "about",
   // AgentDash: release posts are global marketing pages, never company prefixes.
   "whats-new",
+  "releases",
   "start",
   "find",
   "assess",

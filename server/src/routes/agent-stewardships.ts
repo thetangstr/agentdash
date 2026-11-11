@@ -15,7 +15,7 @@ import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { agentService } from "../services/agents.js";
 import { requireProductProfile } from "../services/companies.js";
 import { logger } from "../middleware/logger.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess, assertMayHandOutCompanyAgentAuthority } from "./authz.js";
 import {
   agentVisibilityParam,
 } from "./visibility.js";
@@ -29,6 +29,55 @@ import {
  * greppable and needs no migration -- a cutover only has to be right once.
  */
 const PERSONAL_AGENT_PROVISIONING_FROM = new Date("2026-09-01T00:00:00.000Z");
+
+/**
+ * Authority to change stewardships. `requireCreates` is given for the routes
+ * that make a new pairing (assign): those are capability-gated. Transfer and
+ * release act on a pairing that already exists and stay open everywhere, so
+ * a pairing made before the gate (or on a workspace whose capability was
+ * later switched off) can always be unwound -- otherwise an agent could be
+ * stuck stewarded forever, since autonomy cannot change while paired.
+ *
+ * Exported so removing a member with steward hand-overs (routes/access.ts)
+ * applies exactly the transfer route's guard.
+ */
+export async function assertCanMutateStewardshipsFor(
+  access: ReturnType<typeof accessService>,
+  req: Request,
+  companyId: string,
+  requireCreates?: () => Promise<unknown>,
+) {
+  assertBoard(req);
+  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+    if (requireCreates) await requireCreates();
+    return;
+  }
+  assertCompanyAccess(req, companyId);
+  if (requireCreates) await requireCreates();
+  const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
+  if (!allowed) {
+    throw forbidden("Agent stewardship management requires agent creation permission");
+  }
+}
+
+/**
+ * Stewarding a CEO agent, or an agent that can create agents, lets the
+ * steward connect a terminal to it and run it: company-wide authority, so
+ * assigning or transferring that stewardship needs a company administrator.
+ * Releasing one narrows and keeps its usual rule.
+ */
+export async function assertMayStewardAgentFor(
+  db: Db,
+  access: ReturnType<typeof accessService>,
+  req: Request,
+  companyId: string,
+  agentId: unknown,
+) {
+  if (typeof agentId !== "string") return;
+  const agent = await agentService(db).getById(agentId);
+  if (!agent || agent.companyId !== companyId) return;
+  await assertMayHandOutCompanyAgentAuthority(access, req, companyId, agent);
+}
 
 export function agentStewardshipRoutes(db: Db) {
   const router = Router();
@@ -55,26 +104,12 @@ export function agentStewardshipRoutes(db: Db) {
     return requireProductProfile(company, "agentdash_mk");
   }
 
-  /**
-   * Authority to change stewardships. `creates` is true for the routes that
-   * make a new pairing (assign): those are capability-gated. Transfer and
-   * release act on a pairing that already exists and stay open everywhere, so
-   * a pairing made before the gate (or on a workspace whose capability was
-   * later switched off) can always be unwound -- otherwise an agent could be
-   * stuck stewarded forever, since autonomy cannot change while paired.
-   */
   async function assertCanMutateStewardships(req: Request, companyId: string, creates = false) {
-    assertBoard(req);
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
-      if (creates) await requireStewardshipCompany(companyId);
-      return;
-    }
-    assertCompanyAccess(req, companyId);
-    if (creates) await requireStewardshipCompany(companyId);
-    const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
-    if (!allowed) {
-      throw forbidden("Agent stewardship management requires agent creation permission");
-    }
+    await assertCanMutateStewardshipsFor(access, req, companyId, creates ? () => requireStewardshipCompany(companyId) : undefined);
+  }
+
+  async function assertMayStewardAgent(req: Request, companyId: string, agentId: unknown) {
+    await assertMayStewardAgentFor(db, access, req, companyId, agentId);
   }
 
   /**
@@ -203,6 +238,7 @@ export function agentStewardshipRoutes(db: Db) {
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanMutateStewardships(req, companyId, true);
+      await assertMayStewardAgent(req, companyId, req.body.agentId);
       const stewardship = await stewardships.assign(companyId, {
         agentId: req.body.agentId,
         userId: req.body.userId,
@@ -219,6 +255,7 @@ export function agentStewardshipRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       const agentId = req.params.agentId as string;
       await assertCanMutateStewardships(req, companyId);
+      await assertMayStewardAgent(req, companyId, agentId);
       const stewardship = await stewardships.transfer(companyId, agentId, {
         userId: req.body.userId,
         transferredByUserId: req.actor.userId ?? null,

@@ -17,7 +17,7 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { agents, heartbeatRuns, issueExecutionDecisions, issues, issueWorkProducts } from "@paperclipai/db";
+import { agents, fredRegistrations, heartbeatRuns, issueExecutionDecisions, issues, issueWorkProducts } from "@paperclipai/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   assertFeedbackTraceVisible,
@@ -49,6 +49,7 @@ import {
   createIssueThreadInteractionSchema,
   createIssueWorkProductSchema,
   createIssueLabelSchema,
+  updateIssueLabelSchema,
   checkoutIssueSchema,
   createChildIssueSchema,
   createIssueSchema,
@@ -107,7 +108,7 @@ import {
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, reportAuthzRefusal } from "./authz.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertCompanyAdministrator, assistantGrantAttribution, getActorInfo, isCompanyAdministrator, reportAuthzRefusal } from "./authz.js";
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import { clearWorkspacePersistenceHold } from "../services/workspace-persistence-recovery.js";
@@ -129,7 +130,7 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
-import { resolveStewardedAgentRoute, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
+import { routePersonAssignee, type StewardedAgentRoute } from "../services/stewarded-agent-routing.js";
 import {
   agentHandoffsEnabled,
   checkHandoffRounds,
@@ -320,6 +321,36 @@ export function issueRoutes(
   const router = Router();
   const svc = issueService(db);
   const access = accessService(db);
+
+  // AgentDash: fred-brief-guard. On the main issue of a registered Fred, the
+  // `fred-adoption-brief` document is the owner-confirmed brief Fred acts on, a
+  // company-level decision: only an owner or admin, signed in directly, may
+  // write, restore or delete it through the generic document routes. Agents
+  // (Fred included), assistant grants and plain members are refused. Every
+  // other issue and every other key is untouched. The key must match BRIEF_KEY
+  // in services/fred.ts (the Fred tests write it through the service and then
+  // through these routes).
+  const FRED_BRIEF_DOCUMENT_KEY = "fred-adoption-brief";
+  const FRED_BRIEF_ADMIN_MESSAGE = "Only a company owner or admin can change Fred's adoption brief. Use the Fred page.";
+  async function assertFredBriefDocumentWriteAllowed(req: Request, issue: { id: string; companyId: string }, key: string): Promise<void> {
+    if (key !== FRED_BRIEF_DOCUMENT_KEY) return;
+    const [registration] = await db
+      .select({ id: fredRegistrations.id })
+      .from(fredRegistrations)
+      .where(and(eq(fredRegistrations.mainIssueId, issue.id), eq(fredRegistrations.companyId, issue.companyId)))
+      .limit(1);
+    if (!registration) return;
+    if (req.actor.type !== "board" || req.actor.source === "assistant_grant") {
+      reportAuthzRefusal(req, {
+        companyId: issue.companyId,
+        entityType: "issue",
+        entityId: issue.id,
+        reasonCode: "FRED_BRIEF_ADMIN_REQUIRED",
+      });
+      throw forbidden(FRED_BRIEF_ADMIN_MESSAGE);
+    }
+    await assertCompanyAdministrator(access, req, issue.companyId, FRED_BRIEF_ADMIN_MESSAGE);
+  }
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
@@ -606,20 +637,11 @@ export function issueRoutes(
 
   /**
    * AgentDash: work assigned to a person who stewards an agent goes to that
-   * agent, whoever assigns it (see services/stewarded-agent-routing.ts).
-   * Returns the input with `assignToPerson` removed — it is a request flag,
-   * never stored — and the assignee moved when the rule applies. On an
-   * update, a person who already holds the issue is not a new assignment and
-   * is left alone, and an agent handing its issue back to the person who
-   * created it (the return-to-creator exemption in issue-patch-actions.ts) is
-   * returning work for review, not delegating it, so it is left alone too.
-   * Work is never given to an agent the caller cannot see (agent visibility),
-   * so a hidden steward's agent leaves the assignment with the person. A
-   * person assigning themselves is taking the work, and a person named as a
-   * reviewer or approver by the issue's execution policy is that stage's
-   * participant: both keep the assignment.
+   * agent, whoever assigns it. The rule, with its exceptions and the
+   * agent-visibility filter, lives in services/stewarded-agent-routing.ts
+   * (`routePersonAssignee`), so the batch preview predicts exactly this.
    */
-  async function routePersonAssigneeToStewardedAgent<
+  function routePersonAssigneeToStewardedAgent<
     T extends { assigneeAgentId?: string | null; assigneeUserId?: string | null; assignToPerson?: boolean },
   >(
     req: Request,
@@ -632,51 +654,7 @@ export function issueRoutes(
       executionPolicy?: unknown;
     },
   ): Promise<{ input: T; routed: StewardedAgentRoute | null }> {
-    const { assignToPerson, ...fields } = input;
-    const rest = fields as T;
-    if (current && input.assigneeUserId === current.assigneeUserId) return { input: rest, routed: null };
-    const actorAgentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
-    if (
-      current &&
-      actorAgentId &&
-      current.assigneeAgentId === actorAgentId &&
-      !!current.createdByUserId &&
-      input.assigneeUserId === current.createdByUserId
-    ) {
-      return { input: rest, routed: null };
-    }
-    const requestedPolicy = (input as { executionPolicy?: unknown }).executionPolicy;
-    if (
-      typeof input.assigneeUserId === "string" &&
-      namesStageUser(requestedPolicy !== undefined ? requestedPolicy : current?.executionPolicy, input.assigneeUserId)
-    ) {
-      return { input: rest, routed: null };
-    }
-    const routed = await resolveStewardedAgentRoute(db, {
-      companyId,
-      actorAgentId,
-      actorUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
-      assigneeAgentId: input.assigneeAgentId,
-      assigneeUserId: input.assigneeUserId,
-      assignToPerson,
-    });
-    if (!routed) return { input: rest, routed: null };
-    const visibleIds = await visibleAgentIdsFor(db, req, companyId);
-    if (visibleIds !== null && !visibleIds.has(routed.toAgentId)) return { input: rest, routed: null };
-    return { input: { ...rest, assigneeAgentId: routed.toAgentId, assigneeUserId: null }, routed };
-  }
-
-  /** Whether an execution policy names this person as a stage participant. */
-  function namesStageUser(policy: unknown, userId: string): boolean {
-    const stages = (policy as { stages?: unknown } | null | undefined)?.stages;
-    if (!Array.isArray(stages)) return false;
-    return stages.some((stage) => {
-      const participants = (stage as { participants?: unknown } | null)?.participants;
-      return Array.isArray(participants) && participants.some((participant) => {
-        const p = participant as { type?: unknown; userId?: unknown } | null;
-        return p?.type === "user" && p.userId === userId;
-      });
-    });
+    return routePersonAssignee(db, req, companyId, input, current);
   }
 
   /**
@@ -1531,6 +1509,40 @@ export function issueRoutes(
     res.status(201).json(label);
   });
 
+  // AgentDash admin powers: rename or recolor a label. Same guard as create
+  // and delete (company access): today's rule, kept.
+  router.patch("/labels/:labelId", validate(updateIssueLabelSchema), async (req, res) => {
+    const labelId = req.params.labelId as string;
+    if (!isUuidLike(labelId)) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    const existing = await svc.getLabelById(labelId);
+    if (!existing) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId);
+    const updated = await svc.updateLabel(labelId, req.body);
+    if (!updated) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: updated.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "label.updated",
+      entityType: "label",
+      entityId: updated.id,
+      details: { name: updated.name, color: updated.color, previousName: existing.name, previousColor: existing.color },
+    });
+    res.json(updated);
+  });
+
   router.delete("/labels/:labelId", async (req, res) => {
     const labelId = req.params.labelId as string;
     const existing = await svc.getLabelById(labelId);
@@ -1982,6 +1994,7 @@ export function issueRoutes(
       res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
       return;
     }
+    await assertFredBriefDocumentWriteAllowed(req, issue, keyParsed.data);
 
     const actor = getActorInfo(req);
     const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
@@ -2095,6 +2108,7 @@ export function issueRoutes(
         res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
         return;
       }
+      await assertFredBriefDocumentWriteAllowed(req, issue, keyParsed.data);
 
       const actor = getActorInfo(req);
       const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
@@ -2185,6 +2199,7 @@ export function issueRoutes(
       res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
       return;
     }
+    await assertFredBriefDocumentWriteAllowed(req, issue, keyParsed.data);
     const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const removed = await documentsSvc.deleteIssueDocument(issue.id, keyParsed.data);
     if (!removed) {
@@ -4072,24 +4087,18 @@ export function issueRoutes(
       return;
     }
     await assertFeedbackTraceVisible(db, req, trace);
-    const bundle = await feedback.getFeedbackTraceBundle(traceId);
-    if (!bundle || !actorCanAccessCompany(req, bundle.companyId)) {
-      res.status(404).json({ error: "Feedback trace not found" });
-      return;
-    }
-    // Document access (slice 6b): a bundle carries its source run's log and
-    // events, so it follows the run's readership rule (steward, instance
-    // admin) while the company's flag is on.
-    const sourceRun = bundle.paperclipRun;
-    const sourceAgentId = typeof sourceRun?.agentId === "string" ? sourceRun.agentId : null;
+    // Document access (slice 6b): authorize the canonical source run before
+    // reading logs/transcripts or redacting the bundle. Redacted identifiers
+    // are display data, never inputs to the stewardship UUID lookup.
     const documentRuns = documentRunAccess(db);
-    const unreadable = sourceRun
-      ? sourceAgentId
-        ? !(await documentRuns.canReadRunContent(req.actor, { companyId: bundle.companyId, agentId: sourceAgentId }))
-        // A run whose agent cannot be read back: fail closed while flagged.
-        : await documentRuns.documentAccessEnabled(bundle.companyId)
-      : false;
-    if (unreadable) {
+    const bundle = await feedback.getFeedbackTraceBundle(traceId, async (sourceRun) => {
+      const unreadable = sourceRun
+        ? !(await documentRuns.canReadRunContent(req.actor, sourceRun))
+        // No trustworthy source identity: fail closed while flagged.
+        : await documentRuns.documentAccessEnabled(trace.companyId);
+      if (unreadable) throw notFound("Feedback trace not found");
+    });
+    if (!bundle || !actorCanAccessCompany(req, bundle.companyId)) {
       res.status(404).json({ error: "Feedback trace not found" });
       return;
     }
@@ -4168,6 +4177,12 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    // Turning on the company's feedback sharing is a company setting, so only
+    // an owner or admin's vote may do it. A member's vote is still recorded.
+    const allowSharing = req.body.allowSharing === true;
+    const mayEnableCompanySharing = allowSharing
+      ? await isCompanyAdministrator(access, req, issue.companyId).catch(() => false)
+      : true;
     const result = await feedback.saveIssueVote({
       issueId: id,
       targetType: req.body.targetType,
@@ -4175,7 +4190,8 @@ export function issueRoutes(
       vote: req.body.vote,
       reason: req.body.reason,
       authorUserId: req.actor.userId ?? "local-board",
-      allowSharing: req.body.allowSharing === true,
+      allowSharing,
+      mayEnableCompanySharing,
     });
 
     await logActivity(db, {
@@ -4250,7 +4266,15 @@ export function issueRoutes(
       }
     }
 
-    res.status(201).json(result.vote);
+    res.status(201).json(
+      result.sharingNeedsAdministrator
+        ? {
+            ...result.vote,
+            sharingNotEnabled:
+              "Your vote was saved, but sharing was not turned on: only owners and admins can turn on feedback sharing for this company.",
+          }
+        : result.vote,
+    );
   });
 
   router.get("/issues/:id/attachments", async (req, res) => {

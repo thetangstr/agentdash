@@ -188,3 +188,8 @@ export { issueResponsibilities } from "./issue_responsibilities.js";
 export { routineRunOccurrences } from "./routine_run_occurrences.js";
 export { workforceEnrollments } from './workforce_enrollments.js';
 export { humanActionHandles } from './human_action_handles.js';
+// AgentDash admin powers, part 2: the one batch engine — a batch and its records.
+export { batchOperations, batchOperationItems } from "./batch_operations.js";
+// AgentDash admin powers: named owner ceilings (apply to many agents; the company default for new agents).
+export { agentCeilingTemplates } from "./agent_ceiling_templates.js";
+export { fredRegistrations } from './fred_registrations.js';

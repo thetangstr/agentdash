@@ -1,0 +1,16 @@
+/* AgentDash: /releases and /releases/:version, on the What's new layout (WhatsNew.css). */
+.mkt-releases__aside { color: var(--mkt-ink-soft); font-size: 15px; }
+.mkt-releases__list { display: grid; gap: 48px; list-style: none; padding: 0; margin: 0; }
+.mkt-releases__empty { color: var(--mkt-ink-soft); }
+.mkt-release-entry__title { font-family: var(--mkt-font-mono); font-size: clamp(22px, 2.6vw, 28px); font-weight: 500; letter-spacing: -0.01em; margin: 0 0 16px; overflow-wrap: anywhere; }
+.mkt-release-entry__title a { text-decoration: none; }
+.mkt-release-entry__summary { color: var(--mkt-ink-soft); margin: 0 0 12px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.mkt-release .mkt-updates__intro--article h1 { font-family: var(--mkt-font-mono); font-size: clamp(36px, 6vw, 56px); overflow-wrap: anywhere; }
+.mkt-release__github { margin: 0; font-size: 15px; }
+.mkt-release__sections { display: grid; gap: 56px; max-width: 76ch; }
+.mkt-release__section { border-top: 1px solid var(--mkt-rule-strong); padding-top: 24px; }
+.mkt-release__section h2 { font-family: var(--mkt-font-serif); font-size: clamp(26px, 3vw, 34px); font-weight: 500; margin: 0 0 20px; }
+.mkt-release__section ul { display: grid; gap: 14px; margin: 0; padding-left: 1.2em; }
+.mkt-release__section li { color: var(--mkt-ink); overflow-wrap: anywhere; }
+.mkt-release__empty { color: var(--mkt-ink-soft); max-width: 64ch; }
+@media (max-width: 640px) { .mkt-releases__list { gap: 36px; } .mkt-release__sections { gap: 40px; } }

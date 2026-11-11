@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { AgentProfileChangePayloadView } from "./agent-performance/AgentProfileChangePayload";
+import type { ProfileNameLookup } from "./agent-performance/profile-names";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
@@ -198,12 +199,42 @@ function HireProfileSection({ payload }: { payload: Record<string, unknown> }) {
   );
 }
 
+/**
+ * AgentDash: a process agent runs a command on the host. Whoever approves the
+ * hire decides what will run, so the card shows it (the command with its
+ * arguments, and the folder) rather than leaving it in the raw payload.
+ */
+function ProcessCommandLines({ payload }: { payload: Record<string, unknown> }) {
+  if (payload.adapterType !== "process") return null;
+  const config = payload.adapterConfig && typeof payload.adapterConfig === "object" ? (payload.adapterConfig as Record<string, unknown>) : {};
+  const command = typeof config.command === "string" ? config.command.trim() : "";
+  if (!command) return null;
+  const args = Array.isArray(config.args) ? config.args.filter((arg): arg is string => typeof arg === "string") : [];
+  const cwd = typeof config.cwd === "string" && config.cwd.trim() ? config.cwd.trim() : null;
+  return (
+    <>
+      <div className="flex items-start gap-2" data-testid="hire-agent-command">
+        <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs pt-0.5">Runs</span>
+        <code className="min-w-0 break-all font-mono text-xs">{[command, ...args].join(" ")}</code>
+      </div>
+      <div className="flex items-start gap-2">
+        <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs pt-0.5">In folder</span>
+        {cwd ? <code className="min-w-0 break-all font-mono text-xs">{cwd}</code> : <span className="text-muted-foreground">The server's own folder</span>}
+      </div>
+    </>
+  );
+}
+
 export function HireAgentPayload({ payload }: { payload: Record<string, unknown> }) {
   // AgentDash (c4-hire-ux): the human title carries the job ("Bookkeeper");
   // the role slug and adapter are internal detail and render under Technical
   // details on the page, not here.
   const title = firstNonEmptyString(payload.title, humanizeAgentRole(stringValue(payload.role)));
-  const modelLine = hermesModelLine(payload);
+  const adapterConfig = payload.adapterConfig && typeof payload.adapterConfig === "object"
+    ? payload.adapterConfig as Record<string, unknown> : {};
+  const modelLine = hermesModelLine(payload) ?? stringValue(adapterConfig.model);
+  const modelSelection = payload.modelSelection && typeof payload.modelSelection === "object"
+    ? payload.modelSelection as Record<string, unknown> : {};
   return (
     <div className="mt-3 space-y-1.5 text-sm">
       <div className="flex items-center gap-2">
@@ -224,6 +255,10 @@ export function HireAgentPayload({ payload }: { payload: Record<string, unknown>
           <span>{modelLine}</span>
         </div>
       )}
+      {typeof modelSelection.warning === "string" && (
+        <p className="text-muted-foreground">{modelSelection.warning}</p>
+      )}
+      <ProcessCommandLines payload={payload} />
       <SkillList values={payload.desiredSkills} />
       <HireProfileSection payload={payload} />
     </div>
@@ -397,10 +432,13 @@ export function ApprovalPayloadRenderer({
   type,
   payload,
   hidePrimaryTitle = false,
+  names,
 }: {
   type: string;
   payload: Record<string, unknown>;
   hidePrimaryTitle?: boolean;
+  /** Names for the projects, agents and people a profile change lists by id; ids show where it has none. */
+  names?: ProfileNameLookup;
 }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
@@ -410,6 +448,6 @@ export function ApprovalPayloadRenderer({
   if (type === "request_board_approval") {
     return <BoardApprovalPayload payload={payload} hideTitle={hidePrimaryTitle} />;
   }
-  if (type === "agent_profile_change") return <AgentProfileChangePayloadView payload={payload} />;
+  if (type === "agent_profile_change") return <AgentProfileChangePayloadView payload={payload} names={names} />;
   return <CeoStrategyPayload payload={payload} />;
 }

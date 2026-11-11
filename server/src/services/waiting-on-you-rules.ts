@@ -127,3 +127,16 @@ export function scopeAndRankOpenApprovals<T extends WaitingApprovalLike>(rows: T
       return (a.approval.createdAt?.getTime?.() ?? 0) - (b.approval.createdAt?.getTime?.() ?? 0);
     });
 }
+
+/**
+ * AgentDash: APM gate 2 — the agent an `agent_profile_change` is ABOUT. Its
+ * requester may be a person or the performance manager, so visibility of the
+ * subject agent is checked separately: a hidden agent's profile change does
+ * not exist for the caller. Shared by the approval routes and the batch
+ * candidates (waiting-on-you.ts).
+ */
+export function profileChangeSubjectAgentId(approval: { type: string; payload: unknown }): string | null {
+  if (approval.type !== "agent_profile_change") return null;
+  const agentId = (approval.payload as Record<string, unknown> | null)?.agentId;
+  return typeof agentId === "string" ? agentId : null;
+}

@@ -57,6 +57,7 @@ import {
 import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
 import { findServerAdapter } from "../adapters/index.js";
 import { HttpError, forbidden, notFound, unprocessable } from "../errors.js";
+import { grantsPrivilegedAgentAuthority } from "../routes/authz.js";
 import { assertAllowedGitHubSourceUrl, ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import type { StorageService } from "../storage/types.js";
 import { accessService } from "./access.js";
@@ -2960,7 +2961,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         humans: async (companyId: string) =>
           (await scopedAccess.listActiveUserMemberships(companyId)).length,
         agents: async (companyId: string) =>
-          (await scopedAgents.list(companyId)).length,
+          scopedAgents.countBillable(companyId),
       },
     };
   }
@@ -4270,6 +4271,26 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     const sourceManifest = plan.source.manifest;
     const warnings = [...plan.preview.warnings];
     const include = plan.include;
+
+    // AgentDash (#1053): an agent may not create a CEO, a Chief of Staff or an
+    // agent creator through an import any more than through the hire routes.
+    // People reach imports only as company administrators (the routes check),
+    // so this binds the CEO-agent safe import. Checked before anything is
+    // written, so a refusal leaves no partial import.
+    if (options?.actorIsAgent && include.agents) {
+      const writtenSlugs = new Set(
+        plan.preview.plan.agentPlans.filter((entry) => entry.action !== "skip").map((entry) => entry.slug),
+      );
+      const privileged = (sourceManifest.agents ?? [])
+        .filter((manifestAgent) => writtenSlugs.has(manifestAgent.slug) && grantsPrivilegedAgentAuthority(manifestAgent))
+        .map((manifestAgent) => manifestAgent.slug)
+        .sort();
+      if (privileged.length > 0) {
+        throw forbidden(
+          `Agents cannot import privileged roles or agent-creation authority (${privileged.join(", ")}). Ask an owner or admin to import this bundle.`,
+        );
+      }
+    }
 
     // AgentDash: (#710) a recurring task is imported as a routine, which is a
     // standing instruction. Checked up front, before anything is written, so a

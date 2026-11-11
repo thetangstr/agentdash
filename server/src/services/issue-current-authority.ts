@@ -7,6 +7,7 @@ import {
   instanceUserRoles, principalPermissionGrants, projects, projectAccess,
   projectWorkspaces, executionWorkspaces, environments, goals, assistantAccessTokens, assistantGrants,
 } from "@paperclipai/db";
+import { ASSISTANT_SCOPE_ADMIN } from "@paperclipai/shared";
 import { conflict, forbidden, notFound, unauthorized } from "../errors.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
 import type { IssueCommentContext } from "./issue-mutation-actions.js";
@@ -58,6 +59,18 @@ function authorityCollection(req: Request, original: Request["actor"], verified:
           req.actor = { ...original, userId: refresh.userId, memberships: refresh.memberships.map(member => ({ ...member })),
             companyIds: [...refresh.companyIds], isInstanceAdmin: refresh.isInstanceAdmin };
           return;
+        } else if (original.source === "assistant_grant" && verified?.kind === "batch_item") {
+          // AgentDash admin powers (part 5): one item of a batch the person's
+          // own Claude prepared and they confirmed with the browser-shown code.
+          // The grant is read again here, under the same witness lock as any
+          // assistant write: live, this person's, this company's, and still
+          // holding the admin scope. The runner has already re-read the
+          // person's admin role and the company switch for this item.
+          if (verified.origin.kind !== "assistant" || verified.companyId !== companyId || original.companyId !== companyId ||
+              !original.assistantGrantId || original.assistantGrantId !== verified.origin.grantId || verified.origin.userId !== userId) throw unauthorized();
+          const [grant] = await executor.select().from(assistantGrants).where(eq(assistantGrants.id, original.assistantGrantId));
+          if (!grant || grant.userId !== userId || grant.companyId !== companyId || grant.revokedAt || !grant.scopes.includes(ASSISTANT_SCOPE_ADMIN)) throw unauthorized();
+          witness(`07:assistant_grant:${grant.id}`, byId(assistantGrants, grant.id));
         } else if (original.source === "assistant_grant") {
           if (!original.assistantLoopback || verified?.kind !== "assistant" || !verified.loopback ||
               verified.loopback.expiresAt <= Date.now() || !verified.loopback.lease.isLive() ||

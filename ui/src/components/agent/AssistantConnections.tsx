@@ -16,6 +16,7 @@ const SCOPE_SHORT: Record<string, string> = {
   "agentdash:read": "read",
   "agentdash:work": "work",
   "agentdash:decide": "decide",
+  "agentdash:admin": "batch changes as an admin",
 };
 
 export function AssistantConnections({ companyId }: { companyId: string }) {

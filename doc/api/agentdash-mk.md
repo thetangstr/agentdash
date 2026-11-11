@@ -53,7 +53,7 @@ approval cards over the channel the owner just disallowed.
 | `providers` | `resolveActingAs`, channel binding | `provider_not_allowed`, **403** on binding |
 | `dataScopes` | `resolveActingAs` | `data_scope_not_allowed` |
 | `minimumApproval` | approval decision authority | **403**, or admin-decidable at `none` |
-| `destructiveActions` | computed and stored; no runtime consumer yet | — |
+| `destructiveActions` | bridge task creation (`bridgeService.createTask`), the HubSpot write request (`requestWrite`), the Slack send (`slackConnectorService.postMessage`), and the connector-send apply path (`connectorSendExecutionService.executeForApproval`) | **422** `AGENT_POLICY_CEILING_EXCEEDED` at request time; `destructive_action_blocked` on the apply path |
 
 The provider check runs **before** connection lookup, so a disallowed provider
 answers "the ceiling does not allow this" rather than "no connection available"
@@ -66,6 +66,22 @@ every candidate exceeds the ceiling is `data_scope_not_allowed` returned. A
 connection with no recorded scopes is treated as within any ceiling, because
 scope recording postdates most rows and failing them closed would turn
 narrowing `dataScopes` into an outage for every legacy connection.
+
+`destructiveActions` binds through the shared classifier
+(`packages/shared/src/agent-destructive-classifier.ts`): reads are never
+destructive, a named destructive operation maps to its class, a `send` is an
+`outbound_external_message` unless the recipient is known to be internal (a Slack
+channel is not, so it fails closed to external), and any other write is
+`unclassified_write` (destructive). Under `blocked` every request-time chokepoint
+answers the same named-ceiling error and writes nothing; the apply path records
+`destructive_action_blocked`. `approval_required` routes a bridge `act` through an
+approval, and a HubSpot write always files one. `allowed` proceeds. Verdicts are
+written to `workflow_events` as `destructive_action_gated` rows: the bridge records
+every verdict; the HubSpot write request and the Slack send record only their
+refusals, and a HubSpot write that goes through gets its one row from the apply
+path. Slack posts are refused when destructive actions are `blocked`; under
+`approval_required` they follow the connection's send autonomy (a `draft_only`
+connection drafts, a full one posts), because there is no Slack approval step yet.
 
 `minimumApproval` is the one dimension where the ceiling is a **floor**, so the
 effective value is the *stricter* of ceiling and steward request. Lowering it to
@@ -83,7 +99,7 @@ enabling the profile never removes authority by itself.
 | Method | Path | Who |
 |---|---|---|
 | `GET` | `/api/companies/:companyId/me/inbox` | Any board user (session-scoped) |
-| `GET` | `/api/companies/:companyId/inbox/override` | `agents:create` |
+| `GET` | `/api/companies/:companyId/inbox/override` | Company owner or admin (or instance admin) |
 
 There is deliberately no `userId` parameter — identity comes from the session.
 The personal inbox returns the stewarded agent's approvals **plus** the user's
@@ -106,7 +122,7 @@ agree. The company-wide view lives on the Override screen.
 |---|---|---|
 | `POST` | `/api/approvals/:id/approve` | Current steward of the requesting agent |
 | `POST` | `/api/approvals/:id/reject` | Current steward of the requesting agent |
-| `POST` | `/api/approvals/:id/override` | `agents:create`, reason required |
+| `POST` | `/api/approvals/:id/override` | Company owner or admin (or instance admin), reason required |
 
 In `agentdash_mk`, decisions require `revision`, `idempotencyKey`, and
 `channel` (`web` | `telegram` | `teams`). Default-profile companies keep the
@@ -145,10 +161,14 @@ the portal and scopes, then a live CRM read. A token that introspects cleanly an
 403s on every read would otherwise be stored as healthy and fail later inside an
 agent run, far from the cure.
 
-**Visibility is hard-forced `private`** and never read from input. A
-workspace-visible connection is usable by every agent in the company through
-`resolveActingAs`, which would turn one person's personal key into a shared
-company credential.
+**Visibility starts `private`.** The connect route hard-forces it and never reads
+it from input, because a workspace-visible connection is usable by every agent
+in the company through `resolveActingAs`, which would turn one person's personal
+key into a shared company credential. It can be changed after creation:
+`PATCH /api/connections/:id` accepts `visibility` (`private` or `workspace`) from
+a connector administrator (`agents:create`, which owners and admins hold by role,
+the local board, or an instance admin). Widening a HubSpot key to `workspace`
+makes it a shared company credential.
 
 **One active key per person per company**, enforced by a partial unique index
 (migration `0104`), so the DB decides the race rather than a check-then-insert.
@@ -180,11 +200,14 @@ The request becomes a `connector_send` approval carrying the target, the
 properties, and a **sha256 digest of the properties**, so what executes can be
 proven to be what was decided.
 
-Everything is re-resolved at **execution** time, not request time: stewardship,
-the owner ceiling through `resolveActingAs`, the connection's status, and that
-the resolved connection is still the one that was approved. Authority checked
-when a request is filed is stale by the time a human presses approve — a ceiling
-narrowed in between must block the write, and does.
+Everything is re-resolved at **execution** time: stewardship, the owner ceiling
+through `resolveActingAs`, the `destructiveActions` mode, the connection's status,
+and that the resolved connection is still the one that was approved. Authority
+checked when a request is filed is stale by the time a human presses approve — a
+ceiling narrowed in between must block the write, and does. The request is
+checked too, so an agent learns at once: a provider the ceiling does not allow is
+a 403, and a `blocked` `destructiveActions` mode is a 422
+`AGENT_POLICY_CEILING_EXCEEDED`, with no approval filed.
 
 `approvals.expiresAt` has its first consumer here: a connector_send expires
 after 24 hours. A CRM write approved a week late is acting on a world that has

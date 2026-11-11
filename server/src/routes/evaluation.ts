@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { and } from "drizzle-orm";
 import {
   EVALUATION_EVENT_TYPES,
   EVALUATION_REVIEW_PROJECT_NAME,
@@ -15,7 +16,7 @@ import type { Db } from "@paperclipai/db";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
-import { resolveEvaluationViewer, viewerClassCondition, viewerClassFilter } from "../services/evaluation/access-class.js";
+import { nativeDocumentViewerAccess, resolveEvaluationViewer, viewerClassCondition, viewerClassFilter } from "../services/evaluation/access-class.js";
 import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
 import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
 import { evaluationOverview } from "../services/evaluation/overview.js";
@@ -92,6 +93,7 @@ export function evaluationRoutes(db: Db) {
       // nothing the viewer may not read is returned or counted.
       const viewer = await resolveEvaluationViewer(db, req, companyId);
       const readable = viewerClassFilter(viewer);
+      const nativeAccess = await nativeDocumentViewerAccess(db, req, viewer);
       const listed = await ledger.list(companyId, {
         types,
         sinceEventTime: q.data.since ? new Date(q.data.since) : undefined,
@@ -100,9 +102,9 @@ export function evaluationRoutes(db: Db) {
         goalId: q.data.kind === "goal" ? q.data.id : undefined,
         throughSeq: q.data.throughSeq,
         order: q.data.order,
-        accessCondition: viewerClassCondition(viewer),
+        accessCondition: and(viewerClassCondition(viewer), nativeAccess.condition),
       });
-      const rows = listed.filter(readable);
+      const rows = listed.filter((event) => readable(event) && nativeAccess.reads(event));
       res.json({ events: rows, count: rows.length, scope: q.data.kind && q.data.id ? { kind: q.data.kind, id: q.data.id, throughSeq: q.data.throughSeq ?? null } : null });
     } catch (err) {
       next(err);
@@ -116,7 +118,9 @@ export function evaluationRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const event = await ledger.get(companyId, req.params.eventId as string);
       // AgentDash (APM gate 3): an event the viewer may not read is absent (404, never 403: existence is not disclosed).
-      if (!event || !viewerClassFilter(await resolveEvaluationViewer(db, req, companyId))(event)) throw notFound("Event not found");
+      const viewer = await resolveEvaluationViewer(db, req, companyId);
+      if (!event || !viewerClassFilter(viewer)(event)) throw notFound("Event not found");
+      if (!(await nativeDocumentViewerAccess(db, req, viewer)).reads(event)) throw notFound("Event not found");
       res.json({ event });
     } catch (err) {
       next(err);
@@ -158,7 +162,10 @@ export function evaluationRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       // AgentDash (APM gate 3): per-type counts include only the classes the viewer may read, so a count leaks no private event.
       const viewer = await resolveEvaluationViewer(db, req, companyId);
-      const [cursors, byType, maxSeq] = await Promise.all([ingest.cursors(companyId), ledger.countByType(companyId, viewerClassCondition(viewer)), ledger.maxSeq(companyId)]);
+      const nativeAccess = await nativeDocumentViewerAccess(db, req, viewer);
+      const [cursors, byType, maxSeq] = await Promise.all([ingest.cursors(companyId), ledger.countByType(companyId, and(viewerClassCondition(viewer), nativeAccess.condition)), ledger.maxSeq(companyId)]);
+      // Native source cursors contain revision IDs, so hide a cursor whose source is currently unreadable.
+      if (cursors.document_revisions && !nativeAccess.readsRevision(cursors.document_revisions.id)) delete cursors.document_revisions;
       res.json({ cursors, eventsByType: byType, maxSeq, running: ingest.running });
     } catch (err) {
       next(err);
@@ -170,6 +177,7 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      if (req.actor.source === "assistant_grant") throw forbidden("Not available through an assistant connection."); // review of 4de5523e9
       await assertCompanyAdministrator(access, req, companyId);
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
@@ -673,6 +681,7 @@ export function evaluationRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      if (req.actor.source === "assistant_grant") throw forbidden("Not available through an assistant connection."); // review of 4de5523e9
       await assertCompanyAdministrator(access, req, companyId);
       const q = z.object({ refs: z.string().min(1), costCapCents: z.coerce.number().int().min(0).optional(), verifyLimit: z.coerce.number().int().min(1).max(200).optional() }).safeParse(req.query);
       if (!q.success) throw badRequest("refs (project:<id>,goal:<id>) is required", { issues: q.error.issues });

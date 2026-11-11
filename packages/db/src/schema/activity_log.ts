@@ -30,5 +30,8 @@ export const activityLog = pgTable(
     companyCreatedIdx: index("activity_log_company_created_idx").on(table.companyId, table.createdAt),
     runIdIdx: index("activity_log_run_id_idx").on(table.runId),
     entityIdx: index("activity_log_entity_type_id_idx").on(table.entityType, table.entityId),
+    // AgentDash admin powers: the admin audit filters by person and by action.
+    companyActorCreatedIdx: index("activity_log_company_actor_created_idx").on(table.companyId, table.actorId, table.createdAt),
+    companyActionCreatedIdx: index("activity_log_company_action_created_idx").on(table.companyId, table.action, table.createdAt),
   }),
 );

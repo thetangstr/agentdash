@@ -3,8 +3,9 @@
 // Agent Performance Management gate 2: the company's access-rule mode.
 // Admins pick among the modes the server offers; anything else is visible
 // but disabled; members see the mode read-only. Refusals are shown.
-// Gate 3: enforce is offered, and choosing it opens a confirmation that says
-// plainly what changes; nothing is sent until the admin confirms.
+// Gate 3: enforce is offered. A choice is a draft until "Save changes";
+// saving enforce opens a confirmation that says plainly what changes, and
+// nothing is sent until the admin confirms.
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -78,6 +79,13 @@ function radio(node: HTMLElement, mode: string): HTMLInputElement {
   return node.querySelector<HTMLInputElement>(`[data-testid='access-enforcement-${mode}']`)!;
 }
 
+async function save(node: HTMLElement) {
+  await act(async () => {
+    node.querySelector<HTMLButtonElement>("[data-testid='access-enforcement-save']")!.click();
+  });
+  await flush();
+}
+
 afterEach(() => {
   if (root) act(() => root!.unmount());
   container?.remove();
@@ -109,6 +117,10 @@ describe("AgentAccessEnforcementCard", () => {
       radio(node, "shadow").click();
     });
     await flush();
+    expect(mockEnforcementApi.set).not.toHaveBeenCalled();
+    expect(node.querySelector("[data-testid='access-enforcement-state']")?.textContent).toBe("Unsaved changes");
+    await save(node);
+    expect(mockEnforcementApi.set).toHaveBeenCalledTimes(1);
     expect(mockEnforcementApi.set).toHaveBeenCalledWith("company-1", "shadow");
     expect(radio(node, "shadow").checked).toBe(true);
     const status = node.querySelector("[data-testid='access-enforcement-status']");
@@ -139,6 +151,9 @@ describe("AgentAccessEnforcementCard", () => {
       radio(node, "enforce").click();
     });
     await flush();
+    // Choosing enforce is only a draft; the confirmation comes with the save.
+    expect(document.body.querySelector("[data-testid='access-enforcement-confirm']")).toBeNull();
+    await save(node);
     const dialog = document.body.querySelector<HTMLElement>("[data-testid='access-enforcement-confirm']")!;
     expect(dialog).not.toBeNull();
     expect(dialog.getAttribute("role")).toBe("dialog");
@@ -147,9 +162,8 @@ describe("AgentAccessEnforcementCard", () => {
     expect(dialog.textContent).toContain("Agents are refused anything outside the access their operating profile defines");
     expect(dialog.textContent).toContain("accountable person, steward and company admins always stay reachable");
     expect(dialog.textContent).toContain("You can switch back to Shadow or Off at any time.");
-    // Nothing is sent yet, and the stored mode is still the checked one.
+    // Nothing is sent yet.
     expect(mockEnforcementApi.set).not.toHaveBeenCalled();
-    expect(radio(node, "shadow").checked).toBe(true);
 
     await act(async () => {
       document.body.querySelector<HTMLButtonElement>("[data-testid='access-enforcement-confirm-cancel']")!.click();
@@ -157,12 +171,19 @@ describe("AgentAccessEnforcementCard", () => {
     await flush();
     expect(document.body.querySelector("[data-testid='access-enforcement-confirm']")).toBeNull();
     expect(mockEnforcementApi.set).not.toHaveBeenCalled();
+    // Cancel keeps the draft; discarding it goes back to the stored mode.
+    expect(radio(node, "enforce").checked).toBe(true);
+    await act(async () => {
+      node.querySelector<HTMLButtonElement>("[data-testid='access-enforcement-discard']")!.click();
+    });
+    await flush();
     expect(radio(node, "shadow").checked).toBe(true);
 
     await act(async () => {
       radio(node, "enforce").click();
     });
     await flush();
+    await save(node);
     await act(async () => {
       document.body.querySelector<HTMLButtonElement>("[data-testid='access-enforcement-confirm-enforce']")!.click();
     });
@@ -181,6 +202,7 @@ describe("AgentAccessEnforcementCard", () => {
       radio(node, "shadow").click();
     });
     await flush();
+    await save(node);
     expect(document.body.querySelector("[data-testid='access-enforcement-confirm']")).toBeNull();
     expect(mockEnforcementApi.set).toHaveBeenCalledWith("company-1", "shadow");
   });
@@ -211,7 +233,7 @@ describe("AgentAccessEnforcementCard", () => {
     );
   });
 
-  it("shows a server refusal and keeps the stored mode", async () => {
+  it("shows a server refusal and keeps the draft until it is discarded", async () => {
     mockAccessApi.listMembers.mockResolvedValue(members(true));
     mockEnforcementApi.get.mockResolvedValue(view("off"));
     mockEnforcementApi.set.mockRejectedValue(new ApiError("Company admin required", 403, { error: "Company admin required" }));
@@ -220,10 +242,18 @@ describe("AgentAccessEnforcementCard", () => {
       radio(node, "shadow").click();
     });
     await flush();
+    await save(node);
     const alert = node.querySelector("[data-testid='access-enforcement-error']");
     expect(alert?.getAttribute("role")).toBe("alert");
     expect(alert?.textContent).toBe("The mode was not changed: Company admin required");
+    expect(radio(node, "shadow").checked).toBe(true);
+    expect(node.querySelector("[data-testid='access-enforcement-state']")?.textContent).toBe("Unsaved changes");
+    await act(async () => {
+      node.querySelector<HTMLButtonElement>("[data-testid='access-enforcement-discard']")!.click();
+    });
+    await flush();
     expect(radio(node, "off").checked).toBe(true);
+    expect(node.querySelector("[data-testid='access-enforcement-error']")).toBeNull();
   });
 
   it("shows members the current mode read-only", async () => {

@@ -134,6 +134,7 @@ const SECURITY_SCHEMES = {
           "agentdash:read": "Read the company's work.",
           "agentdash:work": "Create and move work, wake agents.",
           "agentdash:decide": "Resolve approvals and hire. Opt-in at consent; never granted by default.",
+          "agentdash:admin": "Prepare batch changes as an admin. Never pre-checked; granted only to an admin of a company that turned it on. Nothing changes until the person reads back the code shown in their browser.",
         },
       },
     },

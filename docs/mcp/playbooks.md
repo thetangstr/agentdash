@@ -3,7 +3,7 @@ title: "Playbooks"
 summary: "The five operating contracts the MCP server sends as its instructions, verbatim, and which connection gets which."
 ---
 
-> Generated at commit `ee2b64710` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `eeed05b13` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 > 3 sections omitted: engagement-specific.
 
@@ -92,7 +92,8 @@ name, a number, or a workspace code.
    and stewardship is refused for it.
 
 5. **Invites.** POST /onboarding/invites { companyId, emails, autoApprove: true }.
-   Each entry carries `inviteUrl` — hand those to the human, because no email
+   It needs `users:invite`, the same as the regular invite route (owners and
+   admins hold it); a member without it is refused with 403. Each entry carries `inviteUrl` — hand those to the human, because no email
    provider is configured and `emailStatus: "skipped"` is the expected, correct
    outcome. Handing over the links IS the delivery.
    Do NOT pair a teammate with an agent before they accept: it is refused with
@@ -389,7 +390,7 @@ You are helping a person get their own AgentDash cloud workspace (https://<name>
    - active: claimed. Go to step 5.
    - failed: say what the reason means; do not retry blindly.
 5. Call agentdash_cloud_connect. Give the person the approvalUrl and the confirmationCode: they sign in on their workspace, check that the page shows the same code, and click Approve (if the codes differ, they must not approve). Then call agentdash_cloud_connect again.
-6. Once connected over stdio this session talks to the workspace: call agentdash_setup_status and follow its nextAction (model adapter → interview → plan → hire), exactly as the setup toolset describes. Tell the person to persist the workspace key so future sessions stay signed in.
+6. Once connected over stdio this session talks to the workspace: call agentdash_setup_status and follow its nextAction (workspace → the agents' model → interview → plan → hire), exactly as the setup toolset describes. A hosted workspace's agents need a model before the interview: ask which of its providers (agentModel.options) and for an API key, then call agentdash_setup_adapter with preset "hermes". Tell the person to persist the workspace key so future sessions stay signed in.
 
 ## Boundaries
 - One workspace per person. Never sign anyone up without their explicit request, and never with an email that is not theirs.

@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
 import { useCanCreateCompany } from "../hooks/useCanCreateCompany";
+import { useCapability } from "../hooks/useCapability";
 import { NEW_COMPANY_PATH } from "../lib/onboarding-route";
 import { useNavigate } from "@/lib/router";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -32,6 +33,17 @@ import {
   Coins,
   Calendar,
 } from "lucide-react";
+
+/**
+ * Rename and delete are owner/admin acts; the server refuses everyone else.
+ * Rendered only once the server has said yes for this company, so a member
+ * never sees a control that 403s and an owner never sees one disappear.
+ */
+function CompanyAdminOnly({ companyId, children }: { companyId: string; children: ReactNode }) {
+  const manage = useCapability(companyId, "company:manage");
+  if (!manage.allowed || manage.isLoading) return null;
+  return <>{children}</>;
+}
 
 export function Companies() {
   const {
@@ -197,17 +209,20 @@ export function Companies() {
                       >
                         {company.status}
                       </span>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="text-muted-foreground opacity-0 group-hover:opacity-100"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startEdit(company.id, company.name);
-                        }}
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </Button>
+                      <CompanyAdminOnly companyId={company.id}>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          className="text-muted-foreground opacity-0 group-hover:opacity-100"
+                          aria-label={`Rename ${company.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startEdit(company.id, company.name);
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                      </CompanyAdminOnly>
                     </div>
                   )}
                   {company.description && !isEditing && (
@@ -217,13 +232,15 @@ export function Companies() {
                   )}
                 </div>
 
-                {/* Three-dot menu */}
+                {/* Three-dot menu: rename and delete, owners and admins only */}
+                <CompanyAdminOnly companyId={company.id}>
                 <div onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
                         size="icon-xs"
+                        aria-label={`Actions for ${company.name}`}
                         className="text-muted-foreground opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
                       >
                         <MoreHorizontal className="h-4 w-4" />
@@ -247,6 +264,7 @@ export function Companies() {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+                </CompanyAdminOnly>
               </div>
 
               {/* Stats row */}

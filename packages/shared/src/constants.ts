@@ -6,6 +6,11 @@ export type CompanyProductProfile = (typeof COMPANY_PRODUCT_PROFILES)[number];
 
 export const DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_COMPANY_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
+// AgentDash admin powers: how many records one batch from an admin's own
+// Claude may hold (company setting `assistantBatchMaxRecords`).
+export const ASSISTANT_BATCH_MAX_RECORDS_MIN = 1;
+export const ASSISTANT_BATCH_MAX_RECORDS_MAX = 200;
+export const ASSISTANT_BATCH_MAX_RECORDS_DEFAULT = 50;
 
 export const DEPLOYMENT_MODES = ["local_trusted", "authenticated"] as const;
 export type DeploymentMode = (typeof DEPLOYMENT_MODES)[number];
@@ -1338,7 +1343,26 @@ export const FEATURE_FLAG_KEYS = {
    * Off by default: every work route and the attachment-text read refuse.
    */
   COWORKER_BRIDGE: "coworker_bridge_enabled",
+  /**
+   * The two agent-avatar treatments in the agent creator, each rolled out on
+   * its own. Read only by the UI (`ui/src/lib/feature-flags.ts`); listed here
+   * so the one registry of keys the write route accepts includes them.
+   */
+  AGENT_AVATAR_RESTRAINED: "agent_avatar_restrained",
+  AGENT_AVATAR_PLAYFUL: "agent_avatar_playful",
 } as const;
+
+export type FeatureFlagKey = (typeof FEATURE_FLAG_KEYS)[keyof typeof FEATURE_FLAG_KEYS];
+
+/**
+ * Every flag key something actually reads. `PUT .../feature-flags/:flagKey`
+ * refuses any other key, so a typo cannot create a row nothing will ever read.
+ */
+export const KNOWN_FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = Object.freeze(Object.values(FEATURE_FLAG_KEYS));
+
+export function isKnownFeatureFlagKey(value: string): value is FeatureFlagKey {
+  return (KNOWN_FEATURE_FLAG_KEYS as readonly string[]).includes(value);
+}
 
 // AgentDash (#157): billing-infra activity log action names.
 // Written by entitlement-sync.ts when Stripe sends payment failure or

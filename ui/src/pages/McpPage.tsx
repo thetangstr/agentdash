@@ -9,8 +9,8 @@
 // No new CSS frameworks; everything below is the existing mkt-* system plus
 // inline styles on mkt tokens, exactly like Consulting.tsx.
 //
-// The commands and tool names mirror doc/MCP-LAUNCH.md and
-// packages/mcp-server/src/journey.ts (the canonical sources) — keep them in
+// The local commands and tools mirror doc/MCP-LAUNCH.md and
+// packages/mcp-server/src/journey.ts; hosted request tools mirror cloud.ts — keep them in
 // sync when the flow or tool surface changes. Deliberately NO kickoff prompt
 // here: the server's protocol-level instructions steer the agent, and the
 // operator runbook (doc/MCP-LAUNCH.md) is where the full prompt lives.
@@ -40,6 +40,13 @@ const MCP_ADD_EXISTING = `claude mcp add agentdash \\
 // instructions (packages/mcp-server/src/playbook.ts), so the customer just
 // talks. The full operator runbook lives in doc/MCP-LAUNCH.md.
 const FIRST_WORDS = `Set up AgentDash for me.`;
+
+const CLOUD_TOOLS = [
+  { name: "agentdash_cloud_check_name", description: "Check whether a workspace name is available." },
+  { name: "agentdash_cloud_start", description: "Request a workspace with the owner's email and terms acceptance." },
+  { name: "agentdash_cloud_status", description: "Follow email verification, admission and provisioning status." },
+  { name: "agentdash_cloud_connect", description: "Request access for the owner's approval after the workspace is claimed." },
+];
 
 const HOW_IT_WORKS: Array<{ step: string; title: string; body: string }> = [
   {
@@ -112,7 +119,7 @@ const TOOL_GROUPS: Array<{ title: string; blurb: string; tools: string[] }> = [
 
 function CodeBlock({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <figure style={{ margin: 0 }}>
+    <figure style={{ margin: 0, minWidth: 0, maxWidth: "100%" }}>
       <figcaption
         style={{
           fontSize: 12,
@@ -136,6 +143,8 @@ function CodeBlock({ label, children }: { label: string; children: ReactNode }) 
           lineHeight: 1.6,
           overflowX: "auto",
           whiteSpace: "pre",
+          maxWidth: "100%",
+          boxSizing: "border-box",
         }}
       >
         <code>{children}</code>
@@ -157,37 +166,77 @@ export function McpPage() {
         </h1>
         <div style={{ display: "grid", gap: 24, maxWidth: "60ch", color: "var(--mkt-ink-soft)" }}>
           <p className="mkt-body-lg">
-            No signup forms, no dashboards required. Connect the AgentDash MCP
-            server to Claude Code, Claude Desktop, Cursor, or any MCP client,
-            and your agent does the rest: it signs you up with your email,
-            interviews you about your business, builds your agent team, and
-            runs it day to day — with every risky action gated behind your
-            approval.
+            Request a hosted workspace from an MCP client that supports remote
+            HTTP servers, or connect to a self-hosted instance. The hosted request
+            and workspace setup are separate steps, with the owner in control of
+            email verification, account claiming and access approval.
           </p>
         </div>
       </SectionContainer>
 
       <SectionContainer background="cream-2">
         <h2 className="mkt-display-section" style={{ marginBottom: "var(--mkt-space-4)" }}>
-          Get connected
+          Request a hosted workspace
+        </h2>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: "var(--mkt-space-3)", minWidth: 0, maxWidth: 760, color: "var(--mkt-ink-soft)" }}>
+          <p style={{ margin: 0 }}>
+            Add this Streamable HTTP server URL to your client's remote MCP
+            settings. There is no local install or API key needed to request a workspace.
+            Your client must support this transport; its connection steps may differ.
+          </p>
+          <CodeBlock label="Hosted workspace requests — Streamable HTTP">
+            https://www.agentdash.cloud/api/cloud/mcp
+          </CodeBlock>
+          <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 12 }}>
+            {CLOUD_TOOLS.map((tool) => (
+              <li key={tool.name}><code style={{ overflowWrap: "anywhere" }}>{tool.name}</code> — {tool.description}</li>
+            ))}
+          </ul>
+          <p style={{ margin: 0 }}>
+            Give your agent your real email and workspace name, and accept the{" "}
+            <a href="/terms">terms</a> yourself. Verify your email using the link
+            sent to you. Agent-started requests wait for admission approval after
+            verification unless you have a valid hosted admission code; capacity
+            must also be available. Claim the workspace from your private email
+            link and set your own password. For agent access, sign in to the
+            approval page, check the confirmation code and approve the request
+            yourself. Never share the email claim link with your agent.
+          </p>
+          <p style={{ margin: 0 }}>
+            This hosted endpoint keeps its four request tools and does not switch
+            to workspace setup tools. Continue setup in your workspace's web UI,
+            or use the documented stdio connection. Your hosted agents need your
+            model provider and API key configured before the Chief of Staff can reply.
+            Provider usage is billed separately.
+          </p>
+          <p style={{ margin: 0 }}>
+            See <a href="/docs/mcp/connecting">MCP connection instructions</a> and{" "}
+            <a href="/docs/start/quickstart">the cloud setup guide</a>, or request
+            a workspace directly on <a href="/start">the signup page</a>.
+          </p>
+        </div>
+      </SectionContainer>
+
+      <SectionContainer>
+        <h2 className="mkt-display-section" style={{ marginBottom: "var(--mkt-space-4)" }}>
+          Connect a self-hosted instance
         </h2>
         <div style={{ display: "grid", gap: "var(--mkt-space-4)", maxWidth: 760 }}>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
-            <strong>Setting up a brand-new machine?</strong> One command
-            handles everything — prerequisites, install, build, and MCP
-            registration (needs Node 20+ and the Claude Code CLI):
+            <strong>Installing on your own machine?</strong> This bootstrap
+            command checks prerequisites, installs, builds, and registers the
+            local MCP server (needs Node 20+ and the Claude Code CLI):
           </p>
           <CodeBlock label="Fresh machine — one command">{BOOTSTRAP_COMMAND}</CodeBlock>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
             Then start your agent and just say:
           </p>
-          <CodeBlock label={"That's it — the agent does the rest"}>{FIRST_WORDS}</CodeBlock>
+          <CodeBlock label="Start local setup">{FIRST_WORDS}</CodeBlock>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
-            No prompt to paste. The AgentDash MCP server carries its own
-            operating playbook and approval boundaries, so any connected agent
-            already knows the drill: install if needed, sign you up with your
-            email, interview you about your business, and propose an agent
-            team — hiring nothing until you approve the plan.
+            The local MCP server provides setup instructions and approval
+            boundaries. Follow its setup status, configure a supported agent
+            runtime, then continue the interview and team proposal. Hiring waits
+            for your approval of the plan.
           </p>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
             <strong>Connecting to a running AgentDash?</strong> Point at your
@@ -206,7 +255,7 @@ export function McpPage() {
 
       <SectionContainer>
         <h2 className="mkt-display-section" style={{ marginBottom: "var(--mkt-space-6)" }}>
-          How it works
+          Self-hosted setup
         </h2>
         <ol
           style={{
@@ -252,13 +301,13 @@ export function McpPage() {
 
       <SectionContainer background="cream-2">
         <h2 className="mkt-display-section" style={{ marginBottom: "var(--mkt-space-4)" }}>
-          What your agent can do
+          Self-hosted workspace tools
         </h2>
         <p style={{ margin: 0, marginBottom: "var(--mkt-space-4)", color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
-          Every AgentDash service is a tool your agent can call. The
-          <code> agentdash_*</code> journey covers the whole lifecycle, and a
-          full workspace toolset (issues, comments, documents, projects,
-          approvals) handles the day-to-day work underneath.
+          The local MCP connection offers setup and workspace tools according
+          to its toolset and credentials. These are separate from the four
+          hosted request tools above. Workspace tools cover issues, comments,
+          documents, projects and approvals.
         </p>
         <div
           style={{

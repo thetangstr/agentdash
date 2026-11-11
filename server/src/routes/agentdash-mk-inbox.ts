@@ -264,6 +264,8 @@ export function agentdashMkInboxRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     await requireProfileCompany(req, companyId);
     requireBoardUser(req);
+    // Review of 8f1b669b0: the owner/admin override view is never served to an assistant connection.
+    if (req.actor.source === "assistant_grant") throw forbidden("The override view requires company owner or administrator access");
 
     // AgentDash (security, GH #971): this is the owner/admin decision
     // surface, and it used to admit anyone holding `agents:create` — a

@@ -350,6 +350,28 @@ curl -X POST https://your-instance.example/api/issues/$ISSUE_ID/comments \
 | 409 | With `resume`, or an agent's `reopen`: the follow-up refusals listed under update. |
 | 500 | `Comment accepted, but follow-up effects are unresolved. Read the issue before retrying.`, or `Comment acceptance is uncertain. Read the issue before retrying.` — the comment may have been saved. Read the comments before you send it again. |
 
+## Rename or recolor a label
+
+`PATCH /api/labels/{labelId}` · [`updateLabel`](/api/reference#tag/issues/updateLabel)
+
+Send `name`, `color` (a 6-digit hex value such as `#336699`) or both. Any member of the label's company may, the same rule as creating and deleting a label.
+
+```bash
+curl -X PATCH https://your-instance.example/api/labels/$LABEL_ID \
+  -H "Authorization: Bearer $AGENTDASH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "Defect", "color": "#aa0000" }'
+```
+
+**Response** `200` — the updated label. The activity row is `label.updated`, with the previous name and colour.
+
+| Status | When |
+| --- | --- |
+| 400 | `Validation error` — neither field, an empty name, or a colour that is not `#rrggbb`. |
+| 403 | Not a member of the label's company. |
+| 404 | `Label not found`. |
+| 409 | `A label with this name already exists.` — names are unique within a company. |
+
 ## The `Issue` object
 
 From `packages/shared/src/types/issue.ts`. The fields an integration reads:

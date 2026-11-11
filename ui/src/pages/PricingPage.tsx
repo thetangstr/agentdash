@@ -14,11 +14,9 @@
 // Tiers + numbers below come from the Subscription + Billing sub-project (Free:
 // 1 human + 1 agent, 50 runs/mo; Pro: $29/seat, unlimited, 1,000 runs/mo +250
 // per seat, 14-day no-card trial; Team: custom). Every
-// CTA routes to sign-up (`/auth?mode=sign_up`) — in-app upgrade/checkout lives at
+// workspace CTA routes to hosted sign-up (`/start`) — in-app upgrade/checkout lives at
 // `/{prefix}/billing` and is Stripe-env-gated, so this PUBLIC page never hard-
-// depends on a live Stripe key. The Team contact address is an OBVIOUS placeholder
-// constant (see CONTACT_EMAIL) — replace it before launch; we never invent a real
-// address.
+// depends on a live Stripe key. Team inquiries use the shared public marketing contact.
 
 import {
   useEffect,
@@ -37,18 +35,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+// Same published contact as the marketing footer.
+import { CONTACT_EMAIL } from "../marketing/content/site";
+
 const EASE = "cubic-bezier(0.22,1,0.36,1)";
 const CLAY = "var(--accent-500)";
 
 // Sign-up entry point. Free + Pro both land here; in-app upgrade/checkout is the
 // env-gated /{prefix}/billing page, so the public marketing surface only ever
-// needs to route to account creation.
-const SIGN_UP_HREF = "/auth?mode=sign_up";
-
-// ⚠️ PLACEHOLDER — replace before launch. Mirrors how InvestorsPage refuses to
-// invent contact details: this is an obviously-fake example address, not a real
-// inbox. The Team-tier "Contact us" CTA points here via mailto:.
-const CONTACT_EMAIL = "sales@agentdash.example";
+// needs to route to the hosted workspace request.
+const SIGN_UP_HREF = "/start";
 
 // ---------------------------------------------------------------------------
 // motion
@@ -231,7 +227,6 @@ const TIERS: Tier[] = [
     features: [
       "1 human seat + 1 agent (your Chief of Staff)",
       "50 agent-runs / month",
-      "The autonomous-company Test Drive",
       "CoS chat — design and steer your company",
     ],
   },
@@ -398,7 +393,6 @@ const COMPARISON: { label: string; free: Cell; pro: Cell; team: Cell }[] = [
   { label: "Human seats", free: "1", pro: "Unlimited", team: "Unlimited" },
   { label: "Agents", free: "1 (Chief of Staff)", pro: "Unlimited", team: "Unlimited" },
   { label: "Agent-runs / month", free: "50", pro: "1,000 +250 / seat", team: "Custom" },
-  { label: "Autonomous-company Test Drive", free: true, pro: true, team: true },
   { label: "Teammate invites", free: false, pro: true, team: true },
   { label: "Multi-human + CoS substrate", free: false, pro: true, team: true },
   { label: "Priority support", free: false, pro: false, team: true },
@@ -520,9 +514,15 @@ export function PricingPage() {
               className="text-muted-foreground"
               style={{ fontSize: 18, lineHeight: 1.6, marginTop: 20, maxWidth: 640 }}
             >
-              Stand up a Chief of Staff for free and watch it build a company. Upgrade
-              to bring your team, lift the run limits, and only pay for the work the
-              fleet actually does.
+              Start with a Chief of Staff and upgrade to bring your team and
+              lift the run limits.
+            </p>
+          </Reveal>
+          <Reveal reduced={reduced} delay={180}>
+            <p className="text-muted-foreground" style={{ fontSize: 15, lineHeight: 1.6, marginTop: 16, maxWidth: 640 }}>
+              Hosted agents need your model provider and API key configured
+              before the Chief of Staff can reply. Provider usage is billed separately
+              from your AgentDash plan. See <a href="/docs/start/quickstart">cloud setup</a>.
             </p>
           </Reveal>
         </div>
@@ -676,11 +676,11 @@ export function PricingPage() {
                   className="text-foreground"
                   style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.035em", lineHeight: 1.1, maxWidth: 640 }}
                 >
-                  Build a company in a minute — free.
+                  Start your workspace.
                 </h2>
                 <p className="text-muted-foreground" style={{ fontSize: 16, lineHeight: 1.6, marginTop: 14, maxWidth: 600 }}>
-                  No card, no setup. Describe what you do and your Chief of Staff takes
-                  it from there. Upgrade only when you want your whole team in.
+                  No card required. Configure your model, then describe what you do
+                  to your Chief of Staff. Upgrade when you want your whole team in.
                 </p>
                 <div className="mt-8 flex flex-wrap items-center gap-3">
                   <a
@@ -691,10 +691,10 @@ export function PricingPage() {
                     Start free
                   </a>
                   <a
-                    href="/trial"
+                    href={SIGN_UP_HREF}
                     className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-base font-medium text-foreground transition-colors hover:border-[var(--accent-500)]"
                   >
-                    See it build a company
+                    Create a workspace
                   </a>
                 </div>
               </div>
@@ -709,7 +709,7 @@ export function PricingPage() {
             <Wordmark />
             <nav className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
               <a href="/pricing" className="transition-colors hover:text-foreground">Pricing</a>
-              <a href="/trial" className="transition-colors hover:text-foreground">Test drive</a>
+              <a href={SIGN_UP_HREF} className="transition-colors hover:text-foreground">Create a workspace</a>
               <a href="/" className="transition-colors hover:text-foreground">Home</a>
               <a href="/investors" className="transition-colors hover:text-foreground">Investors</a>
               <a href="/terms" className="transition-colors hover:text-foreground">Terms</a>

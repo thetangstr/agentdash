@@ -3,7 +3,7 @@ import { Identity } from "./Identity";
 import { IssueReferenceActivitySummary } from "./IssueReferenceActivitySummary";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
-import { formatActivityVerb, isSystemPlumbingActivity } from "../lib/activity-format";
+import { formatActivityVerb, isAgentRowAboutItself, isSystemPlumbingActivity } from "../lib/activity-format";
 import { deriveProjectUrlKey, type ActivityEvent, type Agent } from "@paperclipai/shared";
 import type { CompanyUserProfile } from "../lib/company-members";
 
@@ -17,6 +17,13 @@ function entityLink(entityType: string, entityId: string, name?: string | null):
     default: return null;
   }
 }
+
+/**
+ * AgentDash (APM): profile rows are written against a revision, a profile or
+ * an application, which have no name of their own; the sentence names the
+ * agent the profile belongs to ("Board applied a profile change to Builder").
+ */
+const PROFILE_ENTITY_TYPES = new Set(["agent_profile", "agent_profile_revision", "agent_profile_application"]);
 
 interface ActivityRowProps {
   event: ActivityEvent;
@@ -34,27 +41,34 @@ interface ActivityRowProps {
 }
 
 export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, entityTitleMap, className, layout = "inline" }: ActivityRowProps) {
-  const verb = formatActivityVerb(event.action, event.details, { agentMap, userProfileMap });
+  // An agent's own access rules refused it: the verb says "its", so the name isn't repeated after it.
+  const aboutItself = isAgentRowAboutItself(event);
+  const verb = formatActivityVerb(event.action, event.details, { agentMap, userProfileMap, aboutItself });
 
   const isHeartbeatEvent = event.entityType === "heartbeat_run";
   const heartbeatAgentId = isHeartbeatEvent
     ? (event.details as Record<string, unknown> | null)?.agentId as string | undefined
     : undefined;
+  const profileAgentId = PROFILE_ENTITY_TYPES.has(event.entityType) ? event.agentId : null;
 
   const name =
     // AgentDash (c3 copy): the cancelled-run verb already names the agent
     // ("stopped Scout's run") — appending the entity name would repeat it.
-    event.action === "heartbeat.cancelled"
+    event.action === "heartbeat.cancelled" || aboutItself
       ? null
       : isHeartbeatEvent
         ? (heartbeatAgentId ? entityNameMap.get(`agent:${heartbeatAgentId}`) : null)
-        : entityNameMap.get(`${event.entityType}:${event.entityId}`);
+        : profileAgentId
+          ? (entityNameMap.get(`agent:${profileAgentId}`) ?? agentMap.get(profileAgentId)?.name ?? "an agent")
+          : entityNameMap.get(`${event.entityType}:${event.entityId}`);
 
   const entityTitle = entityTitleMap?.get(`${event.entityType}:${event.entityId}`);
 
   const link = isHeartbeatEvent && heartbeatAgentId
     ? `/agents/${heartbeatAgentId}/runs/${event.entityId}`
-    : entityLink(event.entityType, event.entityId, name);
+    : profileAgentId
+      ? `/agents/${profileAgentId}/profile`
+      : entityLink(event.entityType, event.entityId, name);
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;
   const userProfile = event.actorType === "user" ? userProfileMap?.get(event.actorId) : null;

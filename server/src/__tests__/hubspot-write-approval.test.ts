@@ -17,8 +17,10 @@ import {
   agentWakeupRequests,
   createDb,
   heartbeatRuns,
+  workflowEvents,
 } from "@paperclipai/db";
 import {
+  AGENT_POLICY_CEILING_EXCEEDED,
   AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
   AGENT_POLICY_WILDCARD,
   type AgentGovernancePolicy,
@@ -327,6 +329,63 @@ describeEmbeddedPostgres("hubspot steward-approved writes", () => {
 
     expect(res.status).toBe(403);
     expect(await db.select().from(approvals)).toHaveLength(0);
+  });
+
+  // AgentDash-MK T5a at request time: the destructive-action ceiling refuses a
+  // `blocked` write before a steward ever sees it, with the same named-ceiling
+  // error the bridge raises. The apply path still re-checks at execution.
+  describe("destructive-action ceiling at request time", () => {
+    async function gateEvents(companyId: string) {
+      const rows = await db.select().from(workflowEvents);
+      return rows.filter((row) => row.companyId === companyId && row.eventType === "destructive_action_gated");
+    }
+
+    it("refuses a write under a blocked ceiling and files no approval", async () => {
+      const { company, agent } = await seed();
+      await setCeiling(company.id, agent.id, { destructiveActions: "blocked" });
+
+      const res = await requestWrite(company, agent);
+
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body.error).toBe("This action is blocked by the owner ceiling for destructive actions");
+      expect(res.body.details).toMatchObject({
+        code: AGENT_POLICY_CEILING_EXCEEDED,
+        violations: [
+          expect.objectContaining({ field: "destructiveActions", requested: "unclassified_write", allowed: "blocked" }),
+        ],
+      });
+      expect(await db.select().from(approvals)).toHaveLength(0);
+      expect(crmWrites()).toHaveLength(0);
+      const events = await gateEvents(company.id);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({
+        surface: "connector_send_request",
+        actionClass: "unclassified_write",
+        mode: "blocked",
+        decision: "refused",
+      });
+      expect(events[0]!.actorKind).toBe("agent");
+    });
+
+    it("records nothing at request time when it lets the write through: the apply path records the one verdict", async () => {
+      const { company, agent, steward } = await seed();
+      await setCeiling(company.id, agent.id, { destructiveActions: "approval_required" });
+
+      const filed = await requestWrite(company, agent);
+      expect(filed.status, JSON.stringify(filed.body)).toBe(202);
+      expect(await gateEvents(company.id)).toHaveLength(0);
+
+      const decided = await decide(company, steward, filed.body.approvalId, "approve");
+      expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+      const events = await gateEvents(company.id);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.runId).toBe(filed.body.approvalId);
+      expect(events[0]!.payload).toMatchObject({
+        surface: "connector_send",
+        mode: "approval_required",
+        decision: "allowed",
+      });
+    });
   });
 
   it("refuses a board user on the agent-facing write route", async () => {

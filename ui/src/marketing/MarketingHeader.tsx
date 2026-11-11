@@ -16,7 +16,7 @@ export function MarketingHeader() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
-    const mq = window.matchMedia("(min-width: 1061px)");
+    const mq = window.matchMedia("(min-width: 1201px)");
     const onChange = () => {
       if (mq.matches) setOpen(false);
     };

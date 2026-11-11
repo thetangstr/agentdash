@@ -7,7 +7,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -87,7 +87,10 @@ describe("POST /api/onboarding/setup-adapter (hermes provider)", () => {
     activity = vi.fn(async () => undefined);
     fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
     logSpies = (["info", "warn", "error", "debug"] as const).map((level) => vi.spyOn(logger, level));
-    for (const key of ["AGENTDASH_DEFAULT_ADAPTER", "PAPERCLIP_E2E_SKIP_LLM"]) savedEnv[key] = process.env[key];
+    for (const key of ["AGENTDASH_DEFAULT_ADAPTER", "PAPERCLIP_E2E_SKIP_LLM", "AGENTDASH_DEPLOYMENT_KIND", "AGENTDASH_ENV_FILE"]) {
+      savedEnv[key] = process.env[key];
+    }
+    delete process.env.AGENTDASH_DEPLOYMENT_KIND;
   });
 
   afterEach(async () => {
@@ -137,6 +140,37 @@ describe("POST /api/onboarding/setup-adapter (hermes provider)", () => {
     expect(observable(res)).not.toContain(KEY);
   });
 
+  it("turns off a hosted box's stub mode once a real model is set, in the process and the env file", async () => {
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    process.env.PAPERCLIP_E2E_SKIP_LLM = "true";
+    const envFile = join(tmp, "agentdash.env");
+    process.env.AGENTDASH_ENV_FILE = envFile;
+    await writeFile(envFile, "AGENTDASH_DEFAULT_ADAPTER=hermes_local\nPAPERCLIP_E2E_SKIP_LLM=true\nOTHER=1\n");
+
+    const res = await request(buildApp(admin))
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "hermes", provider: "openrouter", apiKey: KEY, companyId: "company-1" });
+
+    expect(res.status).toBe(201);
+    expect(process.env.PAPERCLIP_E2E_SKIP_LLM).toBeUndefined();
+    expect(await readFile(envFile, "utf8")).toBe("AGENTDASH_DEFAULT_ADAPTER=hermes_local\nOTHER=1\n");
+    expect(res.body.applied).toContain("PAPERCLIP_E2E_SKIP_LLM (cleared)");
+    expect(activity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ details: expect.objectContaining({ stubModeCleared: true }) }),
+    );
+  });
+
+  it("leaves stub mode alone on a self-hosted install", async () => {
+    process.env.PAPERCLIP_E2E_SKIP_LLM = "true";
+    const res = await request(buildApp(admin))
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "hermes", provider: "openrouter", apiKey: KEY, companyId: "company-1" });
+    expect(res.status).toBe(201);
+    expect(process.env.PAPERCLIP_E2E_SKIP_LLM).toBe("true");
+    expect(res.body.applied).not.toContain("PAPERCLIP_E2E_SKIP_LLM (cleared)");
+  });
+
   it("returns a readable error for a wrong key, leaks nothing, and leaves no template behind", async () => {
     fetchMock.mockImplementation(async () => new Response(`{"error":{"message":"bad key ${KEY}"}}`, { status: 401 }));
     const res = await request(buildApp(admin))
@@ -168,6 +202,34 @@ describe("POST /api/onboarding/setup-adapter (hermes provider)", () => {
       .send({ preset: "hermes", provider: "zai", apiKey: KEY, companyId: "company-2" });
     expect(res.status).toBe(403);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Qwen Token Plan key on a hosted box under any provider, before any provider call", async () => {
+    process.env.AGENTDASH_DEPLOYMENT_KIND = "hosted";
+    const planKey = "sk-sp-routetestplankey0123456789";
+    for (const provider of ["openai", "openrouter", "zai"]) {
+      const res = await request(buildApp(admin))
+        .post("/api/onboarding/setup-adapter")
+        .send({ preset: "hermes", provider, apiKey: planKey, companyId: "company-1" });
+      expect(res.status).toBe(422);
+      expect(res.body.details).toEqual({ code: "provider_plan_key_not_allowed" });
+      expect(res.body.error).toContain("Qwen Token Plan key");
+      expect(observable(res)).not.toContain(planKey);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(hermesCalls).toEqual([]);
+    expect(secretPuts).toEqual([]);
+  });
+
+  it("leaves a self-hosted install's key check unchanged for an sk-sp- key", async () => {
+    delete process.env.AGENTDASH_DEPLOYMENT_KIND;
+    fetchMock.mockImplementation(async () => new Response("{}", { status: 401 }));
+    const res = await request(buildApp(admin))
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "hermes", provider: "openai", apiKey: "sk-sp-routetestplankey0123456789", companyId: "company-1" });
+    expect(res.status).toBe(422);
+    expect(res.body.details).toEqual({ code: "provider_key_rejected" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("401s an agent and 400s bad input before any provider call", async () => {

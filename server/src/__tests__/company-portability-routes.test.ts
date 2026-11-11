@@ -19,6 +19,7 @@ const mockAgentService = vi.hoisted(() => ({
 const mockAccessService = vi.hoisted(() => ({
   ensureMembership: vi.fn(),
   canUser: vi.fn(),
+  getMembership: vi.fn(),
 }));
 
 const mockBudgetService = vi.hoisted(() => ({
@@ -170,6 +171,7 @@ describe.sequential("company portability routes", () => {
       warnings: [],
     });
     mockAccessService.canUser.mockResolvedValue(false);
+    mockAccessService.getMembership.mockResolvedValue({ status: "active", membershipRole: "member" });
   });
 
   it.sequential("rejects non-CEO agents from CEO-safe export preview routes", async () => {
@@ -256,8 +258,30 @@ describe.sequential("company portability routes", () => {
     expect(mockCompanyPortabilityService.exportBundle).toHaveBeenNthCalledWith(2, companyId, exportRequest, { accessActorAgentId: ceoAgentId });
   });
 
-  it.sequential("allows board users to export through legacy and CEO-safe bundle routes", async () => {
+  // Exports are owner/admin only for people: a bundle carries every agent's
+  // instructions and every project and issue, restricted ones included.
+  it.sequential("refuses a plain member on the legacy and CEO-safe export routes", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      companyIds: [companyId],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    for (const path of [`/api/companies/${companyId}/export`, `/api/companies/${companyId}/exports`, `/api/companies/${companyId}/exports/preview`]) {
+      const res = await request(app).post(path).send(exportRequest);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("Only owners and admins can export this company.");
+    }
+    expect(mockCompanyPortabilityService.exportBundle).not.toHaveBeenCalled();
+    expect(mockCompanyPortabilityService.previewExport).not.toHaveBeenCalled();
+  });
+
+  it.sequential("allows company admins to export through legacy and CEO-safe bundle routes", async () => {
     mockCompanyPortabilityService.exportBundle.mockResolvedValue(createExportResult());
+    mockAccessService.getMembership.mockResolvedValue({ status: "active", membershipRole: "admin" });
     const app = await createApp({
       type: "board",
       userId: "user-1",
@@ -476,7 +500,9 @@ describe.sequential("company portability routes", () => {
       target: { mode: "existing_company", companyId },
       collisionStrategy: "rename",
     };
-    const memberWithoutAssign = {
+    // Importing into an existing company needs an owner or admin first; the
+    // routine-write rule then still applies to that administrator.
+    const boardUser = {
       type: "board",
       userId: "user-1",
       companyIds: [companyId],
@@ -516,9 +542,25 @@ describe.sequential("company portability routes", () => {
     });
 
     it.sequential.each(importRoutes)(
-      "rejects a member without tasks:assign on the %s import route",
+      "rejects a plain member on the %s import route before the routine rule",
       async (_label, path) => {
-        const app = await createApp(memberWithoutAssign);
+        mockAccessService.canUser.mockResolvedValue(true);
+        const app = await createApp(boardUser);
+
+        const res = await request(app).post(path).send(routineBundle);
+
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe("Only owners and admins can import into this company.");
+        expect(mockCompanyPortabilityService.importBundle).not.toHaveBeenCalled();
+        expect(mockLogActivity).not.toHaveBeenCalled();
+      },
+    );
+
+    it.sequential.each(importRoutes)(
+      "rejects an admin without tasks:assign on the %s import route",
+      async (_label, path) => {
+        mockAccessService.getMembership.mockResolvedValue({ status: "active", membershipRole: "admin" });
+        const app = await createApp(boardUser);
 
         const res = await request(app).post(path).send(routineBundle);
 
@@ -530,10 +572,11 @@ describe.sequential("company portability routes", () => {
     );
 
     it.sequential.each(importRoutes)(
-      "lets a member with tasks:assign import routines on the %s route",
+      "lets an admin with tasks:assign import routines on the %s route",
       async (_label, path) => {
+        mockAccessService.getMembership.mockResolvedValue({ status: "active", membershipRole: "admin" });
         mockAccessService.canUser.mockResolvedValue(true);
-        const app = await createApp(memberWithoutAssign);
+        const app = await createApp(boardUser);
 
         const res = await request(app).post(path).send(routineBundle);
 
@@ -547,7 +590,7 @@ describe.sequential("company portability routes", () => {
     );
 
     it.sequential.each(importRoutes)("lets an instance admin import routines on the %s route", async (_label, path) => {
-      const app = await createApp({ ...memberWithoutAssign, isInstanceAdmin: true });
+      const app = await createApp({ ...boardUser, isInstanceAdmin: true });
 
       const res = await request(app).post(path).send(routineBundle);
 

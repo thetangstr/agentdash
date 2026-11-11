@@ -3,7 +3,7 @@ title: "Bridge tools"
 summary: "The tools a bridge endpoint token gets: the local end of the agent bridge and the steward inbox."
 ---
 
-> Generated at commit `d3a98f945` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `8f1b669b0` by `scripts/docs/generate-mcp-reference.mjs`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
 **9 tools** — measured: the length of the `tools/list` response. Source: `buildToolSurface` in `packages/mcp-server/src/index.ts`, which returns these for any credential `isControlPlaneCredential` (`src/config.ts`) rejects, whatever the toolset except `human`; the tools are defined in `src/bridge.ts`.
@@ -35,7 +35,7 @@ No input.
 
 ## `inbox_propose`
 
-Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'): `work` is a short name for the job (it becomes the issue title) and `description` is the full brief; confirmed work is created as todo and the agent starts on it straight away. It also records a check-interval preference, but nothing acts on it -- the check is triggered by the operator's own harness schedule, not by AgentDash, so do not tell the operator that setting it changes when the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing.
+Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'): `work` is a short name for the job (it becomes the issue title) and `description` is the full brief; confirmed work is created as todo and the agent starts on it straight away. It also records a check-interval preference, but nothing acts on it -- the check is triggered by the operator's own harness schedule, not by AgentDash, so do not tell the operator that setting it changes when the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing. For changes to more than 10 records at once, use the AgentDash connector in Claude (batch changes, which an admin must turn on). This inbox does not do bulk.
 
 | Property | Type | Required | Description |
 |---|---|---|---|

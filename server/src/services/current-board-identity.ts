@@ -34,12 +34,26 @@ function originalBoardKey(req: Request) {
 const minimumDeadline = (a: number | null, b: number | null) => a === null ? b : b === null ? a : Math.min(a, b);
 const byId = (table: SQLWrapper, id: string) => sql`select id from ${table} where id = ${id} for share`;
 
+/**
+ * The browser session this request proves. A batch item (admin powers, part 2)
+ * carries the confirming person's session as its origin, so the same live
+ * session row is re-read below: a batch stops working the moment that session
+ * ends, exactly as the person's own clicks would.
+ */
+function sessionProof(req: Request): { sessionId: string; userId: string } | null {
+  const verified = req.verifiedCredential;
+  if (verified?.kind === "session") return { sessionId: verified.sessionId, userId: verified.userId };
+  if (verified?.kind === "batch_item" && verified.origin.kind === "session") {
+    return { sessionId: verified.origin.sessionId, userId: verified.origin.userId };
+  }
+  return null;
+}
+
 export function currentBoardIdentity(req: Request) {
   const { type, source, userId, keyId } = req.actor;
   if (type !== "board" || (source !== "board_key" && source !== "session" && source !== "local_implicit")) throw unauthorized();
   const key = source === "board_key" ? originalBoardKey(req) : null;
-  const session = source === "session" && req.verifiedCredential?.kind === "session"
-    ? { sessionId: req.verifiedCredential.sessionId, userId: req.verifiedCredential.userId } : null;
+  const session = source === "session" ? sessionProof(req) : null;
   if (source !== "local_implicit" && (!userId || (source === "session" && (!session || session.userId !== userId)))) throw unauthorized();
   let credentialDeadline = key?.expiresAt ?? null;
 
@@ -49,7 +63,10 @@ export function currentBoardIdentity(req: Request) {
       const current = verifiedBoardCredential(req);
       if (!current || current.userId !== key.userId || current.keyId !== key.keyId) throw unauthorized();
     }
-    if (session && (req.verifiedCredential?.kind !== "session" || req.verifiedCredential.sessionId !== session.sessionId || req.verifiedCredential.userId !== session.userId)) throw unauthorized();
+    if (session) {
+      const current = sessionProof(req);
+      if (!current || current.sessionId !== session.sessionId || current.userId !== session.userId) throw unauthorized();
+    }
     if (credentialDeadline !== null && credentialDeadline <= Date.now()) throw unauthorized();
   }
   checkTime();

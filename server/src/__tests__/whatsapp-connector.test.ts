@@ -437,6 +437,47 @@ describeEmbeddedPostgres("whatsapp connector", () => {
     expect(stored.decidedByUserId).toBe(steward.principalId);
   });
 
+  // A CEO hire needs a company administrator wherever it is decided
+  // (approvalService.approve): a member steward's button reply is refused
+  // with a plain message and nothing is decided.
+  it("refuses a member steward approving a pending CEO hire, plainly", async () => {
+    const { company, agent, binding } = await seedPaired();
+    const ceoHire = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "hire_agent",
+        requestedByAgentId: agent.id,
+        status: "pending",
+        payload: { name: `CEO ${randomUUID().slice(0, 8)}`, role: "ceo", adapterType: "process" },
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const token = await whatsappConnectorService(db).issueCallbackToken({
+      companyId: company.id,
+      approvalId: ceoHire.id,
+      revision: ceoHire.revision,
+      decision: "approved",
+      bindingId: binding.id,
+    });
+
+    await post(
+      createApp(),
+      messageEnvelope([
+        {
+          id: "wamid.ceo",
+          from: "15551234567",
+          type: "interactive",
+          interactive: { type: "button_reply", button_reply: { id: token } },
+        },
+      ]),
+    );
+
+    const stored = await db.select().from(approvals).where(eq(approvals.id, ceoHire.id)).then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
+    expect(JSON.stringify(sent)).toContain("Only owners and admins can approve this hire.");
+  });
+
   it("refuses a button reply from a revoked binding", async () => {
     const { company, agent, binding } = await seedPaired();
     const approval = await db

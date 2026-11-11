@@ -65,6 +65,8 @@ export const issues = pgTable(
   },
   (table) => ({
     companyStatusIdx: index("issues_company_status_idx").on(table.companyId, table.status),
+    // AgentDash: the evaluation ingest's keyset read (services/evaluation/sources.ts) orders by this key per company.
+    companyUpdatedIdIdx: index("issues_company_updated_id_idx").on(table.companyId, table.updatedAt, table.id),
     assigneeStatusIdx: index("issues_company_assignee_status_idx").on(
       table.companyId,
       table.assigneeAgentId,

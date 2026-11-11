@@ -129,17 +129,21 @@ export function ToggleField({
   checked,
   onChange,
   toggleTestId,
+  disabled = false,
 }: {
   label: string;
   hint?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   toggleTestId?: string;
+  /** Shows the current value without letting it change (a read-only viewer). */
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-1.5">
-        <span className="text-xs text-muted-foreground">{label}</span>
+    <div className="flex items-center justify-between gap-2 max-sm:gap-5">
+      {/* AgentDash: min-w-0 lets a long label wrap inside its own block. On a phone the hint icon's 44px hit area grows 16px past its box (HintIcon), so the row keeps a 20px gap to the switch's own hit area and the two never overlap. */}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="min-w-0 text-xs text-muted-foreground">{label}</span>
         {hint && <HintIcon text={hint} />}
       </div>
       <button
@@ -149,10 +153,13 @@ export function ToggleField({
         role="switch"
         aria-checked={checked}
         aria-label={label}
+        disabled={disabled}
         // AgentDash: the button is the hit area (44px on phones, the negative
         // margin keeps the row height); the track inside is the visible switch.
-        className="relative inline-flex items-center justify-end max-sm:-my-3 max-sm:min-w-11 max-sm:py-3"
-        onClick={() => onChange(!checked)}
+        className="relative inline-flex shrink-0 items-center justify-end disabled:cursor-not-allowed disabled:opacity-60 max-sm:-my-3 max-sm:min-w-11 max-sm:py-3"
+        onClick={() => {
+          if (!disabled) onChange(!checked);
+        }}
       >
         <span
           className={cn(

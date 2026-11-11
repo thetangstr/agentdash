@@ -644,7 +644,7 @@ export interface AgentCardContractSummary {
 export interface AgentCardV1 {
   kind: "agent_card";
   cardVersion: typeof AGENT_CARD_VERSION;
-  formulaVersion: typeof AGENT_METRICS_VERSION;
+  formulaVersion: string;
   scorecardKind: typeof AGENT_CARD_SCORECARD_KIND;
   companyId: string;
   subjectRef: EvaluationAgentSubjectRef;
@@ -672,9 +672,14 @@ export interface AgentCardV1 {
  * `partial` when some. Replay dependencies the viewer can't read are dropped.
  */
 export interface AgentCardView {
+  /** Stored formula differs from the installed scorer. Historical bodies are never relabelled. */
+  formulaMismatch?: boolean;
+  /** Live head validation is separate from the captured snapshot and its hash. */
+  nativeOutputStatus?: "captured" | "current" | "stale";
+  nativeOutputCheckedAt?: string;
   kind: "agent_card_view";
   cardVersion: typeof AGENT_CARD_VERSION;
-  formulaVersion: typeof AGENT_METRICS_VERSION;
+  formulaVersion: string;
   companyId: string;
   agentId: string;
   agentName: string | null;
@@ -790,6 +795,8 @@ export interface AgentCardSnapshotResponse {
 
 /** One row of `GET evaluation/agents` (latest stored version, projected). */
 export interface AgentCardSummary {
+  formulaVersion?: string;
+  formulaMismatch?: boolean;
   agentId: string;
   agentName: string | null;
   /** AgentDash (P3.7): the agent's url key today (its current name, as every agent route resolves it), for links. */
@@ -852,6 +859,11 @@ export interface AgentCaseFilter {
 }
 
 export interface AgentCaseList {
+  /** Cases reproduce the pinned snapshot; they do not validate current document heads. */
+  evidenceContext?: "captured";
+  formulaVersion?: string;
+  formulaMismatch?: boolean;
+  unavailableReason?: string;
   agentId: string;
   version: number | null;
   throughSeq: number | null;

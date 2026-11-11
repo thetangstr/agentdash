@@ -7,6 +7,7 @@ import { formatDateTime } from "@/lib/utils";
 import { EmptyNote, Section, ViewStatus } from "./shared";
 import { ProfileDiffList, REVISION_STATE_TEXT } from "./profile-shared";
 import { ManagerFiledBadge, isManagerFiledRevision } from "./manager-shared";
+import type { ProfileNameLookup } from "./profile-names";
 
 // AgentDash: Agent Performance Management gate 2 — revision history. Profiles
 // are never reset: each change is a new revision, kept with its state. Each
@@ -17,13 +18,24 @@ import { ManagerFiledBadge, isManagerFiledRevision } from "./manager-shared";
 // `proposedByCapacity` (the server reads it from the approval's payload), so
 // no approval is fetched per row.
 
-function authorText(revision: AgentProfileRevisionSummary): string {
-  if (revision.createdByUserId) return `a person (${revision.createdByUserId})`;
-  if (revision.createdByAgentId) return `an agent (${revision.createdByAgentId.slice(0, 8)})`;
+/** Who wrote a revision: their name when the screen has it, the id only when it doesn't. */
+function authorText(revision: AgentProfileRevisionSummary, names?: ProfileNameLookup): string {
+  if (revision.createdByUserId) return names?.(revision.createdByUserId) ?? `a person (${revision.createdByUserId})`;
+  if (revision.createdByAgentId) return names?.(revision.createdByAgentId) ?? `an agent (${revision.createdByAgentId.slice(0, 8)})`;
   return "unknown";
 }
 
-function RevisionDiff({ companyId, agentId, revision }: { companyId: string; agentId: string; revision: AgentProfileRevisionSummary }) {
+function RevisionDiff({
+  companyId,
+  agentId,
+  revision,
+  names,
+}: {
+  companyId: string;
+  agentId: string;
+  revision: AgentProfileRevisionSummary;
+  names?: ProfileNameLookup;
+}) {
   const query = useQuery({
     queryKey: agentProfileQueryKeys.diff(companyId, agentId, revision.id, "active"),
     queryFn: () => agentProfilesApi.diff(companyId, agentId, revision.id, "active"),
@@ -36,6 +48,7 @@ function RevisionDiff({ companyId, agentId, revision }: { companyId: string; age
       beforeLabel="Active"
       afterLabel={`Revision ${revision.revisionNumber}`}
       emptyText="Same as the active profile."
+      names={names}
       testId={`agent-profile-history-diff-${revision.revisionNumber}`}
     />
   );
@@ -45,10 +58,13 @@ export function ProfileHistory({
   companyId,
   agentId,
   activeRevisionId,
+  names,
 }: {
   companyId: string;
   agentId: string;
   activeRevisionId: string | null;
+  /** Names for authors and for ids in the diffs (`useProfileNames`). */
+  names?: ProfileNameLookup;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const query = useQuery({
@@ -86,7 +102,7 @@ export function ProfileHistory({
                         </span>
                       ) : null}
                       <span className="block text-xs text-text-secondary">
-                        Created {formatDateTime(revision.createdAt)} by {authorText(revision)}; updated {formatDateTime(revision.updatedAt)}
+                        Created {formatDateTime(revision.createdAt)} by {authorText(revision, names)}; updated {formatDateTime(revision.updatedAt)}
                       </span>
                     </p>
                     <div className="flex flex-wrap gap-1">
@@ -114,7 +130,7 @@ export function ProfileHistory({
                   </div>
                   {open ? (
                     <div id={regionId} className="mt-2">
-                      <RevisionDiff companyId={companyId} agentId={agentId} revision={revision} />
+                      <RevisionDiff companyId={companyId} agentId={agentId} revision={revision} names={names} />
                     </div>
                   ) : null}
                 </li>

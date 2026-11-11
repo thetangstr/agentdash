@@ -149,12 +149,21 @@ export function cleanLine(text) {
  * bold lead of its parent bullet (so a kept sub-bullet still says what it is
  * about).
  */
+/**
+ * A note marked as withdrawn: either `> Withdrawn, never released.` (a version cut
+ * but never published) or `> **Withdrawn on YYYY-MM-DD. Do not install this release.**`
+ * (published, then withdrawn). Both are exempt from the structure and the
+ * frozen-notes checks, skipped by the API changelog and left off the public list.
+ */
+export const WITHDRAWN_LINE = /^>\s*(?:\*\*)?Withdrawn(?:, never released|\s+on\s+\d{4}-\d{2}-\d{2})/i;
+
 export function parseRelease(markdown) {
   const lines = markdown.split(/\r?\n/);
   const version = lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim() ?? "Unversioned";
   const releasedLine = lines.find((line) => /^>\s*Released:/i.test(line));
   const releasedAt = releasedLine ? parseReleasedDate(releasedLine.replace(/^>\s*Released:\s*/i, "")) : null;
-  const withdrawn = lines.some((line) => /^>\s*Withdrawn, never released/i.test(line));
+  const withdrawn = lines.some((line) => WITHDRAWN_LINE.test(line));
+  const withdrawnNeverReleased = lines.some((line) => /^>\s*Withdrawn, never released/i.test(line));
   const upstream = lines.some((line) => /^>\s*Upstream:/i.test(line));
 
   const items = [];
@@ -196,7 +205,7 @@ export function parseRelease(markdown) {
     }
     if (line.trim() === "" || !/^\s/.test(line)) current = null;
   }
-  return { version, releasedAt, withdrawn, upstream, items };
+  return { version, releasedAt, withdrawn, withdrawnNeverReleased, upstream, items };
 }
 
 // ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ const mockFeedbackExportService = vi.hoisted(() => ({
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
   hasPermission: vi.fn(),
+  getMembership: vi.fn(),
 }));
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -228,6 +229,59 @@ describe("issue feedback trace routes", () => {
       companyId: "company-1",
       traceId: "trace-1",
       limit: 1,
+    });
+  });
+
+  describe("who may turn on company feedback sharing", () => {
+    const targetId = "11111111-1111-4111-8111-111111111111";
+    const memberActor = {
+      type: "board",
+      userId: "member-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active", membershipRole: "member" }],
+    };
+    function voteResult(extra: Record<string, unknown>) {
+      return {
+        vote: { targetType: "issue_comment", targetId, vote: "up", reason: null },
+        traceId: null,
+        consentEnabledNow: false,
+        persistedSharingPreference: null,
+        sharingEnabled: false,
+        ...extra,
+      };
+    }
+    beforeEach(() => {
+      mockIssueService.getById.mockResolvedValue({ id: "issue-1", companyId: "company-1", identifier: "PAP-1" });
+    });
+
+    it("records a member's vote without letting it turn sharing on, and says so", async () => {
+      mockAccessService.getMembership.mockResolvedValue({ status: "active", membershipRole: "member" });
+      mockFeedbackService.saveIssueVote.mockResolvedValue(voteResult({ sharingNeedsAdministrator: true }));
+      const res = await request(await createApp(memberActor))
+        .post("/api/issues/issue-1/feedback-votes")
+        .send({ targetType: "issue_comment", targetId, vote: "up", allowSharing: true });
+
+      expect(res.status).toBe(201);
+      expect(mockFeedbackService.saveIssueVote).toHaveBeenCalledWith(
+        expect.objectContaining({ allowSharing: true, mayEnableCompanySharing: false, authorUserId: "member-1" }),
+      );
+      expect(res.body.sharingNotEnabled).toMatch(/only owners and admins can turn on feedback sharing/);
+    });
+
+    it("lets an admin's vote turn sharing on", async () => {
+      mockAccessService.getMembership.mockResolvedValue({ status: "active", membershipRole: "admin" });
+      mockFeedbackService.saveIssueVote.mockResolvedValue(voteResult({ sharingEnabled: true, sharingNeedsAdministrator: false }));
+      const res = await request(
+        await createApp({ ...memberActor, userId: "admin-1", memberships: [{ companyId: "company-1", status: "active", membershipRole: "admin" }] }),
+      )
+        .post("/api/issues/issue-1/feedback-votes")
+        .send({ targetType: "issue_comment", targetId, vote: "up", allowSharing: true });
+
+      expect(res.status).toBe(201);
+      expect(mockFeedbackService.saveIssueVote).toHaveBeenCalledWith(expect.objectContaining({ mayEnableCompanySharing: true }));
+      expect(res.body.sharingNotEnabled).toBeUndefined();
     });
   });
 

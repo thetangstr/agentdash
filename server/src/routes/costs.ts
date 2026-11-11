@@ -31,7 +31,8 @@ import {
   canReadCompanySpend,
   projectScopedVisibilityCondition,
 } from "./visibility.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
+import { accessService } from "../services/access.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
@@ -79,6 +80,10 @@ export function costRoutes(
   // primary agent-budget write paths, so the ceiling must bind here too —
   // enforcing it only on PATCH /agents/:id would leave it trivially bypassable.
   const governance = agentGovernanceService(db);
+  const access = accessService(db);
+  // The company budget is a company setting: owner/admin only, like the rest
+  // of PATCH /companies/:id.
+  const COMPANY_BUDGET_ADMIN_MESSAGE = "Only owners and admins can change the company budget.";
 
   /**
    * Who may see what a company spends.
@@ -382,6 +387,9 @@ export function costRoutes(
       if (req.body.scopeType === "project") {
         await assertProjectIdVisible(db, req, companyId, req.body.scopeId, "Project");
       }
+      if (req.body.scopeType === "company") {
+        await assertCompanyAdministrator(access, req, companyId, COMPANY_BUDGET_ADMIN_MESSAGE);
+      }
       // An agent-scoped budget policy sets the same spend authority as the
       // agent budget field, so it is ceiling-bound on the same terms.
       if (req.body.scopeType === "agent" && typeof req.body.scopeId === "string") {
@@ -422,6 +430,15 @@ export function costRoutes(
         if (linkedApproval) {
           await approvalAuthority.requireDecisionActor(linkedApproval, req.actor);
         }
+      }
+
+      // On a company-scope incident, raising the limit writes
+      // companies.budgetMonthlyCents and resumes a paused company: the same
+      // owner/admin decision as PATCH /companies/:id/budgets. A soft incident
+      // has no linked approval, and outside agentdash_mk the approval rule
+      // admits any member, so this is checked on its own.
+      if (req.body.action === "raise_budget_and_resume" && incidentContext?.companyScope) {
+        await assertCompanyAdministrator(access, req, companyId, COMPANY_BUDGET_ADMIN_MESSAGE);
       }
 
       // Resolving an incident with a raised limit writes agents.budgetMonthlyCents
@@ -474,6 +491,7 @@ export function costRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    await assertCompanyAdministrator(access, req, companyId, COMPANY_BUDGET_ADMIN_MESSAGE);
     const company = await companies.update(companyId, { budgetMonthlyCents: req.body.budgetMonthlyCents });
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -501,7 +519,13 @@ export function costRoutes(
       req.actor.userId ?? "board",
     );
 
-    res.json(company);
+    // The same spend read rule as the company routes (`companyForReader`):
+    // a caller who may not read spend gets the row without the amounts.
+    res.json(
+      (await canReadCompanySpend(db, req, companyId))
+        ? company
+        : { ...company, budgetMonthlyCents: null, spentMonthlyCents: null },
+    );
   });
 
   router.patch("/agents/:agentId/budgets", validate(updateBudgetSchema), async (req, res) => {

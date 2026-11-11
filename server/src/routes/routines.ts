@@ -108,6 +108,35 @@ export function routineRoutes(
     res.json(detail);
   });
 
+  // AgentDash admin powers: delete a routine. Same guard as archive (every
+  // routine write: `assertCanWriteRoutines`). The definition goes; its past
+  // runs, the issues they created and the activity rows stay.
+  router.delete("/routines/:id", async (req, res) => {
+    const routine = await loadRoutineForWrite(req, req.params.id as string);
+    if (!routine) {
+      res.status(404).json({ error: "Routine not found" });
+      return;
+    }
+    const removed = await svc.remove(routine.id);
+    if (!removed) {
+      res.status(404).json({ error: "Routine not found" });
+      return;
+    }
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: routine.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "routine.deleted",
+      entityType: "routine",
+      entityId: routine.id,
+      details: { title: routine.title },
+    });
+    res.json({ id: routine.id, deleted: true });
+  });
+
   router.patch("/routines/:id", validate(updateRoutineSchema), async (req, res) => {
     // AgentDash: (#710) the guard used to run only when the assignee changed or
     // the status became active, so an assigned agent or a member without

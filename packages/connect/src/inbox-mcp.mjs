@@ -133,7 +133,7 @@ const TOOLS = [
     name: "inbox_propose",
     route: "propose",
     description:
-      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Agent A draft X'): `work` is a short name for the job (it becomes the issue title) and `description` is the full brief. Confirmed work is created as todo and the agent starts on it straight away. If a name does not resolve this returns the alternatives — ask the person rather than guessing.",
+      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Agent A draft X'): `work` is a short name for the job (it becomes the issue title) and `description` is the full brief. Confirmed work is created as todo and the agent starts on it straight away. If a name does not resolve this returns the alternatives — ask the person rather than guessing. For changes to more than 10 records at once, use the AgentDash connector in Claude (batch changes, which an admin must turn on). This inbox does not do bulk.",
     inputSchema: {
       type: "object",
       properties: {

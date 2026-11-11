@@ -374,6 +374,11 @@ describe("docs: search", () => {
     expect(searchDocs("   ", entries)).toHaveLength(0);
   });
 
+  it("finds hosted invitation and model setup help in the shipped index", () => {
+    expect(searchDocs("invitation code").some((hit) => hit.entry.slug === "start/quickstart")).toBe(true);
+    expect(searchDocs("model API key").some((hit) => hit.entry.slug === "start/quickstart")).toBe(true);
+  });
+
   it("finds real pages in the shipped index", () => {
     expect(searchDocs("connect your terminal")[0]?.entry.slug).toBe("guides/steward/connect-your-terminal");
   });

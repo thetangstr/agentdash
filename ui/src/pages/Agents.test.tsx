@@ -52,6 +52,18 @@ vi.mock("../api/agents", () => ({
   agentsApi: mockAgentsApi,
 }));
 
+// AgentDash admin powers: every test in this file gets the same capability
+// and directory stubs (the page now asks for agents:create).
+const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("../api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
+const mockAccessApi = vi.hoisted(() => ({ listUserDirectory: vi.fn() }));
+vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
+vi.mock("../components/batch/AgentsBulkBar", () => ({
+  AgentsBulkBar: (props: { selected: Array<{ id: string }> }) => (
+    <div data-testid="agents-bulk-bar" data-selected={props.selected.map((agent) => agent.id).join(",")} />
+  ),
+}));
+
 vi.mock("../api/heartbeats", () => ({
   heartbeatsApi: mockHeartbeatsApi,
 }));
@@ -125,6 +137,8 @@ describe("Agents", () => {
       },
     ]);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+    mockCapabilitiesApi.get.mockResolvedValue({ companyId: "company-1", actorType: "board", membershipRole: "member", isInstanceAdmin: false, capabilities: { "agents:create": false } });
+    mockAccessApi.listUserDirectory.mockResolvedValue({ users: [] });
   });
 
   afterEach(async () => {
@@ -138,6 +152,58 @@ describe("Agents", () => {
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
+  });
+
+  describe("selecting agents to change together (admin powers)", () => {
+    async function renderList() {
+      mockAgentsApi.list.mockResolvedValue([makeAgent({ id: "a1", name: "Alpha" }), makeAgent({ id: "a2", name: "Beta", urlKey: "beta" })]);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(
+          <QueryClientProvider client={queryClient}>
+            <Agents />
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      const listButton = container.querySelector<HTMLButtonElement>('button[aria-label="List view"]');
+      if (listButton) await act(async () => { listButton.click(); });
+      await flushReact();
+    }
+    const boxes = () => [...container.querySelectorAll<HTMLInputElement>('[data-testid="agent-bulk-checkbox"]')];
+
+    it("offers checkboxes and the bar to owners and admins", async () => {
+      mockCapabilitiesApi.get.mockResolvedValue({ companyId: "company-1", actorType: "board", membershipRole: "owner", isInstanceAdmin: false, capabilities: { "agents:create": true, "company:manage": true } });
+      await renderList();
+      expect(boxes()).toHaveLength(2);
+      expect(container.querySelector('[data-testid="agents-bulk-bar"]')).toBeNull();
+      await act(async () => { boxes()[1]!.click(); });
+      expect(container.querySelector('[data-testid="agents-bulk-bar"]')!.getAttribute("data-selected")).toBe("a2");
+      await act(async () => { container.querySelector<HTMLInputElement>('[data-testid="agents-select-visible"] input')!.click(); });
+      expect(container.querySelector('[data-testid="agents-bulk-bar"]')!.getAttribute("data-selected")!.split(",").sort()).toEqual(["a1", "a2"]);
+    });
+
+    it("shows nothing to a member, even one who can manage agents: bulk changes are for owners and admins", async () => {
+      mockCapabilitiesApi.get.mockResolvedValue({ companyId: "company-1", actorType: "board", membershipRole: "member", isInstanceAdmin: false, capabilities: { "agents:create": true, "company:manage": false } });
+      await renderList();
+      expect(container.querySelectorAll('[data-testid="agent-bulk-checkbox"]')).toHaveLength(0);
+      expect(container.querySelector('[data-testid="agents-select-visible"]')).toBeNull();
+      expect(container.textContent).toContain("Alpha");
+    });
+
+    it("shows nothing to people who cannot manage agents", async () => {
+      await renderList();
+      expect(boxes()).toHaveLength(0);
+      expect(container.querySelector('[data-testid="agents-select-visible"]')).toBeNull();
+    });
+
+    it("shows nothing while the answer is still loading", async () => {
+      mockCapabilitiesApi.get.mockReturnValue(new Promise(() => undefined));
+      await renderList();
+      expect(boxes()).toHaveLength(0);
+      expect(container.querySelector('[data-testid="agents-bulk-bar"]')).toBeNull();
+    });
   });
 
   it("marks an agent with no heartbeat schedule, which otherwise looks identical to a working one", async () => {

@@ -1,11 +1,12 @@
 import type { PaperclipApiClient } from "../client.js";
 import type { ToolDefinition } from "../tools.js";
-import { ASSISTANT_SCOPE_DECIDE, ASSISTANT_SCOPE_WORK } from "@paperclipai/shared";
+import { ASSISTANT_SCOPE_ADMIN, ASSISTANT_SCOPE_DECIDE, ASSISTANT_SCOPE_WORK } from "@paperclipai/shared";
 import { AssistantContext } from "./context.js";
 import { assistantTools } from "./tools.js";
 import { assistantWorkTools } from "./work.js";
 import { assistantGatedTools } from "./gated.js";
 import { assistantRossRequestTools } from "./ross-request.js";
+import { assistantAdminBatchTools } from "./admin-batch.js";
 
 /**
  * AgentDash assistant MCP (M1 reads GH #676, M3 work tools GH #678, M4 gated
@@ -19,7 +20,8 @@ import { assistantRossRequestTools } from "./ross-request.js";
  * attempt them, and the read-only surface is the honest contract. The same
  * rule hides the gated tools without the opt-in `agentdash:decide` scope.
  * When `assistantScopes` is undefined (stdio against an operator key, not a
- * grant) the full surface is served.
+ * grant) the full surface is served, except the admin batch tools, which
+ * need an explicit `agentdash:admin` (part 5b).
  */
 export function createAssistantToolDefinitions(
   client: PaperclipApiClient,
@@ -35,6 +37,13 @@ export function createAssistantToolDefinitions(
   }
   if (!config.assistantScopes || config.assistantScopes.includes(ASSISTANT_SCOPE_DECIDE)) {
     tools.push(...assistantGatedTools(client, ctx));
+  }
+  // AgentDash admin powers (part 5b): batch changes as an admin exist ONLY
+  // for a grant that explicitly holds `agentdash:admin`. Unlike work and
+  // decide, an undefined scope list (stdio, operator key) does not get them:
+  // the code flow needs a grant and the person's browser.
+  if (config.assistantScopes?.includes(ASSISTANT_SCOPE_ADMIN)) {
+    tools.push(...assistantAdminBatchTools(client, ctx));
   }
   return tools;
 }

@@ -114,3 +114,26 @@ describe("securityHeaders ordering", () => {
     expect(res.headers["content-security-policy"]).toBe("frame-ancestors 'none'");
   });
 });
+
+describe("batch review page framing (review of 8f1b669b0)", () => {
+  it("the batch review page may not be framed at all; other pages keep the same-origin default", async () => {
+    const { batchReviewFramingGuard } = await import("../app.js");
+    const a = express();
+    a.use(securityHeaders());
+    a.use(batchReviewFramingGuard);
+    a.get(/.*/, (_req, res) => res.send("<html></html>"));
+    for (const path of [
+      "/PAP/company/batches/2f9c7e8e-0000-4000-8000-000000000000", "/company/batches/abc", "/PAP/company/batches/abc/",
+      // Review of c5941141b: matched as the router matches it.
+      "/PAP/COMPANY/Batches/abc", "/pap/Company/BATCHES/abc//", "/PAP/%63ompany/batches/abc", "/PAP/company/%62atches/abc", "//PAP//company//batches//abc",
+    ]) {
+      const res = await request(a).get(path);
+      expect(res.headers["x-frame-options"], path).toBe("DENY");
+      expect(res.headers["content-security-policy"], path).toBe("frame-ancestors 'none'");
+    }
+    for (const path of ["/PAP/company/settings", "/PAP/company/batches", "/PAP/issues/ENG-1"]) {
+      const res = await request(a).get(path);
+      expect(res.headers["x-frame-options"], path).toBe("SAMEORIGIN");
+    }
+  });
+});

@@ -32,6 +32,8 @@ export const routinesApi = {
     api.post<Routine>(`/companies/${companyId}/routines`, data),
   get: (id: string) => api.get<RoutineDetail>(`/routines/${id}`),
   update: (id: string, data: Record<string, unknown>) => api.patch<Routine>(`/routines/${id}`, data),
+  // AgentDash admin powers: delete a routine for good (its runs, the tasks they created and its history stay).
+  remove: (id: string) => api.delete<{ id: string; deleted: true }>(`/routines/${id}`),
   listRuns: (id: string, limit: number = 50) => api.get<RoutineRunSummary[]>(`/routines/${id}/runs?limit=${limit}`),
   createTrigger: (id: string, data: Record<string, unknown>) =>
     api.post<RoutineTriggerResponse>(`/routines/${id}/triggers`, data),

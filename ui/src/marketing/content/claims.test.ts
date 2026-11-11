@@ -76,13 +76,9 @@ describe("launch-week copy guardrails", () => {
     expect(readFileSync(join(ROOT, "updates/ReleaseIllustrations.tsx"), "utf8").match(/Simulated illustration/g)).toHaveLength(2);
     expect(launchCopy).toMatch(/depends on the version your operator has installed/);
   });
-  it("links only the two release-note source files", async () => {
+  it("links only the two releases' public notes pages", async () => {
     const { UPDATE_SOURCES } = await import("./updates");
-    const { GITHUB_URL } = await import("./site");
-    expect(UPDATE_SOURCES.map((s) => s.href)).toEqual([
-      `${GITHUB_URL}/blob/main/releases/v2026.1007.0.md`,
-      `${GITHUB_URL}/blob/main/releases/v2026.1007.1.md`,
-    ]);
+    expect(UPDATE_SOURCES.map((s) => s.href)).toEqual(["/releases/v2026.1007.0", "/releases/v2026.1007.1"]);
   });
 });
 

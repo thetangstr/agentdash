@@ -404,7 +404,7 @@ describeEmbeddedPostgres("agent performance routes (APM gate 1)", () => {
       expect(p.bounds).toEqual({ refusedAttempts: 1, byCode: { AGENT_CROSS_COMPANY: 1 } });
       expect(p.decisions).toEqual({ pendingApprovals: 1, openQuestionsToPeople: 1 });
       expect(p.gaps.map((g: { code: string }) => g.code)).toContain("ATTRIBUTION_CURRENT_ASSIGNEE");
-      expect(p.withheld).toEqual([{ section: "paired-harness assessments", reason: "Shown once evidence access rules ship (gate 3)" }]);
+      expect(p.withheld).toEqual([{ section: "paired-harness assessments", reason: "Counted on the performance card, for people allowed to read them" }]);
     });
 
     it("leaves restricted-project work the viewer can't read out of every count and never names it; an admin sees it", async () => {

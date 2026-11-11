@@ -574,7 +574,8 @@ async function stepEnvironment(ctx: RunContext, body: AgentOperatingProfileV1): 
  * assigned to this agent, and be in this company. Validation only — routines
  * are never modified.
  */
-async function stepRoutineBindings(ctx: RunContext, body: AgentOperatingProfileV1): Promise<StepOutcome> {
+/** Exported for its tests: the routine-trigger validity step of a profile application. */
+export async function stepRoutineBindings(ctx: Pick<RunContext, "db" | "companyId" | "agentId">, body: AgentOperatingProfileV1): Promise<StepOutcome> {
   const triggerIds = [
     ...new Set(
       body.responsibilities.flatMap((responsibility) =>
@@ -594,6 +595,8 @@ async function stepRoutineBindings(ctx: RunContext, body: AgentOperatingProfileV
         inArray(routineTriggers.id, triggerIds),
         eq(routineTriggers.companyId, ctx.companyId),
         eq(routines.companyId, ctx.companyId),
+        // A deleted routine's trigger is not a valid reference.
+        isNull(routines.deletedAt),
       ),
     );
   const valid = new Set(rows.filter((row) => row.assigneeAgentId === ctx.agentId).map((row) => row.id));

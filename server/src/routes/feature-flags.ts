@@ -2,6 +2,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
+import { KNOWN_FEATURE_FLAG_KEYS, isKnownFeatureFlagKey } from "@paperclipai/shared";
 import { badRequest, forbidden, notFound } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { insertActivity, publishActivity, type ActivityPublication } from "../services/activity-log.js";
@@ -32,6 +33,10 @@ const setFlagSchema = z.object({
  * people need `isCompanyAdministrator` (owner/admin, instance admin, or the
  * local implicit board). Every change is recorded as `feature_flag.updated`
  * with the previous and new value.
+ *
+ * Only keys in `KNOWN_FEATURE_FLAG_KEYS` (packages/shared) may be written: a
+ * key nothing reads is a typo, and storing it would report a feature as on
+ * that never turns on. Unknown keys answer 400 naming the known ones.
  */
 export function featureFlagRoutes(db: Db) {
   const router = Router();
@@ -89,6 +94,12 @@ export function featureFlagRoutes(db: Db) {
           companyId,
           "Only a workspace owner or admin can change feature flags.",
         );
+        if (!isKnownFeatureFlagKey(flagKey)) {
+          throw badRequest(
+            `Unknown feature flag "${flagKey}". Known flags: ${KNOWN_FEATURE_FLAG_KEYS.join(", ")}.`,
+            { code: "FEATURE_FLAG_UNKNOWN", knownFlags: [...KNOWN_FEATURE_FLAG_KEYS] },
+          );
+        }
         const parsed = setFlagSchema.safeParse(req.body);
         if (!parsed.success) {
           throw badRequest("Invalid feature-flag body", {

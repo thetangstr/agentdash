@@ -964,6 +964,19 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
   });
 
+  it("admin powers (part 5b): more than ten at once is refused, and the refusal points big changes to the connector", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const proposal = await stewardInboxActionsService(db).propose(endpoint.id, {
+      kind: "assign_work",
+      items: Array.from({ length: 11 }, (_, i) => ({ agent: agent.name, work: `job ${i}` })),
+    });
+    expect(proposal.ok).toBe(false);
+    expect((proposal as { reason: string }).reason).toContain("ask for at most 10 at a time");
+    expect((proposal as { reason: string }).reason).toContain("For changes to more than 10 records at once, use the AgentDash connector in Claude (batch changes, which an admin must turn on). This inbox does not do bulk.");
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+  });
+
   /**
    * The failure this path exists to prevent: a wrong name confidently assigned
    * to the wrong agent. A near miss must come back as a question.

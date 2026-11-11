@@ -1,4 +1,5 @@
 import type { AssistantCredentialOrigin, AssistantLoopbackLease } from "../services/assistant-loopback.js";
+import type { BatchItemCredentialOrigin } from "../services/batch/item-credential.js";
 export {};
 
 declare global {
@@ -8,7 +9,12 @@ declare global {
       verifiedCredential?:
         | { kind: "session"; sessionId: string; userId: string }
         | { kind: "agent_jwt"; expiresAt: number; agentId: string; companyId: string; signedRunId: string }
-        | { kind: "assistant"; origin: AssistantCredentialOrigin; loopback?: { expiresAt: number; lease: AssistantLoopbackLease } };
+        | { kind: "assistant"; origin: AssistantCredentialOrigin; loopback?: { expiresAt: number; lease: AssistantLoopbackLease } }
+        // AgentDash admin powers (part 2): one item of a confirmed batch, sent
+        // by the runner through the record's own route. `origin` is the proof
+        // the confirming person authenticated with; routes that re-check a
+        // session (current-board-identity.ts) re-check that one.
+        | { kind: "batch_item"; batchId: string; itemId: string; companyId: string; origin: BatchItemCredentialOrigin };
       actor: {
         type: "board" | "agent" | "none";
         userId?: string;

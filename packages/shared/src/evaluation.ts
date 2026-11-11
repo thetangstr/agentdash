@@ -19,7 +19,8 @@ import { z } from "zod";
  * agent snapshots carry `adapterType`/`model`, verdicts carry their project/goal,
  * `authz.refused` carries the V2 dimension/rule/target when the row has them.
  */
-export const EVALUATION_SCHEMA_VERSION = 3;
+// 4 (native output): persisted document revision digests and removal observations.
+export const EVALUATION_SCHEMA_VERSION = 4;
 
 /** Contract document version (spec §4). */
 export const EVALUATION_CONTRACT_VERSION = "v1";
@@ -98,6 +99,8 @@ export const EVALUATION_EVENT_TYPES = [
   "profile.revision_changed",
   "profile.application_changed",
   "issue.execution_decision",
+  "issue.document_revision",
+  "issue.document_removed",
   // AgentDash (APM gate 4, P4.1) — the performance manager's advisory recommendations
   // and the owner's decision on each (EVALUATION_ADVISORY_EVENT_TYPES).
   "evaluation.agent_recommendation",
@@ -147,6 +150,8 @@ export const EVALUATION_AGENT_SOURCE_EVENT_TYPES = [
   "profile.application_changed",
   /** issue_execution_decisions (review/approval stage decisions on an issue). */
   "issue.execution_decision",
+  "issue.document_revision",
+  "issue.document_removed",
 ] as const satisfies readonly EvaluationEventType[];
 
 /** Typed activity_log actions (gate 3): milestone scoring counts them as it counted `activity.other` without an item. */
@@ -634,6 +639,8 @@ export const EVALUATION_GOAL_METRIC_KEY_PREFIX = "goal:";
 export type EvaluationTypedPredicate =
   /** No check declared: unmeasurable, counts against coverage, never satisfied. */
   | { kind: "none" }
+  /** Exact UTF-8 body digest, computed from the native persisted revision. */
+  | { kind: "document_sha256"; key: string; sha256: string }
   | { kind: "record"; predicate: EvaluationRecordPredicate; coverage: EvaluationCoverageClass | null }
   /** `project.status=<value>` / `goal.status=<value>`. */
   | { kind: "status"; subject: "project" | "goal"; value: string }
@@ -657,6 +664,13 @@ export function evaluationTypedPredicate(check: EvaluationCriterionCheck | null 
     return { kind: "metric", metricKey: check.metricKey, target: check.target, unit: check.unit };
   }
   const record = check.record;
+  const document = /^document\.sha256:([^:]+):([0-9a-f]{64})$/.exec(record);
+  if (document) {
+    try {
+      const key = decodeURIComponent(document[1]!);
+      if (key && encodeURIComponent(key) === document[1]) return { kind: "document_sha256", key, sha256: document[2]! };
+    } catch { /* Malformed encoding remains an unknown check. */ }
+  }
   const name = Object.prototype.hasOwnProperty.call(EVALUATION_RECORD_PREDICATE_ALIASES, record) ? EVALUATION_RECORD_PREDICATE_ALIASES[record]! : record;
   if ((EVALUATION_RECORD_PREDICATES as readonly string[]).includes(name)) {
     const predicate = name as EvaluationRecordPredicate;
@@ -869,7 +883,7 @@ export type AgentExceptionKind = (typeof AGENT_EXCEPTION_KINDS)[number];
 /** Card shape version. */
 export const AGENT_CARD_VERSION = "agent-card/1";
 /** Agent formula version (LLD §6.3); separate from the milestone `FORMULA_VERSION`. Verify refuses to compare across it. */
-export const AGENT_METRICS_VERSION = "agent-metrics/1";
+export const AGENT_METRICS_VERSION = "agent-metrics/2";
 /** `evaluation_scorecards.milestone_kind` for agent cards; `milestone_id` is the agent id (LLD §2). */
 export const AGENT_CARD_SCORECARD_KIND = "agent";
 

@@ -1,6 +1,12 @@
 import { workforceService } from "./workforce.js";
 import { type ActivityAcceptance } from "./activity-log.js";
 import { normalizeHumanRole } from "./company-member-roles.js";
+import type { Request } from "express";
+import {
+  PRIVILEGED_AGENT_ADMIN_MESSAGE,
+  grantsPrivilegedAgentAuthority,
+  isCompanyAdministrator,
+} from "../routes/authz.js";
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -17,7 +23,11 @@ import { accessService } from "./access.js";
 import { approvalAuthorityService, type ApprovalDecisionActor } from "./approval-authority.js";
 import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
 import { agentService } from "./agents.js";
-import { approvalService } from "./approvals.js";
+import {
+  PRIVILEGED_HIRE_APPROVAL_REFUSAL,
+  approvalService,
+  hireGrantsPrivilegedAgentAuthority,
+} from "./approvals.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import { hermesModelTierStamp } from "./hermes-model-tiers.js";
 import { DECIDABLE_STATUSES } from "./steward-inbox.js";
@@ -270,6 +280,30 @@ export function assistantGatedActionsService(
     return access.canUser(companyId, actor.userId, "agents:create");
   }
 
+  /**
+   * The one company-administrator predicate (`isCompanyAdministrator`), asked
+   * for the person behind the grant. A CEO, a Chief of Staff or an agent
+   * creator is company-wide authority, so hiring or approving one needs it,
+   * through an assistant exactly as through the board routes.
+   */
+  async function isAdministrator(companyId: string, actor: AssistantGatedActor): Promise<boolean> {
+    const asRequest = {
+      actor: {
+        type: "board",
+        userId: actor.userId,
+        source: "assistant_grant",
+        isInstanceAdmin: await access.isInstanceAdmin(actor.userId),
+      },
+    } as unknown as Request;
+    return isCompanyAdministrator(access, asRequest, companyId).catch(() => false);
+  }
+
+  // `approvalService.approve` refuses a privileged hire for a non-administrator
+  // whatever the channel; asking here as well turns that into a structured
+  // refusal before a handle is minted or anything is decided.
+  const hireGrantsPrivilegedAuthority = (companyId: string, payload: unknown) =>
+    hireGrantsPrivilegedAgentAuthority(db, companyId, payload);
+
   async function readBackFor(approval: ApprovalRow, decision: AssistantDecision, note: string | null) {
     const asker = approval.requestedByAgentId
       ? await agentsSvc.getById(approval.requestedByAgentId).then((a) => a?.name ?? "An agent")
@@ -344,6 +378,12 @@ export function assistantGatedActionsService(
         reason: "Deciding an agent hire needs the agents:create permission — ask a company admin.",
         status: 403,
       };
+    }
+    if (input.decision === "approve"
+        && approval.type === "hire_agent"
+        && (await hireGrantsPrivilegedAuthority(companyId, approval.payload))
+        && !(await isAdministrator(companyId, actor))) {
+      return { ok: false, code: "not_authorized", reason: PRIVILEGED_HIRE_APPROVAL_REFUSAL, status: 403 };
     }
 
     const note = input.note?.trim() || null;
@@ -428,6 +468,9 @@ export function assistantGatedActionsService(
         reason: "You do not have permission to hire agents in this company.",
         status: 403,
       };
+    }
+    if (grantsPrivilegedAgentAuthority({ role: normalizeRequestedRole(role) }) && !(await isAdministrator(companyId, actor))) {
+      return { ok: false, code: "not_authorized", reason: PRIVILEGED_AGENT_ADMIN_MESSAGE, status: 403 };
     }
 
     const company = await db
@@ -771,6 +814,14 @@ export function assistantGatedActionsService(
           status: 403,
         };
       }
+      if (
+        payload.decision === "approve"
+        && approval.type === "hire_agent"
+        && (await hireGrantsPrivilegedAuthority(companyId, approval.payload))
+        && !(await isAdministrator(companyId, actor))
+      ) {
+        return { ok: false, code: "not_authorized", reason: `${PRIVILEGED_HIRE_APPROVAL_REFUSAL} Nothing was decided.`, status: 403 };
+      }
 
       if (payload.decision === "request_changes") {
         const updated = await approvalsSvc.requestRevision(approval.id, actor.userId, payload.note);
@@ -915,6 +966,10 @@ export function assistantGatedActionsService(
     decisionsNeedTap: boolean,
   ): ReturnType<typeof confirm> {
     const payload = record.payload as unknown as HireHandlePayload;
+    // Re-checked at confirm: the person's role may have changed since prepare.
+    if (grantsPrivilegedAgentAuthority({ role: payload.role }) && !(await isAdministrator(companyId, actor))) {
+      return { ok: false, code: "not_authorized", reason: `${PRIVILEGED_AGENT_ADMIN_MESSAGE} Nothing was filed.`, status: 403 };
+    }
     if (payload.workforceTemplateId !== undefined) {
       if (!(await canSelectWorkforceTemplate(companyId, actor))) return { ok: false, code: "not_authorized", reason: "Only an admin can select a workforce template — nothing was filed.", status: 403 };
       if (payload.workforceTemplateVersion !== 1 || !resolveWorkforceTemplate(payload.workforceTemplateId, payload.workforceTemplateVersion) || !supportsWorkforcePrompt(payload.adapterType)) {

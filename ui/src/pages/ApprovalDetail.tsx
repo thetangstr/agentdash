@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { approvalsApi } from "../api/approvals";
 import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
+import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { buildCompanyUserLabelMap } from "../lib/company-members";
@@ -11,6 +12,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { StatusBadge } from "../components/StatusBadge";
 import { Identity } from "../components/Identity";
 import { approvalLabel, typeIcon, defaultTypeIcon, ApprovalPayloadRenderer } from "../components/ApprovalPayload";
+import { buildProfileNameLookup } from "../components/agent-performance/profile-names";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -71,6 +73,17 @@ export function ApprovalDetail() {
     queryFn: () => accessApi.listUserDirectory(resolvedCompanyId ?? ""),
     enabled: !!resolvedCompanyId,
   });
+
+  // AgentDash (APM): a profile change lists projects by id; name them, as the agents and people above are.
+  const { data: projects } = useQuery({
+    queryKey: queryKeys.projects.list(resolvedCompanyId ?? ""),
+    queryFn: () => projectsApi.list(resolvedCompanyId ?? ""),
+    enabled: !!resolvedCompanyId && approval?.type === "agent_profile_change",
+  });
+  const profileNames = useMemo(
+    () => buildProfileNameLookup({ agents, projects, people: userDirectory?.users }),
+    [agents, projects, userDirectory],
+  );
 
   useEffect(() => {
     if (!approval?.companyId || approval.companyId === selectedCompanyId) return;
@@ -262,7 +275,7 @@ export function ApprovalDetail() {
               <Identity name={requestedByLabel} size="sm" />
             </div>
           )}
-          <ApprovalPayloadRenderer type={approval.type} payload={payload} />
+          <ApprovalPayloadRenderer type={approval.type} payload={payload} names={profileNames} />
           <button
             type="button"
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-2"

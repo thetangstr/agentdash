@@ -202,7 +202,7 @@ describe("configureHermesProvider", () => {
       "company-1",
       HERMES_PROVIDER_SECRET_NAME,
       KEY,
-      "Hermes provider key (Z.AI (GLM))",
+      "Hermes provider key (Z.AI / Zhipu (GLM))",
       "user-1",
     );
     expect(calls[0]).toEqual(["profile", "create", "agentdash", "--no-alias", "--description", "AgentDash managed template"]);
@@ -271,7 +271,7 @@ describe("configureHermesProvider", () => {
     const attempt = configureHermesProvider("company-1", input, "u", { agentIds: [] }, deps(statusFetch(401) as never));
     await expect(attempt).rejects.toBeInstanceOf(HermesProviderSetupError);
     await expect(attempt).rejects.toMatchObject({ status: 422, code: "provider_key_rejected" });
-    await expect(attempt).rejects.toThrow("Z.AI (GLM) rejected this API key (HTTP 401). Check the key and try again.");
+    await expect(attempt).rejects.toThrow("Z.AI / Zhipu (GLM) rejected this API key (HTTP 401). Check the key and try again.");
     const error = (await attempt.catch((e: Error) => e)) as Error;
     expect(error.message).not.toContain(KEY);
     expect(calls).toEqual([]);

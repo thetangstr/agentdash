@@ -1650,6 +1650,8 @@ export async function prepareUnboundProfileHire(
       title: body.identity.title || null,
       capabilities: body.identity.summary || null,
       adapterType: body.runtime!.adapterType!,
+      // The hire's own adapter settings (a process agent's command): checked by the hire validator and the hire path like a direct hire's.
+      ...(input.adapterConfig !== undefined ? { adapterConfig: input.adapterConfig } : {}),
       ...(input.icon !== undefined ? { icon: input.icon } : {}),
       ...(reportsTo ? { reportsTo } : {}),
       ...(input.budgetMonthlyCents !== undefined ? { budgetMonthlyCents: input.budgetMonthlyCents } : {}),

@@ -10,6 +10,9 @@ import { approvalService } from "./approvals.js";
 import { connectorService } from "./connectors.js";
 import { logActivity } from "./activity-log.js";
 import { AccessPolicyRefusedError, enforceAgentAccessAll, connectorSendAccessChecks } from "./agent-access-check.js";
+import { agentGovernanceService } from "./agent-governance.js";
+import { refuseBlockedDestructiveAction } from "./destructive-action-gate.js";
+import { workflowEventsService } from "./workflow-events.js";
 
 /**
  * AgentDash-MK: HubSpot as a native, per-user bring-your-own-key connector.
@@ -135,6 +138,7 @@ function consumeRateBudget(connectionId: string): boolean {
 export function hubspotConnectorService(db: Db) {
   const connectors = connectorService(db);
   const approvals = approvalService(db);
+  const destructiveGate = { governance: agentGovernanceService(db), workflow: workflowEventsService(db) };
 
   async function hubspotFetch(path: string, token: string, init: RequestInit = {}) {
     return fetch(`${HUBSPOT_API}${path}`, {
@@ -505,6 +509,24 @@ export function hubspotConnectorService(db: Db) {
       properties: input.properties,
     });
     await enforceAgentAccessAll(db, sendChecks.inputs, { site: "connector_send.create", context: sendChecks.context });
+
+    // AgentDash-MK T5a: the destructive-action ceiling, at request time too.
+    // The apply path already refuses a `blocked` write, but only after a
+    // steward has spent attention deciding it; refusing here tells the agent
+    // at once, with the same named-ceiling error the bridge raises. A HubSpot
+    // create or update is `unclassified_write` (destructive, fail closed).
+    // `approval_required` needs nothing more: this route always files the
+    // approval. Only a refusal is recorded here; a write that is let through
+    // gets its one verdict row from the apply path, which re-checks at
+    // execution because this answer goes stale the moment it returns. Inert
+    // off-profile.
+    await refuseBlockedDestructiveAction(destructiveGate, {
+      companyId: input.companyId,
+      agentId: input.agentId,
+      action: { kind: "connector", provider: PROVIDER, operation: input.operation },
+      surface: "connector_send_request",
+      pipelineId: `connector_send:${PROVIDER}`,
+    });
 
     const expiresAt = new Date(Date.now() + CONNECTOR_SEND_TTL_MS);
     const approval = await approvals.create(input.companyId, {

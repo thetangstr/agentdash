@@ -255,6 +255,8 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
         expect(res.body.scopes_supported).toEqual(
           expect.arrayContaining(["agentdash:read", "agentdash:work", "agentdash:decide"]),
         );
+        // AgentDash admin powers (part 5): the admin scope is advertised (a step-up clients may ask for).
+        expect(res.body.scopes_supported).toEqual(["agentdash:read", "agentdash:work", "agentdash:decide", "agentdash:admin"]);
       }
     });
 
@@ -519,6 +521,46 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
       expect(view.body.redirectHost).toBe("assistant.example");
       expect(view.body.requestedScopes).toEqual(["agentdash:read", "agentdash:work"]);
       expect(view.body.companies).toHaveLength(1);
+    });
+
+    it("admin powers (part 5): batch changes as an admin is available only to an admin whose company turned it on, and is dropped (never failing) otherwise", async () => {
+      const company = await seedCompany("Batches");
+      const { client_id } = await registerClient();
+      const scope = "agentdash:read agentdash:work agentdash:admin";
+      async function consent(approveScopes: string[]) {
+        const authz = await authorize({ client_id, scope });
+        const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+        const view = await request(app).get(`/oauth/consent/${requestId}`);
+        const decision = await request(app)
+          .post(`/oauth/consent/${requestId}/decision`)
+          .set("Origin", PUBLIC_BASE)
+          .send({ approved: true, companyId: company.id, scopes: approveScopes });
+        const [grant] = await db.select().from(assistantGrants)
+          .where(and(eq(assistantGrants.companyId, company.id), eq(assistantGrants.userId, USER_ID), isNull(assistantGrants.revokedAt)));
+        return { view, decision, grant };
+      }
+      // The switch is off: offered as unavailable, and dropped from the grant, which is still issued.
+      const off = await consent(["agentdash:read", "agentdash:admin"]);
+      expect(off.view.body.companies.find((c: { id: string }) => c.id === company.id).adminBatchesAvailable).toBe(false);
+      expect(off.decision.status).toBe(200);
+      expect(off.grant!.scopes).toEqual(["agentdash:read"]);
+      // Switch on, but a member: still dropped.
+      await db.update(companies).set({ assistantAdminBatchesEnabled: true }).where(eq(companies.id, company.id));
+      await db.update(companyMemberships).set({ membershipRole: "member" })
+        .where(and(eq(companyMemberships.companyId, company.id), eq(companyMemberships.principalId, USER_ID)));
+      const memberRun = await consent(["agentdash:read", "agentdash:admin"]);
+      expect(memberRun.view.body.companies.find((c: { id: string }) => c.id === company.id).adminBatchesAvailable).toBe(false);
+      expect(memberRun.decision.status).toBe(200);
+      expect(memberRun.grant!.scopes).toEqual(["agentdash:read"]);
+      // An admin of a company that turned it on: available, and granted only when checked.
+      await db.update(companyMemberships).set({ membershipRole: "admin" })
+        .where(and(eq(companyMemberships.companyId, company.id), eq(companyMemberships.principalId, USER_ID)));
+      const unchecked = await consent(["agentdash:read", "agentdash:work"]);
+      expect(unchecked.view.body.companies.find((c: { id: string }) => c.id === company.id).adminBatchesAvailable).toBe(true);
+      expect(unchecked.grant!.scopes).toEqual(["agentdash:read", "agentdash:work"]);
+      const checked = await consent(["agentdash:read", "agentdash:admin"]);
+      expect(checked.decision.status).toBe(200);
+      expect(checked.grant!.scopes).toEqual(["agentdash:read", "agentdash:admin"]);
     });
 
     it("approving returns a redirect carrying code, state and iss", async () => {
@@ -1015,6 +1057,51 @@ describeEmbeddedPostgres("assistant OAuth 2.1 authorization server", () => {
         redirect_uris: ["https://victim.example/callback"],
       }));
       const res = await authorize({ client_id: CIMD_URL, redirect_uri: "https://victim.example/callback" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_client_metadata");
+    });
+
+    it("accepts a native client's loopback redirect_uris (Claude Code's document) on any port", async () => {
+      // The shape Claude Code publishes: the document is on its vendor's
+      // origin, the callback is on the person's own machine.
+      stubCimdHttps(JSON.stringify({
+        client_id: CIMD_URL,
+        client_name: "Native Client",
+        redirect_uris: ["http://localhost/callback", "http://127.0.0.1/callback"],
+        token_endpoint_auth_method: "none",
+      }));
+      const company = await seedCompany();
+      const { challenge, verifier } = pkcePair();
+      const authz = await authorize({
+        client_id: CIMD_URL,
+        redirect_uri: "http://localhost:51487/callback",
+        code_challenge: challenge,
+      });
+      expect(authz.status).toBe(302);
+      const requestId = new URL(authz.headers.location, PUBLIC_BASE).searchParams.get("request")!;
+      const decision = await request(app)
+        .post(`/oauth/consent/${requestId}/decision`)
+        .set("Origin", PUBLIC_BASE)
+        .send({ approved: true, companyId: company.id, scopes: ["agentdash:read"] });
+      const redirect = new URL(decision.body.redirect);
+      expect(redirect.origin).toBe("http://localhost:51487");
+      const token = await request(app).post("/oauth/token").send({
+        grant_type: "authorization_code",
+        code: redirect.searchParams.get("code")!,
+        client_id: CIMD_URL,
+        redirect_uri: "http://localhost:51487/callback",
+        code_verifier: verifier,
+        resource: CANONICAL_RESOURCE,
+      });
+      expect(token.status).toBe(200);
+    });
+
+    it("still rejects an off-origin https redirect listed beside loopback ones", async () => {
+      stubCimdHttps(JSON.stringify({
+        client_name: "Mixed",
+        redirect_uris: ["http://localhost/callback", "https://victim.example/callback"],
+      }));
+      const res = await authorize({ client_id: CIMD_URL, redirect_uri: "http://localhost:4000/callback" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_client_metadata");
     });

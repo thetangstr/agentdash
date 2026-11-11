@@ -104,6 +104,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 }
 
 // AgentDash: operation-log-visibility is inherited from the canonical default bundle;
+// AgentDash: fred-fde-guide is inherited by every proposed worker; requests from
+// the registered guide grant no access or approval authority to its teammates.
 // workers must not probe alternate run/workspace routes after an unavailable operation.
 // AgentDash: spend-visibility is inherited from the canonical default;
 // null/omitted amounts stay unavailable in approvals, inboxes, agent history and mutation/create/hire responses too;
@@ -125,6 +127,8 @@ export function agentCreatorFromProposal(deps: Deps) {
 // including named-owner questions, private sharing and recovery boundaries.
 // AgentDash: issue-mutation-acceptance (comment and PATCH) recovery/no-blind-retry guidance is
 // inherited through this same managed canonical bundle for every hired worker.
+// Accepted edits may leave automatic wakes withheld for paused/terminated/pending-approval
+// assignees; the inherited guidance grants no resume/approval authority or proof of execution.
 // All named policy blocks, including workforce-learning and issue-current-authority, are inherited verbatim
 // from onboarding-assets/default/AGENTS.md via the canonical bundle loader.
 // Update that source for shared behavior; do not duplicate its mandate here.
@@ -209,6 +213,10 @@ export function agentCreatorFromProposal(deps: Deps) {
 // from the canonical default bundle: seconds precedence and legacy fallback;
 // a request deadline does not prove remote work stopped or authorize a retry.
 function renderAgents(canonical: string, proposal: AgentProposal, transcript: InterviewTurn[]): string {
+  // AgentDash: system-hire-model is server-owned configuration for plan and
+  // reviewer hires; this header adds no worker procedure or model authority.
+  // AgentDash: native-output-proof is inherited from the canonical default bundle below.
+  // The per-hire context grants no acceptance authority and must retain that shared contract.
   const userVoice = transcript
     .filter(turn => turn.role === "user")
     .flatMap(turn => turn.content.split("\n").map(line => `> ${line}`))

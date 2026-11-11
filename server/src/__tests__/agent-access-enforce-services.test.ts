@@ -545,6 +545,49 @@ describeEmbeddedPostgres("V2 access checks in enforce mode — service rows (APM
       return { ...s, ceo, writer, run, counts, before };
     }
 
+    // AgentDash (#1053): an agent may not create a privileged agent through an
+    // import any more than through the hire routes. People reach imports only
+    // as company administrators, so a board import of the same bundle passes.
+    it("refuses an agent importing a Chief of Staff before anything is written; a board import may", async () => {
+      const s = await seed();
+      const ceo = await db
+        .insert(agents)
+        .values({ companyId: s.company.id, name: "Chief", role: "ceo", status: "idle", adapterType: "codex_local", adapterConfig: {} })
+        .returning()
+        .then((rows) => rows[0]!);
+      const deputy = await db
+        .insert(agents)
+        .values({ companyId: s.company.id, name: "Deputy", role: "chief_of_staff", status: "idle", adapterType: "codex_local", adapterConfig: {} })
+        .returning()
+        .then((rows) => rows[0]!);
+      const portability = companyPortabilityService(db);
+      const exported = await portability.exportBundle(s.company.id, {
+        include: { company: false, agents: true, projects: false, issues: false, skills: false },
+        agents: [deputy.id],
+      } as never);
+      const agentCount = async () =>
+        (await db.select({ id: agents.id }).from(agents).where(eq(agents.companyId, s.company.id))).length;
+      const before = await agentCount();
+      const input = {
+        source: { type: "inline", rootPath: exported.rootPath, files: exported.files },
+        include: { company: false, agents: true, projects: false, issues: false, skills: false },
+        target: { mode: "existing_company", companyId: s.company.id },
+        agents: "all",
+        collisionStrategy: "rename",
+      } as never;
+
+      const error = await caught(
+        portability.importBundle(input, null, { mode: "agent_safe", sourceCompanyId: s.company.id, actorIsAgent: true, actorAgentId: ceo.id }),
+      );
+      expect(error).toMatchObject({ status: 403 });
+      expect(String((error as Error).message)).toContain("Agents cannot import privileged roles");
+      expect(await agentCount()).toBe(before);
+
+      const imported = await portability.importBundle(input, null, { mode: "agent_safe", sourceCompanyId: s.company.id });
+      expect(imported.agents.filter((entry) => entry.action === "created")).toHaveLength(1);
+      expect(await agentCount()).toBe(before + 1);
+    });
+
     it("enforce: an imported agent's skill outside the importer's scope is 403 before anything is written", async () => {
       const s = await seedImport("rename", { do: { skills: { mode: "listed", ids: [] } } });
       expectRefusal(await caught(s.run()), { dimension: "do.skills", rule: "do.skills.not_listed", requested: { skillKey: "writer-skill" } });

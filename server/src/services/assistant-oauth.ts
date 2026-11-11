@@ -20,12 +20,14 @@ import {
   ASSISTANT_CLIENT_ID_PREFIX,
   ASSISTANT_REFRESH_TOKEN_PREFIX,
   ASSISTANT_REFRESH_TOKEN_TTL_MS,
+  ASSISTANT_SCOPE_ADMIN,
   ASSISTANT_SCOPES,
   isAssistantScope,
   type AssistantScope,
   type DeploymentMode,
 } from "@paperclipai/shared";
 import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
+import { normalizeHumanRole } from "./company-member-roles.js";
 
 /**
  * AgentDash assistant MCP (GH #677): a minimal, first-party OAuth 2.1
@@ -593,7 +595,13 @@ export function assistantOAuthService(db: Db) {
       // The document may only speak for its own origin. A metadata document at
       // attacker.example naming a redirect on victim.example must not turn a
       // consent screen into a code-delivery mechanism for that origin.
-      if (new URL(validated).origin !== docOrigin) {
+      // Loopback is the exception: a native client (Claude Code's document at
+      // claude.ai lists http://localhost/callback) receives the code on the
+      // person's own machine, which no remote origin can claim, and PKCE
+      // still binds the code to the client that started the flow.
+      const target = new URL(validated);
+      const loopback = target.protocol === "http:" && isLoopbackHostname(target.hostname);
+      if (!loopback && target.origin !== docOrigin) {
         throw new OAuthError(
           "invalid_client_metadata",
           "CIMD redirect_uris must share the client_id document's origin",
@@ -724,6 +732,10 @@ export function assistantOAuthService(db: Db) {
     return row;
   }
 
+  function adminBatchesAvailable(membershipRole: string | null, enabled: boolean): boolean {
+    return enabled && normalizeHumanRole(membershipRole) === "admin";
+  }
+
   /** What the consent screen renders. Companies are the person's live memberships. */
   async function consentView(requestId: string, userId: string) {
     const request = await getPendingRequest(requestId);
@@ -735,7 +747,12 @@ export function assistantOAuthService(db: Db) {
         .where(eq(assistantOauthClients.id, request.clientRowId))
         .then((rows) => rows[0] ?? null),
       db
-        .select({ companyId: companyMemberships.companyId, name: companies.name })
+        .select({
+          companyId: companyMemberships.companyId,
+          name: companies.name,
+          membershipRole: companyMemberships.membershipRole,
+          assistantAdminBatchesEnabled: companies.assistantAdminBatchesEnabled,
+        })
         .from(companyMemberships)
         .innerJoin(companies, eq(companies.id, companyMemberships.companyId))
         .where(
@@ -753,7 +770,15 @@ export function assistantOAuthService(db: Db) {
       redirectHost: new URL(request.redirectUri).host,
       requestedScopes: request.scope.split(/\s+/).filter(Boolean),
       resource: request.resource,
-      companies: memberships.map((m) => ({ id: m.companyId, name: m.name })),
+      // AgentDash admin powers (part 5): whether "Batch changes as an admin"
+      // can be granted for this company — the person is an admin there AND
+      // the company switched batch changes from Claude on. Otherwise the
+      // scope is dropped at approval (never failing the grant).
+      companies: memberships.map((m) => ({
+        id: m.companyId,
+        name: m.name,
+        adminBatchesAvailable: adminBatchesAvailable(m.membershipRole, m.assistantAdminBatchesEnabled),
+      })),
     };
   }
 
@@ -802,7 +827,25 @@ export function assistantOAuthService(db: Db) {
     if (!client) throw new OAuthError("invalid_request", "client no longer exists");
 
     const requested = new Set(request.scope.split(/\s+/).filter(Boolean));
-    const scopes = input.scopes.filter((s): s is AssistantScope => isAssistantScope(s) && requested.has(s));
+    let scopes = input.scopes.filter((s): s is AssistantScope => isAssistantScope(s) && requested.has(s));
+    // AgentDash admin powers (part 5): "Batch changes as an admin" only for an
+    // admin of this company whose company switched it on. Otherwise the scope
+    // is dropped and the grant is issued with the rest, never failed.
+    if (scopes.includes(ASSISTANT_SCOPE_ADMIN)) {
+      const [eligibility] = await db
+        .select({ membershipRole: companyMemberships.membershipRole, enabled: companies.assistantAdminBatchesEnabled })
+        .from(companyMemberships)
+        .innerJoin(companies, eq(companies.id, companyMemberships.companyId))
+        .where(and(
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, input.userId),
+          eq(companyMemberships.companyId, input.companyId),
+          eq(companyMemberships.status, "active"),
+        ));
+      if (!eligibility || !adminBatchesAvailable(eligibility.membershipRole, eligibility.enabled)) {
+        scopes = scopes.filter((scope) => scope !== ASSISTANT_SCOPE_ADMIN);
+      }
+    }
     // An approval with nothing granted must fail, not quietly mint a read
     // grant the consent screen never showed. Deny is the path for "no".
     if (scopes.length === 0) {

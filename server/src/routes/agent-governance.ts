@@ -45,11 +45,15 @@ export function agentGovernanceRoutes(db: Db) {
     return access.canUser(companyId, req.actor.userId, "agents:create");
   }
 
-  /** Owner/admin only — ceilings are never steward-editable. */
+  /**
+   * Ceilings need permission to manage agents (`agents:create`), never the
+   * steward role. Review of 94b9e03ee (r3c fix 3): the message says what is
+   * checked; it used to say "owner or administrator".
+   */
   async function requireCeilingAuthority(req: Request, companyId: string) {
     assertBoard(req);
     if (await isAdministrator(req, companyId)) return;
-    throw forbidden("Only a company owner or administrator can change agent policy ceilings");
+    throw forbidden("You need permission to manage agents to change agent policy ceilings.");
   }
 
   /** The agent's current steward, or an administrator acting on their behalf. */

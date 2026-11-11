@@ -1,3 +1,4 @@
+import { IssueResponsibilitySection } from "@/components/agent-performance/IssueResponsibilitySection";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type Ref } from "react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from "@/lib/router";
@@ -15,6 +16,7 @@ import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
+import { useCapability } from "../hooks/useCapability";
 import { useDialogActions } from "../context/DialogContext";
 import { usePanel } from "../context/PanelContext";
 import { useSidebar } from "../context/SidebarContext";
@@ -1389,7 +1391,16 @@ export function IssueDetail() {
     retry: false,
   });
   const keyboardShortcutsEnabled = instanceGeneralSettings?.keyboardShortcuts === true;
-  const feedbackDataSharingPreference = instanceGeneralSettings?.feedbackDataSharingPreference ?? "prompt";
+  // Choosing to share (the "prompt" dialog's Always allow) turns on the
+  // company's feedback sharing, which only owners and admins may do. Everyone
+  // else votes without being offered the choice; the server records the vote
+  // and shares it only if the company already shares.
+  const feedbackSharingChoice = useCapability(resolvedCompanyId, "company:manage");
+  const instanceSharingPreference = instanceGeneralSettings?.feedbackDataSharingPreference ?? "prompt";
+  const feedbackDataSharingPreference =
+    instanceSharingPreference === "prompt" && !(feedbackSharingChoice.allowed && !feedbackSharingChoice.isLoading)
+      ? "not_allowed"
+      : instanceSharingPreference;
   const { orderedProjects } = useProjectOrder({
     projects: projects ?? [],
     companyId: selectedCompanyId,
@@ -4051,6 +4062,7 @@ export function IssueDetail() {
         <TabsContent value="reviews" className="space-y-4">
           {detailTab === "reviews" ? (
             <>
+              <IssueResponsibilitySection key={`${issue.companyId}:${issue.id}:${issue.assigneeAgentId ?? "unassigned"}`} companyId={issue.companyId} issueId={issue.id} assigneeAgentId={issue.assigneeAgentId ?? null} />
               <IssueDoDSection
                 companyId={issue.companyId}
                 issueId={issue.id}
