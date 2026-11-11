@@ -239,6 +239,20 @@ describeEmbeddedPostgres("batch engine (real database, real loopback)", () => {
     expect(t.widgets.get(next.id)!.value).toBe("old");
   });
 
+  it("stops sending when the person stops being an owner or admin mid-batch", async () => {
+    const userId = await addUser(t.db, companyId, "admin");
+    const sessionId = await t.signIn(userId);
+    const demoter = widget("demote");
+    const next = widget("ok");
+    const p = await preview(sessionId, { kind: "test.widget", ids: [demoter.id, next.id], change: { value: "new" } });
+    const c = await confirm(sessionId, p.body.batchId, { handle: p.body.confirmHandle, previewDigest: p.body.previewDigest });
+    expect(c.status).toBe(202);
+    await t.batches.waitForRunner(p.body.batchId);
+    const items = await t.db.select().from(batchOperationItems).where(eq(batchOperationItems.batchId, p.body.batchId)).orderBy(batchOperationItems.ordinal);
+    expect(items.map((item) => [item.outcome, item.reasonCode])).toEqual([["applied", null], ["refused", "access_ended"]]);
+    expect(t.widgets.get(next.id)!.value).toBe("old");
+  });
+
   it("caps open previews per person and confirmed records per hour", async () => {
     const userId = await addUser(t.db, companyId, "admin");
     const sessionId = await t.signIn(userId);

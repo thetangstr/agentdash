@@ -56,7 +56,7 @@ On **Routines**, tick the routines and choose **Delete**. A deleted routine is g
 
 ## Rename and recolor labels
 
-**Company Settings → Labels** renames and recolors a label in place, and deletes one or several; the preview says how many tasks lose each label. Any member can rename, recolor or delete one label at a time; deleting several at once is for owners and admins.
+**Company Settings → Labels** renames and recolors a label in place, and deletes one or several; when an owner or admin deletes several, the preview says how many tasks lose each label. Any member can rename, recolor or delete one label at a time; deleting several at once is for owners and admins.
 
 ## The Admin powers switches
 

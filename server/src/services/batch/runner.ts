@@ -300,6 +300,10 @@ async function refreshAccess(db: Db, ctx: BatchRunnerContext): Promise<Refreshed
     .from(instanceUserRoles)
     .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")));
   if (!membership && !admin) return { ok: false };
+  // Bulk changes are for owners and admins: a person who stops being one
+  // while their batch runs sends nothing more (the assistant path above
+  // already asks this per item).
+  if (!admin && normalizeHumanRole(membership?.membershipRole) !== "admin") return { ok: false };
   return {
     ok: true,
     actor: {
