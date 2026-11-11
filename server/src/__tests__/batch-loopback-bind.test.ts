@@ -70,7 +70,7 @@ describeEmbeddedPostgres("batch items go to the address the server listens on", 
 
   it("an item reaches the real server on ::1 and nothing reaches the process on 127.0.0.1", async () => {
     const companyId = (await addCompany(t.db, "Bind", "default")).id;
-    const userId = await addUser(t.db, companyId, "member");
+    const userId = await addUser(t.db, companyId, "admin");
     const headers = t.browser(await t.signIn(userId));
     const widget = { id: randomUUID(), companyId, value: "old", mode: "ok" as const };
     t.widgets.set(widget.id, widget);

@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from "@/lib/router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { accessApi } from "../api/access";
-import { useCapability } from "../hooks/useCapability";
+import { useCanBulkChange, useCapability } from "../hooks/useCapability";
 import { buildCompanyUserLabelMap } from "../lib/company-members";
 import { AgentsBulkBar } from "../components/batch/AgentsBulkBar";
 import { heartbeatsApi } from "../api/heartbeats";
@@ -137,10 +137,11 @@ export function Agents() {
     enabled: !!selectedCompanyId,
   });
 
-  // AgentDash admin powers: people who can manage agents select several and
-  // change them together. Nothing is shown while the answer is loading.
+  // AgentDash admin powers: owners and admins who can manage agents select
+  // several and change them together. Nothing is shown while the answer is loading.
+  const canBulkChange = useCanBulkChange(selectedCompanyId);
   const agentsManage = useCapability(selectedCompanyId, "agents:create");
-  const canBulkManage = agentsManage.allowed && !agentsManage.isLoading;
+  const canBulkManage = canBulkChange && agentsManage.allowed && !agentsManage.isLoading;
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
   const { data: userDirectory } = useQuery({
     queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),

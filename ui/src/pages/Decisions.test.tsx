@@ -31,6 +31,12 @@ vi.mock("../api/access", () => ({ accessApi: mockAccessApi }));
 vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 vi.mock("../api/inboxDismissals", () => ({ inboxDismissalsApi: mockInboxDismissalsApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
+// Bulk changes are for owners and admins: the server's `company:manage` answer.
+const mockCapabilitiesApi = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("../api/capabilities", () => ({ capabilitiesApi: mockCapabilitiesApi }));
+function capabilitiesFor(admin: boolean) {
+  return { companyId: "company-1", actorType: "board", membershipRole: admin ? "owner" : "member", isInstanceAdmin: false, capabilities: { "company:manage": admin } };
+}
 // AgentDash admin powers: the shared batch dialog has its own suite; here it
 // is a stub that records what the page asked it to do.
 const batchDialog = vi.hoisted(() => ({ last: null as null | Record<string, unknown> }));
@@ -164,6 +170,7 @@ describe("Decisions", () => {
       Promise.resolve({ id: "d-1", itemKey }),
     );
     mockAgentsApi.list.mockResolvedValue([{ id: "agent-1", name: "Casper" }, { id: "agent-2", name: "Priya" }]);
+    mockCapabilitiesApi.get.mockResolvedValue(capabilitiesFor(true));
     resetSourceFailureStreaks();
   });
 
@@ -233,6 +240,22 @@ describe("Decisions", () => {
       expect(batchDialog.last).toMatchObject({ kind: "approval.reject", ids: ["appr-1", "appr-2"] });
       // Phone-sized targets.
       expect((q("decisions-bulk-approve") as HTMLElement).className).toContain("max-sm:min-h-11");
+    });
+
+    it("a member gets no checkboxes or bar and still decides each one on its own", async () => {
+      mockCapabilitiesApi.get.mockResolvedValue(capabilitiesFor(false));
+      mockDashboardApi.waitingOnYou.mockResolvedValue(twoDecisions(true));
+      await render();
+      expect(container.querySelectorAll('[data-testid="decisions-row"]')).toHaveLength(2);
+      expect(container.querySelector('[data-testid="decisions-select"]')).toBeNull();
+      expect(q("decisions-bulk-bar")).toBeNull();
+    });
+
+    it("shows no checkboxes while it is not yet known whether the person is an owner or admin", async () => {
+      mockCapabilitiesApi.get.mockReturnValue(new Promise(() => undefined));
+      mockDashboardApi.waitingOnYou.mockResolvedValue(twoDecisions(true));
+      await render();
+      expect(container.querySelector('[data-testid="decisions-select"]')).toBeNull();
     });
 
     it("shows no checkboxes or bar while the list is still loading", async () => {

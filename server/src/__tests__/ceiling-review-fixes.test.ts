@@ -203,7 +203,7 @@ describeEmbeddedPostgres("round 3c review fixes", () => {
   });
 
   describe("fix 3: the ceiling refusals say what is checked", () => {
-    it("the route and the batch kind both say 'You need permission to manage agents'", async () => {
+    it("the route says 'You need permission to manage agents'; a member's bulk change is refused as bulk", async () => {
       const agent = await addAgent(t.db, mk, { name: `Worded ${randomUUID().slice(0, 4)}`, status: "idle", runtimeConfig: NO_RUN });
       const route = await request(t.server).put(`/api/companies/${mk}/agents/${agent.id}/governance/ceiling`).set(member)
         .send({ policy: DEFAULT_AGENT_GOVERNANCE_POLICY, revision: 1 });
@@ -213,7 +213,8 @@ describeEmbeddedPostgres("round 3c review fixes", () => {
       const batch = await request(t.server).post(`/api/companies/${mk}/batches/preview`).set(member)
         .send({ kind: "agent.apply_ceiling", ids: [agent.id], change: { templateId: tpl.id } });
       expect(batch.status).toBe(403);
-      expect(batch.body.error).toBe("You need permission to manage agents to change agent policy ceilings.");
+      // Bulk changes are for owners and admins, so a member is refused before the kind's own check.
+      expect(batch.body.error).toBe("Bulk changes are for company owners and admins.");
       expect(JSON.stringify([route.body, batch.body])).not.toMatch(/owner or administrator/);
     });
   });

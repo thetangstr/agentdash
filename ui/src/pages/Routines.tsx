@@ -8,6 +8,7 @@ import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { issuesApi } from "../api/issues";
 import { useStewardedRoutingNotice } from "../hooks/useStewardedRoutingNotice";
+import { useCanBulkChange } from "../hooks/useCapability";
 import { heartbeatsApi } from "../api/heartbeats";
 import { accessApi } from "../api/access";
 import { useCompany } from "../context/CompanyContext";
@@ -335,9 +336,10 @@ function RoutineListRow({
 }
 
 export function Routines() {
-  // AgentDash admin powers: select routines and archive or delete them together.
+  // AgentDash admin powers: owners and admins select routines and archive or delete them together.
   const [selectedRoutineIds, setSelectedRoutineIds] = useState<string[]>([]);
   const { selectedCompanyId } = useCompany();
+  const canBulkChange = useCanBulkChange(selectedCompanyId);
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -565,7 +567,7 @@ export function Routines() {
     [agentById, projectById, routineViewState.groupBy, sortedRoutines],
   );
   // Only routines still shown stay selected.
-  const selectedRoutineIdsShown = selectedRoutineIds.filter((id) => sortedRoutines.some((routine) => routine.id === id));
+  const selectedRoutineIdsShown = !canBulkChange ? [] : selectedRoutineIds.filter((id) => sortedRoutines.some((routine) => routine.id === id));
   const recentRunsIssueLinkState = useMemo(
     () =>
       createIssueDetailLocationState(
@@ -1053,6 +1055,7 @@ export function Routines() {
                   <CollapsibleContent>
                     {group.items.map((routine) => (
                       <div key={routine.id} className="flex items-stretch">
+                      {canBulkChange ? (
                       <label className="flex shrink-0 cursor-pointer items-center border-b border-border px-2 max-sm:min-w-11 max-sm:justify-center">
                         <input
                           type="checkbox"
@@ -1065,6 +1068,7 @@ export function Routines() {
                             : current.filter((id) => id !== routine.id))}
                         />
                       </label>
+                      ) : null}
                       <div className="min-w-0 flex-1">
                       <RoutineListRow
                         key={routine.id}

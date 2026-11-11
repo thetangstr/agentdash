@@ -27,8 +27,9 @@ import { badRequest } from "../errors.js";
  *
  * Every write is per record through that record's own single-record route
  * (services/batch/runner.ts); these routes only preview, confirm, read,
- * cancel and record verdicts. Guards: board access to the company, plus the
- * kind's own preview guard; confirm and cancel belong to the person who
+ * cancel and record verdicts. Guards: board access to the company, the
+ * owner or admin role (at preview, at confirm and before each record), plus
+ * the kind's own preview guard; confirm and cancel belong to the person who
  * previewed; reading another person's batch and recording verdicts are for
  * owners and admins.
  */

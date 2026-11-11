@@ -6,21 +6,23 @@ audience: admin
 
 These tools arrived in v2026.1110.0. Most of them need no setting: a batch is the same change you could make one record at a time, done for many records after one preview. Only the Admin powers switches are off until an owner or admin turns them on.
 
+Since v2026.1110.1, bulk changes are for company owners and admins only. Members keep changing records one at a time, exactly as before, and do not see the checkboxes or the bulk bar.
+
 ## Change many records with a preview
 
 | Where | What you can change together | Who |
 | --- | --- | --- |
-| **Issues** (list view) | Status, assignee, labels, project, priority | Anyone who can change those tasks |
-| **Decisions** | Approve or reject several approvals waiting on you, with one shared note | Anyone who may decide them |
-| **Agents** (list view) | Pause, resume, model, new steward, a ceiling template | People who can manage agents |
-| **Routines** | Archive or delete | Anyone who can change those routines |
-| **Company Settings → Labels** | Delete | Any member |
+| **Issues** (list view) | Status, assignee, labels, project, priority | Owners and admins |
+| **Decisions** | Approve or reject several approvals waiting on you, with one shared note | Owners and admins who may decide them |
+| **Agents** (list view) | Pause, resume, model, new steward, a ceiling template | Owners and admins who can manage agents |
+| **Routines** | Archive or delete | Owners and admins |
+| **Company Settings → Labels** | Delete | Owners and admins |
 
 1. Tick the records, then choose the change in the bar that appears.
 2. The preview lists every record with its before and after, and a note where a change has a consequence (for example, moving a task out of done reopens it). Records the change would not alter, or that their own rules decide (a task waiting on a review step), are left out and counted.
 3. Choose **Apply** (the button says how many records). Nothing changes before that.
 
-Each record goes through the same permission check as changing it by hand, so a batch can never do something you could not do one at a time. A batch holds up to 200 records. You can have 5 previews open and confirm up to 1,000 records an hour. A preview expires after 15 minutes. A record that changed after you previewed it is left alone.
+Each record also goes through the same permission check as changing it by hand, so a batch can never do something you could not do one at a time. A batch holds up to 200 records. You can have 5 previews open and confirm up to 1,000 records an hour. A preview expires after 15 minutes. A record that changed after you previewed it is left alone.
 
 ## Read the results
 
@@ -54,7 +56,7 @@ On **Routines**, tick the routines and choose **Delete**. A deleted routine is g
 
 ## Rename and recolor labels
 
-**Company Settings → Labels** renames and recolors a label in place, and deletes one or several; the preview says how many tasks lose each label. Any member can manage labels.
+**Company Settings → Labels** renames and recolors a label in place, and deletes one or several; when an owner or admin deletes several, the preview says how many tasks lose each label. Any member can rename, recolor or delete one label at a time; deleting several at once is for owners and admins.
 
 ## The Admin powers switches
 

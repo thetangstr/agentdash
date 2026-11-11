@@ -4,9 +4,9 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express, { type Express, type Request } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { authSessions, authUsers, createDb } from "@paperclipai/db";
+import { authSessions, authUsers, companyMemberships, createDb } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase } from "./embedded-postgres.js";
 import { actorMiddleware } from "../../middleware/auth.js";
 import { errorHandler } from "../../middleware/index.js";
@@ -50,7 +50,7 @@ import { resetInstanceSecretsCacheForTests } from "../../services/run-log-redact
 
 export type TestDb = ReturnType<typeof createDb>;
 
-export type WidgetMode = "ok" | "refuse" | "boom" | "boom-after" | "hang" | "end-session" | "different";
+export type WidgetMode = "ok" | "refuse" | "boom" | "boom-after" | "hang" | "end-session" | "demote" | "different";
 export interface Widget { id: string; companyId: string; value: string; mode: WidgetMode }
 export interface WidgetCall { widgetId: string; credentialKind: string | null; actorSource: string | null; userId: string | null }
 
@@ -184,6 +184,16 @@ export async function startBatchTestApp(
       case "end-session":
         if (req.verifiedCredential?.kind === "batch_item" && req.verifiedCredential.origin.kind === "session") {
           await db.delete(authSessions).where(eq(authSessions.id, req.verifiedCredential.origin.sessionId));
+        }
+        break;
+      case "demote":
+        // The person stops being an owner or admin while their batch runs.
+        if (req.actor.userId) {
+          await db.update(companyMemberships).set({ membershipRole: "member" }).where(and(
+            eq(companyMemberships.companyId, widget.companyId),
+            eq(companyMemberships.principalType, "user"),
+            eq(companyMemberships.principalId, req.actor.userId),
+          ));
         }
         break;
       default:
