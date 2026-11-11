@@ -17,7 +17,7 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { agents, heartbeatRuns, issueExecutionDecisions, issues, issueWorkProducts } from "@paperclipai/db";
+import { agents, fredRegistrations, heartbeatRuns, issueExecutionDecisions, issues, issueWorkProducts } from "@paperclipai/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   assertFeedbackTraceVisible,
@@ -108,7 +108,7 @@ import {
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
-import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assistantGrantAttribution, getActorInfo, isCompanyAdministrator, reportAuthzRefusal } from "./authz.js";
+import { actorHumanRole, assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, assertCompanyAdministrator, assistantGrantAttribution, getActorInfo, isCompanyAdministrator, reportAuthzRefusal } from "./authz.js";
 // AgentDash (GH #505): member emails reach only callers allowed to read them.
 import { canViewMemberEmails, visibleMemberEmail } from "./member-email-visibility.js";
 import { clearWorkspacePersistenceHold } from "../services/workspace-persistence-recovery.js";
@@ -321,6 +321,36 @@ export function issueRoutes(
   const router = Router();
   const svc = issueService(db);
   const access = accessService(db);
+
+  // AgentDash: fred-brief-guard. On the main issue of a registered Fred, the
+  // `fred-adoption-brief` document is the owner-confirmed brief Fred acts on, a
+  // company-level decision: only an owner or admin, signed in directly, may
+  // write, restore or delete it through the generic document routes. Agents
+  // (Fred included), assistant grants and plain members are refused. Every
+  // other issue and every other key is untouched. The key must match BRIEF_KEY
+  // in services/fred.ts (the Fred tests write it through the service and then
+  // through these routes).
+  const FRED_BRIEF_DOCUMENT_KEY = "fred-adoption-brief";
+  const FRED_BRIEF_ADMIN_MESSAGE = "Only a company owner or admin can change Fred's adoption brief. Use the Fred page.";
+  async function assertFredBriefDocumentWriteAllowed(req: Request, issue: { id: string; companyId: string }, key: string): Promise<void> {
+    if (key !== FRED_BRIEF_DOCUMENT_KEY) return;
+    const [registration] = await db
+      .select({ id: fredRegistrations.id })
+      .from(fredRegistrations)
+      .where(and(eq(fredRegistrations.mainIssueId, issue.id), eq(fredRegistrations.companyId, issue.companyId)))
+      .limit(1);
+    if (!registration) return;
+    if (req.actor.type !== "board" || req.actor.source === "assistant_grant") {
+      reportAuthzRefusal(req, {
+        companyId: issue.companyId,
+        entityType: "issue",
+        entityId: issue.id,
+        reasonCode: "FRED_BRIEF_ADMIN_REQUIRED",
+      });
+      throw forbidden(FRED_BRIEF_ADMIN_MESSAGE);
+    }
+    await assertCompanyAdministrator(access, req, issue.companyId, FRED_BRIEF_ADMIN_MESSAGE);
+  }
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
@@ -1964,6 +1994,7 @@ export function issueRoutes(
       res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
       return;
     }
+    await assertFredBriefDocumentWriteAllowed(req, issue, keyParsed.data);
 
     const actor = getActorInfo(req);
     const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
@@ -2077,6 +2108,7 @@ export function issueRoutes(
         res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
         return;
       }
+      await assertFredBriefDocumentWriteAllowed(req, issue, keyParsed.data);
 
       const actor = getActorInfo(req);
       const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
@@ -2167,6 +2199,7 @@ export function issueRoutes(
       res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
       return;
     }
+    await assertFredBriefDocumentWriteAllowed(req, issue, keyParsed.data);
     const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const removed = await documentsSvc.deleteIssueDocument(issue.id, keyParsed.data);
     if (!removed) {
