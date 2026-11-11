@@ -1135,6 +1135,13 @@
       "when": 1794305315278,
       "tag": "0161_activity_log_audit_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 162,
+      "version": "7",
+      "when": 1794362559546,
+      "tag": "0162_fred_builtin_guide",
+      "breakpoints": true
     }
   ]
 }

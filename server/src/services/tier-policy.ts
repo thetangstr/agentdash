@@ -22,11 +22,11 @@ export interface TierCapacityAdds {
 // customers do not get Pro features until they resolve the payment issue.
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
-// AgentDash: Free-tier capacity is operator-tunable so a launch can give trial
+// AgentDash: Free-tier worker capacity is operator-tunable so a launch can give trial
 // users room to feel the multi-human + agent-roster value before the upgrade
 // wall (recommended launch setting: AGENTDASH_FREE_HUMAN_CAP=2,
-// AGENTDASH_FREE_AGENT_CAP=3). Default stays 1+1 so behavior is unchanged unless
-// the operator opts in.
+// AGENTDASH_FREE_AGENT_CAP=3). Default stays one human + one worker; only the
+// protected registered Fred guide is outside worker headcount (guide-capacity.ts).
 function readCap(envVar: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[envVar] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
@@ -63,8 +63,8 @@ export function freeTierCapExceededPayload(action: TierCapAction) {
     code: "agent_cap_exceeded",
     message:
       FREE_AGENT_CAP === 1
-        ? "Free workspaces include only the Chief of Staff. Upgrade to Pro to hire more agents."
-        : `Free workspaces include up to ${FREE_AGENT_CAP} agents (incl. the Chief of Staff). Upgrade to Pro to hire more.`,
+        ? "Free workspaces include one worker agent plus Fred, your included guide. Upgrade to Pro to hire more workers."
+        : `Free workspaces include up to ${FREE_AGENT_CAP} worker agents plus Fred, your included guide. Upgrade to Pro to hire more workers.`,
   } as const;
 }
 

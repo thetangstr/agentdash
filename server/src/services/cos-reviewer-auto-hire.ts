@@ -296,7 +296,7 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
             },
             counts: {
               humans: async () => 0,
-              agents: async (id) => (await agentService(txDb).list(id)).length,
+              agents: async (id) => agentService(txDb).countBillable(id),
             },
           },
           companyId,

@@ -7,6 +7,7 @@ import {
   Settings,
   PackageCheck,
   MessageSquare,
+  Compass,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarNavItem } from "./SidebarNavItem";
@@ -16,6 +17,7 @@ import { SidebarHelpMenu } from "./SidebarHelpMenu";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { useDecisionsBadge } from "../hooks/useDecisionsBadge";
+import { useCapability } from "../hooks/useCapability";
 import { heartbeatsApi } from "../api/heartbeats";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -37,6 +39,11 @@ export function Sidebar() {
   // company. The Decisions badge IS the page's main-list length (#817's
   // useDecisionsBadge), so the sidebar, Home and the page read one number.
   const decisionsBadge = useDecisionsBadge(selectedCompanyId);
+  // AgentDash: Fred's setup, brief and start are owner/admin decisions; the
+  // server answers `company:manage` and refuses everyone else, so the entry is
+  // offered to exactly those people (hidden while the answer is loading).
+  const fredAccess = useCapability(selectedCompanyId, "company:manage");
+  const canOpenFred = fredAccess.allowed && !fredAccess.isLoading;
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -97,11 +104,15 @@ export function Sidebar() {
             footer "?"; nothing else belongs in this sidebar. */}
         <SidebarMoreGroup />
 
-        <div className="mt-auto flex items-center gap-1 border-t border-border pt-2">
-          <div className="min-w-0 flex-1">
-            <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+        <div className="mt-auto border-t border-border pt-2">
+          {/* AgentDash: the built-in guide is distinct from the company's CoS. */}
+          {canOpenFred ? <SidebarNavItem to="/company/fred" label="Fred" icon={Compass} /> : null}
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+            </div>
+            <SidebarHelpMenu />
           </div>
-          <SidebarHelpMenu />
         </div>
 
         <PluginSlotOutlet

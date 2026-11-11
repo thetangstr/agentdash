@@ -192,3 +192,4 @@ export { humanActionHandles } from './human_action_handles.js';
 export { batchOperations, batchOperationItems } from "./batch_operations.js";
 // AgentDash admin powers: named owner ceilings (apply to many agents; the company default for new agents).
 export { agentCeilingTemplates } from "./agent_ceiling_templates.js";
+export { fredRegistrations } from './fred_registrations.js';

@@ -1562,3 +1562,5 @@ export * from "./batch.js";
 export * from "./validators/batch.js";
 // AgentDash admin powers: gains and losses between two governance policies.
 export * from "./agent-governance-diff.js";
+// AgentDash: built-in FDE owner workflow contracts.
+export * from './fred.js';

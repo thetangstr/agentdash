@@ -128,6 +128,14 @@ describe("board route roots stay in step with the router", () => {
  expect(applyCompanyPrefix('/workforce?agent=a#company-brief', 'ACME')).toBe('/ACME/workforce?agent=a#company-brief');
  });
 
+ it('keeps the guide scoped without breaking existing FRED company prefixes', () => {
+ expect(applyCompanyPrefix('/company/fred?review=1#brief', 'ACME')).toBe('/ACME/company/fred?review=1#brief');
+ expect(extractCompanyPrefixFromPath('/FRED/issues')).toBe('FRED');
+ expect(applyCompanyPrefix('/FRED/issues','ACME')).toBe('/FRED/issues');
+ expect(toCompanyRelativePath('/ACME/company/fred')).toBe('/company/fred');
+ expect(isReservedCompanyPrefix('FRED')).toBe(false);
+ });
+
  it('strips the company prefix from /:prefix/onboarding so a remembered path never doubles it', () => {
  expect(toCompanyRelativePath('/WAN/onboarding')).toBe('/onboarding');
  expect(extractCompanyPrefixFromPath('/onboarding')).toBeNull();

@@ -127,6 +127,16 @@ describe("FirstRunPage", () => {
     expect(current?.textContent).toContain("Your model");
   });
 
+  it("offers Fred during first-run setup without starting another agent job", async () => {
+    mockStatus.mockResolvedValue(status());
+    await render();
+    expect(container.querySelector('a[href="/ACM/company/fred"]')?.textContent).toContain("Meet Fred");
+    expect(container.textContent).toContain("No discovery starts until you choose it");
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockSetupAdapter).not.toHaveBeenCalled();
+    expect(mockSetupHermesProvider).not.toHaveBeenCalled();
+  });
+
   // AgentDash (first-session test, Lane A item 3): after the key the founder
   // landed on a bare companies list instead of the CoS conversation.
   it("goes to the CoS conversation once the model key is saved", async () => {
