@@ -415,13 +415,8 @@ export function InstanceExperimentalSettings() {
                 Preview
               </Button>
               <Button
-                onClick={() => {
-                  if (!lookbackHoursIsValid) {
-                    setActionError("Lookback hours must be a whole number from 1 to 720.");
-                    return;
-                  }
-                  runRecoveryMutation.mutate(parsedLookbackHours);
-                }}
+                // Runs what is saved: the saved switch and the saved hours, not the draft.
+                onClick={() => runRecoveryMutation.mutate(lookbackHours)}
                 disabled={recoveryActionPending || !savedRecoveryEnabled}
               >
                 <Play className="h-4 w-4" />

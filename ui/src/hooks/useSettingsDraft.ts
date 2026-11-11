@@ -71,19 +71,25 @@ export function useSettingsDraft<T extends Record<string, unknown>, R = unknown>
   const [state, setState] = useState<{ key: string; edits: Partial<T> }>({ key: resetKey, edits: {} });
   const edits: Partial<T> = state.key === resetKey ? state.edits : {};
 
+  // Drop edits after a save: those that match what was sent, and every field
+  // a confirm step decided through `include`, whatever the edit held.
+  const clearSaved = (key: string, sent: Partial<T>, decided: Array<keyof T>) => {
+    setState((current) => {
+      if (current.key !== key) return current;
+      const next: Partial<T> = { ...current.edits };
+      for (const field of Object.keys(sent) as Array<keyof T>) {
+        if (isSameSettingValue(next[field], sent[field])) delete next[field];
+      }
+      for (const field of decided) delete next[field];
+      return { key: current.key, edits: next };
+    });
+  };
+
   const mutation = useMutation({
-    mutationFn: (variables: { key: string; changes: Partial<T> }) => save(variables.changes),
+    mutationFn: (variables: { key: string; changes: Partial<T>; decided: Array<keyof T> }) => save(variables.changes),
     onSuccess: async (result, variables) => {
       await onSaved?.(result, variables.changes);
-      // Drop the edits that were saved; the server values now carry them.
-      setState((current) => {
-        if (current.key !== variables.key) return current;
-        const next: Partial<T> = { ...current.edits };
-        for (const key of Object.keys(variables.changes) as Array<keyof T>) {
-          if (isSameSettingValue(next[key], variables.changes[key])) delete next[key];
-        }
-        return { key: current.key, edits: next };
-      });
+      clearSaved(variables.key, variables.changes, variables.decided);
     },
   });
 
@@ -103,24 +109,36 @@ export function useSettingsDraft<T extends Record<string, unknown>, R = unknown>
     isSaved: mutation.isSuccess && forThisKey && !isDirty,
     error: mutation.isError && forThisKey ? mutation.error : null,
     set: (key, value) => {
-      setState((current) => ({
-        key: resetKey,
-        edits: { ...(current.key === resetKey ? current.edits : {}), [key]: value } as Partial<T>,
-      }));
+      // A value equal to the server's is no edit: keeping it would hide a
+      // later server change behind a draft the person never made.
+      const backToSaved = isSameSettingValue(value, saved[key]);
+      setState((current) => {
+        const next = { ...(current.key === resetKey ? current.edits : {}) } as Partial<T>;
+        if (backToSaved) delete next[key];
+        else next[key] = value;
+        return { key: resetKey, edits: next };
+      });
+      // A failed save's error no longer applies once the draft is clean again.
+      if (backToSaved && mutation.isError) {
+        const othersDirty = (Object.keys(changes) as Array<keyof T>).some((field) => field !== key);
+        if (!othersDirty) mutation.reset();
+      }
     },
     save: (options) => {
       if (mutation.isPending) return;
       const toSend: Partial<T> = { ...changes };
-      for (const key of Object.keys(options?.include ?? {}) as Array<keyof T>) {
+      const decided = Object.keys(options?.include ?? {}) as Array<keyof T>;
+      for (const key of decided) {
         const value = options!.include![key];
         if (isSameSettingValue(value, saved[key])) delete toSend[key];
         else toSend[key] = value;
       }
       if (Object.keys(toSend).length === 0) {
+        clearSaved(resetKey, toSend, decided);
         options?.onSuccess?.();
         return;
       }
-      mutation.mutate({ key: resetKey, changes: toSend }, { onSuccess: () => options?.onSuccess?.() });
+      mutation.mutate({ key: resetKey, changes: toSend, decided }, { onSuccess: () => options?.onSuccess?.() });
     },
     discard: () => {
       setState({ key: resetKey, edits: {} });

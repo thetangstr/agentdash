@@ -190,6 +190,19 @@ describe("AdminPowersSection", () => {
     expect(byTestId("admin-powers-error")).toBeNull();
   });
 
+  it("a save error goes away when the switch is flipped back by hand", async () => {
+    mockCompaniesApi.update.mockRejectedValueOnce(new Error("Only owners and admins can change this."));
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    await click(byTestId("admin-powers-directive-read-toggle")!);
+    await click(byTestId("admin-powers-save")!);
+    await flush();
+    expect(byTestId("admin-powers-error")).not.toBeNull();
+    await click(byTestId("admin-powers-directive-read-toggle")!);
+    expect(byTestId<HTMLButtonElement>("admin-powers-save")!.disabled).toBe(true);
+    expect(byTestId("admin-powers-discard")).toBeNull();
+    expect(byTestId("admin-powers-error")).toBeNull();
+  });
+
   it("the record limit (1 to 200) is part of the draft and blocks Save while it is not valid", async () => {
     await render({ company: company({ assistantAdminBatchesEnabled: true }), canManage: true, showReadOnlyNotice: false });
     const input = byTestId<HTMLInputElement>("admin-powers-assistant-batch-max")!;

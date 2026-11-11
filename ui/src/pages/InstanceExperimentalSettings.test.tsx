@@ -185,6 +185,42 @@ describe("InstanceExperimentalSettings saves explicitly", () => {
     expect(mockInstanceSettingsApi.updateExperimental).toHaveBeenCalledWith({ enableIssueGraphLivenessAutoRecovery: true });
   });
 
+  it("Run now uses the saved lookback hours, not unsaved ones", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableIssueGraphLivenessAutoRecovery: true,
+      issueGraphLivenessAutoRecoveryLookbackHours: 24,
+    });
+    await renderPage();
+    await type(byLabel<HTMLInputElement>("Lookback hours"), "48");
+    await click(buttonByText("Run now"));
+    expect(mockInstanceSettingsApi.runIssueGraphLivenessAutoRecovery).toHaveBeenCalledWith({ lookbackHours: 24 });
+  });
+
+  it("turning auto-recovery on and off again, then Preview and Enable only, leaves no stale draft", async () => {
+    mockInstanceSettingsApi.previewIssueGraphLivenessAutoRecovery.mockResolvedValue({
+      lookbackHours: 24,
+      recoverableFindings: 0,
+      skippedOutsideLookback: 0,
+      items: [],
+    });
+    const enabled = { enableIssueGraphLivenessAutoRecovery: true, issueGraphLivenessAutoRecoveryLookbackHours: 24 };
+    mockInstanceSettingsApi.updateExperimental.mockImplementation(async () => {
+      mockInstanceSettingsApi.getExperimental.mockResolvedValue(enabled);
+      return enabled;
+    });
+    await renderPage();
+    const toggle = byLabel("Toggle issue graph liveness auto-recovery");
+    await click(toggle);
+    await click(toggle);
+    await click(buttonByText("Preview"));
+    await click(buttonByText("Enable only"));
+    await flush();
+    expect(mockInstanceSettingsApi.updateExperimental).toHaveBeenCalledWith({ enableIssueGraphLivenessAutoRecovery: true });
+    expect(byLabel("Toggle issue graph liveness auto-recovery").getAttribute("aria-checked")).toBe("true");
+    expect(byTestId("instance-experimental-recovery-state")!.textContent).not.toBe("Unsaved changes");
+    expect(byTestId<HTMLButtonElement>("instance-experimental-recovery-save")!.disabled).toBe(true);
+  });
+
   it("turning auto-recovery off and changing the hours save together without a preview", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableIssueGraphLivenessAutoRecovery: true,

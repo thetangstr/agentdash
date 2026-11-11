@@ -125,6 +125,51 @@ describe("useSettingsDraft", () => {
   });
 });
 
+describe("useSettingsDraft leaves no hidden edits", () => {
+  it("a field set back to the saved value is no edit, so a later refetch shows the server value", async () => {
+    await render({ name: "Meridian", on: false });
+    await run(() => draft.set("on", true));
+    await run(() => draft.set("on", false));
+    // Another tab turns it on; the page refetches.
+    await render({ name: "Meridian", on: true });
+    expect(draft.values.on).toBe(true);
+    expect(draft.isDirty).toBe(false);
+    expect(draft.changes).toEqual({});
+  });
+
+  it("a save with include clears that field's edit, whatever the edit held", async () => {
+    await render({ name: "Meridian", on: false });
+    await run(() => draft.set("name", "Harbor"));
+    await run(() => draft.save({ include: { name: "Meridian Labs" } }));
+    expect(save).toHaveBeenCalledWith({ name: "Meridian Labs" });
+    await render({ name: "Meridian Labs", on: false });
+    expect(draft.values.name).toBe("Meridian Labs");
+    expect(draft.isDirty).toBe(false);
+  });
+
+  it("an include that matches the server sends nothing and still clears that field's edit", async () => {
+    await render({ name: "Meridian", on: true });
+    await run(() => draft.set("on", false));
+    const onSuccess = vi.fn();
+    await run(() => draft.save({ include: { on: true }, onSuccess }));
+    expect(save).not.toHaveBeenCalled();
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(draft.values.on).toBe(true);
+    expect(draft.isDirty).toBe(false);
+  });
+
+  it("a save error clears once the person puts the draft back to the saved values", async () => {
+    save.mockRejectedValueOnce(new Error("refused"));
+    await render({ name: "Meridian", on: false });
+    await run(() => draft.set("on", true));
+    await run(() => draft.save());
+    expect((draft.error as Error).message).toBe("refused");
+    await run(() => draft.set("on", false));
+    expect(draft.isDirty).toBe(false);
+    expect(draft.error).toBeNull();
+  });
+});
+
 describe("isSameSettingValue", () => {
   it("compares plain values and nested objects by content", () => {
     expect(isSameSettingValue("a", "a")).toBe(true);
