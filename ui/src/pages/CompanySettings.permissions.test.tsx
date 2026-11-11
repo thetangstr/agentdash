@@ -202,6 +202,85 @@ describe("CompanySettings for an owner or admin", () => {
   });
 });
 
+describe("CompanySettings sections save explicitly", () => {
+  function byTestId<T extends Element = HTMLElement>(id: string) {
+    return container.querySelector<T>(`[data-testid="${id}"]`);
+  }
+  async function click(el: Element) {
+    await act(async () => {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+  async function type(el: HTMLInputElement, value: string) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it("Hiring: flipping the switch sends nothing; Save sends only that field", async () => {
+    capabilities(true);
+    mockCompaniesApi.update.mockResolvedValue({});
+    await render();
+    const save = byTestId<HTMLButtonElement>("company-settings-hiring-save")!;
+    expect(save.disabled).toBe(true);
+    await click(toggle("company-settings-team-approval-toggle")!);
+    expect(mockCompaniesApi.update).not.toHaveBeenCalled();
+    expect(byTestId("company-settings-hiring-state")!.textContent).toBe("Unsaved changes");
+    // Each section keeps its own draft.
+    expect(byTestId<HTMLButtonElement>("company-settings-work-save")!.disabled).toBe(true);
+    await click(save);
+    expect(mockCompaniesApi.update).toHaveBeenCalledTimes(1);
+    expect(mockCompaniesApi.update).toHaveBeenCalledWith("company-1", { requireBoardApprovalForNewAgents: true });
+    expect(byTestId("company-settings-hiring-state")!.textContent).toBe("Saved");
+  });
+
+  it("Work: Discard puts the switch back and sends nothing", async () => {
+    capabilities(true);
+    await render();
+    await click(toggle("company-settings-issue-start-toggle")!);
+    expect(toggle("company-settings-issue-start-toggle")!.getAttribute("aria-checked")).toBe("true");
+    await click(byTestId("company-settings-work-discard")!);
+    expect(toggle("company-settings-issue-start-toggle")!.getAttribute("aria-checked")).toBe("false");
+    expect(byTestId<HTMLButtonElement>("company-settings-work-save")!.disabled).toBe(true);
+    expect(mockCompaniesApi.update).not.toHaveBeenCalled();
+  });
+
+  it("General: Save sends only the changed field; a failure keeps the draft and shows the error", async () => {
+    capabilities(true);
+    mockCompaniesApi.update.mockRejectedValueOnce(new Error("Name already taken"));
+    await render();
+    const save = byTestId<HTMLButtonElement>("company-settings-general-save")!;
+    expect(save.textContent).toBe("Save changes");
+    expect(save.disabled).toBe(true);
+    await type(input("Description")!, "  Ships the launch  ");
+    expect(save.disabled).toBe(false);
+    await click(save);
+    expect(mockCompaniesApi.update).toHaveBeenCalledWith("company-1", { description: "Ships the launch" });
+    expect(byTestId("company-settings-general-error")!.textContent).toBe("Name already taken");
+    expect(input("Description")!.value).toBe("  Ships the launch  ");
+    expect(byTestId("company-settings-general-state")!.textContent).toBe("Unsaved changes");
+  });
+
+  it("General: an empty workspace name cannot be saved", async () => {
+    capabilities(true);
+    await render();
+    await type(input("Workspace name")!, "   ");
+    expect(byTestId<HTMLButtonElement>("company-settings-general-save")!.disabled).toBe(true);
+  });
+
+  it("members get no save rows", async () => {
+    capabilities(false);
+    await render();
+    for (const id of ["company-settings-general-save", "company-settings-hiring-save", "company-settings-work-save", "admin-powers-save"]) {
+      expect(byTestId(id), id).toBeNull();
+    }
+  });
+});
+
 describe("CompanySettings while the answer is loading", () => {
   it("shows neither state: no read-only line, no destructive controls, nothing editable", async () => {
     mockCapabilitiesApi.get.mockReturnValue(new Promise(() => {}));

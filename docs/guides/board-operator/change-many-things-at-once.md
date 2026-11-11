@@ -60,7 +60,7 @@ On **Routines**, tick the routines and choose **Delete**. A deleted routine is g
 
 ## The Admin powers switches
 
-**Company Settings → Admin powers**. Only owners and admins can change these.
+**Company Settings → Admin powers**. Only owners and admins can change these. Changes to the switches and fields here are a draft until you choose **Save changes** under the section; **Discard** puts them back.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ Off by default. This has been tested against AgentDash's own test client and rev
 
 **Turn it on.**
 
-1. In Admin powers, turn on **Allow batch changes from an admin's own Claude**.
+1. In Admin powers, turn on **Allow batch changes from an admin's own Claude** and choose **Save changes**.
 2. Connect Claude to AgentDash, or connect it again if it is already connected, and tick **Batch changes as an admin** on the consent screen. It is never pre-checked, and a connection made before you turned the switch on does not get it until you connect again. [Connecting an assistant](/mcp/connecting) has the steps.
 
 **How the confirm code works.**

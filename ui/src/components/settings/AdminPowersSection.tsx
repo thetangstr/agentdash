@@ -1,18 +1,46 @@
-import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ASSISTANT_BATCH_MAX_RECORDS_DEFAULT,
   ASSISTANT_BATCH_MAX_RECORDS_MAX,
   ASSISTANT_BATCH_MAX_RECORDS_MIN,
   type Company,
 } from "@paperclipai/shared";
-import { Button } from "@/components/ui/button";
 import { Link } from "@/lib/router";
 import { companiesApi } from "../../api/companies";
 import { ceilingTemplatesApi } from "../../api/ceilingTemplates";
 import { ApiError } from "../../api/client";
 import { queryKeys } from "../../lib/queryKeys";
+import { useSettingsDraft } from "../../hooks/useSettingsDraft";
 import { Field, ToggleField } from "../agent-config-primitives";
+import { SettingsSaveBar } from "./SettingsSaveBar";
+
+type AdminPowersForm = {
+  adminDirectiveReadEnabled: boolean;
+  adminTranscriptReadEnabled: boolean;
+  assistantAdminBatchesEnabled: boolean;
+  /** The field's text; parsed on save. */
+  assistantBatchMaxRecords: string;
+  /** "" means no ceiling. */
+  defaultCeilingTemplateId: string;
+};
+
+type AdminPowersPatch = Partial<Pick<Company,
+  "adminDirectiveReadEnabled" | "adminTranscriptReadEnabled" | "assistantAdminBatchesEnabled" | "assistantBatchMaxRecords" | "defaultCeilingTemplateId"
+>>;
+
+function toPatch(changes: Partial<AdminPowersForm>): AdminPowersPatch {
+  const patch: AdminPowersPatch = {};
+  if (changes.adminDirectiveReadEnabled !== undefined) patch.adminDirectiveReadEnabled = changes.adminDirectiveReadEnabled;
+  if (changes.adminTranscriptReadEnabled !== undefined) patch.adminTranscriptReadEnabled = changes.adminTranscriptReadEnabled;
+  if (changes.assistantAdminBatchesEnabled !== undefined) patch.assistantAdminBatchesEnabled = changes.assistantAdminBatchesEnabled;
+  if (changes.assistantBatchMaxRecords !== undefined) {
+    patch.assistantBatchMaxRecords = Number.parseInt(changes.assistantBatchMaxRecords, 10);
+  }
+  if (changes.defaultCeilingTemplateId !== undefined) {
+    patch.defaultCeilingTemplateId = changes.defaultCeilingTemplateId || null;
+  }
+  return patch;
+}
 
 /**
  * AgentDash admin powers: the company switches, in one place in Company
@@ -25,6 +53,9 @@ import { Field, ToggleField } from "../agent-config-primitives";
  * picks one of the company's ceiling templates (or none); it applies to
  * agents created from then on. Owners and admins also get the link to the
  * admin audit (part 4), which is on for them by default.
+ *
+ * Every control here is a draft until "Save changes", which sends only the
+ * changed fields in one request.
  */
 export function AdminPowersSection({
   company,
@@ -36,20 +67,20 @@ export function AdminPowersSection({
   showReadOnlyNotice: boolean;
 }) {
   const queryClient = useQueryClient();
-  const savedMax = company.assistantBatchMaxRecords ?? ASSISTANT_BATCH_MAX_RECORDS_DEFAULT;
-  const [maxRecords, setMaxRecords] = useState(String(savedMax));
-  useEffect(() => setMaxRecords(String(savedMax)), [savedMax]);
-
-  const mutation = useMutation({
-    mutationFn: (
-      data: Partial<Pick<Company,
-        "adminDirectiveReadEnabled" | "adminTranscriptReadEnabled" | "assistantAdminBatchesEnabled" | "assistantBatchMaxRecords" | "defaultCeilingTemplateId"
-      >>,
-    ) => companiesApi.update(company.id, data),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+  const draft = useSettingsDraft<AdminPowersForm>({
+    resetKey: company.id,
+    saved: {
+      adminDirectiveReadEnabled: !!company.adminDirectiveReadEnabled,
+      adminTranscriptReadEnabled: !!company.adminTranscriptReadEnabled,
+      assistantAdminBatchesEnabled: !!company.assistantAdminBatchesEnabled,
+      assistantBatchMaxRecords: String(company.assistantBatchMaxRecords ?? ASSISTANT_BATCH_MAX_RECORDS_DEFAULT),
+      defaultCeilingTemplateId: company.defaultCeilingTemplateId ?? "",
     },
+    save: (changes) => companiesApi.update(company.id, toPatch(changes)),
+    onSaved: () => queryClient.invalidateQueries({ queryKey: queryKeys.companies.all }),
   });
+  const form = draft.values;
+  const locked = !canManage || draft.isSaving;
 
   const templates = useQuery({
     queryKey: queryKeys.ceilingTemplates(company.id),
@@ -58,13 +89,11 @@ export function AdminPowersSection({
   });
   const ceilingsUnavailable = templates.error instanceof ApiError && templates.error.status === 404;
 
-  const assistantBatches = !!company.assistantAdminBatchesEnabled;
-  const parsedMax = Number.parseInt(maxRecords, 10);
+  const parsedMax = Number.parseInt(form.assistantBatchMaxRecords, 10);
   const maxValid =
-    String(parsedMax) === maxRecords.trim()
+    String(parsedMax) === form.assistantBatchMaxRecords.trim()
     && parsedMax >= ASSISTANT_BATCH_MAX_RECORDS_MIN
     && parsedMax <= ASSISTANT_BATCH_MAX_RECORDS_MAX;
-  const maxDirty = maxValid && parsedMax !== savedMax;
 
   return (
     <div className="space-y-4" data-testid="company-settings-admin-powers-section">
@@ -80,56 +109,44 @@ export function AdminPowersSection({
         <ToggleField
           label="Admins can read agent directives"
           hint="Owners and admins can read the directives of any agent in this company, not only the agents they look after. Each read is recorded. Off by default."
-          checked={!!company.adminDirectiveReadEnabled}
-          onChange={(value) => mutation.mutate({ adminDirectiveReadEnabled: value })}
+          checked={form.adminDirectiveReadEnabled}
+          onChange={(value) => draft.set("adminDirectiveReadEnabled", value)}
           toggleTestId="admin-powers-directive-read-toggle"
-          disabled={!canManage || mutation.isPending}
+          disabled={locked}
         />
         <ToggleField
           label="Admins can read run transcripts when document access is on"
           hint="Owners and admins can open the transcript of any agent's run, even when document access limits who reads them. Reads are recorded once per person and run every 10 minutes. Off by default."
-          checked={!!company.adminTranscriptReadEnabled}
-          onChange={(value) => mutation.mutate({ adminTranscriptReadEnabled: value })}
+          checked={form.adminTranscriptReadEnabled}
+          onChange={(value) => draft.set("adminTranscriptReadEnabled", value)}
           toggleTestId="admin-powers-transcript-read-toggle"
-          disabled={!canManage || mutation.isPending}
+          disabled={locked}
         />
         <ToggleField
           label="Allow batch changes from an admin's own Claude"
           hint="An owner or admin can ask their own Claude to prepare a change to many records. Nothing changes until they confirm it in AgentDash, and each record is checked as if they changed it by hand. Off by default."
-          checked={assistantBatches}
-          onChange={(value) => mutation.mutate({ assistantAdminBatchesEnabled: value })}
+          checked={form.assistantAdminBatchesEnabled}
+          onChange={(value) => draft.set("assistantAdminBatchesEnabled", value)}
           toggleTestId="admin-powers-assistant-batches-toggle"
-          disabled={!canManage || mutation.isPending}
+          disabled={locked}
         />
         <Field
           label="Most records per batch from Claude"
           hint={`From ${ASSISTANT_BATCH_MAX_RECORDS_MIN} to ${ASSISTANT_BATCH_MAX_RECORDS_MAX}. Applies only when batch changes from Claude are allowed.`}
         >
           <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                aria-label="Most records per batch from Claude"
-                data-testid="admin-powers-assistant-batch-max"
-                min={ASSISTANT_BATCH_MAX_RECORDS_MIN}
-                max={ASSISTANT_BATCH_MAX_RECORDS_MAX}
-                step={1}
-                value={maxRecords}
-                disabled={!canManage || !assistantBatches}
-                onChange={(event) => setMaxRecords(event.target.value)}
-                className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none disabled:opacity-60"
-              />
-              {canManage && assistantBatches && maxDirty && (
-                <Button
-                  size="sm"
-                  onClick={() => mutation.mutate({ assistantBatchMaxRecords: parsedMax })}
-                  disabled={mutation.isPending}
-                  data-testid="admin-powers-assistant-batch-max-save"
-                >
-                  {mutation.isPending ? "Saving..." : "Save"}
-                </Button>
-              )}
-            </div>
+            <input
+              type="number"
+              aria-label="Most records per batch from Claude"
+              data-testid="admin-powers-assistant-batch-max"
+              min={ASSISTANT_BATCH_MAX_RECORDS_MIN}
+              max={ASSISTANT_BATCH_MAX_RECORDS_MAX}
+              step={1}
+              value={form.assistantBatchMaxRecords}
+              disabled={locked || !form.assistantAdminBatchesEnabled}
+              onChange={(event) => draft.set("assistantBatchMaxRecords", event.target.value)}
+              className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none disabled:opacity-60"
+            />
             {!maxValid && (
               <span className="text-xs text-destructive">
                 Enter a whole number from {ASSISTANT_BATCH_MAX_RECORDS_MIN} to {ASSISTANT_BATCH_MAX_RECORDS_MAX}.
@@ -148,9 +165,9 @@ export function AdminPowersSection({
               aria-label="Ceiling for new agents"
               data-testid="admin-powers-default-ceiling"
               className="w-56 max-sm:min-h-11 max-sm:w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none disabled:opacity-60"
-              value={company.defaultCeilingTemplateId ?? ""}
-              disabled={!canManage || templates.isLoading || mutation.isPending}
-              onChange={(event) => mutation.mutate({ defaultCeilingTemplateId: event.target.value || null })}
+              value={form.defaultCeilingTemplateId}
+              disabled={locked || templates.isLoading}
+              onChange={(event) => draft.set("defaultCeilingTemplateId", event.target.value)}
             >
               <option value="">None</option>
               {(templates.data?.templates ?? []).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
@@ -160,6 +177,9 @@ export function AdminPowersSection({
             <p className="mt-1 text-xs text-muted-foreground">Applies to agents created from now on; existing agents keep their ceilings.</p>
           ) : null}
         </Field>
+        {canManage && (
+          <SettingsSaveBar draft={draft} canSave={maxValid} testId="admin-powers" />
+        )}
         {canManage && (
           <Field
             label="Admin audit"
@@ -173,11 +193,6 @@ export function AdminPowersSection({
               Open the admin audit
             </Link>
           </Field>
-        )}
-        {mutation.isError && (
-          <p className="text-xs text-destructive" role="alert">
-            {mutation.error instanceof Error ? mutation.error.message : "The change was not saved."}
-          </p>
         )}
       </div>
     </div>

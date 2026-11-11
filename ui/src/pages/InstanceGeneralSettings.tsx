@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PatchInstanceGeneralSettings, BackupRetentionPolicy } from "@paperclipai/shared";
+import type { PatchInstanceGeneralSettings } from "@paperclipai/shared";
 import {
   DAILY_RETENTION_PRESETS,
   WEEKLY_RETENTION_PRESETS,
@@ -12,6 +12,8 @@ import { authApi } from "@/api/auth";
 import { healthApi } from "@/api/health";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { ModeBadge } from "@/components/access/ModeBadge";
+import { SettingsSaveBar } from "@/components/settings/SettingsSaveBar";
+import { useSettingsDraft } from "@/hooks/useSettingsDraft";
 import { Button } from "../components/ui/button";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -52,15 +54,30 @@ export function InstanceGeneralSettings() {
     retry: false,
   });
 
-  const updateGeneralMutation = useMutation({
-    mutationFn: instanceSettingsApi.updateGeneral,
-    onSuccess: async () => {
-      setActionError(null);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.instance.generalSettings });
-    },
-    onError: (error) => {
-      setActionError(error instanceof Error ? error.message : "Failed to update general settings.");
-    },
+  // Each section is a draft until its "Save changes", which sends only the
+  // changed fields in one request.
+  const general = generalQuery.data;
+  const saveGeneral = (changes: PatchInstanceGeneralSettings) => instanceSettingsApi.updateGeneral(changes);
+  const refreshGeneral = () => queryClient.invalidateQueries({ queryKey: queryKeys.instance.generalSettings });
+  const censorDraft = useSettingsDraft({
+    saved: { censorUsernameInLogs: general?.censorUsernameInLogs === true },
+    save: saveGeneral,
+    onSaved: refreshGeneral,
+  });
+  const shortcutsDraft = useSettingsDraft({
+    saved: { keyboardShortcuts: general?.keyboardShortcuts === true },
+    save: saveGeneral,
+    onSaved: refreshGeneral,
+  });
+  const retentionDraft = useSettingsDraft({
+    saved: { backupRetention: general?.backupRetention ?? DEFAULT_BACKUP_RETENTION },
+    save: saveGeneral,
+    onSaved: refreshGeneral,
+  });
+  const feedbackDraft = useSettingsDraft<{ feedbackDataSharingPreference: NonNullable<PatchInstanceGeneralSettings["feedbackDataSharingPreference"]> }>({
+    saved: { feedbackDataSharingPreference: general?.feedbackDataSharingPreference ?? "prompt" },
+    save: saveGeneral,
+    onSaved: refreshGeneral,
   });
 
   if (generalQuery.isLoading) {
@@ -77,10 +94,10 @@ export function InstanceGeneralSettings() {
     );
   }
 
-  const censorUsernameInLogs = generalQuery.data?.censorUsernameInLogs === true;
-  const keyboardShortcuts = generalQuery.data?.keyboardShortcuts === true;
-  const feedbackDataSharingPreference = generalQuery.data?.feedbackDataSharingPreference ?? "prompt";
-  const backupRetention: BackupRetentionPolicy = generalQuery.data?.backupRetention ?? DEFAULT_BACKUP_RETENTION;
+  const { censorUsernameInLogs } = censorDraft.values;
+  const { keyboardShortcuts } = shortcutsDraft.values;
+  const { backupRetention } = retentionDraft.values;
+  const { feedbackDataSharingPreference } = feedbackDraft.values;
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -146,10 +163,13 @@ export function InstanceGeneralSettings() {
           </div>
           <ToggleSwitch
             checked={censorUsernameInLogs}
-            onCheckedChange={() => updateGeneralMutation.mutate({ censorUsernameInLogs: !censorUsernameInLogs })}
-            disabled={updateGeneralMutation.isPending}
+            onCheckedChange={(checked) => censorDraft.set("censorUsernameInLogs", checked)}
+            disabled={censorDraft.isSaving}
             aria-label="Toggle username log censoring"
           />
+        </div>
+        <div className="mt-4">
+          <SettingsSaveBar draft={censorDraft} testId="instance-general-censor" />
         </div>
       </section>
 
@@ -164,10 +184,13 @@ export function InstanceGeneralSettings() {
           </div>
           <ToggleSwitch
             checked={keyboardShortcuts}
-            onCheckedChange={() => updateGeneralMutation.mutate({ keyboardShortcuts: !keyboardShortcuts })}
-            disabled={updateGeneralMutation.isPending}
+            onCheckedChange={(checked) => shortcutsDraft.set("keyboardShortcuts", checked)}
+            disabled={shortcutsDraft.isSaving}
             aria-label="Toggle keyboard shortcuts"
           />
+        </div>
+        <div className="mt-4">
+          <SettingsSaveBar draft={shortcutsDraft} testId="instance-general-shortcuts" />
         </div>
       </section>
 
@@ -191,18 +214,15 @@ export function InstanceGeneralSettings() {
                   <button
                     key={days}
                     type="button"
-                    disabled={updateGeneralMutation.isPending}
+                    disabled={retentionDraft.isSaving}
                     className={cn(
                       "rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
                       active
                         ? "border-foreground bg-accent text-foreground"
                         : "border-border bg-background hover:bg-accent/50",
                     )}
-                    onClick={() =>
-                      updateGeneralMutation.mutate({
-                        backupRetention: { ...backupRetention, dailyDays: days },
-                      })
-                    }
+                    aria-pressed={active}
+                    onClick={() => retentionDraft.set("backupRetention", { ...backupRetention, dailyDays: days })}
                   >
                     <div className="text-sm font-medium">{days} days</div>
                   </button>
@@ -221,18 +241,15 @@ export function InstanceGeneralSettings() {
                   <button
                     key={weeks}
                     type="button"
-                    disabled={updateGeneralMutation.isPending}
+                    disabled={retentionDraft.isSaving}
                     className={cn(
                       "rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
                       active
                         ? "border-foreground bg-accent text-foreground"
                         : "border-border bg-background hover:bg-accent/50",
                     )}
-                    onClick={() =>
-                      updateGeneralMutation.mutate({
-                        backupRetention: { ...backupRetention, weeklyWeeks: weeks },
-                      })
-                    }
+                    aria-pressed={active}
+                    onClick={() => retentionDraft.set("backupRetention", { ...backupRetention, weeklyWeeks: weeks })}
                   >
                     <div className="text-sm font-medium">{label}</div>
                   </button>
@@ -251,18 +268,15 @@ export function InstanceGeneralSettings() {
                   <button
                     key={months}
                     type="button"
-                    disabled={updateGeneralMutation.isPending}
+                    disabled={retentionDraft.isSaving}
                     className={cn(
                       "rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
                       active
                         ? "border-foreground bg-accent text-foreground"
                         : "border-border bg-background hover:bg-accent/50",
                     )}
-                    onClick={() =>
-                      updateGeneralMutation.mutate({
-                        backupRetention: { ...backupRetention, monthlyMonths: months },
-                      })
-                    }
+                    aria-pressed={active}
+                    onClick={() => retentionDraft.set("backupRetention", { ...backupRetention, monthlyMonths: months })}
                   >
                     <div className="text-sm font-medium">{label}</div>
                   </button>
@@ -270,6 +284,8 @@ export function InstanceGeneralSettings() {
               })}
             </div>
           </div>
+
+          <SettingsSaveBar draft={retentionDraft} testId="instance-general-retention" />
         </div>
       </section>
 
@@ -292,7 +308,7 @@ export function InstanceGeneralSettings() {
               </a>
             ) : null}
           </div>
-          {feedbackDataSharingPreference === "prompt" ? (
+          {(general?.feedbackDataSharingPreference ?? "prompt") === "prompt" ? (
             <div className="rounded-lg border border-border/70 bg-accent/20 px-3 py-2 text-sm text-muted-foreground">
               No default is saved yet. The next thumbs up or thumbs down choice will ask once and
               then save the answer here.
@@ -316,7 +332,8 @@ export function InstanceGeneralSettings() {
                 <button
                   key={option.value}
                   type="button"
-                  disabled={updateGeneralMutation.isPending}
+                  disabled={feedbackDraft.isSaving}
+                  aria-pressed={active}
                   className={cn(
                     "rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
                     active
@@ -324,11 +341,10 @@ export function InstanceGeneralSettings() {
                       : "border-border bg-background hover:bg-accent/50",
                   )}
                   onClick={() =>
-                    updateGeneralMutation.mutate({
-                      feedbackDataSharingPreference: option.value as
-                        | "allowed"
-                        | "not_allowed",
-                    })
+                    feedbackDraft.set(
+                      "feedbackDataSharingPreference",
+                      option.value as "allowed" | "not_allowed",
+                    )
                   }
                 >
                   <div className="text-sm font-medium">{option.label}</div>
@@ -339,6 +355,7 @@ export function InstanceGeneralSettings() {
               );
             })}
           </div>
+          <SettingsSaveBar draft={feedbackDraft} testId="instance-general-feedback" />
           <p className="text-xs text-muted-foreground">
             To retest the first-use prompt in local dev, remove the{" "}
             <code>feedbackDataSharingPreference</code> key from the{" "}
