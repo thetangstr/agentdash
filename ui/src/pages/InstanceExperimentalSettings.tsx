@@ -6,6 +6,8 @@ import type {
   PatchInstanceExperimentalSettings,
 } from "@paperclipai/shared";
 import { instanceSettingsApi } from "@/api/instanceSettings";
+import { SettingsSaveBar } from "@/components/settings/SettingsSaveBar";
+import { useSettingsDraft } from "@/hooks/useSettingsDraft";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useCapabilities } from "../hooks/useCapability";
@@ -128,7 +130,6 @@ export function InstanceExperimentalSettings() {
   const isInstanceAdmin = useCapabilities(selectedCompanyId).data?.isInstanceAdmin === true;
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
-  const [lookbackHoursDraft, setLookbackHoursDraft] = useState("24");
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [pendingPreview, setPendingPreview] = useState<IssueGraphLivenessAutoRecoveryPreview | null>(null);
 
@@ -144,19 +145,48 @@ export function InstanceExperimentalSettings() {
     queryFn: () => instanceSettingsApi.getExperimental(),
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: async (patch: PatchInstanceExperimentalSettings) =>
-      instanceSettingsApi.updateExperimental(patch),
-    onSuccess: async () => {
-      setActionError(null);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.instance.experimentalSettings }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
-      ]);
+  // Each section is a draft until its "Save changes", which sends only the
+  // changed fields in one request.
+  const experimental = experimentalQuery.data;
+  const saveExperimental = (patch: PatchInstanceExperimentalSettings) => instanceSettingsApi.updateExperimental(patch);
+  const refreshExperimental = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.instance.experimentalSettings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+    ]);
+  const environmentsDraft = useSettingsDraft({
+    saved: { enableEnvironments: experimental?.enableEnvironments === true },
+    save: saveExperimental,
+    onSaved: refreshExperimental,
+  });
+  const workspacesDraft = useSettingsDraft({
+    saved: { enableIsolatedWorkspaces: experimental?.enableIsolatedWorkspaces === true },
+    save: saveExperimental,
+    onSaved: refreshExperimental,
+  });
+  const devServerDraft = useSettingsDraft({
+    saved: { autoRestartDevServerWhenIdle: experimental?.autoRestartDevServerWhenIdle === true },
+    save: saveExperimental,
+    onSaved: refreshExperimental,
+  });
+  // Auto-recovery: the switch and the lookback hours (the field's text) save
+  // together. Turning it on still goes through the preview below first.
+  const recoveryDraft = useSettingsDraft({
+    saved: {
+      enableIssueGraphLivenessAutoRecovery: experimental?.enableIssueGraphLivenessAutoRecovery === true,
+      issueGraphLivenessAutoRecoveryLookbackHours: String(experimental?.issueGraphLivenessAutoRecoveryLookbackHours ?? 24),
     },
-    onError: (error) => {
-      setActionError(error instanceof Error ? error.message : "Failed to update experimental settings.");
+    save: (changes) => {
+      const patch: PatchInstanceExperimentalSettings = {};
+      if (changes.enableIssueGraphLivenessAutoRecovery !== undefined) {
+        patch.enableIssueGraphLivenessAutoRecovery = changes.enableIssueGraphLivenessAutoRecovery;
+      }
+      if (changes.issueGraphLivenessAutoRecoveryLookbackHours !== undefined) {
+        patch.issueGraphLivenessAutoRecoveryLookbackHours = Number.parseInt(changes.issueGraphLivenessAutoRecoveryLookbackHours, 10);
+      }
+      return saveExperimental(patch);
     },
+    onSaved: refreshExperimental,
   });
 
   const previewMutation = useMutation({
@@ -188,13 +218,6 @@ export function InstanceExperimentalSettings() {
     },
   });
 
-  useEffect(() => {
-    const next = experimentalQuery.data?.issueGraphLivenessAutoRecoveryLookbackHours;
-    if (typeof next === "number") {
-      setLookbackHoursDraft(String(next));
-    }
-  }, [experimentalQuery.data?.issueGraphLivenessAutoRecoveryLookbackHours]);
-
   if (experimentalQuery.isLoading) {
     return <div className="text-sm text-muted-foreground">Loading experimental settings...</div>;
   }
@@ -209,18 +232,19 @@ export function InstanceExperimentalSettings() {
     );
   }
 
-  const enableEnvironments = experimentalQuery.data?.enableEnvironments === true;
-  const enableIsolatedWorkspaces = experimentalQuery.data?.enableIsolatedWorkspaces === true;
-  const autoRestartDevServerWhenIdle = experimentalQuery.data?.autoRestartDevServerWhenIdle === true;
-  const enableIssueGraphLivenessAutoRecovery =
-    experimentalQuery.data?.enableIssueGraphLivenessAutoRecovery === true;
-  const lookbackHours =
-    experimentalQuery.data?.issueGraphLivenessAutoRecoveryLookbackHours ?? 24;
+  const { enableEnvironments } = environmentsDraft.values;
+  const { enableIsolatedWorkspaces } = workspacesDraft.values;
+  const { autoRestartDevServerWhenIdle } = devServerDraft.values;
+  const enableIssueGraphLivenessAutoRecovery = recoveryDraft.values.enableIssueGraphLivenessAutoRecovery;
+  const lookbackHoursDraft = recoveryDraft.values.issueGraphLivenessAutoRecoveryLookbackHours;
+  // What the server has now: "Run now" and the current-window line use these.
+  const savedRecoveryEnabled = experimental?.enableIssueGraphLivenessAutoRecovery === true;
+  const lookbackHours = experimental?.issueGraphLivenessAutoRecoveryLookbackHours ?? 24;
   const parsedLookbackHours = Number.parseInt(lookbackHoursDraft, 10);
   const lookbackHoursIsValid =
-    Number.isInteger(parsedLookbackHours) && parsedLookbackHours >= 1 && parsedLookbackHours <= 720;
+    String(parsedLookbackHours) === lookbackHoursDraft.trim() && parsedLookbackHours >= 1 && parsedLookbackHours <= 720;
   const recoveryActionPending =
-    toggleMutation.isPending || previewMutation.isPending || runRecoveryMutation.isPending;
+    recoveryDraft.isSaving || previewMutation.isPending || runRecoveryMutation.isPending;
 
   function previewForEnable() {
     if (!lookbackHoursIsValid) {
@@ -230,22 +254,33 @@ export function InstanceExperimentalSettings() {
     previewMutation.mutate(parsedLookbackHours);
   }
 
+  // Saving a draft that turns auto-recovery on shows the preview first; the
+  // dialog's buttons are what save it. Any other draft saves directly.
+  function saveRecovery() {
+    if (!lookbackHoursIsValid) return;
+    if (recoveryDraft.changes.enableIssueGraphLivenessAutoRecovery === true) {
+      previewForEnable();
+      return;
+    }
+    recoveryDraft.save();
+  }
+
+  // The dialog's buttons turn auto-recovery on with the hours it previewed,
+  // along with anything else in the draft.
+  const enableWithPreviewedHours = {
+    enableIssueGraphLivenessAutoRecovery: true,
+    issueGraphLivenessAutoRecoveryLookbackHours: lookbackHoursDraft,
+  };
+
   function enableOnly() {
     if (!lookbackHoursIsValid) return;
-    toggleMutation.mutate({
-      enableIssueGraphLivenessAutoRecovery: true,
-      issueGraphLivenessAutoRecoveryLookbackHours: parsedLookbackHours,
-    }, {
-      onSuccess: () => setPreviewDialogOpen(false),
-    });
+    recoveryDraft.save({ include: enableWithPreviewedHours, onSuccess: () => setPreviewDialogOpen(false) });
   }
 
   function enableAndRun() {
     if (!lookbackHoursIsValid) return;
-    toggleMutation.mutate({
-      enableIssueGraphLivenessAutoRecovery: true,
-      issueGraphLivenessAutoRecoveryLookbackHours: parsedLookbackHours,
-    }, {
+    recoveryDraft.save({
+      include: enableWithPreviewedHours,
       onSuccess: () => runRecoveryMutation.mutate(parsedLookbackHours),
     });
   }
@@ -279,10 +314,13 @@ export function InstanceExperimentalSettings() {
           </div>
           <ToggleSwitch
             checked={enableEnvironments}
-            onCheckedChange={() => toggleMutation.mutate({ enableEnvironments: !enableEnvironments })}
-            disabled={toggleMutation.isPending}
+            onCheckedChange={(checked) => environmentsDraft.set("enableEnvironments", checked)}
+            disabled={environmentsDraft.isSaving}
             aria-label="Toggle environments experimental setting"
           />
+        </div>
+        <div className="mt-4">
+          <SettingsSaveBar draft={environmentsDraft} testId="instance-experimental-environments" />
         </div>
       </section>
 
@@ -297,10 +335,13 @@ export function InstanceExperimentalSettings() {
           </div>
           <ToggleSwitch
             checked={enableIsolatedWorkspaces}
-            onCheckedChange={() => toggleMutation.mutate({ enableIsolatedWorkspaces: !enableIsolatedWorkspaces })}
-            disabled={toggleMutation.isPending}
+            onCheckedChange={(checked) => workspacesDraft.set("enableIsolatedWorkspaces", checked)}
+            disabled={workspacesDraft.isSaving}
             aria-label="Toggle isolated workspaces experimental setting"
           />
+        </div>
+        <div className="mt-4">
+          <SettingsSaveBar draft={workspacesDraft} testId="instance-experimental-workspaces" />
         </div>
       </section>
 
@@ -317,10 +358,13 @@ export function InstanceExperimentalSettings() {
             </div>
             <ToggleSwitch
               checked={autoRestartDevServerWhenIdle}
-              onCheckedChange={() => toggleMutation.mutate({ autoRestartDevServerWhenIdle: !autoRestartDevServerWhenIdle })}
-              disabled={toggleMutation.isPending}
+              onCheckedChange={(checked) => devServerDraft.set("autoRestartDevServerWhenIdle", checked)}
+              disabled={devServerDraft.isSaving}
               aria-label="Toggle guarded dev-server auto-restart"
             />
+          </div>
+          <div className="mt-4">
+            <SettingsSaveBar draft={devServerDraft} testId="instance-experimental-dev-server" />
           </div>
         </section>
       )}
@@ -337,13 +381,7 @@ export function InstanceExperimentalSettings() {
             </div>
             <ToggleSwitch
               checked={enableIssueGraphLivenessAutoRecovery}
-              onCheckedChange={() => {
-                if (enableIssueGraphLivenessAutoRecovery) {
-                  toggleMutation.mutate({ enableIssueGraphLivenessAutoRecovery: false });
-                  return;
-                }
-                previewForEnable();
-              }}
+              onCheckedChange={(checked) => recoveryDraft.set("enableIssueGraphLivenessAutoRecovery", checked)}
               disabled={recoveryActionPending}
               aria-label="Toggle issue graph liveness auto-recovery"
             />
@@ -361,26 +399,13 @@ export function InstanceExperimentalSettings() {
                 max={720}
                 step={1}
                 value={lookbackHoursDraft}
-                onChange={(event) => setLookbackHoursDraft(event.target.value)}
+                aria-label="Lookback hours"
+                onChange={(event) => recoveryDraft.set("issueGraphLivenessAutoRecoveryLookbackHours", event.target.value)}
+                disabled={recoveryDraft.isSaving}
                 aria-invalid={!lookbackHoursIsValid}
               />
             </label>
             <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (!lookbackHoursIsValid) {
-                    setActionError("Lookback hours must be a whole number from 1 to 720.");
-                    return;
-                  }
-                  toggleMutation.mutate({
-                    issueGraphLivenessAutoRecoveryLookbackHours: parsedLookbackHours,
-                  });
-                }}
-                disabled={recoveryActionPending || parsedLookbackHours === lookbackHours}
-              >
-                Save hours
-              </Button>
               <Button
                 variant="outline"
                 onClick={previewForEnable}
@@ -397,7 +422,7 @@ export function InstanceExperimentalSettings() {
                   }
                   runRecoveryMutation.mutate(parsedLookbackHours);
                 }}
-                disabled={recoveryActionPending || !enableIssueGraphLivenessAutoRecovery}
+                disabled={recoveryActionPending || !savedRecoveryEnabled}
               >
                 <Play className="h-4 w-4" />
                 Run now
@@ -405,9 +430,20 @@ export function InstanceExperimentalSettings() {
             </div>
           </div>
 
+          {!lookbackHoursIsValid && (
+            <p className="text-xs text-destructive">Lookback hours must be a whole number from 1 to 720.</p>
+          )}
+
           <p className="text-xs text-muted-foreground">
             Current window: last {lookbackHours} {lookbackHours === 1 ? "hour" : "hours"}.
           </p>
+
+          <SettingsSaveBar
+            draft={recoveryDraft}
+            canSave={lookbackHoursIsValid}
+            onSave={saveRecovery}
+            testId="instance-experimental-recovery"
+          />
         </div>
       </section>
 

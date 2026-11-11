@@ -11,11 +11,13 @@ import { PerformanceManagerCard } from "@/components/settings/PerformanceManager
 import { NeedsReconciliationPanel, useNeedsReconciliationCount } from "@/components/settings/NeedsReconciliationPanel";
 import { ReadinessAssessmentCard } from "@/components/settings/ReadinessAssessmentCard";
 import { AdminPowersSection } from "@/components/settings/AdminPowersSection";
+import { SettingsSaveBar } from "@/components/settings/SettingsSaveBar";
 import { LabelsCard } from "@/components/settings/LabelsCard";
 import { CeilingTemplatesCard } from "@/components/settings/CeilingTemplatesCard";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCapability } from "../hooks/useCapability";
+import { useSettingsDraft } from "../hooks/useSettingsDraft";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { healthApi } from "../api/health";
@@ -37,8 +39,32 @@ type AgentSnippetInput = {
 };
 
 const BYTES_PER_MIB = 1024 * 1024;
-const DEFAULT_COMPANY_ATTACHMENT_MAX_MIB = DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES / BYTES_PER_MIB;
 const MAX_COMPANY_ATTACHMENT_MAX_MIB = MAX_COMPANY_ATTACHMENT_MAX_BYTES / BYTES_PER_MIB;
+
+/** General + Appearance as the fields hold them; mapped to the company PATCH on save. */
+type GeneralForm = {
+  name: string;
+  description: string;
+  brandColor: string;
+  attachmentMaxMiB: string;
+};
+
+function generalPatch(changes: Partial<GeneralForm>) {
+  const patch: {
+    name?: string;
+    description?: string | null;
+    brandColor?: string | null;
+    attachmentMaxBytes?: number;
+  } = {};
+  if (changes.name !== undefined) patch.name = changes.name.trim();
+  if (changes.description !== undefined) patch.description = changes.description.trim() || null;
+  if (changes.brandColor !== undefined) patch.brandColor = changes.brandColor || null;
+  if (changes.attachmentMaxMiB !== undefined) {
+    patch.attachmentMaxBytes = Number.parseInt(changes.attachmentMaxMiB, 10) * BYTES_PER_MIB;
+  }
+  return patch;
+}
+
 export function CompanySettings() {
   const {
     companies,
@@ -72,23 +98,41 @@ export function CompanySettings() {
   // AgentDash (scan 4, lane O2): reconciliation waits under Advanced only
   // while nothing needs a verdict; with items it sits in the main page.
   const reconciliationCount = useNeedsReconciliationCount(selectedCompanyId ?? "");
-  // General settings local state
-  const [companyName, setCompanyName] = useState("");
-  const [description, setDescription] = useState("");
-  const [brandColor, setBrandColor] = useState("");
-  const [attachmentMaxMiB, setAttachmentMaxMiB] = useState(String(DEFAULT_COMPANY_ATTACHMENT_MAX_MIB));
+  // Every section below is a draft until its "Save changes", which sends
+  // only the changed fields in one request. The logo is the exception: a
+  // file upload (or "Remove logo") is itself the explicit action.
+  const invalidateCompanies = () => queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+  const generalDraft = useSettingsDraft<GeneralForm>({
+    resetKey: selectedCompanyId ?? "",
+    saved: {
+      name: selectedCompany?.name ?? "",
+      description: selectedCompany?.description ?? "",
+      brandColor: selectedCompany?.brandColor ?? "",
+      attachmentMaxMiB: String(Math.round((selectedCompany?.attachmentMaxBytes ?? DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES) / BYTES_PER_MIB)),
+    },
+    save: (changes) => companiesApi.update(selectedCompanyId!, generalPatch(changes)),
+    onSaved: invalidateCompanies,
+  });
+  const hiringDraft = useSettingsDraft({
+    resetKey: selectedCompanyId ?? "",
+    saved: { requireBoardApprovalForNewAgents: !!selectedCompany?.requireBoardApprovalForNewAgents },
+    save: (changes) => companiesApi.update(selectedCompanyId!, changes),
+    onSaved: invalidateCompanies,
+  });
+  const workDraft = useSettingsDraft({
+    resetKey: selectedCompanyId ?? "",
+    saved: { newIssuesStartAsTodo: !!selectedCompany?.newIssuesStartAsTodo },
+    save: (changes) => companiesApi.update(selectedCompanyId!, changes),
+    onSaved: invalidateCompanies,
+  });
+  const { name: companyName, description, brandColor, attachmentMaxMiB } = generalDraft.values;
   const [logoUrl, setLogoUrl] = useState("");
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
 
-  // Sync local state from selected company
+  // Sync the logo from the selected company
   useEffect(() => {
-    if (!selectedCompany) return;
-    setCompanyName(selectedCompany.name);
-    setDescription(selectedCompany.description ?? "");
-    setBrandColor(selectedCompany.brandColor ?? "");
-    setAttachmentMaxMiB(String(Math.round((selectedCompany.attachmentMaxBytes ?? DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES) / BYTES_PER_MIB)));
-    setLogoUrl(selectedCompany.logoUrl ?? "");
-  }, [selectedCompany]);
+    setLogoUrl(selectedCompany?.logoUrl ?? "");
+  }, [selectedCompany?.logoUrl]);
 
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
@@ -100,43 +144,6 @@ export function CompanySettings() {
     Number.isInteger(attachmentMaxBytes)
     && attachmentMaxBytes >= BYTES_PER_MIB
     && attachmentMaxBytes <= MAX_COMPANY_ATTACHMENT_MAX_BYTES;
-
-  const generalDirty =
-    !!selectedCompany &&
-    (companyName !== selectedCompany.name ||
-      description !== (selectedCompany.description ?? "") ||
-      brandColor !== (selectedCompany.brandColor ?? "") ||
-      attachmentMaxBytes !== (selectedCompany.attachmentMaxBytes ?? DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES));
-
-  const generalMutation = useMutation({
-    mutationFn: (data: {
-      name: string;
-      description: string | null;
-      brandColor: string | null;
-      attachmentMaxBytes: number;
-    }) => companiesApi.update(selectedCompanyId!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-    }
-  });
-
-  const settingsMutation = useMutation({
-    mutationFn: (requireApproval: boolean) =>
-      companiesApi.update(selectedCompanyId!, {
-        requireBoardApprovalForNewAgents: requireApproval
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-    }
-  });
-
-  const issueStartMutation = useMutation({
-    mutationFn: (startAsTodo: boolean) =>
-      companiesApi.update(selectedCompanyId!, { newIssuesStartAsTodo: startAsTodo }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-    }
-  });
 
   const inviteMutation = useMutation({
     mutationFn: () =>
@@ -270,15 +277,6 @@ export function CompanySettings() {
     );
   }
 
-  function handleSaveGeneral() {
-    generalMutation.mutate({
-      name: companyName.trim(),
-      description: description.trim() || null,
-      brandColor: brandColor || null,
-      attachmentMaxBytes
-    });
-  }
-
   return (
     <div className="max-w-2xl space-y-6">
       <div className="flex items-center gap-2">
@@ -304,7 +302,7 @@ export function CompanySettings() {
               type="text"
               value={companyName}
               disabled={!canManage}
-              onChange={(e) => setCompanyName(e.target.value)}
+              onChange={(e) => generalDraft.set("name", e.target.value)}
             />
           </Field>
           <Field
@@ -318,7 +316,7 @@ export function CompanySettings() {
               value={description}
               placeholder="Optional workspace description"
               disabled={!canManage}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => generalDraft.set("description", e.target.value)}
             />
           </Field>
         </div>
@@ -394,7 +392,7 @@ export function CompanySettings() {
                     aria-label="Brand color"
                     value={brandColor || "#6366f1"}
                     disabled={!canManage}
-                    onChange={(e) => setBrandColor(e.target.value)}
+                    onChange={(e) => generalDraft.set("brandColor", e.target.value)}
                     className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0 max-sm:h-11 max-sm:w-11"
                   />
                   <input
@@ -405,7 +403,7 @@ export function CompanySettings() {
                     onChange={(e) => {
                       const v = e.target.value;
                       if (v === "" || /^#[0-9a-fA-F]{0,6}$/.test(v)) {
-                        setBrandColor(v);
+                        generalDraft.set("brandColor", v);
                       }
                     }}
                     placeholder="Auto"
@@ -415,7 +413,7 @@ export function CompanySettings() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setBrandColor("")}
+                      onClick={() => generalDraft.set("brandColor", "")}
                       className="text-xs text-muted-foreground"
                     >
                       Clear
@@ -437,7 +435,7 @@ export function CompanySettings() {
                       step={1}
                       value={attachmentMaxMiB}
                       disabled={!canManage}
-                      onChange={(e) => setAttachmentMaxMiB(e.target.value)}
+                      onChange={(e) => generalDraft.set("attachmentMaxMiB", e.target.value)}
                       className="w-28 max-sm:min-w-0 max-sm:flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
                     />
                     <span className="text-xs text-muted-foreground">MiB</span>
@@ -455,26 +453,12 @@ export function CompanySettings() {
       </div>
 
       {/* Save button for General + Appearance */}
-      {canManage && generalDirty && (
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            onClick={handleSaveGeneral}
-            disabled={generalMutation.isPending || !companyName.trim() || !attachmentMaxValid}
-          >
-            {generalMutation.isPending ? "Saving..." : "Save changes"}
-          </Button>
-          {generalMutation.isSuccess && (
-            <span className="text-xs text-muted-foreground">Saved</span>
-          )}
-          {generalMutation.isError && (
-            <span className="text-xs text-destructive">
-              {generalMutation.error instanceof Error
-                  ? generalMutation.error.message
-                  : "Failed to save"}
-            </span>
-          )}
-        </div>
+      {canManage && (
+        <SettingsSaveBar
+          draft={generalDraft}
+          canSave={!!companyName.trim() && attachmentMaxValid}
+          testId="company-settings-general"
+        />
       )}
 
       {/* Hiring */}
@@ -482,15 +466,16 @@ export function CompanySettings() {
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           Hiring
         </div>
-        <div className="rounded-md border border-border px-4 py-3">
+        <div className="space-y-3 rounded-md border border-border px-4 py-3">
           <ToggleField
             label="Require your approval for new hires"
             hint="New agent hires stay pending until you approve them."
-            checked={!!selectedCompany.requireBoardApprovalForNewAgents}
-            onChange={(v) => settingsMutation.mutate(v)}
+            checked={hiringDraft.values.requireBoardApprovalForNewAgents}
+            onChange={(v) => hiringDraft.set("requireBoardApprovalForNewAgents", v)}
             toggleTestId="company-settings-team-approval-toggle"
-            disabled={!canManage}
+            disabled={!canManage || hiringDraft.isSaving}
           />
+          {canManage && <SettingsSaveBar draft={hiringDraft} testId="company-settings-hiring" />}
         </div>
       </div>
 
@@ -499,15 +484,16 @@ export function CompanySettings() {
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           Work
         </div>
-        <div className="rounded-md border border-border px-4 py-3">
+        <div className="space-y-3 rounded-md border border-border px-4 py-3">
           <ToggleField
             label="Start new issues right away"
             hint="Issues created without a status start as To do, and the assigned agent begins immediately. When off they go to Backlog and wait. Unassigned To do issues go to the Chief of Staff."
-            checked={!!selectedCompany.newIssuesStartAsTodo}
-            onChange={(v) => issueStartMutation.mutate(v)}
+            checked={workDraft.values.newIssuesStartAsTodo}
+            onChange={(v) => workDraft.set("newIssuesStartAsTodo", v)}
             toggleTestId="company-settings-issue-start-toggle"
-            disabled={!canManage}
+            disabled={!canManage || workDraft.isSaving}
           />
+          {canManage && <SettingsSaveBar draft={workDraft} testId="company-settings-work" />}
         </div>
         {/* AgentDash admin powers: the company's labels. Any member manages
             labels one at a time (the label routes' rule), so the card is not

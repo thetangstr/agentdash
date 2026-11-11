@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentAccessEnforcementMode } from "@paperclipai/shared";
 import { accessApi } from "@/api/access";
 import { agentAccessEnforcementApi, agentProfileQueryKeys } from "@/api/agent-profiles";
@@ -12,6 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { SettingsSaveBar } from "@/components/settings/SettingsSaveBar";
+import { useSettingsDraft } from "@/hooks/useSettingsDraft";
 import { queryKeys } from "@/lib/queryKeys";
 
 // AgentDash: Agent Performance Management gate 2 — how the company checks the
@@ -20,9 +22,10 @@ import { queryKeys } from "@/lib/queryKeys";
 // (`selectableModes`); anything else is shown disabled. Members see the
 // current mode, read-only. The server is the authority on both: this control
 // is presentation, and its refusals are shown.
-// Gate 3: `enforce` is selectable. Choosing it opens a confirmation that says
-// plainly what changes; nothing is sent until the admin confirms. Leaving
-// enforce (to shadow or off) needs no confirmation: it only stops refusing.
+// Gate 3: `enforce` is selectable. Choosing a mode is a draft until "Save
+// changes". Saving enforce opens a confirmation that says plainly what
+// changes; nothing is sent until the admin confirms. Leaving enforce (to
+// shadow or off) needs no confirmation: it only stops refusing.
 
 export const ENFORCE_UNAVAILABLE_TEXT = "Not available on this server yet";
 const MODE_UNAVAILABLE_TEXT = "Not available yet";
@@ -72,7 +75,6 @@ export function AgentAccessEnforcementCard({ companyId }: { companyId: string })
   const groupName = useId();
   const headingId = `${groupName}-heading`;
   const [announcement, setAnnouncement] = useState("");
-  const [problem, setProblem] = useState<string | null>(null);
   const [confirmingEnforce, setConfirmingEnforce] = useState(false);
 
   const modeQuery = useQuery({
@@ -89,20 +91,16 @@ export function AgentAccessEnforcementCard({ companyId }: { companyId: string })
   });
   const isAdmin = membersQuery.data?.access.canManageAgents ?? false;
 
-  const setMode = useMutation({
-    mutationFn: (mode: AgentAccessEnforcementMode) => agentAccessEnforcementApi.set(companyId, mode),
-    onSuccess: (result) => {
-      setProblem(null);
+  const draft = useSettingsDraft({
+    resetKey: companyId,
+    saved: { mode: (modeQuery.data?.mode ?? "off") as AgentAccessEnforcementMode },
+    save: (changes) => agentAccessEnforcementApi.set(companyId, changes.mode!),
+    onSaved: (result) => {
       queryClient.setQueryData(agentProfileQueryKeys.enforcement(companyId), result);
       setAnnouncement(`Access rule checking is now ${MODE_NAME[result.mode].toLowerCase()}.`);
     },
-    onError: (error) => {
-      setAnnouncement("");
-      setProblem(`The mode was not changed: ${messageOf(error)}`);
-    },
   });
-
-  const current = setMode.isPending && setMode.variables ? setMode.variables : modeQuery.data?.mode;
+  const current = draft.values.mode;
   // The server names what may be chosen; anything else is shown, disabled.
   const selectable = new Set<AgentAccessEnforcementMode>(modeQuery.data?.selectableModes ?? []);
 
@@ -124,45 +122,56 @@ export function AgentAccessEnforcementCard({ companyId }: { companyId: string })
             Loading the current mode…
           </p>
         ) : isAdmin ? (
-          <fieldset className="space-y-2" aria-busy={setMode.isPending}>
-            <legend className="text-sm font-medium text-foreground">Mode</legend>
-            {MODE_OPTIONS.map((option) => {
-              const optionId = `${groupName}-${option.mode}`;
-              const descriptionId = `${optionId}-description`;
-              const disabled = !selectable.has(option.mode);
-              return (
-                <div key={option.mode} className="flex items-start gap-2">
-                  <input
-                    type="radio"
-                    id={optionId}
-                    name={groupName}
-                    value={option.mode}
-                    className="mt-1 accent-foreground"
-                    checked={current === option.mode}
-                    disabled={disabled}
-                    aria-describedby={descriptionId}
-                    onChange={() => {
-                      if (disabled || setMode.isPending || option.mode === modeQuery.data?.mode) return;
-                      if (option.mode === "enforce") {
-                        setConfirmingEnforce(true);
-                        return;
-                      }
-                      setMode.mutate(option.mode);
-                    }}
-                    data-testid={`access-enforcement-${option.mode}`}
-                  />
-                  <div>
-                    <label htmlFor={optionId} className={disabled ? "text-sm text-muted-foreground" : "text-sm text-foreground"}>
-                      {option.label}
-                    </label>
-                    <p id={descriptionId} className="text-xs text-muted-foreground">
-                      {disabled ? `${option.unavailableText}. ${option.description}` : option.description}
-                    </p>
+          <div className="space-y-3">
+            <fieldset className="space-y-2" aria-busy={draft.isSaving}>
+              <legend className="text-sm font-medium text-foreground">Mode</legend>
+              {MODE_OPTIONS.map((option) => {
+                const optionId = `${groupName}-${option.mode}`;
+                const descriptionId = `${optionId}-description`;
+                const disabled = !selectable.has(option.mode);
+                return (
+                  <div key={option.mode} className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      id={optionId}
+                      name={groupName}
+                      value={option.mode}
+                      className="mt-1 accent-foreground"
+                      checked={current === option.mode}
+                      disabled={disabled || draft.isSaving}
+                      aria-describedby={descriptionId}
+                      onChange={() => {
+                        if (disabled || draft.isSaving) return;
+                        setAnnouncement("");
+                        draft.set("mode", option.mode);
+                      }}
+                      data-testid={`access-enforcement-${option.mode}`}
+                    />
+                    <div>
+                      <label htmlFor={optionId} className={disabled ? "text-sm text-muted-foreground" : "text-sm text-foreground"}>
+                        {option.label}
+                      </label>
+                      <p id={descriptionId} className="text-xs text-muted-foreground">
+                        {disabled ? `${option.unavailableText}. ${option.description}` : option.description}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </fieldset>
+                );
+              })}
+            </fieldset>
+            <SettingsSaveBar
+              draft={draft}
+              testId="access-enforcement"
+              onSave={() => {
+                if (draft.values.mode === "enforce") {
+                  setConfirmingEnforce(true);
+                  return;
+                }
+                draft.save();
+              }}
+              errorMessage={(error) => `The mode was not changed: ${messageOf(error)}`}
+            />
+          </div>
         ) : (
           <div className="space-y-1" data-testid="access-enforcement-readonly">
             <p className="text-sm text-foreground">
@@ -176,11 +185,6 @@ export function AgentAccessEnforcementCard({ companyId }: { companyId: string })
         <p role="status" aria-live="polite" className={announcement ? "text-sm text-foreground" : "sr-only"} data-testid="access-enforcement-status">
           {announcement}
         </p>
-        {problem ? (
-          <p role="alert" className="text-sm text-destructive" data-testid="access-enforcement-error">
-            {problem}
-          </p>
-        ) : null}
       </div>
       <Dialog open={confirmingEnforce} onOpenChange={setConfirmingEnforce}>
         <DialogContent data-testid="access-enforcement-confirm">
@@ -201,7 +205,7 @@ export function AgentAccessEnforcementCard({ companyId }: { companyId: string })
               type="button"
               onClick={() => {
                 setConfirmingEnforce(false);
-                setMode.mutate("enforce");
+                draft.save();
               }}
               data-testid="access-enforcement-confirm-enforce"
             >

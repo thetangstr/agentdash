@@ -9,7 +9,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * Admin powers: the company switches. Owners and admins change them; members
- * see them disabled with one plain line. Each power starts off.
+ * see them disabled with one plain line. Each power starts off. Every control
+ * is a draft until "Save changes", which sends only the changed fields.
  */
 
 const mockCompaniesApi = vi.hoisted(() => ({ update: vi.fn() }));
@@ -80,6 +81,18 @@ async function click(el: Element) {
   });
 }
 
+async function flush() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
+async function setValue(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 describe("AdminPowersSection", () => {
   it("shows a member every switch, off and disabled, with one plain line", async () => {
     await render({ company: company(), canManage: false, showReadOnlyNotice: true });
@@ -106,56 +119,116 @@ describe("AdminPowersSection", () => {
     expect(byTestId("admin-powers-audit-link")).toBeNull();
   });
 
-  it("lets an admin turn each power on through the company settings PATCH", async () => {
+  it("flipping a switch sends nothing until Save, and Save sends only the changed fields in one request", async () => {
     await render({ company: company(), canManage: true, showReadOnlyNotice: false });
     expect(byTestId("admin-powers-read-only")).toBeNull();
+    const save = byTestId<HTMLButtonElement>("admin-powers-save")!;
+    expect(save.textContent).toBe("Save changes");
+    expect(save.disabled).toBe(true);
+    expect(byTestId("admin-powers-state")!.textContent).toBe("");
+
     await click(byTestId("admin-powers-directive-read-toggle")!);
-    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { adminDirectiveReadEnabled: true });
-    await click(byTestId("admin-powers-transcript-read-toggle")!);
-    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { adminTranscriptReadEnabled: true });
     await click(byTestId("admin-powers-assistant-batches-toggle")!);
-    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { assistantAdminBatchesEnabled: true });
-    // The record limit only applies once Claude batches are allowed.
-    expect(byTestId<HTMLInputElement>("admin-powers-assistant-batch-max")!.disabled).toBe(true);
+    // Nothing is sent until "Save changes".
+    expect(mockCompaniesApi.update).not.toHaveBeenCalled();
+    expect(byTestId("admin-powers-directive-read-toggle")!.getAttribute("aria-checked")).toBe("true");
+    expect(byTestId("admin-powers-state")!.textContent).toBe("Unsaved changes");
+    expect(save.disabled).toBe(false);
+    // The record limit opens as soon as Claude batches are on in the draft.
+    expect(byTestId<HTMLInputElement>("admin-powers-assistant-batch-max")!.disabled).toBe(false);
+
+    await click(save);
+    await flush();
+    expect(mockCompaniesApi.update).toHaveBeenCalledTimes(1);
+    expect(mockCompaniesApi.update).toHaveBeenCalledWith("company-1", {
+      adminDirectiveReadEnabled: true,
+      assistantAdminBatchesEnabled: true,
+    });
+    expect(byTestId("admin-powers-state")!.textContent).toBe("Saved");
   });
 
-  it("saves the record limit (1 to 200) when Claude batches are allowed", async () => {
+  it("flipping a switch back to the saved value leaves nothing to save", async () => {
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    await click(byTestId("admin-powers-transcript-read-toggle")!);
+    expect(byTestId<HTMLButtonElement>("admin-powers-save")!.disabled).toBe(false);
+    await click(byTestId("admin-powers-transcript-read-toggle")!);
+    expect(byTestId<HTMLButtonElement>("admin-powers-save")!.disabled).toBe(true);
+    expect(byTestId("admin-powers-state")!.textContent).toBe("");
+    expect(byTestId("admin-powers-discard")).toBeNull();
+  });
+
+  it("Discard resets the draft to the saved values without sending", async () => {
+    await render({ company: company({ assistantAdminBatchesEnabled: true }), canManage: true, showReadOnlyNotice: false });
+    await click(byTestId("admin-powers-directive-read-toggle")!);
+    await setValue(byTestId<HTMLInputElement>("admin-powers-assistant-batch-max")!, "120");
+    await click(byTestId("admin-powers-discard")!);
+    expect(byTestId("admin-powers-directive-read-toggle")!.getAttribute("aria-checked")).toBe("false");
+    expect(byTestId<HTMLInputElement>("admin-powers-assistant-batch-max")!.value).toBe("50");
+    expect(byTestId<HTMLButtonElement>("admin-powers-save")!.disabled).toBe(true);
+    expect(byTestId("admin-powers-discard")).toBeNull();
+    expect(mockCompaniesApi.update).not.toHaveBeenCalled();
+  });
+
+  it("a failed save shows the error and keeps the draft", async () => {
+    mockCompaniesApi.update.mockRejectedValueOnce(new Error("Only owners and admins can change this."));
+    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
+    await click(byTestId("admin-powers-transcript-read-toggle")!);
+    await click(byTestId("admin-powers-save")!);
+    await flush();
+    const alert = byTestId("admin-powers-error")!;
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toBe("Only owners and admins can change this.");
+    expect(byTestId("admin-powers-transcript-read-toggle")!.getAttribute("aria-checked")).toBe("true");
+    expect(byTestId("admin-powers-state")!.textContent).toBe("Unsaved changes");
+    expect(byTestId<HTMLButtonElement>("admin-powers-save")!.disabled).toBe(false);
+
+    // Trying again sends the same draft, and a success clears the error.
+    await click(byTestId("admin-powers-save")!);
+    await flush();
+    expect(mockCompaniesApi.update).toHaveBeenCalledTimes(2);
+    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { adminTranscriptReadEnabled: true });
+    expect(byTestId("admin-powers-error")).toBeNull();
+  });
+
+  it("the record limit (1 to 200) is part of the draft and blocks Save while it is not valid", async () => {
     await render({ company: company({ assistantAdminBatchesEnabled: true }), canManage: true, showReadOnlyNotice: false });
     const input = byTestId<HTMLInputElement>("admin-powers-assistant-batch-max")!;
     expect(input.disabled).toBe(false);
     expect(input.value).toBe("50");
-    const setValue = async (value: string) => {
-      await act(async () => {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-        setter.call(input, value);
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-    };
-    await setValue("250");
+    await setValue(input, "250");
     expect(container.textContent).toContain("Enter a whole number from 1 to 200.");
-    expect(byTestId("admin-powers-assistant-batch-max-save")).toBeNull();
-    await setValue("120");
-    await click(byTestId("admin-powers-assistant-batch-max-save")!);
-    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { assistantBatchMaxRecords: 120 });
+    expect(byTestId<HTMLButtonElement>("admin-powers-save")!.disabled).toBe(true);
+    await setValue(input, "120");
+    expect(mockCompaniesApi.update).not.toHaveBeenCalled();
+    await click(byTestId("admin-powers-save")!);
+    await flush();
+    expect(mockCompaniesApi.update).toHaveBeenCalledWith("company-1", { assistantBatchMaxRecords: 120 });
   });
 
-  it("Ceiling for new agents: lists the templates, saves the choice, and is disabled for people who cannot manage settings", async () => {
+  it("Ceiling for new agents: lists the templates, saves the choice on Save, and is disabled for people who cannot manage settings", async () => {
     mockCeilingTemplatesApi.list.mockResolvedValue({ templates: [{ id: "t1", name: "Contractors" }] } as never);
-    await render({ company: company(), canManage: true, showReadOnlyNotice: false });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await render({ company: company({ defaultCeilingTemplateId: "t1" }), canManage: true, showReadOnlyNotice: false });
+    await flush();
     const select = byTestId<HTMLSelectElement>("admin-powers-default-ceiling")!;
     expect([...select.options].map((option) => option.textContent)).toEqual(["None", "Contractors"]);
+    expect(select.value).toBe("t1");
     expect(container.textContent).toContain("Applies to agents created from now on; existing agents keep their ceilings.");
     await act(async () => {
-      select.value = "t1";
+      select.value = "";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(mockCompaniesApi.update).toHaveBeenLastCalledWith("company-1", { defaultCeilingTemplateId: "t1" });
+    expect(mockCompaniesApi.update).not.toHaveBeenCalled();
+    await click(byTestId("admin-powers-save")!);
+    await flush();
+    // "None" is sent as no ceiling.
+    expect(mockCompaniesApi.update).toHaveBeenCalledWith("company-1", { defaultCeilingTemplateId: null });
     act(() => root.unmount());
     root = createRoot(container);
     await render({ company: company(), canManage: false, showReadOnlyNotice: true });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await flush();
     expect(byTestId<HTMLSelectElement>("admin-powers-default-ceiling")!.disabled).toBe(true);
+    // People who cannot manage settings get no save row.
+    expect(byTestId("admin-powers-save")).toBeNull();
   });
 
   it("Ceiling for new agents is disabled while the templates load, and says 'available on request' where there are no ceilings", async () => {
