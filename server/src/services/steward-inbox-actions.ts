@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, inArray, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, bridgeEndpoints, stewardInboxActionHandles } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
@@ -57,6 +57,8 @@ const MAX_ITEMS_PER_INSTRUCTION = 10;
  */
 const MAX_TITLE_LENGTH = 120;
 const MAX_DESCRIPTION_LENGTH = 20_000;
+/** Statuses `issueService` refuses as an assignee. */
+const UNASSIGNABLE_AGENT_STATUSES = ["terminated", "pending_approval"];
 
 /** The only cadences offered. Two options is the whole preference surface. */
 export const ALLOWED_CADENCE_MINUTES = [30, 60] as const;
@@ -174,7 +176,8 @@ export function stewardInboxActionsService(
   const access = accessService(db);
 
   /**
-   * The company's agents, name and role only.
+   * The company's agents that can be given work, name and role only.
+   * Terminated agents and hires awaiting approval are left out.
    *
    * Narrow on purpose. Resolving "Casper" needs a name and an id; it does not
    * need adapter configuration, budgets, or policy, and an endpoint credential
@@ -182,11 +185,23 @@ export function stewardInboxActionsService(
    */
   async function listAgents(endpointId: string) {
     const endpoint = await inbox.requireInboxEndpoint(endpointId);
-    const rows = await db
+    return { agents: await assignableRoster(endpoint.companyId) };
+  }
+
+  /**
+   * The agents work can be assigned to: the rule issue assignment enforces,
+   * so the inbox never offers, or resolves a name to, an agent that would be
+   * refused after the confirmation is spent. Without it, rejected hires
+   * (terminated) and hires awaiting approval crowd out the live agents and can
+   * collide with their names (#1146).
+   */
+  function assignableRoster(companyId: string) {
+    return db
       .select({ id: agents.id, name: agents.name, role: agents.role })
       .from(agents)
-      .where(eq(agents.companyId, endpoint.companyId));
-    return { agents: rows };
+      .where(
+        and(eq(agents.companyId, companyId), notInArray(agents.status, UNASSIGNABLE_AGENT_STATUSES)),
+      );
   }
 
   async function mintHandle(input: {
@@ -262,10 +277,7 @@ export function stewardInboxActionsService(
       };
     }
 
-    const roster = await db
-      .select({ id: agents.id, name: agents.name })
-      .from(agents)
-      .where(eq(agents.companyId, endpoint.companyId));
+    const roster = await assignableRoster(endpoint.companyId);
     const names = roster.map((a) => a.name);
 
     const resolved: Array<{
