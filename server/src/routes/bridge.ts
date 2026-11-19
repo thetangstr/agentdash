@@ -269,7 +269,8 @@ export function bridgeRoutes(
   });
 
   /**
-   * The company's agents, name and role only.
+   * The company's agents that can be given work, name and role only.
+   * Terminated agents and hires awaiting approval are left out.
    *
    * Enough to turn "Casper" into an id, and nothing more. An endpoint
    * credential has no business seeing adapter configuration, budgets or policy,

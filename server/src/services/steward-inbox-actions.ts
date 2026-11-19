@@ -176,7 +176,8 @@ export function stewardInboxActionsService(
   const access = accessService(db);
 
   /**
-   * The company's agents, name and role only.
+   * The company's agents that can be given work, name and role only.
+   * Terminated agents and hires awaiting approval are left out.
    *
    * Narrow on purpose. Resolving "Casper" needs a name and an id; it does not
    * need adapter configuration, budgets, or policy, and an endpoint credential
