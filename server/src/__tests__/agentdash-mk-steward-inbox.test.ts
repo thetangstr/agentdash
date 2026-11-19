@@ -945,6 +945,57 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(Object.keys(roster[0]!).sort()).toEqual(["id", "name", "role"]);
   });
 
+  async function addAgent(companyId: string, name: string, status: string) {
+    return db
+      .insert(agents)
+      .values({ companyId, name, role: "engineer", status, adapterType: "process" })
+      .returning()
+      .then((rows) => rows[0]!);
+  }
+
+  /**
+   * #1146: rejected reviewer auto-hires piled up as terminated agents and
+   * drowned the live ones. The roster is for directing work, so it holds only
+   * agents work can be assigned to — the same rule issue assignment enforces.
+   */
+  it("offers only agents work can be assigned to: no terminated or pending hires", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const paused = await addAgent(company.id, "Paused Pat", "paused");
+    await addAgent(company.id, "CoS Reviewer 1", "terminated");
+    await addAgent(company.id, "CoS Reviewer 2", "pending_approval");
+
+    const { agents: roster } = await stewardInboxActionsService(db).listAgents(endpoint.id);
+
+    expect(roster.map((a: any) => a.name).sort()).toEqual([agent.name, paused.name].sort());
+  });
+
+  it("resolves a name past a terminated agent of the same name, and never to one", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await addAgent(company.id, agent.name, "terminated");
+    await addAgent(company.id, "CoS Reviewer", "terminated");
+    await addAgent(company.id, "CoS Approver", "pending_approval");
+    const actions = stewardInboxActionsService(db);
+
+    const live = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "draft the agenda" }],
+    });
+    expect(live.ok).toBe(true);
+    expect(live.readback).toEqual([`${agent.name} — draft the agenda — starts as soon as you confirm`]);
+
+    for (const name of ["CoS Reviewer", "CoS Approver"]) {
+      const dead = await actions.propose(endpoint.id, {
+        kind: "assign_work",
+        items: [{ agent: name, work: "review it" }],
+      });
+      expect(dead.ok).toBe(false);
+      expect(dead.handle).toBeUndefined();
+      expect(dead.ambiguities?.[0]?.didYouMean).toEqual([]);
+    }
+  });
+
   it("reads an assignment back before anything happens", async () => {
     const { company, steward, agent } = await seed();
     const endpoint = await makeEndpoint(company.id, steward.principalId);
