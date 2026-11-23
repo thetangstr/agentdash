@@ -32,10 +32,17 @@ describe("public agent performance pages", () => {
     expect(container.querySelector('#release-notes')?.textContent).toContain("Availability depends on the version your operator has installed");
     expect(container.querySelector('a[href="https://github.com/thetangstr/agentdash/releases/tag/v2026.1105.0"]')).toBeTruthy();
   });
+  // Pinned to explicit published lists: the default reads the committed
+  // releases/published.json snapshot, which grows at every release cut and
+  // would otherwise decide what this test means.
+  const updateOrder = () =>
+    [...container.querySelectorAll("article")].map((article) => article.querySelector("h2 a")?.getAttribute("href"));
   it("puts the new customer update ahead of the preserved launch-week archive", async () => {
-    await act(async () => root.render(<WhatsNew />));
-    const articles = [...container.querySelectorAll("article")];
-    expect(articles[0]?.querySelector("h2 a")?.getAttribute("href")).toBe("/whats-new/agent-performance");
-    expect(articles[1]?.querySelector("h2 a")?.getAttribute("href")).toBe("/whats-new/launch-week");
+    await act(async () => root.render(<WhatsNew published={["v2026.1104.0", "v2026.1105.0"]} />));
+    expect(updateOrder()).toEqual(["/whats-new/agent-performance", "/whats-new/launch-week"]);
+  });
+  it("leads with admin powers once v2026.1110.0 is published", async () => {
+    await act(async () => root.render(<WhatsNew published={["v2026.1104.0", "v2026.1105.0", "v2026.1110.0"]} />));
+    expect(updateOrder()).toEqual(["/whats-new/admin-powers", "/whats-new/agent-performance", "/whats-new/launch-week"]);
   });
 });
