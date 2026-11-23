@@ -56,6 +56,17 @@ describe("codex-local fast mode and the model picker", () => {
     expect(models.some((entry) => entry.id === "gpt-6-terra")).toBe(false);
   });
 
+  it("lists the gpt-6.2 family and gpt-6.1 Terra, with fast mode, newest first", () => {
+    // Read from Codex's catalog for a ChatGPT login on 2026-11-23; each ran on
+    // Codex CLI 0.171.0. All three offer the Fast tier.
+    const added = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra"];
+    for (const id of added) {
+      expect(isCodexLocalManualModel(id), `${id} should be a known model`).toBe(false);
+      expect(isCodexLocalFastModeSupported(id), `${id} lost fast mode by becoming selectable`).toBe(true);
+    }
+    expect(models.slice(0, 3).map((entry) => entry.id)).toEqual(added);
+  });
+
   it("still grants fast mode to a model typed in by hand", () => {
     // The escape hatch that made the regression invisible. Keep it working.
     expect(isCodexLocalManualModel("gpt-6-not-released-yet")).toBe(true);

@@ -33,6 +33,9 @@ export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
  * refreshing the list was for.
  */
 export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = [
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
+  "gpt-6.1-terra",
   "gpt-6.1-sol",
   "gpt-6-astra",
   "gpt-6-sol",
@@ -84,11 +87,23 @@ export function isCodexLocalFastModeSupported(model: string | null | undefined):
  * (fast). All four offer the Fast service tier. The catalog only lists them to
  * Codex CLI 0.160.0 and later, so an older `codex` cannot run them — upgrade
  * the CLI before moving an agent onto one.
+ *
+ * gpt-6.2 Sol, gpt-6.2 Astra and gpt-6.1 Terra were read from the same catalog
+ * on 2026-11-23 and each answered on Codex CLI 0.171.0 under a ChatGPT login.
+ * Codex CLI 0.148.0 refused gpt-6.1 Sol under the same login ("not supported
+ * when using Codex with a ChatGPT account"), so the CLI version matters.
+ *
+ * This list is only the fallback now: the server puts the Codex CLI's own
+ * catalog ahead of it (`server/src/adapters/codex-models.ts`), so a model
+ * released after this list was written is still selectable.
  */
 export const models = [
-  { id: "gpt-6.1-sol", label: "gpt-6.1 Sol — current workhorse (Codex CLI 0.160+)" },
-  { id: "gpt-6-astra", label: "gpt-6 Astra — frontier, most demanding work (Codex CLI 0.160+)" },
-  { id: "gpt-6-sol", label: "gpt-6 Sol — previous workhorse (Codex CLI 0.160+)" },
+  { id: "gpt-6.2-sol", label: "gpt-6.2 Sol — current workhorse (recent Codex CLI)" },
+  { id: "gpt-6.2-astra", label: "gpt-6.2 Astra — frontier, most capable (recent Codex CLI)" },
+  { id: "gpt-6.1-terra", label: "gpt-6.1 Terra — efficient; visual understanding, computer use (recent Codex CLI)" },
+  { id: "gpt-6.1-sol", label: "gpt-6.1 Sol — previous workhorse (Codex CLI 0.160+)" },
+  { id: "gpt-6-astra", label: "gpt-6 Astra — previous frontier (Codex CLI 0.160+)" },
+  { id: "gpt-6-sol", label: "gpt-6 Sol — legacy workhorse (Codex CLI 0.160+)" },
   { id: "gpt-6-luna", label: "gpt-6 Luna — fast, affordable (Codex CLI 0.160+)" },
   { id: "gpt-5.6-sol", label: "gpt-5.6 Sol — deepest reasoning" },
   { id: "gpt-5.6-terra", label: "gpt-5.6 Terra — balanced" },

@@ -1,5 +1,8 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import type { AdapterModel } from "./types.js";
-import { models as codexFallbackModels } from "@paperclipai/adapter-codex-local";
+import { models as builtInCodexModels } from "@paperclipai/adapter-codex-local";
+import { resolveManagedCodexHomeDir, resolveSharedCodexHomeDir } from "@paperclipai/adapter-codex-local/server";
 import { readConfigFile } from "../config-file.js";
 
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
@@ -24,10 +27,93 @@ function dedupeModels(models: AdapterModel[]): AdapterModel[] {
   return deduped;
 }
 
+/**
+ * The Codex CLI's own model catalog: `$CODEX_HOME/models_cache.json`, which the
+ * CLI refreshes from OpenAI on every run, for whatever account it is signed in
+ * with. On a ChatGPT-login install, the usual one, there is no OpenAI API key
+ * to ask, and this file is the only place that knows a model shipped last
+ * week. Reading it keeps the picker current without a release.
+ *
+ * Only `visibility: "list"` entries are offered; the catalog also holds
+ * internal models (`codex-auto-review`) that Codex itself never shows. Any
+ * problem reading it means "no catalog", never an error: the built-in list
+ * still answers. Re-read only when the file changes.
+ *
+ * Agents run Codex from a per-company home seeded from the shared one, so it
+ * is their runs that refresh those copies while the shared copy can go stale.
+ * The newest copy wins. It is also the truest one, because Codex fetches the
+ * catalog for its own version: an old CLI gets a shorter list.
+ */
+let catalogCache: { file: string; mtimeMs: number; models: AdapterModel[] } | null = null;
+
+const CATALOG_FILE = "models_cache.json";
+
+function newestCodexCatalogFile(): { file: string; mtimeMs: number } | null {
+  const homes = [resolveSharedCodexHomeDir(), resolveManagedCodexHomeDir(process.env)];
+  const companiesDir = path.join(path.dirname(resolveManagedCodexHomeDir(process.env)), "companies");
+  try {
+    for (const company of readdirSync(companiesDir)) homes.push(path.join(companiesDir, company, "codex-home"));
+  } catch {
+    // No managed company homes yet.
+  }
+  let newest: { file: string; mtimeMs: number } | null = null;
+  for (const home of homes) {
+    const file = path.join(home, CATALOG_FILE);
+    try {
+      const { mtimeMs } = statSync(file);
+      if (!newest || mtimeMs > newest.mtimeMs) newest = { file, mtimeMs };
+    } catch {
+      // Not there; try the next home.
+    }
+  }
+  return newest;
+}
+
+function readCodexCliCatalog(): AdapterModel[] {
+  const newest = newestCodexCatalogFile();
+  if (!newest) return [];
+  const { file, mtimeMs } = newest;
+  try {
+    if (catalogCache && catalogCache.file === file && catalogCache.mtimeMs === mtimeMs) {
+      return catalogCache.models;
+    }
+    const payload = JSON.parse(readFileSync(file, "utf8")) as { models?: unknown };
+    const entries = Array.isArray(payload.models) ? payload.models : [];
+    const listed = entries
+      .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
+      .filter((entry) => entry.visibility === "list" && typeof entry.slug === "string" && entry.slug.trim())
+      .map((entry, index) => ({
+        priority: typeof entry.priority === "number" ? entry.priority : Number.MAX_SAFE_INTEGER,
+        index,
+        model: { id: (entry.slug as string).trim(), label: catalogLabel(entry) },
+      }))
+      .sort((a, b) => a.priority - b.priority || a.index - b.index)
+      .map((entry) => entry.model);
+    const models = dedupeModels(listed);
+    catalogCache = { file, mtimeMs, models };
+    return models;
+  } catch {
+    return [];
+  }
+}
+
+function catalogLabel(entry: Record<string, unknown>): string {
+  const name = typeof entry.display_name === "string" && entry.display_name.trim()
+    ? entry.display_name.trim()
+    : String(entry.slug).trim();
+  const description = typeof entry.description === "string" ? entry.description.trim().replace(/\.$/, "") : "";
+  return description ? `${name} — ${description}` : name;
+}
+
+/** The catalog first, in the CLI's own order, then the built-in list. */
+function codexFallbackModels(): AdapterModel[] {
+  return dedupeModels([...readCodexCliCatalog(), ...builtInCodexModels]);
+}
+
 function mergedWithFallback(models: AdapterModel[]): AdapterModel[] {
   return dedupeModels([
     ...models,
-    ...codexFallbackModels,
+    ...codexFallbackModels(),
   ]).sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true, sensitivity: "base" }));
 }
 
@@ -73,7 +159,7 @@ async function fetchOpenAiModels(apiKey: string): Promise<AdapterModel[]> {
 async function loadCodexModels(options?: { forceRefresh?: boolean }): Promise<AdapterModel[]> {
   const forceRefresh = options?.forceRefresh === true;
   const apiKey = resolveOpenAiApiKey();
-  const fallback = dedupeModels(codexFallbackModels);
+  const fallback = codexFallbackModels();
   if (!apiKey) return fallback;
 
   const now = Date.now();
@@ -110,6 +196,7 @@ export async function refreshCodexModels(): Promise<AdapterModel[]> {
 
 export function resetCodexModelsCacheForTests() {
   cached = null;
+  catalogCache = null;
 }
 
 // AgentDash (#1122): chat and system hires share this fallback. Keeping it in
