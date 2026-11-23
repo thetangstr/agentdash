@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { AdapterModel } from "./types.js";
 import { models as builtInCodexModels } from "@paperclipai/adapter-codex-local";
@@ -41,43 +41,81 @@ function dedupeModels(models: AdapterModel[]): AdapterModel[] {
  *
  * Agents run Codex from a per-company home seeded from the shared one, so it
  * is their runs that refresh those copies while the shared copy can go stale.
- * The newest copy wins. It is also the truest one, because Codex fetches the
- * catalog for its own version: an old CLI gets a shorter list.
+ * So every copy is a candidate, and the one written by the newest Codex
+ * version wins, then the most recently fetched. Not simply the newest file:
+ * Codex fetches the catalog for its own version, and one run by an outdated
+ * CLI writes a shorter list that must not shrink everyone's picker.
+ *
+ * A company home counts only while its `auth.json` is the shared sign-in (the
+ * symlink `codex-home.ts` creates). A company whose Codex was signed in to a
+ * different account has that account's catalog, which is not the others'.
  */
-let catalogCache: { file: string; mtimeMs: number; models: AdapterModel[] } | null = null;
-
 const CATALOG_FILE = "models_cache.json";
 
-function newestCodexCatalogFile(): { file: string; mtimeMs: number } | null {
-  const homes = [resolveSharedCodexHomeDir(), resolveManagedCodexHomeDir(process.env)];
-  const companiesDir = path.join(path.dirname(resolveManagedCodexHomeDir(process.env)), "companies");
+type ParsedCatalog = { clientVersion: number[]; fetchedAt: number; models: AdapterModel[] };
+
+const parsedCatalogs = new Map<string, { mtimeMs: number; catalog: ParsedCatalog | null }>();
+
+function realpathOrNull(file: string): string | null {
   try {
-    for (const company of readdirSync(companiesDir)) homes.push(path.join(companiesDir, company, "codex-home"));
+    return realpathSync(file);
+  } catch {
+    return null;
+  }
+}
+
+function catalogHomes(): string[] {
+  const shared = resolveSharedCodexHomeDir();
+  const sharedAuth = realpathOrNull(path.join(shared, "auth.json"));
+  const managed = resolveManagedCodexHomeDir(process.env);
+  const candidates = [managed];
+  const companiesDir = path.join(path.dirname(managed), "companies");
+  try {
+    for (const company of readdirSync(companiesDir)) candidates.push(path.join(companiesDir, company, "codex-home"));
   } catch {
     // No managed company homes yet.
   }
-  let newest: { file: string; mtimeMs: number } | null = null;
-  for (const home of homes) {
-    const file = path.join(home, CATALOG_FILE);
+  const signedInAsShared = (home: string) => {
+    const auth = path.join(home, "auth.json");
     try {
-      const { mtimeMs } = statSync(file);
-      if (!newest || mtimeMs > newest.mtimeMs) newest = { file, mtimeMs };
+      return sharedAuth !== null && lstatSync(auth).isSymbolicLink() && realpathOrNull(auth) === sharedAuth;
     } catch {
-      // Not there; try the next home.
+      return false;
     }
-  }
-  return newest;
+  };
+  return [shared, ...candidates.filter(signedInAsShared)];
 }
 
-function readCodexCliCatalog(): AdapterModel[] {
-  const newest = newestCodexCatalogFile();
-  if (!newest) return [];
-  const { file, mtimeMs } = newest;
+function parseVersion(value: unknown): number[] {
+  if (typeof value !== "string") return [];
+  const match = value.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1, 4).map(Number) : [];
+}
+
+function compareCatalogs(a: ParsedCatalog, b: ParsedCatalog): number {
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (a.clientVersion[i] ?? -1) - (b.clientVersion[i] ?? -1);
+    if (diff !== 0) return diff;
+  }
+  return a.fetchedAt - b.fetchedAt;
+}
+
+function parseCatalogFile(file: string): ParsedCatalog | null {
+  let mtimeMs: number;
   try {
-    if (catalogCache && catalogCache.file === file && catalogCache.mtimeMs === mtimeMs) {
-      return catalogCache.models;
-    }
-    const payload = JSON.parse(readFileSync(file, "utf8")) as { models?: unknown };
+    mtimeMs = statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+  const memo = parsedCatalogs.get(file);
+  if (memo && memo.mtimeMs === mtimeMs) return memo.catalog;
+  let catalog: ParsedCatalog | null = null;
+  try {
+    const payload = JSON.parse(readFileSync(file, "utf8")) as {
+      models?: unknown;
+      client_version?: unknown;
+      fetched_at?: unknown;
+    };
     const entries = Array.isArray(payload.models) ? payload.models : [];
     const listed = entries
       .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
@@ -89,12 +127,26 @@ function readCodexCliCatalog(): AdapterModel[] {
       }))
       .sort((a, b) => a.priority - b.priority || a.index - b.index)
       .map((entry) => entry.model);
-    const models = dedupeModels(listed);
-    catalogCache = { file, mtimeMs, models };
-    return models;
+    const fetchedAt = typeof payload.fetched_at === "string" ? Date.parse(payload.fetched_at) : Number.NaN;
+    catalog = {
+      clientVersion: parseVersion(payload.client_version),
+      fetchedAt: Number.isFinite(fetchedAt) ? fetchedAt : mtimeMs,
+      models: dedupeModels(listed),
+    };
   } catch {
-    return [];
+    catalog = null;
   }
+  parsedCatalogs.set(file, { mtimeMs, catalog });
+  return catalog;
+}
+
+function readCodexCliCatalog(): AdapterModel[] {
+  let best: ParsedCatalog | null = null;
+  for (const home of catalogHomes()) {
+    const catalog = parseCatalogFile(path.join(home, CATALOG_FILE));
+    if (catalog && catalog.models.length > 0 && (!best || compareCatalogs(catalog, best) > 0)) best = catalog;
+  }
+  return best?.models ?? [];
 }
 
 function catalogLabel(entry: Record<string, unknown>): string {
@@ -196,7 +248,7 @@ export async function refreshCodexModels(): Promise<AdapterModel[]> {
 
 export function resetCodexModelsCacheForTests() {
   cached = null;
-  catalogCache = null;
+  parsedCatalogs.clear();
 }
 
 // AgentDash (#1122): chat and system hires share this fallback. Keeping it in

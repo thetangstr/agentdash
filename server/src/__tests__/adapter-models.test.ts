@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,19 +106,57 @@ describe("adapter model listing", () => {
    * The newest copy is also the truest: Codex fetches the catalog for its own
    * version, so it names what the agents' CLI can actually run.
    */
-  it("reads whichever Codex catalog was refreshed most recently, including an agent's", async () => {
-    writeCodexCatalog([{ slug: "gpt-6.1-sol", display_name: "GPT-6.1-Sol", visibility: "list" }]);
-    const stale = new Date(Date.now() - 60_000);
-    utimesSync(path.join(codexHome, "models_cache.json"), stale, stale);
+  function companyCodexHome(companyId: string, options: { sharedAuth: boolean }) {
+    const home = path.join(paperclipHome, "instances", "default", "companies", companyId, "codex-home");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(path.join(codexHome, "auth.json"), "{}");
+    if (options.sharedAuth) symlinkSync(path.join(codexHome, "auth.json"), path.join(home, "auth.json"));
+    else writeFileSync(path.join(home, "auth.json"), "{}");
+    return home;
+  }
 
-    const companyHome = path.join(paperclipHome, "instances", "default", "companies", "company-1", "codex-home");
-    mkdirSync(companyHome, { recursive: true });
+  function writeCatalogAt(home: string, clientVersion: string, fetchedAt: string, slugs: string[]) {
     writeFileSync(
-      path.join(companyHome, "models_cache.json"),
-      JSON.stringify({ models: [{ slug: "gpt-6.2-sol", display_name: "GPT-6.2-Sol", visibility: "list" }] }),
+      path.join(home, "models_cache.json"),
+      JSON.stringify({
+        client_version: clientVersion,
+        fetched_at: fetchedAt,
+        models: slugs.map((slug) => ({ slug, display_name: slug, visibility: "list" })),
+      }),
     );
+  }
 
-    expect((await listAdapterModels("codex_local"))[0]?.id).toBe("gpt-6.2-sol");
+  it("reads an agent's catalog when it was fetched by a newer Codex than the shared one", async () => {
+    writeCatalogAt(codexHome, "0.166.0", "2026-11-20T00:00:00Z", ["gpt-6.1-sol"]);
+    const company = companyCodexHome("company-1", { sharedAuth: true });
+    writeCatalogAt(company, "0.171.0", "2026-11-23T00:00:00Z", ["gpt-7-nova"]);
+
+    expect((await listAdapterModels("codex_local"))[0]?.id).toBe("gpt-7-nova");
+  });
+
+  /**
+   * Codex fetches the catalog for its own version, so a run by an outdated CLI
+   * writes a SHORTER list. Being the most recent write must not let it shrink
+   * everyone's picker.
+   */
+  it("prefers the catalog from the newest Codex version over the most recent write", async () => {
+    writeCatalogAt(codexHome, "0.171.0", "2026-11-23T10:00:00Z", ["gpt-7-nova", "gpt-6.2-sol"]);
+    const company = companyCodexHome("company-1", { sharedAuth: true });
+    writeCatalogAt(company, "0.148.0", "2026-11-23T11:00:00Z", ["gpt-5.6-terra"]);
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(path.join(company, "models_cache.json"), later, later);
+
+    expect((await listAdapterModels("codex_local"))[0]?.id).toBe("gpt-7-nova");
+  });
+
+  it("ignores a company's catalog when that company's Codex is signed in to another account", async () => {
+    writeCatalogAt(codexHome, "0.166.0", "2026-11-20T00:00:00Z", ["gpt-6.1-sol"]);
+    const company = companyCodexHome("company-2", { sharedAuth: false });
+    writeCatalogAt(company, "0.171.0", "2026-11-23T00:00:00Z", ["enterprise-only-model"]);
+
+    const models = await listAdapterModels("codex_local");
+    expect(models[0]?.id).toBe("gpt-6.1-sol");
+    expect(models.some((model) => model.id === "enterprise-only-model")).toBe(false);
   });
 
   it("falls back to the built-in codex list when the catalog is unreadable", async () => {
