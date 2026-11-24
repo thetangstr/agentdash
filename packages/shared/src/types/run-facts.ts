@@ -62,6 +62,8 @@ export type RunFactWakeReason = (typeof RUN_FACT_WAKE_REASONS)[number];
 
 export interface RunFacts {
   meteringStatus: RunMeteringStatus;
+  /** Producing adapter, retained after invocation-event cleanup. Absent on historical rows. */
+  adapterType?: string | null;
   /**
    * How the metering ledger was located (OBS-1 unified resolver): e.g.
    * `profile_arg`, `wrapper_script`, `env_hermes_home`, `active_profile`,

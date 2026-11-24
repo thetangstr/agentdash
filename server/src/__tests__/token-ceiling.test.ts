@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { agents, companies, createDb, heartbeatRuns, heartbeatRunEvents } from "@paperclipai/db";
 import {
   AGENT_ADAPTER_TYPES,
   AGENT_DEFAULT_MAX_DAILY_TOKENS,
@@ -137,8 +137,9 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
     runFacts: Record<string, unknown>,
     createdAt = new Date(),
   ) {
+    const runId = randomUUID();
     await db.insert(heartbeatRuns).values({
-      id: randomUUID(),
+      id: runId,
       companyId,
       agentId,
       invocationSource: "timer",
@@ -149,7 +150,98 @@ describeEmbeddedPostgres("token ceiling daily usage", () => {
       startedAt: createdAt,
       finishedAt: createdAt,
     });
+    return runId;
   }
+
+  async function seedInvocation(companyId: string, agentId: string, runId: string, adapterType?: string, seq = 1) {
+    await db.insert(heartbeatRunEvents).values({
+      companyId, agentId, runId, seq, eventType: "adapter.invoke",
+      payload: adapterType ? { adapterType } : {},
+    });
+  }
+
+  it.each([
+    { name: "Sam", runs: 4, input: 2_963_983, cached: 2_662_912, output: 25_484, total: 2_989_467, paused: false },
+    { name: "David", runs: 8, input: 3_933_424, cached: 3_441_664, output: 22_997, total: 3_956_421, paused: false },
+    { name: "Jerry", runs: 10, input: 12_144_471, cached: 11_164_032, output: 111_715, total: 12_256_186, paused: true },
+  ])("reconciles $name's historical Codex runs without counting cached input twice", async (fixture) => {
+    // Current adapter deliberately differs: only retained per-run evidence is authoritative.
+    const { companyId, agentId, adapterType } = await seedAgent({}, "claude_local");
+    const now = new Date("2026-11-24T12:00:00Z");
+    const share = (value: number, i: number) => Math.floor(value / fixture.runs) + (i === fixture.runs - 1 ? value % fixture.runs : 0);
+    for (let i = 0; i < fixture.runs; i += 1) {
+      const runId = await seedMeteredRun(companyId, agentId, {
+        meteringStatus: "adapter_reported", inputTokens: share(fixture.input, i),
+        cachedInputTokens: share(fixture.cached, i), outputTokens: share(fixture.output, i), outcome: "no_op",
+      }, now);
+      await seedInvocation(companyId, agentId, runId, "codex_local");
+      if (i === 0) await seedInvocation(companyId, agentId, runId, "codex_local", 2); // retry must not multiply usage
+    }
+    const service = tokenCeilingService(db);
+    const status = await service.evaluate({ id: agentId, companyId, adapterType, runtimeConfig: {} }, now);
+    expect(status.tokensToday).toBe(fixture.total);
+    expect(status.meteredRuns).toBe(fixture.runs);
+    expect(status.paused).toBe(fixture.paused);
+    expect((await service.dailyUsage({ id: agentId, companyId, adapterType }, now)).noOpTokens).toBe(fixture.total);
+  });
+
+  it.each([
+    { adapters: ["claude_local"], total: 150 },
+    { adapters: ["hermes_local"], total: 150 },
+    { adapters: ["pi_local"], total: 150 },
+    { adapters: ["opencode_local"], total: 150 },
+    { adapters: [], total: 150 },
+    { adapters: ["codex_local", "claude_local"], total: 150 },
+    { adapters: ["codex_local", undefined], total: 150 },
+  ])("preserves exclusive/unknown historical input with invocation evidence $adapters", async ({ adapters, total }) => {
+    const { companyId, agentId, adapterType } = await seedAgent();
+    const runId = await seedMeteredRun(companyId, agentId, {
+      meteringStatus: "adapter_reported", inputTokens: 100, cachedInputTokens: 40, outputTokens: 10,
+      servedProvider: "openai", // provider does not establish cache inclusion
+    });
+    for (const [seq, adapter] of adapters.entries()) await seedInvocation(companyId, agentId, runId, adapter, seq);
+    const usage = await tokenCeilingService(db).dailyUsage({ id: agentId, companyId, adapterType }, new Date());
+    expect(usage.totalTokens).toBe(total);
+  });
+
+  it.each([
+    { recordedAdapter: "codex_local", total: 110 },
+    { recordedAdapter: "claude_local", total: 150 },
+  ])("uses durable $recordedAdapter facts after invocation event retention", async ({ recordedAdapter, total }) => {
+    const { companyId, agentId, adapterType } = await seedAgent({}, "hermes_local");
+    await seedMeteredRun(companyId, agentId, {
+      adapterType: recordedAdapter, meteringStatus: "adapter_reported", inputTokens: 100, cachedInputTokens: 40, outputTokens: 10,
+    });
+    expect((await tokenCeilingService(db).dailyUsage({ id: agentId, companyId, adapterType }, new Date())).totalTokens).toBe(total);
+  });
+
+  it.each(["company", "agent"])("ignores Codex invocation evidence from a different %s", async (scope) => {
+    const current = await seedAgent();
+    const other = await seedAgent();
+    const runId = await seedMeteredRun(current.companyId, current.agentId, {
+      meteringStatus: "adapter_reported", inputTokens: 100, cachedInputTokens: 40, outputTokens: 10,
+    });
+    // Independent FKs allow malformed legacy metadata; it must not cross the scope boundary.
+    await seedInvocation(scope === "company" ? other.companyId : current.companyId,
+      scope === "agent" ? other.agentId : current.agentId, runId, "codex_local");
+    const service = tokenCeilingService(db);
+    const agent = { id: current.agentId, companyId: current.companyId, adapterType: current.adapterType };
+    expect((await service.dailyUsage(agent, new Date())).totalTokens).toBe(150);
+    await seedInvocation(current.companyId, current.agentId, runId, "codex_local", 2);
+    expect((await service.dailyUsage(agent, new Date())).totalTokens).toBe(110);
+  });
+
+  it.each([
+    { inputTokens: null, cachedInputTokens: 40, outputTokens: 10, total: 50 },
+    { inputTokens: 100, cachedInputTokens: null, outputTokens: null, total: 100 },
+    { inputTokens: 20, cachedInputTokens: 40, outputTokens: 10, total: 50 },
+  ])("does not discard known cached units from incomplete Codex counters: $total", async ({ total, ...tokens }) => {
+    const { companyId, agentId, adapterType } = await seedAgent();
+    await seedMeteredRun(companyId, agentId, {
+      adapterType: "codex_local", meteringStatus: "adapter_reported", ...tokens,
+    });
+    expect((await tokenCeilingService(db).dailyUsage({ id: agentId, companyId, adapterType }, new Date())).totalTokens).toBe(total);
+  });
 
   it("sums input + cached input + output across today's metered runs", async () => {
     const { companyId, agentId, adapterType } = await seedAgent();

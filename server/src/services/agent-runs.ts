@@ -12,6 +12,7 @@ import {
   type AgentRunComplexityTier,
 } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
+import { runTokenTotalSql } from "./token-usage.js";
 
 // ---------------------------------------------------------------------------
 // Complexity classification
@@ -75,15 +76,33 @@ export function agentRunService(db: Db) {
       isOverage?: boolean;
     }) => {
       // 1. Aggregate tokens + cost from cost_events for this run.
+      const tokens = runTokenTotalSql({
+        inputTokens: costEvents.inputTokens,
+        cachedInputTokens: costEvents.cachedInputTokens,
+        outputTokens: costEvents.outputTokens,
+        runId: costEvents.heartbeatRunId,
+        companyId: costEvents.companyId,
+        agentId: costEvents.agentId,
+        runFacts: sql`${heartbeatRuns.resultJson} -> 'runFacts'`,
+      });
       const [agg] = await db
         .select({
-          totalTokens: sql<number>`coalesce(sum(${costEvents.inputTokens} + ${costEvents.cachedInputTokens} + ${costEvents.outputTokens}), 0)::int`,
+          totalTokens: sql<number>`coalesce(sum(${tokens}), 0)::int`,
           totalCostCents: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int`,
         })
         .from(costEvents)
+        .leftJoin(
+          heartbeatRuns,
+          and(
+            eq(heartbeatRuns.id, costEvents.heartbeatRunId),
+            eq(heartbeatRuns.companyId, costEvents.companyId),
+            eq(heartbeatRuns.agentId, costEvents.agentId),
+          ),
+        )
         .where(
           and(
             eq(costEvents.companyId, input.companyId),
+            eq(costEvents.agentId, input.agentId),
             eq(costEvents.heartbeatRunId, input.heartbeatRunId),
           ),
         );
