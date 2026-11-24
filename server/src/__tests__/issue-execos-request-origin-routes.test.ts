@@ -3,7 +3,7 @@ import request from "supertest";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { companies, companyMemberships, createDb, issues } from "@paperclipai/db";
+import { companies, companyMemberships, createDb, issues, projects } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -14,13 +14,7 @@ import { errorHandler } from "../middleware/index.js";
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
-/**
- * AgentDash: ExecOS request identity. One normalized ExecOS request is one
- * issue per company. The pair (originKind "execos_request", originId) must be
- * sent together, and a duplicate is an explicit 409 translated from the
- * issues_execos_request_origin_uq partial unique index.
- */
-describeEmbeddedPostgres("ExecOS request origin on issue create", () => {
+describeEmbeddedPostgres("Retired issue origin on issue create", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
@@ -43,13 +37,24 @@ describeEmbeddedPostgres("ExecOS request origin on issue create", () => {
         membershipRole: "owner",
       });
     }
+    await db.insert(companyMemberships).values({
+      companyId: COMPANY,
+      principalType: "user",
+      principalId: "member",
+      status: "active",
+      membershipRole: "member",
+    });
   }, 60_000);
 
   afterAll(async () => {
     await tempDb?.cleanup();
   });
 
-  function app(companyId: string, source: "session" | "assistant_grant" = "session") {
+  function app(
+    companyId: string,
+    source: "session" | "assistant_grant" = "session",
+    role: "owner" | "member" = "owner",
+  ) {
     const server = express();
     server.use(express.json());
     server.use((req, _res, next) => {
@@ -57,9 +62,9 @@ describeEmbeddedPostgres("ExecOS request origin on issue create", () => {
         type: "board",
         source,
         ...(source === "assistant_grant" ? { assistantGrantId: "grant-1" } : {}),
-        userId: "owner",
+        userId: role,
         companyIds: [companyId],
-        memberships: [{ companyId, membershipRole: "owner", status: "active" }],
+        memberships: [{ companyId, membershipRole: role, status: "active" }],
       };
       next();
     });
@@ -71,29 +76,54 @@ describeEmbeddedPostgres("ExecOS request origin on issue create", () => {
   const create = (companyId: string, body: Record<string, unknown>) =>
     request(app(companyId)).post(`/api/companies/${companyId}/issues`).send(body);
 
-  it("records the origin and refuses a duplicate request with 409", async () => {
-    const originId = `req_${randomUUID()}`;
-    const first = await create(COMPANY, { title: "ExecOS proof", originKind: "execos_request", originId });
-    expect(first.status).toBe(201);
-    expect(first.body.originKind).toBe("execos_request");
-    expect(first.body.originId).toBe(originId);
-
-    const second = await create(COMPANY, { title: "ExecOS proof retry", originKind: "execos_request", originId });
-    expect(second.status).toBe(409);
-    expect(second.body.error).toBe("ExecOS request is already recorded");
-    expect(second.body.details).toMatchObject({ code: "EXECOS_REQUEST_ALREADY_RECORDED", originId });
-
-    const rows = await db
-      .select()
-      .from(issues)
-      .where(and(eq(issues.companyId, COMPANY), eq(issues.originId, originId)));
-    expect(rows).toHaveLength(1);
+  it("returns 410 for a new origin without allocating an issue", async () => {
+    const originId = randomUUID();
+    const counter = () => db.select({ value: companies.issueCounter }).from(companies).where(eq(companies.id, COMPANY));
+    const before = await counter();
+    const res = await create(COMPANY, { title: "Fresh request", originKind: "execos_request", originId });
+    expect(res.status).toBe(410);
+    expect(res.body.details).toEqual({ code: "EXECOS_REQUEST_RETIRED" });
+    expect(await counter()).toEqual(before);
+    expect(await db.select().from(issues).where(eq(issues.originId, originId))).toHaveLength(0);
   });
 
-  it("scopes the key to the company", async () => {
-    const originId = `req_${randomUUID()}`;
-    expect((await create(COMPANY, { title: "A", originKind: "execos_request", originId })).status).toBe(201);
-    expect((await create(OTHER_COMPANY, { title: "B", originKind: "execos_request", originId })).status).toBe(201);
+  it("preserves the conflict for a visible historical issue", async () => {
+    const originId = randomUUID();
+    await db.insert(issues).values({ companyId: COMPANY, title: "Original", originKind: "execos_request", originId });
+    const res = await create(COMPANY, { title: "Retry", originKind: "execos_request", originId });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("ExecOS request is already recorded");
+    expect(res.body.details).toEqual({ code: "EXECOS_REQUEST_ALREADY_RECORDED", originId });
+    const found = await request(app(COMPANY))
+      .get(`/api/companies/${COMPANY}/issues`)
+      .query({ originKind: "execos_request", originId });
+    expect(found.status).toBe(200);
+    expect(found.body).toEqual([expect.objectContaining({ title: "Original", originId })]);
+  });
+
+  it("gives the same response for unknown, hidden, restricted and other-company origins", async () => {
+    const hidden = randomUUID();
+    const restricted = randomUUID();
+    const other = randomUUID();
+    const projectId = randomUUID();
+    await db.insert(projects).values({
+      id: projectId, companyId: COMPANY, name: "Restricted", visibility: "restricted", createdByUserId: "other",
+    });
+    await db.insert(issues).values([
+      { companyId: COMPANY, title: "Hidden", originKind: "execos_request", originId: hidden, hiddenAt: new Date() },
+      { companyId: COMPANY, title: "Restricted", originKind: "execos_request", originId: restricted, projectId },
+      { companyId: OTHER_COMPANY, title: "Other", originKind: "execos_request", originId: other },
+    ]);
+    const retry = (originId: string) => request(app(COMPANY, "session", "member"))
+      .post(`/api/companies/${COMPANY}/issues`)
+      .send({ title: "Retry", originKind: "execos_request", originId });
+    const unknown = await retry(randomUUID());
+    expect(unknown.status).toBe(410);
+    for (const originId of [hidden, restricted, other]) {
+      const res = await retry(originId);
+      expect(res.status).toBe(410);
+      expect(res.body).toEqual(unknown.body);
+    }
   });
 
   it("requires both halves of the origin", async () => {

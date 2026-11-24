@@ -1,5 +1,4 @@
-// AgentDash (2026-10-05): 3199 is the live ExecOS instance on this machine and
-// 3100/3120/3300 are other live local installs (see COMMON.md). A Playwright
+// Ports 3100, 3120, 3199 and 3300 are reserved for shared local instances. A Playwright
 // config that resolves to one of them either attaches to the wrong server
 // (reuseExistingServer) or boots a throwaway instance that collides with it —
 // and the no-webServer configs would drive a live product instance through

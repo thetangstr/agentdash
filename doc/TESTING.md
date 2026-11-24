@@ -88,9 +88,9 @@ createdb agentdash_test     # or: psql -c 'create database agentdash_test'
 
 # 2. Its own env file — note what is deliberately absent
 cat > ~/.config/agentdash/test.env <<'ENV'
-PORT=3199
+PORT=3399
 DATABASE_URL=postgres://paperclip:paperclip@127.0.0.1:54329/agentdash_test
-PAPERCLIP_PUBLIC_URL=http://127.0.0.1:3199
+PAPERCLIP_PUBLIC_URL=http://127.0.0.1:3399
 PAPERCLIP_BIND=127.0.0.1
 PAPERCLIP_DEPLOYMENT_MODE=authenticated
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
@@ -121,7 +121,7 @@ the adapter itself.
 ## The full pass
 
 ```sh
-node scripts/e2e/full-pass.mjs                        # against 127.0.0.1:3199
+node scripts/e2e/full-pass.mjs                        # against 127.0.0.1:3399
 E2E_BASE=http://127.0.0.1:4000 node scripts/e2e/full-pass.mjs
 ```
 
@@ -130,8 +130,9 @@ credentials and the refusals, release and re-kind, invite a colleague, hand over
 accountability, read it back through an agent key and over MCP, then wake an
 agent and wait for the run to finish. It exits non-zero if anything fails.
 
-It refuses to run against a non-loopback host or the production ports 3102 and
-3112, because it creates users and companies and does not clean up. The intended
+By default it refuses non-loopback hosts, production ports 3102 and 3112, and
+shared local ports 3100, 3120, 3199 and 3300. It creates users and companies
+and does not clean up. The intended
 teardown is dropping the database:
 
 ```sh

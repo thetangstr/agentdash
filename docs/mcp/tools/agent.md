@@ -3,7 +3,7 @@ title: "Agent toolset"
 summary: "The control-plane toolset: the default for stdio and the only one `POST /api/mcp` serves."
 ---
 
-> Generated at commit `d8d292bfe` by `scripts/docs/generate-mcp-reference.mjs`.
+> Generated at commit `ddd92b654` by `scripts/docs/generate-mcp-reference.mjs`.
 > Verbatim except for one substitution, in 4 places: the name of a product profile that is not public is shown as `[private profile]`.
 > Do not edit this page: run `pnpm docs:mcp-reference` instead. CI fails when it is stale.
 
@@ -340,8 +340,6 @@ Create a new issue. Assigning a person (assigneeUserId) who stewards an agent gi
 | `assigneeAgentId` | string \| null | no |  |
 | `assigneeUserId` | string \| null | no |  |
 | `assignToPerson` | boolean | no |  |
-| `originKind` | string (1 value omitted: engagement-specific) | no |  |
-| `originId` | string \| null | no |  |
 | `requestDepth` | integer | no | Default: `0`. Minimum: 0. |
 | `requestId` | string | no |  |
 | `billingCode` | string \| null | no |  |

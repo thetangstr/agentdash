@@ -1,6 +1,6 @@
 # Ross bounded local pilot
 
-Current local status: genuine governed GLM runs and same-session recovery have succeeded. Durable commitments and a narrow historical report-publication/consumption check are implemented, tested and read back through the real scoped MCP tool; full executive-OS acceptance remains open. Historical preparation limits below describe their respective checkpoints.
+Current local status: genuine governed GLM runs and same-session recovery have succeeded. Durable commitments and a narrow historical report-publication/consumption check are implemented, tested and read back through the real scoped MCP tool. Full Ross pilot acceptance remains open. Historical preparation limits below describe their respective checkpoints.
 
 The assistant protocol now has an isolated integration test using real Better Auth signup/sign-in, OAuth discovery/DCR/PKCE/consent and the candidate MCP source reader. Run `node scripts/ross/run-assistant-auth-e2e.mjs` from this prepared checkout. It uses a fresh temporary database and loopback HTTPS listener, generated test-certificate trust and a sanitized child environment. It checks attributed source reads, company/project restrictions, raw-endpoint denial and revocation. Identity and company records are synthetic; this is not actual user consent, a running connector or a new GLM run. See the [auth acceptance plan](../../doc/plans/2026-09-30-ross-assistant-auth-e2e.md).
 

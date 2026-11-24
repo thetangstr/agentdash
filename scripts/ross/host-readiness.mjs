@@ -43,8 +43,8 @@ export const EVIDENCE_KIND = "ross-private-host-evidence";
 export const DRAFT_KIND = "ross-private-host-draft-bundle";
 /** Ports already owned by shared/live listeners; a private Ross listener may
  * never collide with them. Deny-list only — these ports are never probed.
- * 3100/4777 shared AgentDash, 443/8443 Funnel/Serve, 3199 local execos
- * instance, 3102/3112 MKThink app + Caddy. Extend with --shared-port. */
+ * 3100/3199 shared AgentDash, 4777 reserved, 443/8443 Funnel/Serve,
+ * 3102/3112 MKThink app + Caddy. Extend with --shared-port. */
 export const SHARED_LISTENER_PORTS = [3100, 4777, 443, 8443, 3199, 3102, 3112];
 export const DEFAULT_MIN_FREE_BYTES = 32 * 1024 * 1024 * 1024;
 const SHA256_RE = /^[0-9a-f]{64}$/i;

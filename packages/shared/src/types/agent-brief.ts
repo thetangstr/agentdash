@@ -20,7 +20,7 @@ export const AGENT_WORK_BRIEF_DOCUMENT_KEY = "agent-work-brief" as const;
 export const AGENT_SCENARIO_MANIFEST_DOCUMENT_KEY = "scenario-manifest" as const;
 /**
  * `issues.origin_kind` of a planning issue created from a brief. Only the
- * brief route sets it (clients can set no origin but `execos_request`), so it
+ * brief route sets it, so it
  * is what "an issue created as a brief" means — the manifest is validated
  * only there.
  */
