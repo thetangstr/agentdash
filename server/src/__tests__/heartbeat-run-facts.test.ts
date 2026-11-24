@@ -397,6 +397,7 @@ describeEmbeddedPostgres("heartbeat run facts", () => {
     expect(facts, "runFacts must be persisted on every finalized run").not.toBeNull();
     expect(facts).toMatchObject({
       meteringStatus: "adapter_reported",
+      adapterType: "codex_local",
       servedModel: "served-model",
       servedProvider: "test-provider",
       configuredModel: "configured-model",

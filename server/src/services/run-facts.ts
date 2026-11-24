@@ -258,6 +258,7 @@ export function resolveMeteringStatus(input: {
 
 export function buildRunFacts(input: {
   meteringStatus: RunMeteringStatus;
+  adapterType?: string | null;
   ledgerSource?: string | null;
   ledgerCertainty?: "certain" | "uncertain" | null;
   servedModel?: string | null;
@@ -301,6 +302,7 @@ export function buildRunFacts(input: {
 
   return {
     meteringStatus: input.meteringStatus,
+    adapterType: readString(input.adapterType),
     ledgerSource: readString(input.ledgerSource),
     ledgerCertainty:
       input.ledgerCertainty === "certain" || input.ledgerCertainty === "uncertain"

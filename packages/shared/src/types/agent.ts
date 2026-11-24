@@ -28,7 +28,8 @@ export interface AgentModelProfileConfig {
  * open.
  *
  * `maxDailyTokens`: per-agent daily token ceiling counted from `runFacts`
- * (input + cached-input + output). Unset means the shared default
+ * (input + output, adding cached input only when not already included).
+ * Unset means the shared default
  * (`AGENT_DEFAULT_MAX_DAILY_TOKENS`); an explicit `0` or `null` disables the
  * ceiling for this agent.
  */

@@ -157,8 +157,9 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
 export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
 /**
  * AgentDash (OBS-2 / GH #695): the daily per-agent token ceiling that applies
- * when `runtimeConfig.heartbeat.maxDailyTokens` is unset. Counts input +
- * cached-input + output tokens from the OBS-1 `runFacts` record. An explicit
+ * when `runtimeConfig.heartbeat.maxDailyTokens` is unset. Counts distinct
+ * input/cache/output units from OBS-1 `runFacts`; Codex cache is already in
+ * input. An explicit
  * `0` or `null` on the agent disables the ceiling — unset never does.
  */
 export const AGENT_DEFAULT_MAX_DAILY_TOKENS = 5_000_000;

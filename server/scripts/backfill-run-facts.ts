@@ -21,7 +21,9 @@
  *     so the run is marked `unmetered_backfill_ambiguous` rather than
  *     guessing a share;
  *   - runs that already carry `runFacts` are skipped, so the script is safe
- *     to re-run (`--force` recomputes).
+ *     to re-run (`--force` recomputes). A recorded adapter selects the source;
+ *     historical Hermes facts are retained if the agent now uses another
+ *     adapter, because its former ledger configuration cannot be inferred.
  *
  * Usage:
  *   set -a && . ~/.config/agentdash/mkboard.env && set +a
@@ -391,6 +393,18 @@ for (const agent of agentRows) {
       skipped += 1;
       continue;
     }
+    const recordedAdapterType = asObject(resultJson.runFacts).adapterType;
+    const historicalAdapterType = typeof recordedAdapterType === "string"
+      ? recordedAdapterType.trim() || null
+      : null;
+    if (historicalAdapterType === "hermes_local" && !isHermes) {
+      // The current adapter configuration cannot locate the historical Hermes
+      // ledger. Even --force must retain the facts rather than guess its source.
+      skipped += 1;
+      console.warn(`retained historical Hermes facts for run ${run.id}: prior ledger configuration unavailable`);
+      continue;
+    }
+    const runIsHermes = historicalAdapterType ? historicalAdapterType === "hermes_local" : isHermes;
 
     let meteringStatus: RunMeteringStatus;
     let tokens: TokenTotals | null;
@@ -403,7 +417,7 @@ for (const agent of agentRows) {
     let turns: number | null = cumulativeTurns;
     let toolCalls: number | null = cumulativeToolCalls;
 
-    if (isHermes) {
+    if (runIsHermes) {
       const sessionId = run.sessionIdAfter;
       if (!sessionId) {
         meteringStatus = "unmetered_no_session";
@@ -476,6 +490,9 @@ for (const agent of agentRows) {
 
     const runFacts = buildRunFacts({
       meteringStatus,
+      // A forced backfill must preserve durable run provenance after event
+      // retention. The agent's current adapter cannot identify an old run.
+      adapterType: historicalAdapterType,
       ledgerSource,
       ledgerCertainty,
       servedModel,

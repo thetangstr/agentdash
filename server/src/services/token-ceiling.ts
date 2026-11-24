@@ -3,14 +3,16 @@ import { heartbeatRuns, type Db } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_DAILY_TOKENS, type AgentTokenCeilingStatus } from "@paperclipai/shared";
 import { parseObject } from "../adapters/utils.js";
 import { TOKEN_CEILING_PAUSED_WAKE_CLASSES } from "./run-facts.js";
+import { runTokenTotalSql } from "./token-usage.js";
 
 /**
  * AgentDash (OBS-2 / GH #695): the per-agent daily token ceiling.
  *
  * Exists to stop the 09-15→09-21 incident shape: a resumed heartbeat session
  * spending ~10M input tokens a day on no-op timer wakes until the provider
- * quota was gone. The ceiling counts the OBS-1 `runFacts` record — input +
- * cached-input + output — over the UTC day (`heartbeat_runs.created_at` —
+ * quota was gone. The ceiling counts distinct tokens in OBS-1 `runFacts` —
+ * cached input is added only when it is not already included in input —
+ * over the UTC day (`heartbeat_runs.created_at` —
  * documented choice over instance timezone so the boundary is the same for
  * every deployment and every reader). Unmetered runs never count: a missing
  * measurement is unknown spend, not zero spend.
@@ -105,7 +107,7 @@ export interface AgentDailyTokenUsage {
   windowStart: Date;
   liftsAt: Date;
   dayKey: string;
-  /** input + cached-input + output, metered runs only. */
+  /** Distinct input/cache/output token units, metered runs only. */
   totalTokens: number;
   /** The share of `totalTokens` spent on runs whose outcome was `no_op`. */
   noOpTokens: number;
@@ -139,11 +141,15 @@ export function tokenCeilingService(db: Db) {
       ${runFacts} ->> 'ledgerCertainty' = 'certain'
       or ${adapterExpectsMetering(agent.adapterType)}
     )`;
-    const tokens = sql`(
-      coalesce((${runFacts} ->> 'inputTokens')::numeric, 0)
-      + coalesce((${runFacts} ->> 'cachedInputTokens')::numeric, 0)
-      + coalesce((${runFacts} ->> 'outputTokens')::numeric, 0)
-    )`;
+    const tokens = runTokenTotalSql({
+      inputTokens: sql`(${runFacts} ->> 'inputTokens')::numeric`,
+      cachedInputTokens: sql`(${runFacts} ->> 'cachedInputTokens')::numeric`,
+      outputTokens: sql`(${runFacts} ->> 'outputTokens')::numeric`,
+      runId: heartbeatRuns.id,
+      companyId: heartbeatRuns.companyId,
+      agentId: heartbeatRuns.agentId,
+      runFacts,
+    });
 
     // The same classes the wake gate pauses (heartbeat.ts): only unattended
     // runs count toward the runaway guard.

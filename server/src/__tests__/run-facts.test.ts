@@ -327,6 +327,13 @@ describe("buildRunFacts", () => {
     now: new Date("2026-09-24T05:02:00Z"),
   };
 
+  it("retains the producing adapter without changing its native token counters", () => {
+    const facts = buildRunFacts({ ...base, adapterType: "codex_local" });
+    expect(facts.adapterType).toBe("codex_local");
+    expect(facts.inputTokens).toBe(1000);
+    expect(facts.cachedInputTokens).toBe(400);
+  });
+
   it("assembles the normalized record", () => {
     const facts = buildRunFacts({
       ...base,
@@ -335,6 +342,7 @@ describe("buildRunFacts", () => {
     });
     expect(facts).toEqual({
       meteringStatus: "metered",
+      adapterType: null,
       ledgerSource: "wrapper_script",
       ledgerCertainty: "certain",
       servedModel: "glm-5.3-flash",

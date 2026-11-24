@@ -3,7 +3,8 @@
  *
  *   - The agent page's daily-ceiling line read "589.4k used today" while Home,
  *     Shipped and the run page agreed on 60.7k / 36.9k. The ceiling counts
- *     cached reads (enforcement), so the line now says so.
+ *     cached reads once (enforcement), respecting whether an adapter's input
+ *     already includes them, so the line now says so.
  *   - Right after a run, the issue's Result card read "not measured",
  *     which looked like an error. A run-created deliverable without usage now
  *     reads "counting…" for a few minutes; one recorded by hand keeps "not
@@ -42,7 +43,7 @@ async function ensureCompany(request: APIRequestContext) {
 }
 
 test.describe("Token figures (scan 4, lane O1)", () => {
-  test("the agent page labels the ceiling's count as counting cached reads", async ({ page, request }) => {
+  test("the agent page explains how the ceiling counts cached input once for each adapter", async ({ page, request }) => {
     const company = await ensureCompany(request);
     const agent = await post<{ id: string }>(request, `/api/companies/${company.id}/agents`, {
       name: `Dana-${Date.now() % 10_000}`,
@@ -58,7 +59,9 @@ test.describe("Token figures (scan 4, lane O1)", () => {
     await expect(line).toBeVisible({ timeout: 20_000 });
     await expect(line).toContainText("counted toward it today (counts cached reads)");
     await expect(line).not.toContainText("used today");
-    await expect(line).toHaveAttribute("title", /counts cached input/);
+    await expect(line).toHaveAttribute("title", /including cached input once/);
+    await expect(line).toHaveAttribute("title", /Codex input already includes its cached subset/);
+    await expect(line).toHaveAttribute("title", /adapters with separate cached input add it/);
   });
 
   // "counting…" is only for a deliverable a run created (its usage is on the

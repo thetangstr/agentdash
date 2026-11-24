@@ -160,6 +160,62 @@ describeEmbeddedPostgres("backfill-run-facts script", () => {
     return (rj.runFacts ?? null) as Record<string, unknown> | null;
   }
 
+  it.each([
+    { name: "recorded Codex provenance after switching adapters", currentAdapter: "process", recordedAdapter: "codex_local", meteringStatus: "adapter_reported", updated: 1 },
+    { name: "recorded Codex usage after switching to Hermes", currentAdapter: "hermes_local", recordedAdapter: "codex_local", meteringStatus: "adapter_reported", updated: 1 },
+    { name: "unknown provenance on an agent now using Codex", currentAdapter: "codex_local", recordedAdapter: null, meteringStatus: "adapter_reported", updated: 1 },
+    { name: "recorded Hermes facts without its former ledger configuration", currentAdapter: "codex_local", recordedAdapter: "hermes_local", meteringStatus: "metered", updated: 0 },
+  ])("preserves $name when forced without invocation events", async ({ currentAdapter, recordedAdapter, meteringStatus, updated }) => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const startedAt = new Date(Date.now() - 60_000);
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Historical adapter provenance",
+      issuePrefix: `P${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Switched adapter",
+      role: "engineer",
+      adapterType: currentAdapter,
+      adapterConfig: {},
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "timer",
+      status: "succeeded",
+      createdAt: startedAt,
+      startedAt,
+      finishedAt: new Date(startedAt.getTime() + 1_000),
+      usageJson: { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10 },
+      resultJson: {
+        runFacts: {
+          ...(recordedAdapter ? { adapterType: recordedAdapter } : {}),
+          meteringStatus,
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          outputTokens: 10,
+        },
+      },
+    });
+
+    const output = runScript(["--days", "30", "--company", companyId, "--force"]);
+    expect(output).toContain(`${updated} updated`);
+    if (updated === 0) expect(output).toContain("1 already had runFacts");
+    expect(factsOf(await readRun(runId))).toMatchObject({
+      adapterType: recordedAdapter,
+      meteringStatus,
+      inputTokens: 100,
+      cachedInputTokens: 40,
+      outputTokens: 10,
+    });
+  }, 120_000);
+
   it("attributes per-run spend by ledger-row windows, marks straddlers ambiguous", async () => {
     const now = Date.now();
     const runA1Start = now - 2 * DAY_MS;

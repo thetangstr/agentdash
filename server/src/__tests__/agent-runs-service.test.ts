@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { classifyComplexity } from "../services/agent-runs.ts";
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { createDb, companies, agents, heartbeatRuns, costEvents } from "@paperclipai/db";
+import { createDb, companies, agents, heartbeatRuns, heartbeatRunEvents, costEvents } from "@paperclipai/db";
 import { agentRunService } from "../services/agent-runs.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -202,6 +203,86 @@ describeEmbeddedPostgres("agentRunService (integration)", () => {
     expect(result!.tokenCount).toBe(13_000);
     expect(result!.costCents).toBe(150);
     expect(result!.complexityTier).toBe("medium"); // 13k tokens > 10k medium threshold
+  });
+
+  it("excludes another agent's cost event incorrectly linked to the same run", async () => {
+    const runId = await createHeartbeatRun();
+    const otherAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: otherAgentId,
+      companyId,
+      name: "Other agent",
+      role: "engineer",
+      adapterType: "process",
+    });
+    await createCostEvent(runId, 7, 100);
+    await db.insert(costEvents).values({
+      companyId,
+      agentId: otherAgentId,
+      heartbeatRunId: runId,
+      provider: "test",
+      model: "test-model",
+      inputTokens: 999,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      costCents: 99,
+      occurredAt: new Date(),
+    });
+
+    const result = await agentRunService(db).recordRun({
+      companyId,
+      agentId,
+      heartbeatRunId: runId,
+      finishedAt: new Date(),
+    });
+    expect(result?.tokenCount).toBe(100);
+    expect(result?.costCents).toBe(7);
+  });
+
+  it.each([
+    { name: "historical Codex input already containing cache", invocations: ["codex_local"], currentAdapter: "process", stampedAdapter: null, want: 110 },
+    { name: "repeated Codex invocations without multiplying events", invocations: ["codex_local", "codex_local"], currentAdapter: "process", stampedAdapter: null, want: 110 },
+    { name: "stamped Codex facts after invocation-event retention", invocations: [], currentAdapter: "process", stampedAdapter: "codex_local", want: 110 },
+    { name: "exclusive Claude input despite a current Codex adapter", invocations: ["claude_local"], currentAdapter: "codex_local", stampedAdapter: null, want: 150 },
+    { name: "historical rows with unknown provenance", invocations: [], currentAdapter: "codex_local", stampedAdapter: null, want: 150 },
+    { name: "conflicting invocation provenance", invocations: ["codex_local", "claude_local"], currentAdapter: "codex_local", stampedAdapter: null, want: 150 },
+    { name: "an invocation missing its adapter type", invocations: ["codex_local", null], currentAdapter: "codex_local", stampedAdapter: null, want: 150 },
+  ])("counts distinct run tokens for $name", async ({ invocations, currentAdapter, stampedAdapter, want }) => {
+    await db.update(agents).set({ adapterType: currentAdapter }).where(eq(agents.id, agentId));
+    const runId = await createHeartbeatRun({
+      resultJson: stampedAdapter ? { runFacts: { adapterType: stampedAdapter } } : null,
+    });
+    for (const [seq, adapterType] of invocations.entries()) {
+      await db.insert(heartbeatRunEvents).values({
+        companyId,
+        agentId,
+        runId,
+        seq,
+        eventType: "adapter.invoke",
+        payload: adapterType ? { adapterType } : {},
+      });
+    }
+    await db.insert(costEvents).values({
+      companyId,
+      agentId,
+      heartbeatRunId: runId,
+      provider: "openai", // Provider alone cannot distinguish inclusive/exclusive input.
+      model: "test-model",
+      inputTokens: 100,
+      cachedInputTokens: 40,
+      outputTokens: 10,
+      costCents: 7,
+      occurredAt: new Date(),
+    });
+
+    const result = await agentRunService(db).recordRun({
+      companyId,
+      agentId,
+      heartbeatRunId: runId,
+      finishedAt: new Date(),
+    });
+    expect(result?.tokenCount).toBe(want);
+    expect(result?.costCents).toBe(7);
   });
 
   it("computes durationMs from startedAt and finishedAt", async () => {

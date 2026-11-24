@@ -9,7 +9,8 @@
  *     (/me/inbox, /me/fact-requests, /inbox/override,
  *     connector-send-executions, /agents/:id/governance) for their 404s.
  *  3. Token figures: Home and the Companies card count input + output tokens
- *     (cached input excluded), and an unmetered workspace's card shows tokens
+ *     (no separate cache counter added; Codex input includes cached reads),
+ *     and an unmetered workspace's card shows tokens
  *     "billed by your model provider" instead of "$0.00 Unlimited budget".
  *
  * Run on a free port, e.g.
@@ -112,7 +113,7 @@ test.describe("Request noise (scan 3 lane L)", () => {
     expect(probes).toEqual([]);
   });
 
-  test("tokens count input + output everywhere, and an unmetered card says who bills them", async ({ page, request }) => {
+  test("tokens display input + output without adding a separate cache counter, and an unmetered card says who bills them", async ({ page, request }) => {
     const { company, agentId } = await seedCompany(request, "E2E Token Figures");
     await post(request, `/api/companies/${company.id}/cost-events`, {
       agentId,
@@ -127,9 +128,12 @@ test.describe("Request noise (scan 3 lane L)", () => {
 
     await page.goto(`/${company.issuePrefix}/dashboard`);
     const tile = page.getByTestId("dashboard-stat-spend");
-    // 100k input + 5k output; the 900k cached input is not counted.
+    // Display the recorded 100k input + 5k output without adding the separate
+    // 900k cache counter; Codex input already includes its cached reads.
     await expect(page.getByTestId("dashboard-stat-spend-value")).toHaveText("105.0k", { timeout: 30_000 });
-    await expect(tile).toHaveAttribute("title", /Cached input .* not counted/);
+    await expect(tile).toHaveAttribute("title", /Recorded input \+ output tokens/);
+    await expect(tile).toHaveAttribute("title", /No separate cached-input counter is added/);
+    await expect(tile).toHaveAttribute("title", /Codex input already includes cached reads/);
 
     await page.goto(`/${company.issuePrefix}/companies`);
     const usage = page.getByTestId("company-card-usage").filter({ hasText: "105.0k tokens" });

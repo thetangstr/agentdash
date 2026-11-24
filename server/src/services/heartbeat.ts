@@ -8478,6 +8478,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const meteringLedger = parseObject(adapterResultJson.meteringLedger);
         const runFacts = buildRunFacts({
           meteringStatus,
+          adapterType: agent.adapterType,
           ledgerSource: readNonEmptyString(meteringLedger.source),
           ledgerCertainty:
             meteringLedger.certainty === "certain" || meteringLedger.certainty === "uncertain"

@@ -3,26 +3,23 @@
 // Home counted cached input and Shipped did not, so the same month read
 // "1.9M" on one page and "221.2k" on the next.
 //
-// Display only. Enforcement is separate and unchanged: the agent token-ceiling
-// checks on the server still count cached input, because cached tokens are
-// still processed and billed. Do not reuse this definition for a limit.
+// Display only. Enforcement uses per-run adapter provenance to avoid counting
+// Codex's cached subset twice and retain exclusive cached input on other adapters.
+// Do not reuse this display definition for a limit.
 //
-// The definition: input + output tokens. Cached input (the prompt the model
-// re-reads from its cache on every turn) is excluded; it dwarfs the rest and
-// is billed at a fraction of the price, so counting it makes usage look
-// many times larger than the work it paid for.
+// The display definition is the recorded input + output counters. No separate
+// cache counter is added; Codex's input already includes cached reads.
 import { formatTokens } from "./utils";
 
 /** Tooltip for every token figure, so the number says what it counts. */
 export const TOKENS_COUNTED_NOTE =
-  "Input + output tokens. Cached input the model re-reads is not counted.";
+  "Recorded input + output tokens. No separate cached-input counter is added; Codex input already includes cached reads.";
 
 /**
- * Tooltip for the daily token ceiling's own count. Enforcement counts cached
- * input, so this figure is larger than every display figure; say so.
+ * Tooltip for the daily ceiling's count, which respects per-run cache semantics.
  */
 export const TOKEN_CEILING_COUNT_NOTE =
-  "The daily ceiling counts cached input the model re-reads, so this is larger than the token figures on Home, Shipped and the run page (input + output only).";
+  "The daily ceiling counts input and output, including cached input once. Codex input already includes its cached subset; adapters with separate cached input add it. Older runs without adapter evidence keep the conservative additive count.";
 
 /** Shown where usage is real but this workspace is not charged for it. */
 export const BILLED_BY_PROVIDER_NOTE = "Billed by your model provider";
