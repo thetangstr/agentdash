@@ -1,8 +1,7 @@
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
 
-// Neutral default port (never the 3199 ExecOS instance); set before the base
-// config reads it.
+// Set the throwaway server port before importing the base config.
 process.env.PAPERCLIP_E2E_PORT ??= "3411";
 const { default: base } = await import("./playwright.config");
 

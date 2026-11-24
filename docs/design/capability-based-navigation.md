@@ -25,9 +25,8 @@ in **8 places**:
 `OverrideInbox` calls `stewardshipsApi.getOverrideInbox()`. So the code asks *"is this company
 MK?"* when the real question is *"does this company use stewardship?"*
 
-The consequence is concrete: **Executive OS cannot have My Agent or Override without pretending
-to be MK Think.** Any company that wants a stewardship surface has to adopt another customer's
-product identity, and every new capability adds a ninth, tenth, eleventh branch on the same enum.
+A company that wants My Agent or Override has to adopt MK Think's product profile.
+Each new capability adds another branch on the same enum.
 
 ## 2. Three axes, currently collapsed into one
 
@@ -38,8 +37,7 @@ product identity, and every new capability adds a ninth, tenth, eleventh branch 
 | **Operating mode** | how is the company governed | `steward`, `autonomous` | **does not exist** (separate design) |
 
 They are genuinely independent. An `autonomous` company can still use stewardship for a
-particular agent; a `steward` company may not have the Override surface enabled; MK's branding
-should not decide whether ExecOS gets a nav item.
+particular agent. A `steward` company's enabled capabilities determine which navigation items it sees.
 
 **This design covers capabilities only.** It does not implement, migrate, or depend on operating
 mode — that stays behind its own review.
@@ -116,8 +114,7 @@ would make navigation a permission system, which is how a UI flag becomes a secu
 the UI ships. `capabilitiesOf` falls back to the profile map, so **behaviour on day one is
 byte-identical for every existing company** — including MK Think, which is not to be modified.
 
-**Adopting a capability** is a write to one company's list. Executive OS gaining `stewardship`
-becomes a deliberate recorded act rather than a change of product identity.
+**Adopting a capability** records the change in the company's capability list and preserves its product profile.
 
 **Rollback:** stop reading the column (revert the UI to the profile check), or drop it. Nothing
 else references it; a down-migration is rehearsed against a snapshot before the up-migration runs
@@ -148,8 +145,8 @@ permission system, or by re-coupling to the axes it was built to separate.
 
 1. **Who may edit a company's capabilities?** Proposed: the same authority that edits company
    settings. If capabilities should need higher authority, that is a different design.
-2. **Should capabilities be visible in the API read surface** the ExecOS registry consumes? It
-   would let the CEO surface show what each company can do; it is a scope decision.
+2. **Should the company API expose enabled capabilities?** An authorized client could then show
+   which features a company has enabled.
 3. **Does `agentdash_mk` remain a profile at all** once capabilities exist, or does it collapse to
    branding? Out of scope here; noted because the answer changes how long the fallback map lives.
 4. **Naming.** `capabilities` reads as entitlements/billing to some people. `surfaces` or

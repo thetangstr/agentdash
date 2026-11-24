@@ -8,7 +8,7 @@ The human bridge exposes the same allowed domain actions as the human pages thro
 
 Use an existing browser-approved named-human CLI board key with the local MCP server. The explicit toolset is `AGENTDASH_TOOLSET=human`. Configuration reads `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` and optional `PAPERCLIP_COMPANY_ID`; `AGENTDASH_API_URL`, `AGENTDASH_API_KEY` and `AGENTDASH_COMPANY_ID` are aliases. The canonical variable takes precedence when both are set. Use the MCP client's private environment configuration for the approved key; this guide contains no credential.
 
-The approved local verification target is `http://localhost:3199`; it is not automatically the API URL for an isolated feature build. Configure the actual instance containing the reviewed implementation. Do not send its board key to cloud, another instance or a returned artifact URL.
+Configure the API URL for the instance running the reviewed build. Verify the company before using its board key, and send the key only to that instance.
 
 The server verifies the live named board-key connection before advertising human tools. An agent key, assistant OAuth grant, MK machine token or implicit local operator is not a human connection. Expired or revoked keys fail. The board key retains its existing ordinary REST authority; this wrapper is not a confined delegated credential.
 

@@ -18,7 +18,7 @@ import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { agents, fredRegistrations, heartbeatRuns, issueExecutionDecisions, issues, issueWorkProducts } from "@paperclipai/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   assertFeedbackTraceVisible,
   assertIssueIdVisible,
@@ -2676,13 +2676,35 @@ export function issueRoutes(
       return;
     }
     // AgentDash: an assistant-grant write is always recorded under its own
-    // assistant_work origin, so an ExecOS origin on the same write would be
+    // assistant_work origin, so a caller-supplied origin on the same write would be
     // silently overwritten. The loopback middleware's body allowlist (GH #745)
     // already refuses these fields with 403 before the route runs; this is
     // defence in depth for any assistant_grant actor that reaches the route.
     if (isAssistantGrant && (req.body.originKind !== undefined || req.body.originId != null)) {
       res.status(400).json({ error: "originKind/originId are not accepted on assistant-grant writes" });
       return;
+    }
+    // Historical retries keep their conflict only when the original issue is visible.
+    if (req.body.originKind === "execos_request") {
+      await resolveAgentVisibility(db, req, companyId);
+      const [existing] = await db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, "execos_request"),
+          eq(issues.originId, req.body.originId),
+          isNull(issues.hiddenAt),
+          issueVisibilityCondition(req, companyId),
+        ))
+        .limit(1);
+      if (existing) {
+        throw conflict("ExecOS request is already recorded", {
+          code: "EXECOS_REQUEST_ALREADY_RECORDED",
+          originId: req.body.originId,
+        });
+      }
+      throw new HttpError(410, "This request origin is retired", { code: "EXECOS_REQUEST_RETIRED" });
     }
     const requestId =
       typeof rawRequestId === "string" && rawRequestId.trim().length > 0 ? rawRequestId.trim() : null;
@@ -2735,19 +2757,6 @@ export function issueRoutes(
           res.status(200).json({ ...existing, replayed: true });
           return;
         }
-      }
-      // AgentDash: ExecOS request identity. The caller owns the retry, so a
-      // duplicate (companyId, execos_request, originId) is an explicit 409,
-      // translated only from its named constraint.
-      if (
-        issueInput.originKind === "execos_request" &&
-        isUniqueViolation(err) &&
-        pgConstraintName(err) === "issues_execos_request_origin_uq"
-      ) {
-        throw conflict("ExecOS request is already recorded", {
-          code: "EXECOS_REQUEST_ALREADY_RECORDED",
-          originId: issueInput.originId,
-        });
       }
       throw err;
     }
