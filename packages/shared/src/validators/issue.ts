@@ -219,6 +219,10 @@ export const createChildIssueSchema = createIssueBaseSchema
     originId: true,
   })
   .extend({
+    // Refuse these keys instead of stripping them: a stale retired-origin
+    // request must not turn into ordinary child work and wake an assignee.
+    originKind: z.never().optional(),
+    originId: z.never().optional(),
     acceptanceCriteria: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
     blockParentUntilDone: z.boolean().optional().default(false),
   });

@@ -3,6 +3,7 @@ import { MAX_ISSUE_REQUEST_DEPTH } from "../index.js";
 import {
   addIssueCommentSchema,
   createIssueSchema,
+  createChildIssueSchema,
   respondIssueThreadInteractionSchema,
   suggestedTaskDraftSchema,
   updateIssueSchema,
@@ -29,8 +30,8 @@ describe("issue validators", () => {
       .toBeUndefined();
   });
 
-  // AgentDash: ExecOS request identity (originKind + originId, both or neither).
-  it("preserves the ExecOS request origin used for idempotent AgentDash records", () => {
+  // Complete legacy identities remain valid input for historical REST retries.
+  it("preserves the complete legacy identity for historical REST retries", () => {
     const parsed = createIssueSchema.parse({
       title: "KiddoQuest read-only proof",
       originKind: "execos_request",
@@ -57,6 +58,13 @@ describe("issue validators", () => {
       originKind: "routine_execution",
       originId: "routine-1",
     }).success).toBe(false);
+  });
+
+  it("rejects child origin fields without changing ordinary unknown-field handling", () => {
+    for (const origin of [{originKind: "execos_request", originId: "legacy"}, {originKind: "execos_request"}, {originId: "legacy"}, {originId: null}]) {
+      expect(createChildIssueSchema.safeParse({title: "Child", ...origin}).success).toBe(false);
+    }
+    expect(createChildIssueSchema.parse({title: "Ordinary child", harmlessUnknownField: true})).toMatchObject({title: "Ordinary child"});
   });
 
   it("leaves issues without an origin unaffected and keeps ExecOS origin off updates", () => {

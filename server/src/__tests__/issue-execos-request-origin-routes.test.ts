@@ -2,14 +2,22 @@ import express from "express";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { companies, companyMemberships, createDb, issues, projects } from "@paperclipai/db";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { agents, agentWakeupRequests, companies, companyMemberships, createDb, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/index.js";
+
+const wakeup = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+// Issue routes construct their heartbeat internally; suppress runtime dispatch
+// at that factory boundary rather than passing a fake in the storage slot.
+vi.mock("../services/heartbeat.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../services/heartbeat.js")>(),
+  heartbeatService: () => ({ wakeup }),
+}));
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -20,6 +28,9 @@ describeEmbeddedPostgres("Retired issue origin on issue create", () => {
 
   const COMPANY = randomUUID();
   const OTHER_COMPANY = randomUUID();
+  const ASSIGNEE = randomUUID();
+
+  beforeEach(() => { wakeup.mockClear(); });
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-execos-origin-");
@@ -43,6 +54,17 @@ describeEmbeddedPostgres("Retired issue origin on issue create", () => {
       principalId: "member",
       status: "active",
       membershipRole: "member",
+    });
+    await db.insert(agents).values({
+      id: ASSIGNEE,
+      companyId: COMPANY,
+      name: "Ordinary task assignee",
+      role: "engineer",
+      status: "idle",
+      autonomy: "autonomous",
+      accountableUserId: "owner",
+      createdByUserId: "owner",
+      visibility: "company",
     });
   }, 60_000);
 
@@ -76,15 +98,65 @@ describeEmbeddedPostgres("Retired issue origin on issue create", () => {
   const create = (companyId: string, body: Record<string, unknown>) =>
     request(app(companyId)).post(`/api/companies/${companyId}/issues`).send(body);
 
-  it("returns 410 for a new origin without allocating an issue", async () => {
+  it("returns 410 for a new assigned origin without allocating an issue or wake", async () => {
     const originId = randomUUID();
     const counter = () => db.select({ value: companies.issueCounter }).from(companies).where(eq(companies.id, COMPANY));
     const before = await counter();
-    const res = await create(COMPANY, { title: "Fresh request", originKind: "execos_request", originId });
+    const res = await create(COMPANY, {
+      title: "Fresh request", originKind: "execos_request", originId,
+      assigneeAgentId: ASSIGNEE, status: "todo",
+    });
     expect(res.status).toBe(410);
     expect(res.body.details).toEqual({ code: "EXECOS_REQUEST_RETIRED" });
     expect(await counter()).toEqual(before);
     expect(await db.select().from(issues).where(eq(issues.originId, originId))).toHaveLength(0);
+    expect(wakeup).not.toHaveBeenCalled();
+    expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, COMPANY))).toHaveLength(0);
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, COMPANY))).toHaveLength(0);
+  });
+
+  it.each([
+    { originKind: "execos_request", originId: "legacy-child" },
+    { originKind: "execos_request" },
+    { originId: "legacy-child" },
+    { originId: null },
+  ])("refuses child-create origin fields rather than converting them into ordinary work: %j", async (origin) => {
+    const [parent] = await db.insert(issues).values({
+      companyId: COMPANY, title: "Child origin guard parent", status: "todo", createdByUserId: "owner",
+    }).returning();
+    const counter = () => db.select({ value: companies.issueCounter }).from(companies).where(eq(companies.id, COMPANY));
+    const before = await counter();
+
+    const res = await request(app(COMPANY)).post(`/api/issues/${parent.id}/children`).send({
+      title: "Retired request must not become a child", assigneeAgentId: ASSIGNEE, status: "todo", ...origin,
+    });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(await counter()).toEqual(before);
+    expect(await db.select().from(issues).where(eq(issues.parentId, parent.id))).toHaveLength(0);
+    expect(wakeup).not.toHaveBeenCalled();
+    expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, COMPANY))).toHaveLength(0);
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, COMPANY))).toHaveLength(0);
+  });
+
+  it("still creates ordinary assigned issues and children and reaches the assignment wake boundary", async () => {
+    const ordinary = await create(COMPANY, { title: "Ordinary assigned task", assigneeAgentId: ASSIGNEE, status: "todo" });
+    expect(ordinary.status, JSON.stringify(ordinary.body)).toBe(201);
+    expect(ordinary.body).toMatchObject({ originKind: "manual", assigneeAgentId: ASSIGNEE });
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(wakeup).toHaveBeenLastCalledWith(ASSIGNEE, expect.objectContaining({
+      source: "assignment", payload: expect.objectContaining({ issueId: ordinary.body.id }),
+    }));
+
+    const child = await request(app(COMPANY)).post(`/api/issues/${ordinary.body.id}/children`).send({
+      title: "Ordinary assigned child", assigneeAgentId: ASSIGNEE, status: "todo",
+    });
+    expect(child.status, JSON.stringify(child.body)).toBe(201);
+    expect(child.body).toMatchObject({ parentId: ordinary.body.id, originKind: "manual", assigneeAgentId: ASSIGNEE });
+    expect(wakeup).toHaveBeenCalledTimes(2);
+    expect(wakeup).toHaveBeenLastCalledWith(ASSIGNEE, expect.objectContaining({
+      source: "assignment", payload: expect.objectContaining({ issueId: child.body.id }),
+    }));
   });
 
   it("preserves the conflict for a visible historical issue", async () => {
