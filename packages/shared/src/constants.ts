@@ -285,9 +285,7 @@ export type IssueThreadInteractionContinuationPolicy =
 
 export const ISSUE_ORIGIN_KINDS = [
   "manual",
-  // AgentDash: an issue recording one normalized ExecOS request. The pair
-  // (originKind, originId) is its idempotency key; see
-  // issues_execos_request_origin_uq.
+  // Historical origin retained for reading issues created before intake was retired.
   "execos_request",
   "routine_execution",
   "stale_active_run_evaluation",

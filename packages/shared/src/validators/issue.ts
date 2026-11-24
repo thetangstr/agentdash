@@ -161,11 +161,8 @@ const createIssueBaseSchema = z.object({
    * stored.
    */
   assignToPerson: z.boolean().optional(),
-  // AgentDash: ExecOS request identity. The external ExecOS client records
-  // one normalized request as one issue; the pair is its durable idempotency
-  // key (unique per company, see issues_execos_request_origin_uq). It is
-  // identity only and grants no capability. Both or neither — enforced by
-  // requireCompleteExecOsOrigin below.
+  // Legacy REST clients can replay a complete origin to identify an existing
+  // issue. The server refuses new issues from this retired origin.
   originKind: z.literal("execos_request").optional(),
   originId: z.string().trim().min(1).max(500).optional().nullable(),
   requestDepth: issueRequestDepthInputSchema.optional().default(0),
@@ -188,9 +185,7 @@ const createIssueBaseSchema = z.object({
   labelIds: z.array(z.guid()).optional(),
 });
 
-// AgentDash: an ExecOS origin must carry both halves. A kind without an id
-// cannot be deduplicated, and an id without the kind would be silently
-// dropped by the route.
+// Historical REST retries need both fields to identify the original issue.
 function requireCompleteExecOsOrigin(
   value: { originKind?: "execos_request"; originId?: string | null },
   ctx: z.RefinementCtx,
@@ -219,11 +214,15 @@ export const createChildIssueSchema = createIssueBaseSchema
   .omit({
     parentId: true,
     inheritExecutionWorkspaceFromIssueId: true,
-    // AgentDash: ExecOS origin is a top-level create concept only.
+    // Only the top-level REST route supports historical retries.
     originKind: true,
     originId: true,
   })
   .extend({
+    // Refuse these keys instead of stripping them: a stale retired-origin
+    // request must not turn into ordinary child work and wake an assignee.
+    originKind: z.never().optional(),
+    originId: z.never().optional(),
     acceptanceCriteria: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
     blockParentUntilDone: z.boolean().optional().default(false),
   });
@@ -247,7 +246,7 @@ export type UpdateIssueLabel = z.infer<typeof updateIssueLabelSchema>;
 
 export const updateIssueSchema = partialWithoutDefaults(createIssueBaseSchema.omit({
   definitionOfDone: true,
-  // AgentDash: ExecOS request identity is immutable after creation.
+  // Historical request identities are immutable.
   originKind: true,
   originId: true,
 })).extend({

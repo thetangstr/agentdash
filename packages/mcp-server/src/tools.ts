@@ -102,13 +102,13 @@ const upsertDocumentToolSchema = z.object({
   baseRevisionId: z.guid().nullable().optional(),
 });
 
-// AgentDash: createIssueSchema carries a refinement (ExecOS origin is both or
-// neither). The tool merges the object without it (zod 4 refuses to merge a
-// refined object, and zod 3 needed `.innerType()` for the same reason), and the
-// create_issue handler re-runs the canonical schema to keep the invariant.
-const createIssueToolSchema = z.object({
-  companyId: companyIdOptional,
-}).merge(withoutRefinements(createIssueSchema));
+// Keep stale callers from silently creating manual issues when they supply a retired origin.
+const createIssueToolSchema = z.object({ companyId: companyIdOptional })
+  .merge(withoutRefinements(createIssueSchema).omit({ originKind: true, originId: true }))
+  .catchall(z.unknown())
+  .refine(input => input.originKind === undefined && input.originId == null, {
+    message: "Issue origins are read-only. Use list_issues to look up an existing origin.",
+  });
 
 const updateIssueToolSchema = z.object({
   issueId: issueIdSchema,
@@ -737,7 +737,6 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       "Create a new issue. Assigning a person (assigneeUserId) who stewards an agent gives the issue to that agent, whoever assigns it (list_agents → steward.userId); assignToPerson: true keeps it with the person. Naming an agent (assigneeAgentId) is never rerouted. An agent handing work to another agent does it as a child issue (parentId) with a brief; a request allows at most 3 agent-to-agent hand-off rounds, and the next is refused with AGENT_HANDOFF_CAP_REACHED — then ask your steward.",
       createIssueToolSchema,
       async ({ companyId, ...input }) => {
-        // AgentDash: enforce the refined create contract (see createIssueToolSchema).
         const body = createIssueSchema.parse(input);
         return client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/issues`, { body });
       },
